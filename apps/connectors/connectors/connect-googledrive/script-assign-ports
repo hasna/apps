@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Assign unique Caddy ports and scaffold proxy configs for any project.
+
+Usage:
+    ~/Workspace/shared/prompts/shared/port/script-assign-ports googledrive \
+        --project-root /path/to/repo
+
+Defaults:
+    - category      = connector (domains `{slug}.connect`, `{slug}.api.connect`)
+    - frontend port = 11000-11999 range
+    - backend port  = 21000-21999 range
+
+Override with `--category`, `--frontend-range`, `--backend-range`, or
+`--frontend-template` / `--backend-template` to mirror other project types.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+CATEGORY_DEFAULTS = {
+    "connector": {
+        "frontend_range": "11000-11999",
+        "backend_range": "21000-21999",
+        "frontend_template": "{slug}.connect",
+        "backend_template": "{slug}.api.connect",
+    },
+    "internalapp": {
+        "frontend_range": "10000-10440",
+        "backend_range": "20000-20440",
+        "frontend_template": "{slug}.iapp",
+        "backend_template": "{slug}.api.iapp",
+    },
+    "service": {
+        "frontend_range": "10000-10440",
+        "backend_range": "20000-20440",
+        "frontend_template": "{slug}.service",
+        "backend_template": "{slug}.api.service",
+    },
+    "project": {
+        "frontend_range": "12000-12999",
+        "backend_range": "22000-22999",
+        "frontend_template": "{slug}.project",
+        "backend_template": "{slug}.api.project",
+    },
+}
+
+CADDY_ROOT = Path("~/.caddy").expanduser()
+PROXY_ROOT = CADDY_ROOT / "proxy"
+PORT_DOC_SCRIPT = CADDY_ROOT / "generate-port-mapping.sh"
+
+
+@dataclass
+class PortPair:
+    frontend: int | None
+    backend: int
+
+
+def parse_range(range_str: str) -> range:
+    try:
+        start_str, end_str = range_str.split("-", 1)
+        start = int(start_str)
+        end = int(end_str)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid port range '{range_str}'. Use START-END.") from exc
+    if start >= end:
+        raise argparse.ArgumentTypeError("Port range start must be less than end.")
+    return range(start, end + 1)
+
+
+def load_used_ports() -> set[int]:
+    pattern = re.compile(r"localhost:(\\d+)")
+    ports: set[int] = set()
+    for config in PROXY_ROOT.rglob("*.caddy"):
+        try:
+            contents = config.read_text()
+        except OSError:
+            continue
+        ports.update(int(match) for match in pattern.findall(contents))
+    return ports
+
+
+def allocate_port(port_range: Iterable[int], used: set[int]) -> int:
+    for port in port_range:
+        if port not in used:
+            used.add(port)
+            return port
+    raise RuntimeError("No available ports in requested range.")
+
+
+def write_caddy_config(category: str, slug: str, pair: PortPair, frontend_template: str | None, backend_template: str) -> Path:
+    output_dir = PROXY_ROOT / category
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dest = output_dir / f"{slug}.caddy"
+    if dest.exists():
+        raise FileExistsError(f"Caddy config already exists: {dest}")
+
+    lines: list[str] = [f"# {category}-{slug} configuration", ""]
+    if frontend_template:
+        lines.extend(
+            [
+                "# Frontend",
+                f"{frontend_template.format(slug=slug)} {{",
+                f"    reverse_proxy localhost:{pair.frontend}",
+                "}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "# Backend API",
+            f"{backend_template.format(slug=slug)} {{",
+            f"    reverse_proxy localhost:{pair.backend}",
+            "}",
+        ]
+    )
+    dest.write_text("\n".join(lines) + "\n")
+    return dest
+
+
+def update_makefile(makefile: Path, backend_port: int) -> None:
+    if not makefile.is_file():
+        raise FileNotFoundError(f"Makefile not found: {makefile}")
+    text = makefile.read_text()
+    pattern = re.compile(r"(UVICORN_PORT\s*\?=\s*)(\d+)")
+    if pattern.search(text):
+        text = pattern.sub(rf"\1{backend_port}", text, count=1)
+    else:
+        text += f"\nUVICORN_PORT ?= {backend_port}\n"
+    makefile.write_text(text)
+
+
+def regenerate_port_doc() -> None:
+    if PORT_DOC_SCRIPT.is_file():
+        subprocess.run([str(PORT_DOC_SCRIPT)], check=False)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Allocate ports and scaffold Caddy configs")
+    parser.add_argument("slug", help="Project slug (used in domain)")
+    parser.add_argument("--category", default="connector", help="Proxy category (default: connector)")
+    parser.add_argument("--frontend-range", help="Frontend port range START-END")
+    parser.add_argument("--backend-range", help="Backend port range START-END")
+    parser.add_argument("--frontend-template", help="Frontend domain template (use {slug})")
+    parser.add_argument("--backend-template", help="Backend domain template (use {slug})")
+    parser.add_argument("--project-root", default=".", help="Project root for Makefile updates")
+    parser.add_argument("--skip-makefile", action="store_true", help="Skip Makefile UVICORN_PORT update")
+    parser.add_argument("--no-frontend", action="store_true", help="Skip frontend entry entirely")
+
+    args = parser.parse_args()
+    slug = args.slug.strip().lower()
+    if not slug or not all(ch.isalnum() or ch in "-" for ch in slug):
+        raise SystemExit("Slug must contain letters, numbers, or hyphens only.")
+
+    defaults = CATEGORY_DEFAULTS.get(args.category, CATEGORY_DEFAULTS["connector"])
+    front_range = parse_range(args.frontend_range or defaults["frontend_range"])
+    back_range = parse_range(args.backend_range or defaults["backend_range"])
+    frontend_template = None if args.no_frontend else (args.frontend_template or defaults.get("frontend_template"))
+    backend_template = args.backend_template or defaults.get("backend_template")
+    if backend_template is None:
+        raise SystemExit("Backend template is required; supply --backend-template.")
+
+    used_ports = load_used_ports()
+    frontend_port = allocate_port(front_range, used_ports) if frontend_template else None
+    backend_port = allocate_port(back_range, used_ports)
+    ports = PortPair(frontend=frontend_port, backend=backend_port)
+
+    config_path = write_caddy_config(args.category, slug, ports, frontend_template, backend_template)
+
+    project_root = Path(args.project_root).resolve()
+    if not args.skip_makefile:
+        try:
+            update_makefile(project_root / "Makefile", ports.backend)
+        except FileNotFoundError:
+            print(f"Makefile not found at {project_root}/Makefile; skipping Makefile update.")
+
+    regenerate_port_doc()
+
+    print("Caddy configuration created:")
+    print(f"  - Slug: {slug}")
+    print(f"  - Category: {args.category}")
+    if frontend_template:
+        print(f"  - Frontend port: {ports.frontend}")
+        print(f"  - Frontend domain: {frontend_template.format(slug=slug)}")
+    print(f"  - Backend port: {ports.backend}")
+    print(f"  - Backend domain: {backend_template.format(slug=slug)}")
+    print(f"  - Config path: {config_path}")
+    print()
+    print("Next steps:")
+    print("  1. Run 'sudo ~/.caddy/update-hosts-all.sh' to refresh /etc/hosts.")
+    print("  2. Restart Caddy with '~/.caddy/start.sh'.")
+    print("  3. Ensure project UVICORN_PORT (or equivalent) matches the assigned backend port.")
+    print("  4. Update OAuth redirect URIs to reflect the assigned backend domain.")
+
+
+if __name__ == "__main__":
+    main()

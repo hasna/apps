@@ -1,0 +1,57 @@
+{
+  "name": "@hasna/connect-stripeatlas",
+  "version": "0.0.1",
+  "description": "Stripe Atlas connector - Browser automation for Stripe Atlas dashboard (no public API)",
+  "type": "module",
+  "bin": {
+    "stripeatlas": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "release": "bun run ./scripts/publish.ts",
+    "release:patch": "bun run ./scripts/publish.ts patch",
+    "release:minor": "bun run ./scripts/publish.ts minor",
+    "release:major": "bun run ./scripts/publish.ts major",
+    "release:dry": "bun run ./scripts/publish.ts --dry-run",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "stripe",
+    "atlas",
+    "connector",
+    "browser-automation",
+    "playwright",
+    "cli",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "author": "Hasna",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "chalk": "^5.3.0",
+    "playwright": "^1.40.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/opensource-connectors.git"
+  }
+}

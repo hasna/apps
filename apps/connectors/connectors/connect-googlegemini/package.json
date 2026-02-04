@@ -1,0 +1,55 @@
+{
+  "name": "@hasna/connect-googlegemini",
+  "version": "0.0.1",
+  "description": "Google Gemini API connector CLI - Text, image, video generation with Gemini, Nano Banana, and Veo models",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "connect-googlegemini": "./bin/index.js"
+  },
+  "scripts": {
+    "dev": "bun run ./src/cli/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "google",
+    "gemini",
+    "ai",
+    "llm",
+    "image-generation",
+    "video-generation",
+    "nano-banana",
+    "veo",
+    "tts",
+    "embeddings",
+    "connector",
+    "cli",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "author": "Hasna",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "src",
+    "README.md",
+    "CLAUDE.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/opensource-connectors.git"
+  }
+}

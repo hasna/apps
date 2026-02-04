@@ -1,0 +1,50 @@
+{
+  "name": "@hasna/connect-googletasks",
+  "version": "0.1.0",
+  "description": "Google Tasks API connector - Manage task lists and tasks",
+  "type": "module",
+  "bin": {
+    "connect-googletasks": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "google",
+    "tasks",
+    "todo",
+    "api",
+    "oauth",
+    "connector",
+    "cli",
+    "hasna"
+  ],
+  "author": "Hasna",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/opensource-connectors.git"
+  }
+}

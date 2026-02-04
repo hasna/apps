@@ -1,0 +1,61 @@
+{
+  "name": "@hasna/connect-meta",
+  "version": "0.1.1",
+  "description": "Meta Marketing API connector CLI - Facebook/Instagram ads, campaigns, audiences, and insights",
+  "type": "module",
+  "bin": {
+    "connect-meta": "bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build",
+    "release": "bun run ./scripts/publish.ts",
+    "release:patch": "bun run ./scripts/publish.ts patch",
+    "release:minor": "bun run ./scripts/publish.ts minor",
+    "release:major": "bun run ./scripts/publish.ts major",
+    "release:dry": "bun run ./scripts/publish.ts --dry-run"
+  },
+  "keywords": [
+    "meta",
+    "facebook",
+    "instagram",
+    "marketing",
+    "ads",
+    "api",
+    "campaigns",
+    "audiences",
+    "insights",
+    "connector",
+    "cli",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "author": "Hasna",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "chalk": "^5.3.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/opensource-connectors.git"
+  }
+}
