@@ -17,7 +17,6 @@
   "scripts": {
     "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/index.ts --outdir ./dist --target bun",
     "dev": "bun run ./src/cli/index.tsx",
-    "copy-connectors": "bun run ./scripts/copy-connectors.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },
