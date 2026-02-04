@@ -37,6 +37,8 @@ cp .npmrc.example .npmrc
 cp connectors/connect-<name>/.npmrc.example connectors/connect-<name>/.npmrc
 ```
 
+See `CONTRIBUTING.md` for publishing and secrets guidance.
+
 ## Usage
 
 ### Interactive Mode
