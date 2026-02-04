@@ -25,6 +25,18 @@ bun install -g @hasna/connectors
 npx @hasna/connectors
 ```
 
+## NPM Auth (Optional)
+
+If you need a scoped registry token (publish or private installs), copy an example file and set `NPM_TOKEN`:
+
+```bash
+# Repo root
+cp .npmrc.example .npmrc
+
+# Or per-connector
+cp connectors/connect-<name>/.npmrc.example connectors/connect-<name>/.npmrc
+```
+
 ## Usage
 
 ### Interactive Mode

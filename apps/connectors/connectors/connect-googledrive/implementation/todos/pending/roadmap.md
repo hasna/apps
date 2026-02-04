@@ -1,8 +1,0 @@
-- [x] Implement automated Drive watch renewal job and webhook token validation.
-- [ ] Build integration tests against Google Drive sandbox using service account credentials.
-- [x] Extend CLI with `permissions` subcommands for listing and updating sharing settings.
-- [ ] Harden MCP server to surface connector metrics and operational controls.
-- [x] Add automated cleanup job for temporary downloads older than configured retention window.
-- [ ] Wire OpenTelemetry traces into central collector once infrastructure is ready.
-- [ ] Add regression tests covering `connect-googledrive capabilities` exporters and Markdown rendering.
-- [ ] Publish discovery metadata (`/.well-known/ai-capabilities.json`) to internal docs portal once schemas stabilize.

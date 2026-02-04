@@ -1,9 +1,0 @@
-{
-  "servers": [
-    {
-      "name": "connect-googledrive",
-      "entrypoint": "mcp/servers/connect_googledrive.py",
-      "description": "Expose Google Drive connector capabilities via MCP."
-    }
-  ]
-}
