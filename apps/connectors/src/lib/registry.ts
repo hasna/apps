@@ -443,6 +443,13 @@ export const CONNECTORS: ConnectorMeta[] = [
 
   // Business Tools
   {
+    name: "notion",
+    displayName: "Notion",
+    description: "Pages, databases, blocks, and property management",
+    category: "Business Tools",
+    tags: ["productivity", "databases", "wiki", "notes"],
+  },
+  {
     name: "quo",
     displayName: "Quo",
     description: "Business quotes and invoices",
