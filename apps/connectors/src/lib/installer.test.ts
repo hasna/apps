@@ -274,5 +274,106 @@ describe("installer", () => {
       expect(docs).not.toBeNull();
       expect(docs!.overview).toContain("Stripe");
     });
+
+    test("raw field contains full CLAUDE.md content", () => {
+      const docs = getConnectorDocs("stripe");
+      expect(docs!.raw).toContain("# CLAUDE.md");
+      expect(docs!.raw).toContain("## Project Overview");
+      expect(docs!.raw).toContain("## Environment Variables");
+    });
+
+    test("parses env vars correctly for multiple connectors", () => {
+      // Test anthropic
+      const anthropicDocs = getConnectorDocs("anthropic");
+      expect(anthropicDocs).not.toBeNull();
+      const anthropicKey = anthropicDocs!.envVars.find(
+        (v) => v.variable === "ANTHROPIC_API_KEY"
+      );
+      expect(anthropicKey).toBeDefined();
+
+      // Test github
+      const githubDocs = getConnectorDocs("github");
+      expect(githubDocs).not.toBeNull();
+      const githubToken = githubDocs!.envVars.find(
+        (v) => v.variable === "GITHUB_TOKEN"
+      );
+      expect(githubToken).toBeDefined();
+    });
+
+    test("returns empty cliCommands for connectors without that section", () => {
+      // Gmail CLAUDE.md doesn't have a "CLI Commands" section
+      const docs = getConnectorDocs("gmail");
+      expect(docs!.cliCommands).toBe("");
+    });
+
+    test("returns overview as first paragraph only concept", () => {
+      const docs = getConnectorDocs("figma");
+      expect(docs!.overview.length).toBeGreaterThan(10);
+      expect(docs!.overview).toContain("Figma");
+    });
+  });
+
+  describe("installConnector edge cases", () => {
+    test("creates proper .connectors directory structure", () => {
+      installConnector("anthropic", { targetDir: TEST_DIR });
+      // Verify it's .connectors/connect-anthropic (not .connect)
+      expect(existsSync(join(TEST_DIR, ".connectors"))).toBe(true);
+      expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic"))).toBe(true);
+      expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic", "src"))).toBe(true);
+      // Verify it's NOT .connect
+      expect(existsSync(join(TEST_DIR, ".connect"))).toBe(false);
+    });
+
+    test("connector has all expected files after install", () => {
+      installConnector("stripe", { targetDir: TEST_DIR });
+      const base = join(TEST_DIR, ".connectors", "connect-stripe");
+      expect(existsSync(join(base, "package.json"))).toBe(true);
+      expect(existsSync(join(base, "CLAUDE.md"))).toBe(true);
+      expect(existsSync(join(base, "README.md"))).toBe(true);
+      expect(existsSync(join(base, "src", "index.ts"))).toBe(true);
+    });
+
+    test("index.ts is valid TypeScript export syntax", () => {
+      installConnector("anthropic", { targetDir: TEST_DIR });
+      installConnector("stripe", { targetDir: TEST_DIR });
+      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
+      const content = readFileSync(indexPath, "utf-8");
+      // Check proper export syntax
+      expect(content).toMatch(/export \* as \w+ from '\.\/connect-\w+\/src\/index\.js'/);
+      expect(content).toContain("Auto-generated");
+    });
+  });
+
+  describe("getInstalledConnectors edge cases", () => {
+    test("ignores index.ts in .connectors dir", () => {
+      installConnector("anthropic", { targetDir: TEST_DIR });
+      const result = getInstalledConnectors(TEST_DIR);
+      // Should not include index.ts, only connector dirs
+      expect(result).toEqual(["anthropic"]);
+      expect(result).not.toContain("index.ts");
+    });
+
+    test("returns multiple connectors in consistent order", () => {
+      installConnector("stripe", { targetDir: TEST_DIR });
+      installConnector("anthropic", { targetDir: TEST_DIR });
+      installConnector("figma", { targetDir: TEST_DIR });
+      const result = getInstalledConnectors(TEST_DIR);
+      expect(result).toHaveLength(3);
+      expect(result).toContain("stripe");
+      expect(result).toContain("anthropic");
+      expect(result).toContain("figma");
+    });
+  });
+
+  describe("removeConnector edge cases", () => {
+    test("index.ts is empty after removing all connectors", () => {
+      installConnector("anthropic", { targetDir: TEST_DIR });
+      removeConnector("anthropic", TEST_DIR);
+
+      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
+      const content = readFileSync(indexPath, "utf-8");
+      expect(content).toContain("Auto-generated");
+      expect(content).not.toContain("export * as");
+    });
   });
 });

@@ -181,5 +181,53 @@ describe("registry", () => {
       const secondVersions = CONNECTORS.map((c) => c.version);
       expect(firstVersions).toEqual(secondVersions);
     });
+
+    test("all connectors get versions from package.json", async () => {
+      const { loadConnectorVersions, CONNECTORS } = await import("./registry.js");
+      loadConnectorVersions();
+      // Every connector in the repo should have a package.json with version
+      for (const c of CONNECTORS) {
+        expect(c.version).toBeDefined();
+        expect(c.version).not.toBe("0.0.0");
+      }
+    });
+  });
+
+  describe("searchConnectors edge cases", () => {
+    test("finds multiple connectors for broad query", async () => {
+      const { searchConnectors } = await import("./registry.js");
+      const results = searchConnectors("google");
+      // Should find multiple google-related connectors
+      expect(results.length).toBeGreaterThan(3);
+    });
+
+    test("partial match on tags", async () => {
+      const { searchConnectors } = await import("./registry.js");
+      const results = searchConnectors("social");
+      expect(results.some((c) => c.name === "x")).toBe(true);
+      expect(results.some((c) => c.name === "reddit")).toBe(true);
+    });
+
+    test("single character query matches broadly", async () => {
+      const { searchConnectors } = await import("./registry.js");
+      const results = searchConnectors("a");
+      expect(results.length).toBeGreaterThan(10);
+    });
+  });
+
+  describe("getConnector edge cases", () => {
+    test("finds connectors with multi-word names", async () => {
+      const { getConnector } = await import("./registry.js");
+      const result = getConnector("googlecalendar");
+      expect(result).toBeDefined();
+      expect(result!.displayName).toBe("Google Calendar");
+    });
+
+    test("finds single-letter connector", async () => {
+      const { getConnector } = await import("./registry.js");
+      const result = getConnector("x");
+      expect(result).toBeDefined();
+      expect(result!.displayName).toBe("X (Twitter)");
+    });
   });
 });

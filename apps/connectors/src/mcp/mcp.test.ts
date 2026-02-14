@@ -226,4 +226,115 @@ describe("MCP Server", () => {
       expect(data.removed).toBe(false);
     });
   });
+
+  describe("search_connectors edge cases", () => {
+    test("finds by tag", async () => {
+      const res = await callMcp("search_connectors", { query: "llm" });
+      const data = parseContent(res);
+      expect(data.some((c: any) => c.name === "anthropic")).toBe(true);
+      expect(data.some((c: any) => c.name === "openai")).toBe(true);
+    });
+
+    test("finds google connectors", async () => {
+      const res = await callMcp("search_connectors", { query: "google" });
+      const data = parseContent(res);
+      expect(data.length).toBeGreaterThan(3);
+    });
+  });
+
+  describe("list_connectors edge cases", () => {
+    test("lists Developer Tools category", async () => {
+      const res = await callMcp("list_connectors", { category: "Developer Tools" });
+      const data = parseContent(res);
+      expect(data.some((c: any) => c.name === "github")).toBe(true);
+      expect(data.every((c: any) => c.category === "Developer Tools")).toBe(true);
+    });
+
+    test("case-insensitive category matching", async () => {
+      const res = await callMcp("list_connectors", { category: "ai & ml" });
+      const data = parseContent(res);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("connector_docs edge cases", () => {
+    test("returns cli commands for stripe", async () => {
+      const res = await callMcp("connector_docs", { name: "stripe" });
+      const data = parseContent(res);
+      expect(data.cliCommands).toContain("connect-stripe");
+    });
+
+    test("returns data storage for github", async () => {
+      const res = await callMcp("connector_docs", { name: "github" });
+      const data = parseContent(res);
+      expect(data.dataStorage).toContain(".connect/connect-github");
+    });
+
+    test("returns version and category in docs", async () => {
+      const res = await callMcp("connector_docs", { name: "anthropic" });
+      const data = parseContent(res);
+      expect(data.version).toBeDefined();
+      expect(data.category).toBe("AI & ML");
+      expect(data.displayName).toBe("Anthropic");
+    });
+  });
+
+  describe("install_connector edge cases", () => {
+    test("usage field is undefined when all fail", async () => {
+      const res = await callMcp("install_connector", {
+        names: ["nonexistent-a", "nonexistent-b"],
+      });
+      const data = parseContent(res);
+      expect(data.results[0].success).toBe(false);
+      expect(data.results[1].success).toBe(false);
+      expect(data.usage).toBeUndefined();
+    });
+
+    test("overwrite flag works", async () => {
+      await callMcp("install_connector", { names: ["anthropic"] });
+      // Without overwrite, should fail
+      const res1 = await callMcp("install_connector", { names: ["anthropic"] });
+      const data1 = parseContent(res1);
+      expect(data1.results[0].success).toBe(false);
+      // With overwrite, should succeed
+      const res2 = await callMcp("install_connector", {
+        names: ["anthropic"],
+        overwrite: true,
+      });
+      const data2 = parseContent(res2);
+      expect(data2.results[0].success).toBe(true);
+    });
+
+    test("summary contains error messages for failures", async () => {
+      const res = await callMcp("install_connector", {
+        names: ["nonexistent-xyz"],
+      });
+      const data = parseContent(res);
+      expect(data.summary).toContain("✗");
+      expect(data.summary).toContain("not found");
+    });
+  });
+
+  describe("connector_info edge cases", () => {
+    test("installed flag is false before install", async () => {
+      const res = await callMcp("connector_info", { name: "figma" });
+      const data = parseContent(res);
+      expect(data.installed).toBe(false);
+    });
+
+    test("installed flag is true after install", async () => {
+      await callMcp("install_connector", { names: ["figma"] });
+      const res = await callMcp("connector_info", { name: "figma" });
+      const data = parseContent(res);
+      expect(data.installed).toBe(true);
+    });
+
+    test("includes tags array", async () => {
+      const res = await callMcp("connector_info", { name: "stripe" });
+      const data = parseContent(res);
+      expect(Array.isArray(data.tags)).toBe(true);
+      expect(data.tags).toContain("payments");
+    });
+  });
 });

@@ -369,12 +369,117 @@ describe("CLI", () => {
     });
   });
 
+  describe("docs edge cases", () => {
+    test("--raw returns raw markdown for anthropic", async () => {
+      const { stdout } = await run("docs anthropic --raw");
+      expect(stdout).toContain("# CLAUDE.md");
+      expect(stdout).toContain("ANTHROPIC_API_KEY");
+    });
+
+    test("shows data storage section", async () => {
+      const { stdout } = await run("docs gmail");
+      expect(stdout).toContain("Data Storage");
+      expect(stdout).toContain(".connect/connect-gmail");
+    });
+
+    test("shows overview section", async () => {
+      const { stdout } = await run("docs figma");
+      expect(stdout).toContain("Overview");
+      expect(stdout).toContain("Figma");
+    });
+  });
+
+  describe("list edge cases", () => {
+    test("--category case-insensitive matching", async () => {
+      const { stdout } = await run(["list", "--category", "ai & ml"]);
+      expect(stdout).toContain("anthropic");
+    });
+
+    test("list shows version column", async () => {
+      const { stdout } = await run("list");
+      expect(stdout).toContain("Version");
+      // Check a known version shows up
+      expect(stdout).toMatch(/\d+\.\d+\.\d+/);
+    });
+
+    test("list --installed --json after install", async () => {
+      await run("install anthropic figma");
+      const { stdout } = await run("list --installed --json");
+      const data = JSON.parse(stdout);
+      expect(data).toContain("anthropic");
+      expect(data).toContain("figma");
+    });
+  });
+
+  describe("search edge cases", () => {
+    test("search finds by tag 'llm'", async () => {
+      const { stdout } = await run("search llm");
+      expect(stdout).toContain("anthropic");
+      expect(stdout).toContain("openai");
+    });
+
+    test("search --json returns proper structure", async () => {
+      const { stdout } = await run("search stripe --json");
+      const data = JSON.parse(stdout);
+      expect(data[0]).toHaveProperty("name");
+      expect(data[0]).toHaveProperty("version");
+      expect(data[0]).toHaveProperty("category");
+      expect(data[0]).toHaveProperty("description");
+    });
+  });
+
+  describe("info edge cases", () => {
+    test("shows tags in info output", async () => {
+      const { stdout } = await run("info anthropic");
+      expect(stdout).toContain("Tags:");
+      expect(stdout).toContain("ai");
+      expect(stdout).toContain("llm");
+    });
+
+    test("shows package name", async () => {
+      const { stdout } = await run("info figma");
+      expect(stdout).toContain("@hasna/connect-figma");
+    });
+
+    test("--json includes all metadata fields", async () => {
+      const { stdout } = await run("info gmail --json");
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("name");
+      expect(data).toHaveProperty("displayName");
+      expect(data).toHaveProperty("version");
+      expect(data).toHaveProperty("category");
+      expect(data).toHaveProperty("description");
+      expect(data).toHaveProperty("tags");
+      expect(data).toHaveProperty("installed");
+    });
+  });
+
+  describe("install edge cases", () => {
+    test("install updates index.ts correctly", async () => {
+      await run("install anthropic stripe");
+      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
+      const { readFileSync } = await import("fs");
+      const content = readFileSync(indexPath, "utf-8");
+      expect(content).toContain("export * as anthropic");
+      expect(content).toContain("export * as stripe");
+    });
+
+    test("--json with mixed success/failure", async () => {
+      const { stdout, exitCode } = await run("install anthropic nonexistent-xyz --json");
+      const data = JSON.parse(stdout);
+      expect(data).toHaveLength(2);
+      expect(data[0].success).toBe(true);
+      expect(data[1].success).toBe(false);
+      expect(exitCode).toBe(1);
+    });
+  });
+
   describe("non-TTY default command", () => {
     test("shows help instead of interactive UI", async () => {
       const { stdout, exitCode } = await run("interactive");
-      // In non-TTY (piped to test), should show help
       expect(stdout).toContain("Non-interactive environment");
       expect(stdout).toContain("connectors list");
+      expect(stdout).toContain("connectors info");
       expect(exitCode).toBe(0);
     });
   });
