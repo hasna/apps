@@ -17,6 +17,7 @@ import {
   removeConnector,
   getConnectorDocs,
 } from "../lib/installer.js";
+import { getAuthStatus } from "../server/auth.js";
 
 // Load versions at startup
 loadConnectorVersions();
@@ -306,6 +307,48 @@ server.registerTool(
           type: "text",
           text: JSON.stringify(
             { ...meta, installed: isInstalled, package: `@hasna/connect-${meta.name}` },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// --- Tool: connector_auth_status ---
+server.registerTool(
+  "connector_auth_status",
+  {
+    title: "Connector Auth Status",
+    description:
+      "Check the authentication status of an installed connector. " +
+      "Returns auth type (oauth/apikey/bearer), whether it's configured, " +
+      "token expiry for OAuth connectors, and environment variable status.",
+    inputSchema: {
+      name: z.string().describe("Connector name (e.g. 'gmail', 'stripe', 'anthropic')"),
+    },
+  },
+  async ({ name }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      return {
+        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        isError: true,
+      };
+    }
+
+    const status = getAuthStatus(name);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              name: meta.name,
+              displayName: meta.displayName,
+              ...status,
+            },
             null,
             2
           ),

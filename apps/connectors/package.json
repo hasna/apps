@@ -5,11 +5,13 @@
   "type": "module",
   "bin": {
     "connectors": "./bin/index.js",
-    "connectors-mcp": "./bin/mcp.js"
+    "connectors-mcp": "./bin/mcp.js",
+    "connectors-serve": "./bin/serve.js"
   },
   "files": [
     "bin/",
     "dist/",
+    "dashboard/dist/",
     "connectors/",
     "README.md"
   ],
@@ -22,7 +24,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun",
+    "build": "cd dashboard && bun run build && cd .. && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun",
+    "build:dashboard": "cd dashboard && bun run build",
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

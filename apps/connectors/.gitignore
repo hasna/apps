@@ -21,3 +21,6 @@ bun.lock
 
 # Test coverage
 coverage/
+
+# Local connector installs
+.connectors/

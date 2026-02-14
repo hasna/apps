@@ -368,4 +368,24 @@ program
     }
   });
 
+// Serve command — local dashboard for auth management
+program
+  .command("serve")
+  .option("-p, --port <port>", "Port to run the dashboard on", "19426")
+  .description("Start local dashboard for connector auth management")
+  .action(async (options: { port: string }) => {
+    const port = parseInt(options.port, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      console.log(chalk.red("Invalid port number"));
+      process.exit(1);
+      return;
+    }
+
+    console.log(chalk.bold("\nStarting Connectors Dashboard...\n"));
+
+    // Dynamically import and start the server
+    const { startServer } = await import("../server/serve.js");
+    await startServer(port);
+  });
+
 program.parse();
