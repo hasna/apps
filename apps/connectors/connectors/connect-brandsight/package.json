@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-brandsight",
-  "version": "0.1.9",
+  "version": "0.1.0",
   "description": "Brandsight/GoDaddy Domain API connector CLI - A TypeScript wrapper for domain management",
   "type": "module",
   "bin": {

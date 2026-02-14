@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googledocs",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Google Docs API v1 connector - Create, read, and edit Google Docs programmatically",
   "type": "module",
   "bin": {

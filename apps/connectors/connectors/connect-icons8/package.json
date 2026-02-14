@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-icons8",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Icons8 API connector - A TypeScript wrapper for Icons8 API with multi-profile support",
   "type": "module",
   "bin": {

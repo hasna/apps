@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-hedra",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Hedra API connector - A TypeScript wrapper for the Hedra AI video generation API with multi-profile support",
   "type": "module",
   "bin": {

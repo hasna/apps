@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-stripe",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Stripe API connector - A TypeScript CLI for interacting with the Stripe API with multi-profile support",
   "type": "module",
   "bin": {

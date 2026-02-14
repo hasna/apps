@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-zoom",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Zoom connector CLI - Meetings, Webinars, Recordings, Users with multi-profile support",
   "type": "module",
   "bin": {

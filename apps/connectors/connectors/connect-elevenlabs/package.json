@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-elevenlabs",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "ElevenLabs API connector CLI - Text-to-speech, voice cloning, sound effects, and more",
   "type": "module",
   "bin": {

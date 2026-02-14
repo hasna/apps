@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-shadcn",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Shadcn CLI wrapper - Execute shadcn commands programmatically with multi-profile support",
   "type": "module",
   "bin": {

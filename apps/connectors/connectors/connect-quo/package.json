@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-quo",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Quo (OpenPhone) API connector - A TypeScript CLI for the Quo messaging and calling API",
   "type": "module",
   "bin": {

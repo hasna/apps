@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-gmail",
-  "version": "0.3.2",
+  "version": "0.1.0",
   "description": "Gmail API connector CLI - A TypeScript wrapper for Gmail with OAuth2 authentication",
   "type": "module",
   "bin": {

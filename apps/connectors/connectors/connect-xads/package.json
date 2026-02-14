@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-xads",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Twitter/X Ads API connector CLI - Manage ad campaigns, promoted tweets, targeting, and analytics",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-anthropic",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Anthropic API connector CLI - Claude models for chat and code generation",
   "type": "module",
   "bin": {

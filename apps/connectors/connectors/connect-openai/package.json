@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-openai",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "OpenAI API connector CLI - Chat, embeddings, and images",
   "type": "module",
   "bin": {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-heygen",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "HeyGen API connector - TypeScript wrapper and CLI for HeyGen AI video generation API",
   "type": "module",
   "bin": {

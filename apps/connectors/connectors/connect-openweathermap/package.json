@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-openweathermap",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenWeatherMap API connector CLI - Get current weather, forecasts, and air quality data",
   "type": "module",
   "bin": {

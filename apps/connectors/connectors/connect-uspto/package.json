@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-uspto",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "USPTO API connector CLI - Patent and trademark search with browser automation",
   "type": "module",
   "bin": {

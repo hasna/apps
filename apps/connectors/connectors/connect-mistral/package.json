@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-mistral",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Mistral AI API connector CLI - Chat completions and embeddings",
   "type": "module",
   "bin": {

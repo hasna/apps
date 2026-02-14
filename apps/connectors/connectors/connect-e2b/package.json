@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-e2b",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "E2B Code Interpreter API connector - Run code in secure cloud sandboxes",
   "type": "module",
   "bin": {

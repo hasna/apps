@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-sedo",
-  "version": "0.1.9",
+  "version": "0.1.0",
   "description": "Sedo Domain Marketplace API connector CLI - Search, list, and manage domains on Sedo",
   "author": "Hasna",
   "license": "MIT",

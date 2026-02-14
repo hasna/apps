@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googlecalendar",
-  "version": "0.0.8",
+  "version": "0.1.0",
   "description": "Google Calendar API connector - TypeScript CLI and library for Google Calendar with OAuth2 authentication and multi-profile support",
   "type": "module",
   "bin": {

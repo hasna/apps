@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-maropost",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Maropost API connector - TypeScript SDK and CLI for Maropost marketing automation platform",
   "type": "module",
   "bin": {

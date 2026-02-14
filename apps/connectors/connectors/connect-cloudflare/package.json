@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-cloudflare",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "Cloudflare API connector CLI - A TypeScript wrapper for the Cloudflare API with multi-profile support",
   "type": "module",
   "bin": {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-discord",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Discord API connector CLI - Guilds, Channels, Messages, Webhooks, Commands, and more",
   "type": "module",
   "bin": {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-aws",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "AWS connector CLI - S3, Lambda, DynamoDB with multi-profile support",
   "type": "module",
   "bin": {

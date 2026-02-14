@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-stabilityai",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "Stability AI API connector CLI - Image generation, editing, upscaling, and 3D model generation",
   "type": "module",
   "bin": {

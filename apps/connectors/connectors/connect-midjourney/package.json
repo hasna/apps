@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-midjourney",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Midjourney API connector - A TypeScript wrapper for Midjourney image generation via Discord bot or third-party API",
   "type": "module",
   "bin": {

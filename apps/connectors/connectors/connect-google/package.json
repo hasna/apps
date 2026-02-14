@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-google",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "Google Workspace API connector CLI - Gmail, Drive, Calendar, Docs, Sheets",
   "type": "module",
   "bin": {

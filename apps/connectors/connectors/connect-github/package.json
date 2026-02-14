@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-github",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "GitHub API connector with multi-profile support",
   "type": "module",
   "bin": {

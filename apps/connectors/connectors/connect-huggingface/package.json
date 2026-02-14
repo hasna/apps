@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-huggingface",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "HuggingFace API connector - A TypeScript client for the HuggingFace API with multi-profile support",
   "type": "module",
   "bin": {

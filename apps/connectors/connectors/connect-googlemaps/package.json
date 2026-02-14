@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googlemaps",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Google Maps Platform connector - Geocoding, Directions, Places, and Distance Matrix",
   "type": "module",
   "main": "./dist/index.js",

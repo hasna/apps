@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-browseruse",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Browser Use Cloud API connector CLI - AI-powered browser automation tasks, sessions, and skills",
   "type": "module",
   "bin": {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-xai",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "xAI Grok API connector CLI - Chat completions with Grok models",
   "type": "module",
   "bin": {

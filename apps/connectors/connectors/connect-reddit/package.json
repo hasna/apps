@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-reddit",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Reddit connector CLI - Posts, Comments, Subreddits with OAuth2 multi-profile support",
   "type": "module",
   "bin": {

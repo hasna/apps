@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-meta",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "Meta Marketing API connector CLI - Facebook/Instagram ads, campaigns, audiences, and insights",
   "type": "module",
   "bin": {

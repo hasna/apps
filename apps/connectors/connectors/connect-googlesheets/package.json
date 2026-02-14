@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googlesheets",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Google Sheets API v4 connector - TypeScript client and CLI for reading/writing spreadsheets",
   "type": "module",
   "bin": {

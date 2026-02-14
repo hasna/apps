@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-youtube",
-  "version": "0.1.2",
+  "version": "0.1.0",
   "description": "YouTube Data API v3 and Analytics API connector CLI - Videos, channels, playlists, comments, live streams, and analytics",
   "type": "module",
   "bin": {

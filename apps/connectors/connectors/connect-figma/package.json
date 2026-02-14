@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-figma",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Figma connector CLI - Files, Comments, Projects, Components with multi-profile support",
   "type": "module",
   "bin": {

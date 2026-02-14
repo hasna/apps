@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googledrive",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "description": "Google Drive API connector CLI - A TypeScript wrapper for Google Drive with OAuth2 authentication",
   "type": "module",
   "bin": {

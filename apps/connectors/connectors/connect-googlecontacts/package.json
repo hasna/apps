@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googlecontacts",
-  "version": "0.0.11",
+  "version": "0.1.0",
   "description": "Google Contacts (People API) connector - A TypeScript library and CLI for interacting with Google Contacts",
   "type": "module",
   "bin": {

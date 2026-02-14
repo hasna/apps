@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-firecrawl",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Firecrawl web scraping API connector - Scrape, crawl, and map websites with AI-powered extraction",
   "type": "module",
   "bin": {

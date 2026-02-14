@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-pandadoc",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "PandaDoc API connector - A TypeScript CLI for the PandaDoc API with multi-profile support",
   "type": "module",
   "bin": {

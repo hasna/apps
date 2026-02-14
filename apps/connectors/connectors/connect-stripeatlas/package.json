@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-stripeatlas",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Stripe Atlas connector - Browser automation for Stripe Atlas dashboard (no public API)",
   "type": "module",
   "bin": {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-mercury",
-  "version": "0.1.7",
+  "version": "0.1.0",
   "description": "Mercury Banking API connector CLI - Accounts, transactions, transfers, invoices, and treasury management",
   "type": "module",
   "bin": {

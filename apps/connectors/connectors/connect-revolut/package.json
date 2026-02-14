@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-revolut",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Revolut Business API connector CLI - Accounts, Payments, Counterparties, Transactions, Exchange, Cards with multi-profile support",
   "type": "module",
   "bin": {

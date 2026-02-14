@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-googlegemini",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Google Gemini API connector CLI - Text, image, video generation with Gemini, Nano Banana, and Veo models",
   "type": "module",
   "main": "./dist/index.js",

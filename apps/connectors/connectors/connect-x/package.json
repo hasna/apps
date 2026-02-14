@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connect-x",
-  "version": "0.0.14",
+  "version": "0.1.0",
   "description": "X (Twitter) API v2 connector CLI - Tweets, users, and search",
   "type": "module",
   "bin": {
