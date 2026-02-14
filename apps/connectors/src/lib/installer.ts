@@ -168,6 +168,82 @@ export function getInstalledConnectors(targetDir: string = process.cwd()): strin
 }
 
 /**
+ * Parsed documentation from a connector's CLAUDE.md
+ */
+export interface ConnectorDocs {
+  overview: string;
+  auth: string;
+  envVars: { variable: string; description: string }[];
+  cliCommands: string;
+  dataStorage: string;
+  raw: string;
+}
+
+/**
+ * Read and parse a connector's documentation (CLAUDE.md)
+ */
+export function getConnectorDocs(name: string): ConnectorDocs | null {
+  const connectorPath = getConnectorPath(name);
+  const claudeMdPath = join(connectorPath, "CLAUDE.md");
+
+  if (!existsSync(claudeMdPath)) return null;
+
+  const raw = readFileSync(claudeMdPath, "utf-8");
+
+  return {
+    overview: extractSection(raw, "Project Overview"),
+    auth: extractSection(raw, "Authentication"),
+    envVars: parseEnvVarsTable(extractSection(raw, "Environment Variables")),
+    cliCommands: extractSection(raw, "CLI Commands"),
+    dataStorage: extractSection(raw, "Data Storage"),
+    raw,
+  };
+}
+
+/**
+ * Extract a markdown section by heading name
+ */
+function extractSection(markdown: string, heading: string): string {
+  // Match ## Heading or ### Heading
+  const regex = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, "m");
+  const match = regex.exec(markdown);
+  if (!match) return "";
+
+  const start = match.index + match[0].length;
+  // Find the next heading of same or higher level
+  const nextHeading = markdown.slice(start).search(/^##\s/m);
+  const content = nextHeading === -1
+    ? markdown.slice(start)
+    : markdown.slice(start, start + nextHeading);
+
+  return content.trim();
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Parse a markdown table of env vars into structured data
+ */
+function parseEnvVarsTable(section: string): { variable: string; description: string }[] {
+  if (!section) return [];
+
+  const vars: { variable: string; description: string }[] = [];
+  const lines = section.split("\n");
+
+  for (const line of lines) {
+    // Match table rows: | `VAR_NAME` | Description |
+    const match = line.match(/\|\s*`([^`]+)`\s*\|\s*(.+?)\s*\|/);
+    if (match && match[1] !== "Variable") {
+      vars.push({ variable: match[1], description: match[2].trim() });
+    }
+  }
+
+  return vars;
+}
+
+/**
  * Remove an installed connector
  */
 export function removeConnector(

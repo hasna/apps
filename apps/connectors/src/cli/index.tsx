@@ -17,6 +17,7 @@ import {
   installConnectors,
   getInstalledConnectors,
   removeConnector,
+  getConnectorDocs,
 } from "../lib/installer.js";
 
 // Load versions from connector package.json files
@@ -29,7 +30,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.0.4");
+  .version("0.0.5");
 
 // Interactive mode (default)
 program
@@ -228,6 +229,97 @@ program
     console.log(`  Tags:        ${meta.tags.join(", ")}`);
     console.log(`  Installed:   ${isInstalled ? chalk.green("yes") : "no"}`);
     console.log(`  Package:     @hasna/connect-${meta.name}`);
+  });
+
+// Docs command - show connector documentation
+program
+  .command("docs")
+  .argument("<connector>", "Connector name")
+  .option("--json", "Output as structured JSON", false)
+  .option("--raw", "Output raw markdown", false)
+  .description("Show connector documentation (auth, env vars, API, CLI commands)")
+  .action((connector: string, options: { json: boolean; raw: boolean }) => {
+    const meta = getConnector(connector);
+    if (!meta) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: `Connector '${connector}' not found` }));
+      } else {
+        console.log(chalk.red(`Connector '${connector}' not found`));
+      }
+      process.exit(1);
+      return;
+    }
+
+    const docs = getConnectorDocs(connector);
+    if (!docs) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: `No documentation found for '${connector}'` }));
+      } else {
+        console.log(chalk.red(`No documentation found for '${connector}'`));
+      }
+      process.exit(1);
+      return;
+    }
+
+    if (options.raw) {
+      console.log(docs.raw);
+      return;
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        name: meta.name,
+        displayName: meta.displayName,
+        version: meta.version,
+        category: meta.category,
+        description: meta.description,
+        overview: docs.overview,
+        auth: docs.auth,
+        envVars: docs.envVars,
+        cliCommands: docs.cliCommands,
+        dataStorage: docs.dataStorage,
+      }, null, 2));
+      return;
+    }
+
+    // Human-readable output
+    console.log(chalk.bold(`\n${meta.displayName} — Documentation`));
+    console.log(chalk.dim("─".repeat(50)));
+
+    if (docs.overview) {
+      console.log(chalk.bold("\nOverview"));
+      console.log(`  ${docs.overview.split("\n")[0]}`);
+    }
+
+    if (docs.auth) {
+      console.log(chalk.bold("\nAuthentication"));
+      for (const line of docs.auth.split("\n").filter(Boolean)) {
+        console.log(`  ${line}`);
+      }
+    }
+
+    if (docs.envVars.length > 0) {
+      console.log(chalk.bold("\nEnvironment Variables"));
+      for (const v of docs.envVars) {
+        console.log(`  ${chalk.cyan(v.variable.padEnd(30))}${v.description}`);
+      }
+    }
+
+    if (docs.cliCommands) {
+      console.log(chalk.bold("\nCLI Commands"));
+      for (const line of docs.cliCommands.split("\n")) {
+        console.log(`  ${line}`);
+      }
+    }
+
+    if (docs.dataStorage) {
+      console.log(chalk.bold("\nData Storage"));
+      for (const line of docs.dataStorage.split("\n").filter(Boolean)) {
+        console.log(`  ${line}`);
+      }
+    }
+
+    console.log();
   });
 
 // Remove command

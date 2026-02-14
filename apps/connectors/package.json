@@ -1,6 +1,6 @@
 {
   "name": "@hasna/connectors",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Open source connector library - Install API connectors with a single command",
   "type": "module",
   "bin": {
@@ -24,6 +24,7 @@
     "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/index.ts --outdir ./dist --target bun",
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

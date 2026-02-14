@@ -26,6 +26,8 @@ export {
   removeConnector,
   connectorExists,
   getConnectorPath,
+  getConnectorDocs,
   type InstallResult,
   type InstallOptions,
+  type ConnectorDocs,
 } from "./lib/installer.js";
