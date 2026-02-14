@@ -15,8 +15,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
 
   const stmt = db.prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, content, priority, working_dir, repository, branch, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (session_id, from_agent, to_agent, channel, content, priority, working_dir, repository, branch, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
 
@@ -24,6 +24,7 @@ export function sendMessage(opts: SendMessageOptions): Message {
     sessionId,
     opts.from,
     opts.to,
+    opts.channel || null,
     opts.content,
     opts.priority || "normal",
     opts.working_dir || null,
@@ -51,6 +52,10 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   if (opts.to) {
     conditions.push("to_agent = ?");
     params.push(opts.to);
+  }
+  if (opts.channel) {
+    conditions.push("channel = ?");
+    params.push(opts.channel);
   }
   if (opts.since) {
     conditions.push("created_at > ?");
@@ -88,6 +93,15 @@ export function markSessionRead(sessionId: string, reader: string): number {
     `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE session_id = ? AND to_agent = ? AND read_at IS NULL`
   );
   const result = stmt.run(sessionId, reader);
+  return result.changes;
+}
+
+export function markChannelRead(channelName: string, reader: string): number {
+  const db = getDb();
+  const stmt = db.prepare(
+    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE channel = ? AND from_agent != ? AND read_at IS NULL`
+  );
+  const result = stmt.run(channelName, reader);
   return result.changes;
 }
 

@@ -5,6 +5,7 @@ export interface Message {
   session_id: string;
   from_agent: string;
   to_agent: string;
+  channel: string | null;
   content: string;
   priority: Priority;
   working_dir: string | null;
@@ -23,11 +24,30 @@ export interface Session {
   unread_count: number;
 }
 
+export interface Channel {
+  name: string;
+  description: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ChannelMember {
+  channel: string;
+  agent: string;
+  joined_at: string;
+}
+
+export interface ChannelInfo extends Channel {
+  member_count: number;
+  message_count: number;
+}
+
 export interface SendMessageOptions {
   from: string;
   to: string;
   content: string;
   session_id?: string;
+  channel?: string;
   priority?: Priority;
   working_dir?: string;
   repository?: string;
@@ -39,6 +59,7 @@ export interface ReadMessagesOptions {
   session_id?: string;
   from?: string;
   to?: string;
+  channel?: string;
   since?: string;
   limit?: number;
   unread_only?: boolean;
