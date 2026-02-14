@@ -83,14 +83,23 @@ program
     }
 
     console.log(chalk.bold("\nInstalling connectors...\n"));
+    const succeeded: string[] = [];
     for (const result of results) {
       if (result.success) {
         console.log(chalk.green(`✓ ${result.connector}`));
+        succeeded.push(result.connector);
       } else {
         console.log(chalk.red(`✗ ${result.connector}: ${result.error}`));
       }
     }
-    console.log(chalk.dim("\nConnectors installed to .connectors/"));
+
+    if (succeeded.length > 0) {
+      console.log(chalk.bold("\nNext steps:"));
+      const importNames = succeeded.join(", ");
+      console.log(chalk.dim(`  1. Import:  `) + `import { ${importNames} } from './.connectors'`);
+      console.log(chalk.dim(`  2. Set key: `) + `connectors docs ${succeeded[0]}` + chalk.dim(` (see env vars)`));
+      console.log(chalk.dim(`  3. Explore: `) + `connectors serve` + chalk.dim(` (dashboard for auth management)`));
+    }
     process.exit(results.every((r) => r.success) ? 0 : 1);
   });
 
@@ -389,6 +398,44 @@ program
 
     const { startServer } = await import("../server/serve.js");
     await startServer(port, { open: options.open });
+  });
+
+// Update command — refresh installed connectors from the package
+program
+  .command("update")
+  .description("Update all installed connectors to the latest version from the package")
+  .option("--json", "Output as JSON", false)
+  .action((options: { json: boolean }) => {
+    const installed = getInstalledConnectors();
+
+    if (installed.length === 0) {
+      if (options.json) {
+        console.log(JSON.stringify({ updated: [] }));
+      } else {
+        console.log(chalk.dim("No connectors installed. Run: connectors install <name>"));
+      }
+      return;
+    }
+
+    const results = installed.map((name) =>
+      installConnector(name, { overwrite: true })
+    );
+
+    if (options.json) {
+      console.log(JSON.stringify(results, null, 2));
+      process.exit(results.every((r) => r.success) ? 0 : 1);
+      return;
+    }
+
+    console.log(chalk.bold(`\nUpdating ${installed.length} connector(s)...\n`));
+    for (const result of results) {
+      if (result.success) {
+        console.log(chalk.green(`✓ ${result.connector}`));
+      } else {
+        console.log(chalk.red(`✗ ${result.connector}: ${result.error}`));
+      }
+    }
+    process.exit(results.every((r) => r.success) ? 0 : 1);
   });
 
 program.parse();

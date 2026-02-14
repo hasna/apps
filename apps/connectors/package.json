@@ -24,12 +24,13 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun",
+    "build": "cd dashboard && bun run build && cd .. && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --outDir ./dist",
     "build:dashboard": "cd dashboard && bun run build",
+    "postinstall": "cd dashboard && bun install",
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun test && bun run build"
   },
   "keywords": [
     "connectors",

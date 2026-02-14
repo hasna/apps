@@ -159,9 +159,11 @@ export async function startServer(port: number, options?: { open?: boolean }): P
   const dashboardExists = existsSync(dashboardDir);
 
   if (!dashboardExists) {
-    console.error(
-      `Dashboard not built at ${dashboardDir}. Run: cd dashboard && bun run build`
-    );
+    console.error(`\nDashboard not found at: ${dashboardDir}`);
+    console.error(`Run this to build it:\n`);
+    console.error(`  cd dashboard && bun install && bun run build\n`);
+    console.error(`Or from the project root:\n`);
+    console.error(`  bun run build:dashboard\n`);
   }
 
   const server = Bun.serve({

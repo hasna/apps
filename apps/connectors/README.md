@@ -1,6 +1,6 @@
 # Connectors
 
-Open source library of 63 TypeScript API connectors. Install any connector with a single command.
+Open source library of 62 TypeScript API connectors. Install any connector with a single command.
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ connectors open                          # Open dashboard in browser
 connectors dashboard                     # Alias for serve
 ```
 
-The dashboard shows all 63 connectors with:
+The dashboard shows all 62 connectors with:
 - Install status and auth type (OAuth, API Key, Bearer)
 - Configure API keys via dialog
 - Run OAuth flows for Google connectors
@@ -98,7 +98,7 @@ connectors info stripe --json
 connectors docs gmail --json
 ```
 
-## Available Connectors (63)
+## Available Connectors (62)
 
 ### AI & ML (12)
 | Connector | Description |
@@ -116,7 +116,7 @@ connectors docs gmail --json
 | elevenlabs | AI voice synthesis and cloning |
 | reducto | Document processing and extraction |
 
-### Developer Tools (10)
+### Developer Tools (9)
 | Connector | Description |
 |-----------|-------------|
 | github | Repositories, issues, PRs, and actions |
@@ -127,7 +127,6 @@ connectors docs gmail --json
 | aws | Amazon Web Services |
 | e2b | Code interpreter sandboxes |
 | firecrawl | Web scraping and crawling |
-| browseruse | Browser automation for AI |
 | shadcn | UI component registry |
 
 ### Design & Content (4)
@@ -194,7 +193,7 @@ connectors docs gmail --json
 |-----------|-------------|
 | notion | Pages, databases, blocks, and property management |
 | quo | Business quotes and invoices |
-| tinker | Internal tooling |
+| tinker | LLM fine-tuning and training API |
 | sedo | Domain marketplace |
 
 ### Patents & IP (1)
@@ -298,19 +297,26 @@ Configuration stored in `~/.connect/{connector-name}/`:
 
 ## Development
 
+**Prerequisites:** [Bun](https://bun.sh/) >= 1.0.0
+
 ```bash
-# Install dependencies
+# Install all dependencies (dashboard deps are auto-installed via postinstall)
 bun install
 
-# Run CLI in development
-bun run dev
-
-# Build
+# Build everything (dashboard + CLI + MCP + serve)
 bun run build
 
-# Type check
+# Run CLI in development mode
+bun run dev
+
+# Type check the project
 bun run typecheck
+
+# Run the test suite
+bun test
 ```
+
+For more details on adding connectors and contributing, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Contributing
 
