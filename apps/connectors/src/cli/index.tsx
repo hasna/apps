@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.0.5");
+  .version("0.1.0");
 
 // Interactive mode (default)
 program
@@ -371,9 +371,12 @@ program
 // Serve command — local dashboard for auth management
 program
   .command("serve")
+  .alias("dashboard")
   .option("-p, --port <port>", "Port to run the dashboard on", "19426")
+  .option("--open", "Open dashboard in browser (default)", true)
+  .option("--no-open", "Don't open browser automatically")
   .description("Start local dashboard for connector auth management")
-  .action(async (options: { port: string }) => {
+  .action(async (options: { port: string; open: boolean }) => {
     const port = parseInt(options.port, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
       console.log(chalk.red("Invalid port number"));
@@ -383,9 +386,25 @@ program
 
     console.log(chalk.bold("\nStarting Connectors Dashboard...\n"));
 
-    // Dynamically import and start the server
     const { startServer } = await import("../server/serve.js");
-    await startServer(port);
+    await startServer(port, { open: options.open });
+  });
+
+// Open command — quick alias to open the dashboard
+program
+  .command("open")
+  .option("-p, --port <port>", "Port to run the dashboard on", "19426")
+  .description("Open the connectors dashboard in your browser")
+  .action(async (options: { port: string }) => {
+    const port = parseInt(options.port, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      console.log(chalk.red("Invalid port number"));
+      process.exit(1);
+      return;
+    }
+
+    const { startServer } = await import("../server/serve.js");
+    await startServer(port, { open: true });
   });
 
 program.parse();

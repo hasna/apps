@@ -1,6 +1,6 @@
 # Connectors
 
-Open source library of 62 TypeScript API connectors. Install any connector with a single command.
+Open source library of 63 TypeScript API connectors. Install any connector with a single command.
 
 ## Quick Start
 
@@ -13,6 +13,9 @@ npx @hasna/connectors install figma stripe github
 
 # List all available connectors
 npx @hasna/connectors list
+
+# Open the auth dashboard
+npx @hasna/connectors serve
 ```
 
 ## Installation
@@ -25,61 +28,77 @@ bun install -g @hasna/connectors
 npx @hasna/connectors
 ```
 
-## NPM Auth (Optional)
-
-If you need a scoped registry token (publish or private installs), copy an example file and set `NPM_TOKEN`:
-
-```bash
-# Repo root
-cp .npmrc.example .npmrc
-
-# Or per-connector
-cp connectors/connect-<name>/.npmrc.example connectors/connect-<name>/.npmrc
-```
-
-See `CONTRIBUTING.md` for publishing and secrets guidance.
-
 ## Usage
-
-### Interactive Mode
-
-Run without arguments to browse connectors by category:
-
-```bash
-connectors
-```
 
 ### Install Connectors
 
 ```bash
-# Install one or more connectors
-connectors install figma stripe github
-
-# Connectors are installed to .connectors/ in your project
+connectors install figma stripe github   # Install connectors
+connectors install figma --overwrite     # Overwrite existing
+connectors remove figma                  # Remove a connector
 ```
 
-### Search
+### Browse & Search
 
 ```bash
-# Search by name, description, or tags
-connectors search payment
-connectors search ai
+connectors                               # Interactive browser (TTY)
+connectors list                          # List all connectors
+connectors list --category "AI & ML"     # Filter by category
+connectors search payment                # Search connectors
+connectors info stripe                   # Connector details
+connectors docs gmail                    # Auth, env vars, CLI docs
 ```
 
-### List by Category
+### Dashboard
+
+Start a local web dashboard to manage connector authentication:
 
 ```bash
-connectors list --category "AI & ML"
-connectors list --category "Developer Tools"
+connectors serve                         # http://localhost:19426
+connectors serve --port 3000             # Custom port
+connectors serve --no-open               # Don't auto-open browser
+connectors open                          # Open dashboard in browser
+connectors dashboard                     # Alias for serve
 ```
 
-### Remove
+The dashboard shows all 63 connectors with:
+- Install status and auth type (OAuth, API Key, Bearer)
+- Configure API keys via dialog
+- Run OAuth flows for Google connectors
+- Monitor token expiry and refresh tokens
+- Light/dark theme, sorting, filtering, pagination
+
+### MCP Server (for AI Agents)
 
 ```bash
-connectors remove figma
+connectors-mcp                           # Start MCP server on stdio
 ```
 
-## Available Connectors (62)
+Add to your MCP config:
+```json
+{
+  "mcpServers": {
+    "connectors": {
+      "command": "connectors-mcp"
+    }
+  }
+}
+```
+
+Tools: `search_connectors`, `list_connectors`, `connector_docs`, `connector_info`, `install_connector`, `remove_connector`, `list_installed`, `connector_auth_status`
+
+### JSON Output (for scripts & agents)
+
+Every command supports `--json` for machine-readable output:
+
+```bash
+connectors list --json
+connectors search ai --json
+connectors info stripe --json
+connectors docs gmail --json
+```
+
+## Available Connectors (63)
 
 ### AI & ML (12)
 | Connector | Description |
@@ -170,9 +189,10 @@ connectors remove figma
 | openweathermap | Weather data and forecasts |
 | brandsight | Brand monitoring |
 
-### Business Tools (3)
+### Business Tools (4)
 | Connector | Description |
 |-----------|-------------|
+| notion | Pages, databases, blocks, and property management |
 | quo | Business quotes and invoices |
 | tinker | Internal tooling |
 | sedo | Domain marketplace |

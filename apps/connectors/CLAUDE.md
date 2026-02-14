@@ -4,7 +4,12 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-`@hasna/connectors` is an open-source monorepo of TypeScript API connectors. It provides a CLI to install connectors into projects and a library of curated API integrations.
+`@hasna/connectors` is an open-source monorepo of 63 TypeScript API connectors. It provides:
+
+- **CLI** (`connectors`) — Install, search, list, and manage connectors
+- **Dashboard** (`connectors serve`) — Local web dashboard (shadcn/ui) for auth management
+- **MCP Server** (`connectors-mcp`) — Model Context Protocol server for AI agents
+- **Library** — Programmatic API for importing connectors into TypeScript projects
 
 ## Build & Run Commands
 
@@ -12,14 +17,118 @@ This file provides guidance to Claude Code when working with this repository.
 # Install dependencies
 bun install
 
+# Install dashboard dependencies
+cd dashboard && bun install && cd ..
+
 # Run CLI in development
 bun run dev
 
-# Build for distribution
+# Build everything (dashboard + CLI + MCP + serve)
 bun run build
+
+# Build dashboard only
+bun run build:dashboard
 
 # Type check
 bun run typecheck
+
+# Run tests
+bun test
+
+# Publish to npm
+npm publish
+```
+
+## CLI Commands
+
+### Interactive Mode
+
+```bash
+connectors              # Interactive connector browser (TTY only)
+connectors i            # Alias
+```
+
+### Install & Remove
+
+```bash
+connectors install <names...>        # Install one or more connectors
+connectors install figma stripe      # Example
+connectors install figma --overwrite # Overwrite existing
+connectors install figma --json      # JSON output
+connectors add <names...>           # Alias for install
+
+connectors remove <name>            # Remove installed connector
+connectors rm <name>                # Alias for remove
+```
+
+### Browse & Search
+
+```bash
+connectors list                     # List all 63 connectors
+connectors list --installed         # List only installed connectors
+connectors list --category "AI & ML" # Filter by category
+connectors list --json              # JSON output
+connectors ls                       # Alias for list
+
+connectors search <query>           # Search by name, description, or tags
+connectors search payment --json    # JSON output
+
+connectors categories               # List all categories with counts
+connectors categories --json        # JSON output
+```
+
+### Connector Details
+
+```bash
+connectors info <name>              # Show connector metadata
+connectors info stripe --json       # JSON output
+
+connectors docs <name>              # Show connector documentation (auth, env vars, API)
+connectors docs gmail --json        # Structured JSON output
+connectors docs gmail --raw         # Raw CLAUDE.md markdown
+```
+
+### Dashboard (Auth Management)
+
+```bash
+connectors serve                    # Start dashboard at http://localhost:19426
+connectors serve --port 3000        # Custom port
+connectors serve --no-open          # Don't open browser
+connectors dashboard                # Alias for serve
+connectors open                     # Start dashboard and open browser
+```
+
+The dashboard provides:
+- All 63 connectors with installed/not-installed status
+- Auth status detection (OAuth, API Key, Bearer Token)
+- API key configuration via dialog
+- OAuth flow for Google connectors (Gmail, Calendar, Drive, etc.)
+- Token refresh and expiry monitoring
+- Light/dark theme toggle
+- Data table with sorting, filtering, pagination (10/page)
+- Copy-to-clipboard install commands for not-installed connectors
+
+### MCP Server
+
+```bash
+connectors-mcp                      # Start MCP server on stdio
+```
+
+MCP Tools available:
+- `search_connectors` — Search by name, keyword, or description
+- `list_connectors` — List all or by category
+- `connector_docs` — Get auth, env vars, CLI commands for a connector
+- `connector_info` — Get metadata and install status
+- `install_connector` — Install connectors
+- `remove_connector` — Remove connectors
+- `list_installed` — List installed connectors
+- `connector_auth_status` — Check auth status (type, configured, token expiry)
+
+### Standalone Dashboard
+
+```bash
+connectors-serve                    # Start dashboard server (standalone binary)
+connectors-serve --port 3000        # Custom port
 ```
 
 ## Code Style
@@ -34,17 +143,47 @@ bun run typecheck
 
 ```
 ├── src/
-│   ├── cli/           # Interactive CLI (Ink/React)
+│   ├── cli/              # Interactive CLI (Ink/React)
 │   │   ├── components/
 │   │   └── index.tsx
-│   ├── lib/           # Core library
-│   │   ├── installer.ts
-│   │   └── registry.ts
-│   └── index.ts       # Library exports
-├── connectors/        # Individual connector packages
-│   └── connect-*/     # Each connector
-└── bin/               # Built CLI output
+│   ├── lib/              # Core library
+│   │   ├── installer.ts  # Install/remove connectors
+│   │   └── registry.ts   # 63 connector definitions
+│   ├── mcp/              # MCP server for AI agents
+│   │   └── index.ts
+│   ├── server/           # Dashboard server
+│   │   ├── auth.ts       # Auth detection, token management
+│   │   ├── dashboard.ts  # Legacy HTML template (unused)
+│   │   ├── index.ts      # Standalone entry point
+│   │   └── serve.ts      # HTTP server + API routes
+│   └── index.ts          # Library exports
+├── dashboard/            # React frontend (Vite + shadcn/ui)
+│   ├── src/
+│   │   ├── components/   # shadcn/ui + app components
+│   │   ├── app.tsx       # Main dashboard app
+│   │   └── main.tsx      # React entry point
+│   └── dist/             # Built dashboard (served by server)
+├── connectors/           # Individual connector packages
+│   └── connect-*/        # Each connector (63 total)
+└── bin/                  # Built CLI output
+    ├── index.js          # CLI binary
+    ├── mcp.js            # MCP server binary
+    └── serve.js          # Dashboard server binary
 ```
+
+## Dashboard API Routes
+
+The dashboard server (port 19426) exposes:
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/` | GET | Dashboard UI |
+| `/api/connectors` | GET | All connectors with auth status |
+| `/api/connectors/:name` | GET | Single connector details |
+| `/api/connectors/:name/key` | POST | Save API key (`{ key, field? }`) |
+| `/api/connectors/:name/refresh` | POST | Refresh OAuth token |
+| `/oauth/:name/start` | GET | Start OAuth flow (redirects) |
+| `/oauth/:name/callback` | GET | OAuth callback handler |
 
 ## Connector Blacklist
 
@@ -90,15 +229,25 @@ When adding connectors from the dev folder:
 6. Ensure no secrets or API keys are committed
 7. Update `src/lib/registry.ts` to include the connector
 
-## Environment Variables
-
-Each connector has its own environment variables documented in its README.md and CLAUDE.md files.
-
-## Data Storage
+## Auth & Data Storage
 
 Connectors store configuration in `~/.connect/connect-{name}/`:
-- `current_profile` - Active profile name
-- `profiles/` - Profile JSON files
+- `current_profile` — Active profile name
+- `credentials.json` — OAuth client credentials (shared across profiles)
+- `profiles/` — Profile JSON files with API keys and tokens
+
+## Publishing
+
+```bash
+# Bump version in package.json
+# Build everything
+bun run build
+
+# Publish
+npm publish
+```
+
+The npm package includes `bin/`, `dist/`, `dashboard/dist/`, and `connectors/`.
 
 ## Dependencies
 
@@ -106,3 +255,6 @@ Connectors store configuration in `~/.connect/connect-{name}/`:
 - chalk: Terminal styling
 - ink: React-based interactive CLI
 - ink-select-input: Selection component for Ink
+- @modelcontextprotocol/sdk: MCP server
+- zod: Schema validation (MCP)
+- Dashboard: React 19, Tailwind CSS v4, shadcn/ui, @tanstack/react-table, Radix UI

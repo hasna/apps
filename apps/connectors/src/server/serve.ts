@@ -128,7 +128,13 @@ function serveStaticFile(filePath: string): Response | null {
   });
 }
 
-export async function startServer(port: number): Promise<void> {
+export interface ServeOptions {
+  port: number;
+  open?: boolean;
+}
+
+export async function startServer(port: number, options?: { open?: boolean }): Promise<void> {
+  const shouldOpen = options?.open ?? true;
   loadConnectorVersions();
 
   const dashboardDir = resolveDashboardDir();
@@ -297,18 +303,20 @@ export async function startServer(port: number): Promise<void> {
     },
   });
 
-  console.log(`Connectors Dashboard running at http://localhost:${port}`);
+  const url = `http://localhost:${port}`;
+  console.log(`Connectors Dashboard running at ${url}`);
 
-  // Try to open in browser
-  try {
-    const { exec } = await import("child_process");
-    const openCmd = process.platform === "darwin"
-      ? "open"
-      : process.platform === "win32"
-        ? "start"
-        : "xdg-open";
-    exec(`${openCmd} http://localhost:${port}`);
-  } catch {
-    // Silently ignore if we can't open browser
+  if (shouldOpen) {
+    try {
+      const { exec } = await import("child_process");
+      const openCmd = process.platform === "darwin"
+        ? "open"
+        : process.platform === "win32"
+          ? "start"
+          : "xdg-open";
+      exec(`${openCmd} ${url}`);
+    } catch {
+      // Silently ignore if we can't open browser
+    }
   }
 }
