@@ -7,12 +7,14 @@ import { App } from "./components/App.js";
 import {
   CONNECTORS,
   CATEGORIES,
+  getConnector,
   getConnectorsByCategory,
   searchConnectors,
   loadConnectorVersions,
 } from "../lib/registry.js";
 import {
   installConnector,
+  installConnectors,
   getInstalledConnectors,
   removeConnector,
 } from "../lib/installer.js";
@@ -20,12 +22,14 @@ import {
 // Load versions from connector package.json files
 loadConnectorVersions();
 
+const isTTY = process.stdout.isTTY ?? false;
+
 const program = new Command();
 
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.0.3");
+  .version("0.0.4");
 
 // Interactive mode (default)
 program
@@ -33,6 +37,19 @@ program
   .alias("i")
   .description("Interactive connector browser")
   .action(() => {
+    if (!isTTY) {
+      // Non-interactive fallback: show help
+      console.log("Non-interactive environment detected. Use a subcommand:\n");
+      console.log("  connectors list              List all available connectors");
+      console.log("  connectors list --json        List as JSON (for AI agents)");
+      console.log("  connectors search <query>     Search connectors");
+      console.log("  connectors install <names...> Install connectors");
+      console.log("  connectors remove <name>      Remove a connector");
+      console.log("  connectors info <name>        Show connector details");
+      console.log("  connectors categories         List categories");
+      console.log("\nRun 'connectors --help' for full usage.");
+      process.exit(0);
+    }
     render(<App />);
   });
 
@@ -42,27 +59,38 @@ program
   .alias("add")
   .argument("[connectors...]", "Connectors to install")
   .option("-o, --overwrite", "Overwrite existing connectors", false)
+  .option("--json", "Output results as JSON", false)
   .description("Install one or more connectors")
   .action((connectors: string[], options) => {
     if (connectors.length === 0) {
-      // No connectors specified, launch interactive mode
+      if (!isTTY) {
+        console.error("Error: specify connectors to install. Example: connectors install figma stripe");
+        process.exit(1);
+      }
       render(<App />);
       return;
     }
 
-    // Non-interactive install
-    console.log(chalk.bold("\nInstalling connectors...\n"));
+    const results = connectors.map((name) =>
+      installConnector(name, { overwrite: options.overwrite })
+    );
 
-    for (const name of connectors) {
-      const result = installConnector(name, { overwrite: options.overwrite });
-      if (result.success) {
-        console.log(chalk.green(`✓ ${name}`));
-      } else {
-        console.log(chalk.red(`✗ ${name}: ${result.error}`));
-      }
+    if (options.json) {
+      console.log(JSON.stringify(results, null, 2));
+      process.exit(results.every((r) => r.success) ? 0 : 1);
+      return;
     }
 
+    console.log(chalk.bold("\nInstalling connectors...\n"));
+    for (const result of results) {
+      if (result.success) {
+        console.log(chalk.green(`✓ ${result.connector}`));
+      } else {
+        console.log(chalk.red(`✗ ${result.connector}: ${result.error}`));
+      }
+    }
     console.log(chalk.dim("\nConnectors installed to .connectors/"));
+    process.exit(results.every((r) => r.success) ? 0 : 1);
   });
 
 // List command
@@ -72,10 +100,15 @@ program
   .option("-c, --category <category>", "Filter by category")
   .option("-a, --all", "Show all available connectors", false)
   .option("-i, --installed", "Show only installed connectors", false)
+  .option("--json", "Output as JSON", false)
   .description("List available or installed connectors")
   .action((options) => {
     if (options.installed) {
       const installed = getInstalledConnectors();
+      if (options.json) {
+        console.log(JSON.stringify(installed));
+        return;
+      }
       if (installed.length === 0) {
         console.log(chalk.dim("No connectors installed"));
         return;
@@ -92,11 +125,19 @@ program
         (c) => c.toLowerCase() === options.category.toLowerCase()
       );
       if (!category) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: `Unknown category: ${options.category}` }));
+          process.exit(1);
+        }
         console.log(chalk.red(`Unknown category: ${options.category}`));
         console.log(chalk.dim(`Available: ${CATEGORIES.join(", ")}`));
         return;
       }
       const connectors = getConnectorsByCategory(category);
+      if (options.json) {
+        console.log(JSON.stringify(connectors));
+        return;
+      }
       console.log(chalk.bold(`\n${category} (${connectors.length}):\n`));
       console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Description")}`);
       console.log(chalk.dim(`  ${"─".repeat(60)}`));
@@ -106,7 +147,12 @@ program
       return;
     }
 
-    // Show all by category
+    // Show all
+    if (options.json) {
+      console.log(JSON.stringify(CONNECTORS));
+      return;
+    }
+
     console.log(chalk.bold(`\nAvailable connectors (${CONNECTORS.length}):\n`));
     for (const category of CATEGORIES) {
       const connectors = getConnectorsByCategory(category);
@@ -124,9 +170,16 @@ program
 program
   .command("search")
   .argument("<query>", "Search term")
+  .option("--json", "Output as JSON", false)
   .description("Search for connectors")
-  .action((query: string) => {
+  .action((query: string, options: { json: boolean }) => {
     const results = searchConnectors(query);
+
+    if (options.json) {
+      console.log(JSON.stringify(results));
+      return;
+    }
+
     if (results.length === 0) {
       console.log(chalk.dim(`No connectors found for "${query}"`));
       return;
@@ -139,26 +192,83 @@ program
     }
   });
 
+// Info command - detailed info about a single connector
+program
+  .command("info")
+  .argument("<connector>", "Connector name")
+  .option("--json", "Output as JSON", false)
+  .description("Show detailed info about a connector")
+  .action((connector: string, options: { json: boolean }) => {
+    const meta = getConnector(connector);
+
+    if (!meta) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: `Connector '${connector}' not found` }));
+        process.exit(1);
+      }
+      console.log(chalk.red(`Connector '${connector}' not found`));
+      process.exit(1);
+      return;
+    }
+
+    const installed = getInstalledConnectors();
+    const isInstalled = installed.includes(meta.name);
+
+    if (options.json) {
+      console.log(JSON.stringify({ ...meta, installed: isInstalled }));
+      return;
+    }
+
+    console.log(chalk.bold(`\n${meta.displayName}`));
+    console.log(chalk.dim(`${"─".repeat(40)}`));
+    console.log(`  Name:        ${chalk.cyan(meta.name)}`);
+    console.log(`  Version:     ${meta.version || "-"}`);
+    console.log(`  Category:    ${meta.category}`);
+    console.log(`  Description: ${meta.description}`);
+    console.log(`  Tags:        ${meta.tags.join(", ")}`);
+    console.log(`  Installed:   ${isInstalled ? chalk.green("yes") : "no"}`);
+    console.log(`  Package:     @hasna/connect-${meta.name}`);
+  });
+
 // Remove command
 program
   .command("remove")
   .alias("rm")
   .argument("<connector>", "Connector to remove")
+  .option("--json", "Output as JSON", false)
   .description("Remove an installed connector")
-  .action((connector: string) => {
+  .action((connector: string, options: { json: boolean }) => {
     const removed = removeConnector(connector);
+
+    if (options.json) {
+      console.log(JSON.stringify({ connector, removed }));
+      process.exit(removed ? 0 : 1);
+      return;
+    }
+
     if (removed) {
       console.log(chalk.green(`✓ Removed ${connector}`));
     } else {
       console.log(chalk.red(`✗ ${connector} is not installed`));
+      process.exit(1);
     }
   });
 
 // Categories command
 program
   .command("categories")
+  .option("--json", "Output as JSON", false)
   .description("List all categories")
-  .action(() => {
+  .action((options: { json: boolean }) => {
+    if (options.json) {
+      const data = CATEGORIES.map((category) => ({
+        name: category,
+        count: getConnectorsByCategory(category).length,
+      }));
+      console.log(JSON.stringify(data));
+      return;
+    }
+
     console.log(chalk.bold("\nCategories:\n"));
     for (const category of CATEGORIES) {
       const count = getConnectorsByCategory(category).length;
