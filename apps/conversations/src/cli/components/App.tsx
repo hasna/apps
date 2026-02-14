@@ -5,7 +5,7 @@ import { SessionList } from "./SessionList.js";
 import { ChatView } from "./ChatView.js";
 import type { Session } from "../../types.js";
 
-type View = "sessions" | "chat" | "new";
+type View = "sessions" | "chat" | "channel" | "new";
 
 interface AppProps {
   agent: string;
@@ -15,11 +15,16 @@ export function App({ agent }: AppProps) {
   const { exit } = useApp();
   const [view, setView] = useState<View>("sessions");
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const [currentChannel, setCurrentChannel] = useState<string | null>(null);
   const [newTo, setNewTo] = useState("");
 
   useInput((input, key) => {
     if (input === "q" && view === "sessions") {
       exit();
+    }
+    if (key.escape && view === "new") {
+      setNewTo("");
+      setView("sessions");
     }
   });
 
@@ -28,27 +33,31 @@ export function App({ agent }: AppProps) {
     setView("chat");
   };
 
+  const handleSelectChannel = (channelName: string) => {
+    setCurrentChannel(channelName);
+    setView("channel");
+  };
+
   const handleNewConversation = () => {
     setView("new");
   };
 
   const handleStartNew = (to: string) => {
     if (!to.trim()) return;
-    // Create a temporary session object — real session will be created on first message
-    const tempSession: Session = {
-      session_id: `${[agent, to.trim()].sort().join("-")}-new`,
+    setCurrentSession({
+      session_id: "",
       participants: [agent, to.trim()],
-      last_message_at: new Date().toISOString(),
+      last_message_at: "",
       message_count: 0,
       unread_count: 0,
-    };
-    setCurrentSession(tempSession);
+    });
     setNewTo("");
     setView("chat");
   };
 
   const handleBack = () => {
     setCurrentSession(null);
+    setCurrentChannel(null);
     setView("sessions");
   };
 
@@ -65,17 +74,28 @@ export function App({ agent }: AppProps) {
             placeholder="agent-id"
           />
         </Box>
-        <Text dimColor>Press Enter to start, Esc to cancel</Text>
+        <Text dimColor>Enter to start, Esc to cancel</Text>
       </Box>
     );
   }
 
-  if (view === "chat" && currentSession) {
+  if (view === "channel" && currentChannel) {
     return (
       <ChatView
-        sessionId={currentSession.session_id}
         agent={agent}
-        participants={currentSession.participants}
+        channelName={currentChannel}
+        onBack={handleBack}
+      />
+    );
+  }
+
+  if (view === "chat" && currentSession) {
+    const others = currentSession.participants.filter((p) => p !== agent);
+    return (
+      <ChatView
+        agent={agent}
+        sessionId={currentSession.session_id || undefined}
+        recipient={others[0] || agent}
         onBack={handleBack}
       />
     );
@@ -85,6 +105,7 @@ export function App({ agent }: AppProps) {
     <SessionList
       agent={agent}
       onSelect={handleSelectSession}
+      onSelectChannel={handleSelectChannel}
       onNew={handleNewConversation}
     />
   );

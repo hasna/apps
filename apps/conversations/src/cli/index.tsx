@@ -15,7 +15,7 @@ const program = new Command();
 program
   .name("conversations")
   .description("Real-time CLI messaging for AI agents")
-  .version("0.0.4");
+  .version("0.0.5");
 
 // ---- send ----
 program

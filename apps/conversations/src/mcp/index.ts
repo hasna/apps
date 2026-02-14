@@ -18,7 +18,7 @@ import { resolveIdentity } from "../lib/identity.js";
 
 const server = new McpServer({
   name: "conversations",
-  version: "0.0.4",
+  version: "0.0.5",
 });
 
 // ---- DM Tools ----

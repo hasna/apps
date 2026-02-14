@@ -1,28 +1,69 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { useMessages } from "../../lib/poll.js";
-import { sendMessage, markSessionRead } from "../../lib/messages.js";
+import { readMessages, sendMessage, markSessionRead, markChannelRead } from "../../lib/messages.js";
+import { startPolling } from "../../lib/poll.js";
 import { MessageBubble } from "./MessageBubble.js";
+import type { Message } from "../../types.js";
 
 interface ChatViewProps {
-  sessionId: string;
   agent: string;
-  participants: string[];
   onBack: () => void;
+  // DM mode
+  sessionId?: string;
+  recipient?: string;
+  // Channel mode
+  channelName?: string;
 }
 
-export function ChatView({ sessionId, agent, participants, onBack }: ChatViewProps) {
-  const messages = useMessages(sessionId, agent);
+export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, channelName }: ChatViewProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [sessionId, setSessionId] = useState(initialSessionId);
+  const isChannel = !!channelName;
 
-  const others = participants.filter((p) => p !== agent);
-  const recipient = others[0] || agent;
+  // Load existing messages + poll for new ones
+  useEffect(() => {
+    const opts = isChannel
+      ? { channel: channelName }
+      : sessionId
+        ? { session_id: sessionId }
+        : {};
 
-  // Mark messages as read when viewing
-  React.useEffect(() => {
-    markSessionRead(sessionId, agent);
-  }, [messages.length, sessionId, agent]);
+    // Only load if we have something to query
+    if (isChannel || sessionId) {
+      const existing = readMessages(opts);
+      setMessages(existing);
+    }
+
+    const pollOpts = isChannel
+      ? { channel: channelName }
+      : sessionId
+        ? { session_id: sessionId }
+        : null;
+
+    if (!pollOpts) return;
+
+    const { stop } = startPolling({
+      ...pollOpts,
+      interval_ms: 200,
+      on_messages: (newMsgs) => {
+        setMessages((prev) => [...prev, ...newMsgs]);
+      },
+    });
+
+    return stop;
+  }, [sessionId, channelName]);
+
+  // Mark as read
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (isChannel && channelName) {
+      markChannelRead(channelName, agent);
+    } else if (sessionId) {
+      markSessionRead(sessionId, agent);
+    }
+  }, [messages.length]);
 
   useInput((_, key) => {
     if (key.escape) onBack();
@@ -31,26 +72,51 @@ export function ChatView({ sessionId, agent, participants, onBack }: ChatViewPro
   const handleSubmit = (value: string) => {
     if (!value.trim()) return;
 
-    sendMessage({
-      from: agent,
-      to: recipient,
-      content: value.trim(),
-      session_id: sessionId,
-    });
+    if (isChannel && channelName) {
+      const msg = sendMessage({
+        from: agent,
+        to: channelName,
+        content: value.trim(),
+        channel: channelName,
+        session_id: `channel:${channelName}`,
+      });
+      // If we weren't polling yet (shouldn't happen for channels), add it
+      setMessages((prev) => [...prev, msg]);
+    } else {
+      const to = recipient || agent;
+      const msg = sendMessage({
+        from: agent,
+        to,
+        content: value.trim(),
+        session_id: sessionId,
+      });
+      // For new conversations, capture the real session ID from the first message
+      if (!sessionId) {
+        setSessionId(msg.session_id);
+      }
+    }
 
     setInput("");
   };
 
+  const title = isChannel
+    ? `#${channelName}`
+    : recipient || "self";
+
+  const prompt = isChannel
+    ? `${agent} → #${channelName}`
+    : `${agent} → ${recipient || "self"}`;
+
   return (
     <Box flexDirection="column" padding={1}>
-      <Box marginBottom={1} gap={1}>
-        <Text bold color="cyan">Chat: {others.join(", ") || "self"}</Text>
-        <Text dimColor>(Esc: back)</Text>
+      <Box marginBottom={1}>
+        <Text bold color={isChannel ? "magenta" : "cyan"}>{title}</Text>
+        <Text dimColor>  (Esc: back)</Text>
       </Box>
 
       <Box flexDirection="column" flexGrow={1}>
         {messages.length === 0 ? (
-          <Text dimColor>No messages yet. Start typing below.</Text>
+          <Text dimColor>No messages yet. Type below and press Enter.</Text>
         ) : (
           messages.map((msg) => (
             <MessageBubble
@@ -63,7 +129,7 @@ export function ChatView({ sessionId, agent, participants, onBack }: ChatViewPro
       </Box>
 
       <Box marginTop={1}>
-        <Text color="cyan">{agent} → {recipient}: </Text>
+        <Text color={isChannel ? "magenta" : "cyan"}>{prompt}: </Text>
         <TextInput
           value={input}
           onChange={setInput}

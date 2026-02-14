@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.5] - 2026-02-14
+
+### Fixed
+- TUI: session list now polls for updates (new sessions appear live)
+- TUI: channels appear in session list with member/message counts
+- TUI: opening a channel shows messages and lets you send to it
+- TUI: new conversation flow creates real session on first message send
+- TUI: channel sessions filtered from DM list (no duplicates)
+- TUI: simplified message display to single-line format
+
 ## [0.0.4] - 2026-02-14
 
 ### Changed
