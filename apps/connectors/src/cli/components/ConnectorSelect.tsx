@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Box, Text, useInput } from "ink";
-import SelectInput from "ink-select-input";
 import { ConnectorMeta } from "../../lib/registry.js";
 
 interface ConnectorSelectProps {
@@ -11,6 +10,10 @@ interface ConnectorSelectProps {
   onBack: () => void;
 }
 
+const COL_CHECK = 5;
+const COL_NAME = 20;
+const COL_VERSION = 10;
+
 export function ConnectorSelect({
   connectors,
   selected,
@@ -18,68 +21,145 @@ export function ConnectorSelect({
   onConfirm,
   onBack,
 }: ConnectorSelectProps) {
-  const items = [
-    { label: "← Back to categories", value: "__back__" },
-    ...connectors.map((c) => ({
-      label: `${selected.has(c.name) ? "[x]" : "[ ]"} ${c.displayName}`,
-      value: c.name,
-    })),
-    { label: "", value: "__sep__" },
-    {
-      label: `✓ Install selected (${selected.size})`,
-      value: "__confirm__",
-    },
-  ];
+  // Items: back + connectors + confirm
+  const totalItems = connectors.length + 2;
+  const [cursor, setCursor] = useState(0);
 
-  const handleSelect = (item: { value: string }) => {
-    if (item.value === "__back__") {
-      onBack();
-    } else if (item.value === "__confirm__") {
-      if (selected.size > 0) {
-        onConfirm();
+  // Visible window for scrolling
+  const maxVisible = 16;
+  const scrollOffset = useMemo(() => {
+    if (totalItems <= maxVisible) return 0;
+    const half = Math.floor(maxVisible / 2);
+    if (cursor < half) return 0;
+    if (cursor > totalItems - maxVisible + half) return totalItems - maxVisible;
+    return cursor - half;
+  }, [cursor, totalItems]);
+
+  useInput((input, key) => {
+    if (key.upArrow) {
+      setCursor((c) => (c > 0 ? c - 1 : totalItems - 1));
+    } else if (key.downArrow) {
+      setCursor((c) => (c < totalItems - 1 ? c + 1 : 0));
+    } else if (key.return) {
+      if (cursor === 0) {
+        onBack();
+      } else if (cursor === totalItems - 1) {
+        if (selected.size > 0) onConfirm();
+      } else {
+        onToggle(connectors[cursor - 1].name);
       }
-    } else if (item.value !== "__sep__") {
-      onToggle(item.value);
+    } else if (input === " " && cursor > 0 && cursor < totalItems - 1) {
+      onToggle(connectors[cursor - 1].name);
     }
-  };
+  });
 
-  // Find the current connector for description
-  const [highlightedIndex, setHighlightedIndex] = useState(1);
-  const currentConnector = connectors[highlightedIndex - 1];
+  const visibleStart = scrollOffset;
+  const visibleEnd = Math.min(scrollOffset + maxVisible, totalItems);
 
   return (
     <Box flexDirection="column">
       <Text bold marginBottom={1}>
-        Select connectors (space to toggle, enter to confirm):
+        Select connectors to install:
       </Text>
 
-      <Box flexDirection="row">
-        <Box flexDirection="column" width="50%">
-          <SelectInput
-            items={items}
-            onSelect={handleSelect}
-            onHighlight={(item) => {
-              const idx = connectors.findIndex((c) => c.name === item.value);
-              if (idx >= 0) setHighlightedIndex(idx + 1);
-            }}
-          />
+      {/* Table header */}
+      <Box>
+        <Box width={COL_CHECK}>
+          <Text dimColor> </Text>
         </Box>
-
-        <Box flexDirection="column" marginLeft={2} width="50%">
-          {currentConnector && (
-            <>
-              <Text bold color="cyan">
-                {currentConnector.displayName}
-              </Text>
-              <Text>{currentConnector.description}</Text>
-              <Text dimColor>
-                Tags: {currentConnector.tags.join(", ")}
-              </Text>
-            </>
-          )}
+        <Box width={COL_NAME}>
+          <Text bold dimColor>Connector</Text>
         </Box>
+        <Box width={COL_VERSION}>
+          <Text bold dimColor>Version</Text>
+        </Box>
+        <Text bold dimColor>Description</Text>
       </Box>
 
+      {/* Separator */}
+      <Box marginBottom={0}>
+        <Text dimColor>{"─".repeat(70)}</Text>
+      </Box>
+
+      {/* Scroll indicator top */}
+      {visibleStart > 0 && (
+        <Text dimColor>  ↑ {visibleStart} more</Text>
+      )}
+
+      {/* Rows */}
+      {Array.from({ length: visibleEnd - visibleStart }, (_, i) => {
+        const idx = visibleStart + i;
+
+        // Back row
+        if (idx === 0) {
+          const isActive = cursor === 0;
+          return (
+            <Box key="__back__">
+              <Text
+                color={isActive ? "cyan" : undefined}
+                bold={isActive}
+              >
+                {isActive ? "❯ " : "  "}← Back to categories
+              </Text>
+            </Box>
+          );
+        }
+
+        // Confirm row
+        if (idx === totalItems - 1) {
+          const isActive = cursor === totalItems - 1;
+          const hasSelection = selected.size > 0;
+          return (
+            <Box key="__confirm__">
+              <Text
+                color={isActive ? (hasSelection ? "green" : "gray") : hasSelection ? "green" : "gray"}
+                bold={isActive}
+                dimColor={!hasSelection}
+              >
+                {isActive ? "❯ " : "  "}✓ Install selected ({selected.size})
+              </Text>
+            </Box>
+          );
+        }
+
+        // Connector row
+        const c = connectors[idx - 1];
+        const isActive = cursor === idx;
+        const isChecked = selected.has(c.name);
+
+        return (
+          <Box key={c.name}>
+            <Box width={2}>
+              <Text color={isActive ? "cyan" : undefined}>
+                {isActive ? "❯" : " "}
+              </Text>
+            </Box>
+            <Box width={COL_CHECK - 2}>
+              <Text color={isChecked ? "green" : "gray"}>
+                {isChecked ? "[✓]" : "[ ]"}
+              </Text>
+            </Box>
+            <Box width={COL_NAME}>
+              <Text bold={isActive} color={isActive ? "cyan" : undefined}>
+                {c.name}
+              </Text>
+            </Box>
+            <Box width={COL_VERSION}>
+              <Text dimColor>{c.version || "-"}</Text>
+            </Box>
+            <Text wrap="truncate">
+              {c.description}
+            </Text>
+          </Box>
+        );
+      })}
+
+      {/* Scroll indicator bottom */}
+      {visibleEnd < totalItems && (
+        <Text dimColor>  ↓ {totalItems - visibleEnd} more</Text>
+      )}
+
+      {/* Selected summary */}
       {selected.size > 0 && (
         <Box marginTop={1}>
           <Text dimColor>
@@ -87,6 +167,13 @@ export function ConnectorSelect({
           </Text>
         </Box>
       )}
+
+      {/* Help */}
+      <Box marginTop={1}>
+        <Text dimColor>
+          ↑↓ navigate  space toggle  enter confirm  esc back
+        </Text>
+      </Box>
     </Box>
   );
 }

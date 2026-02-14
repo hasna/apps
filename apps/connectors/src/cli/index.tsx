@@ -9,6 +9,7 @@ import {
   CATEGORIES,
   getConnectorsByCategory,
   searchConnectors,
+  loadConnectorVersions,
 } from "../lib/registry.js";
 import {
   installConnector,
@@ -16,12 +17,15 @@ import {
   removeConnector,
 } from "../lib/installer.js";
 
+// Load versions from connector package.json files
+loadConnectorVersions();
+
 const program = new Command();
 
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.0.1");
+  .version("0.0.3");
 
 // Interactive mode (default)
 program
@@ -94,8 +98,10 @@ program
       }
       const connectors = getConnectorsByCategory(category);
       console.log(chalk.bold(`\n${category} (${connectors.length}):\n`));
+      console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Description")}`);
+      console.log(chalk.dim(`  ${"─".repeat(60)}`));
       for (const c of connectors) {
-        console.log(`  ${chalk.cyan(c.name)} - ${c.description}`);
+        console.log(`  ${chalk.cyan(c.name.padEnd(20))}${chalk.dim((c.version || "-").padEnd(10))}${c.description}`);
       }
       return;
     }
@@ -105,8 +111,10 @@ program
     for (const category of CATEGORIES) {
       const connectors = getConnectorsByCategory(category);
       console.log(chalk.bold(`${category} (${connectors.length}):`));
+      console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Description")}`);
+      console.log(chalk.dim(`  ${"─".repeat(60)}`));
       for (const c of connectors) {
-        console.log(`  ${chalk.cyan(c.name)} - ${c.description}`);
+        console.log(`  ${chalk.cyan(c.name.padEnd(20))}${chalk.dim((c.version || "-").padEnd(10))}${c.description}`);
       }
       console.log();
     }
@@ -124,11 +132,10 @@ program
       return;
     }
     console.log(chalk.bold(`\nFound ${results.length} connector(s):\n`));
+    console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Category".padEnd(20))}${chalk.dim("Description")}`);
+    console.log(chalk.dim(`  ${"─".repeat(70)}`));
     for (const c of results) {
-      console.log(
-        `  ${chalk.cyan(c.name)} ${chalk.dim(`[${c.category}]`)}`
-      );
-      console.log(`    ${c.description}`);
+      console.log(`  ${chalk.cyan(c.name.padEnd(20))}${chalk.dim((c.version || "-").padEnd(10))}${chalk.dim(c.category.padEnd(20))}${c.description}`);
     }
   });
 

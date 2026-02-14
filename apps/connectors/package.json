@@ -1,11 +1,17 @@
 {
   "name": "@hasna/connectors",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "description": "Open source connector library - Install API connectors with a single command",
   "type": "module",
   "bin": {
-    "connectors": "./bin/cli.js"
+    "connectors": "./bin/index.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "connectors/",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",

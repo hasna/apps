@@ -7,7 +7,19 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONNECTORS_DIR = join(__dirname, "..", "..", "connectors");
+
+// Resolve connectors directory - works from both source (src/lib/) and built (bin/) locations
+function resolveConnectorsDir(): string {
+  // Try from built location: bin/ -> ../connectors/
+  const fromBin = join(__dirname, "..", "connectors");
+  if (existsSync(fromBin)) return fromBin;
+  // Try from source location: src/lib/ -> ../../connectors/
+  const fromSrc = join(__dirname, "..", "..", "connectors");
+  if (existsSync(fromSrc)) return fromSrc;
+  return fromBin; // default
+}
+
+const CONNECTORS_DIR = resolveConnectorsDir();
 
 export interface InstallResult {
   connector: string;

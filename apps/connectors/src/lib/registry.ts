@@ -2,12 +2,17 @@
  * Connector registry - metadata about all available connectors
  */
 
+import { existsSync, readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
 export interface ConnectorMeta {
   name: string;
   displayName: string;
   description: string;
   category: string;
   tags: string[];
+  version?: string;
 }
 
 export const CATEGORIES = [
@@ -507,4 +512,36 @@ export function searchConnectors(query: string): ConnectorMeta[] {
 
 export function getConnector(name: string): ConnectorMeta | undefined {
   return CONNECTORS.find((c) => c.name === name);
+}
+
+/**
+ * Load versions from each connector's package.json into the registry.
+ * Call once at CLI startup.
+ */
+let versionsLoaded = false;
+
+export function loadConnectorVersions(): void {
+  if (versionsLoaded) return;
+  versionsLoaded = true;
+
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  // Resolve connectors directory from built (bin/) or source (src/lib/) location
+  const candidates = [
+    join(thisDir, "..", "connectors"),
+    join(thisDir, "..", "..", "connectors"),
+  ];
+  const connectorsDir = candidates.find((d) => existsSync(d));
+  if (!connectorsDir) return;
+
+  for (const connector of CONNECTORS) {
+    try {
+      const pkgPath = join(connectorsDir, `connect-${connector.name}`, "package.json");
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        connector.version = pkg.version || "0.0.0";
+      }
+    } catch {
+      // skip
+    }
+  }
 }

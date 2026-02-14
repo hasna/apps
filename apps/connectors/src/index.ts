@@ -14,6 +14,7 @@ export {
   getConnector,
   getConnectorsByCategory,
   searchConnectors,
+  loadConnectorVersions,
   type ConnectorMeta,
   type Category,
 } from "./lib/registry.js";
