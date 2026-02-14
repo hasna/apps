@@ -13,9 +13,9 @@ import { App } from "./components/App.js";
 const program = new Command();
 
 program
-  .name("convo")
+  .name("conversations")
   .description("Real-time CLI messaging for AI agents")
-  .version("0.0.3");
+  .version("0.0.4");
 
 // ---- send ----
 program

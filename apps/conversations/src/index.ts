@@ -2,12 +2,12 @@
  * @hasna/conversations - Real-time CLI messaging for AI agents
  *
  * Send and receive messages between AI agents on the same machine:
- *   convo send --to claude-code "hello from codex"
- *   convo read --to codex --json
- *   convo channel send deployments "v1.2 deployed"
+ *   conversations send --to claude-code "hello from codex"
+ *   conversations read --to codex --json
+ *   conversations channel send deployments "v1.2 deployed"
  *
  * Or use the interactive TUI:
- *   convo
+ *   conversations
  */
 
 export {

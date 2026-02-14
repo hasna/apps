@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.4] - 2026-02-14
+
+### Changed
+- Rename CLI binary from `convo` to `conversations`
+- Rename MCP binary from `convo-mcp` to `conversations-mcp`
+
 ## [0.0.3] - 2026-02-14
 
 ### Added

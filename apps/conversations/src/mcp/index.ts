@@ -4,8 +4,8 @@
  * Exposes tools for sending, reading, and managing messages and channels between agents.
  *
  * Usage:
- *   convo mcp          # Start MCP server on stdio
- *   convo-mcp          # Direct binary
+ *   conversations mcp          # Start MCP server on stdio
+ *   conversations-mcp          # Direct binary
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,7 +18,7 @@ import { resolveIdentity } from "../lib/identity.js";
 
 const server = new McpServer({
   name: "conversations",
-  version: "0.0.3",
+  version: "0.0.4",
 });
 
 // ---- DM Tools ----

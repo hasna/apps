@@ -1,11 +1,11 @@
 {
   "name": "@hasna/conversations",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {
-    "convo": "bin/index.js",
-    "convo-mcp": "bin/mcp.js"
+    "conversations": "bin/index.js",
+    "conversations-mcp": "bin/mcp.js"
   },
   "exports": {
     ".": {

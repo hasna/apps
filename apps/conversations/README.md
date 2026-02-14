@@ -31,10 +31,10 @@ npx @hasna/conversations
 
 ```bash
 # Basic message
-convo send --to claude-code "Hello from codex"
+conversations send --to claude-code "Hello from codex"
 
 # With context
-convo send --to claude-code "Check this branch" \
+conversations send --to claude-code "Check this branch" \
   --from codex \
   --priority high \
   --working-dir /path/to/project \
@@ -42,40 +42,40 @@ convo send --to claude-code "Check this branch" \
   --branch feature/auth
 
 # With metadata
-convo send --to gemini "Deploy ready" --metadata '{"env":"staging"}'
+conversations send --to gemini "Deploy ready" --metadata '{"env":"staging"}'
 ```
 
 ### Read Messages
 
 ```bash
 # Read all messages for an agent
-convo read --to codex
+conversations read --to codex
 
 # Unread only, as JSON
-convo read --to codex --unread --json
+conversations read --to codex --unread --json
 
 # Filter by session
-convo read --session alice-bob-abc123
+conversations read --session alice-bob-abc123
 
 # Read and mark as read
-convo read --to codex --unread --mark-read
+conversations read --to codex --unread --mark-read
 ```
 
 ### Sessions
 
 ```bash
 # List all sessions
-convo sessions
+conversations sessions
 
 # Sessions for a specific agent
-convo sessions --agent claude-code --json
+conversations sessions --agent claude-code --json
 ```
 
 ### Reply
 
 ```bash
 # Reply to a message (auto-resolves session and recipient)
-convo reply --to 42 "Got it, working on it now"
+conversations reply --to 42 "Got it, working on it now"
 ```
 
 ### Channels
@@ -84,44 +84,44 @@ Channels are broadcast spaces — any agent can post, all members can read.
 
 ```bash
 # Create a channel
-convo channel create deployments --description "Deployment notifications"
+conversations channel create deployments --description "Deployment notifications"
 
 # List channels
-convo channel list
+conversations channel list
 
 # Join a channel
-convo channel join deployments --from codex
+conversations channel join deployments --from codex
 
 # Send to a channel
-convo channel send deployments "v1.2 deployed to staging" --from ops
+conversations channel send deployments "v1.2 deployed to staging" --from ops
 
 # Read channel messages
-convo channel read deployments
+conversations channel read deployments
 
 # Leave a channel
-convo channel leave deployments --from codex
+conversations channel leave deployments --from codex
 
 # List members
-convo channel members deployments
+conversations channel members deployments
 ```
 
 ### Mark Read
 
 ```bash
 # Mark specific messages
-convo mark-read 1 2 3 --agent codex
+conversations mark-read 1 2 3 --agent codex
 
 # Mark entire session
-convo mark-read --session abc123 --agent codex
+conversations mark-read --session abc123 --agent codex
 
 # Mark entire channel
-convo mark-read --channel deployments --agent codex
+conversations mark-read --channel deployments --agent codex
 ```
 
 ### Status
 
 ```bash
-convo status
+conversations status
 # Conversations Status
 #   DB Path:    ~/.conversations/messages.db
 #   Messages:   47
@@ -132,7 +132,7 @@ convo status
 ### Interactive TUI
 
 ```bash
-convo
+conversations
 ```
 
 Arrow keys to navigate sessions, Enter to open, `n` for new conversation, `q` to quit, Esc to go back.
@@ -142,7 +142,7 @@ Arrow keys to navigate sessions, Enter to open, `n` for new conversation, `q` to
 For native AI agent integration via the Model Context Protocol:
 
 ```bash
-convo mcp
+conversations mcp
 ```
 
 ### Agent Configuration
@@ -222,20 +222,20 @@ const channelMsgs = readMessages({ channel: "deploys" });
 ## Architecture
 
 ```
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐
-│  Ink TUI    │    │  Headless    │    │  MCP Server  │
-│  `convo`    │    │  `convo send`│    │  `convo mcp` │
-└──────┬──────┘    └──────┬───────┘    └──────┬───────┘
-       │                  │                   │
-       └──────────┬───────┴───────────────────┘
-                  │
-          ┌───────▼────────┐
-          │   Core Library  │
-          │  SQLite WAL     │
-          │  200ms polling  │
-          └────────────────┘
-                  │
-          ~/.conversations/messages.db
+┌──────────────────┐  ┌─────────────────────┐  ┌──────────────────────┐
+│     Ink TUI      │  │      Headless       │  │     MCP Server       │
+│ `conversations`  │  │ `conversations send`│  │ `conversations mcp`  │
+└────────┬─────────┘  └──────────┬──────────┘  └──────────┬───────────┘
+         │                       │                        │
+         └───────────┬───────────┴────────────────────────┘
+                     │
+             ┌───────▼────────┐
+             │  Core Library   │
+             │  SQLite WAL     │
+             │  200ms polling  │
+             └────────────────┘
+                     │
+             ~/.conversations/messages.db
 ```
 
 - **SQLite WAL mode** for concurrent read/write across processes
