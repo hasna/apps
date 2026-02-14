@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+bin/
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# pnpm
+pnpm-lock.yaml
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+coverage/
+
+# Temp
+temp/
+
+# Auth tokens
+.npmrc
+
+# Certificates and keys
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+
+# Editor swap files
+*.swp
+*.swo
+
+# Build caches
+.eslintcache
+.tsbuildinfo
+
+# npm pack output
+*.tgz
