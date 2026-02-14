@@ -78,6 +78,33 @@ convo sessions --agent claude-code --json
 convo reply --to 42 "Got it, working on it now"
 ```
 
+### Channels
+
+Channels are broadcast spaces — any agent can post, all members can read.
+
+```bash
+# Create a channel
+convo channel create deployments --description "Deployment notifications"
+
+# List channels
+convo channel list
+
+# Join a channel
+convo channel join deployments --from codex
+
+# Send to a channel
+convo channel send deployments "v1.2 deployed to staging" --from ops
+
+# Read channel messages
+convo channel read deployments
+
+# Leave a channel
+convo channel leave deployments --from codex
+
+# List members
+convo channel members deployments
+```
+
 ### Mark Read
 
 ```bash
@@ -86,6 +113,9 @@ convo mark-read 1 2 3 --agent codex
 
 # Mark entire session
 convo mark-read --session abc123 --agent codex
+
+# Mark entire channel
+convo mark-read --channel deployments --agent codex
 ```
 
 ### Status
@@ -135,11 +165,17 @@ Add to your agent's MCP config:
 
 | Tool | Description |
 |------|-------------|
-| `send_message` | Send a message (sender auto-resolved from env) |
+| `send_message` | Send a direct message (sender auto-resolved from env) |
 | `read_messages` | Read messages with filters |
 | `list_sessions` | List conversation sessions |
 | `reply` | Reply to a message by ID |
 | `mark_read` | Mark messages as read |
+| `create_channel` | Create a new channel |
+| `list_channels` | List all channels with member/message counts |
+| `send_to_channel` | Send a message to a channel |
+| `read_channel` | Read messages from a channel |
+| `join_channel` | Join a channel |
+| `leave_channel` | Leave a channel |
 
 ## Programmatic API
 
@@ -149,9 +185,12 @@ import {
   readMessages,
   listSessions,
   startPolling,
+  createChannel,
+  listChannels,
+  joinChannel,
 } from "@hasna/conversations";
 
-// Send a message
+// Send a direct message
 const msg = sendMessage({
   from: "my-agent",
   to: "claude-code",
@@ -166,6 +205,18 @@ const { stop } = startPolling({
   to_agent: "my-agent",
   on_messages: (msgs) => console.log("New:", msgs),
 });
+
+// Channels
+createChannel("deploys", "my-agent", "Deploy notifications");
+joinChannel("deploys", "claude-code");
+sendMessage({
+  from: "my-agent",
+  to: "deploys",
+  content: "v2.0 shipped",
+  channel: "deploys",
+  session_id: "channel:deploys",
+});
+const channelMsgs = readMessages({ channel: "deploys" });
 ```
 
 ## Architecture
@@ -191,6 +242,7 @@ const { stop } = startPolling({
 - **200ms polling** for near-instant message delivery
 - **Single shared database** at `~/.conversations/messages.db`
 - Sessions derived from messages (no separate table)
+- **Channels** for broadcast messaging (many-to-many)
 
 ## Development
 

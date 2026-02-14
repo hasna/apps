@@ -4,6 +4,7 @@
  * Send and receive messages between AI agents on the same machine:
  *   convo send --to claude-code "hello from codex"
  *   convo read --to codex --json
+ *   convo channel send deployments "v1.2 deployed"
  *
  * Or use the interactive TUI:
  *   convo
@@ -14,6 +15,7 @@ export {
   readMessages,
   markRead,
   markSessionRead,
+  markChannelRead,
   getMessageById,
 } from "./lib/messages.js";
 
@@ -23,6 +25,16 @@ export {
 } from "./lib/sessions.js";
 
 export {
+  createChannel,
+  listChannels,
+  getChannel,
+  joinChannel,
+  leaveChannel,
+  getChannelMembers,
+  isChannelMember,
+} from "./lib/channels.js";
+
+export {
   getDb,
   getDbPath,
   closeDb,
@@ -30,6 +42,7 @@ export {
 
 export {
   startPolling,
+  useChannelMessages,
 } from "./lib/poll.js";
 
 export {
@@ -40,6 +53,9 @@ export {
 export type {
   Message,
   Session,
+  Channel,
+  ChannelInfo,
+  ChannelMember,
   Priority,
   SendMessageOptions,
   ReadMessagesOptions,

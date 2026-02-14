@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.3] - 2026-02-14
+
+### Added
+- Channels for broadcast messaging (many-to-many)
+- CLI: `convo channel create|list|send|read|join|leave|members` commands
+- MCP: create_channel, list_channels, send_to_channel, read_channel, join_channel, leave_channel tools
+- Library: createChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers exports
+- `convo mark-read --channel` flag for marking channel messages as read
+- `convo read --channel` filter for reading channel messages
+- Channel member tracking with join/leave
+- Auto-migration for existing databases (adds channel column)
+
 ## [0.0.2] - 2026-02-14
 
 ### Fixed
