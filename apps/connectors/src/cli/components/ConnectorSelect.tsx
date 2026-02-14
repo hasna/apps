@@ -36,7 +36,9 @@ export function ConnectorSelect({
   }, [cursor, totalItems]);
 
   useInput((input, key) => {
-    if (key.upArrow) {
+    if (key.escape) {
+      onBack();
+    } else if (key.upArrow) {
       setCursor((c) => (c > 0 ? c - 1 : totalItems - 1));
     } else if (key.downArrow) {
       setCursor((c) => (c < totalItems - 1 ? c + 1 : 0));
@@ -46,10 +48,23 @@ export function ConnectorSelect({
       } else if (cursor === totalItems - 1) {
         if (selected.size > 0) onConfirm();
       } else {
+        // Enter on a connector toggles it; if there's a selection, also confirm
         onToggle(connectors[cursor - 1].name);
       }
     } else if (input === " " && cursor > 0 && cursor < totalItems - 1) {
       onToggle(connectors[cursor - 1].name);
+    } else if (input === "i" && selected.size > 0) {
+      onConfirm();
+    } else if (input === "a") {
+      // Toggle all: if all are selected, deselect all; otherwise select all
+      const allSelected = connectors.every((c) => selected.has(c.name));
+      for (const c of connectors) {
+        if (allSelected) {
+          if (selected.has(c.name)) onToggle(c.name);
+        } else {
+          if (!selected.has(c.name)) onToggle(c.name);
+        }
+      }
     }
   });
 
@@ -171,7 +186,7 @@ export function ConnectorSelect({
       {/* Help */}
       <Box marginTop={1}>
         <Text dimColor>
-          ↑↓ navigate  space toggle  enter confirm  esc back
+          ↑↓ navigate  space/enter toggle  a select all  i install  esc back
         </Text>
       </Box>
     </Box>

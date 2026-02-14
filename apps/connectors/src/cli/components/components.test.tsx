@@ -234,7 +234,7 @@ describe("ConnectorSelect", () => {
     const frame = lastFrame();
     expect(frame).toContain("navigate");
     expect(frame).toContain("toggle");
-    expect(frame).toContain("confirm");
+    expect(frame).toContain("install");
   });
 
   test("handles empty connectors list", () => {

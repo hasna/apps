@@ -35,9 +35,14 @@ export function App({ initialConnectors, overwrite = false }: AppProps) {
     if (key.escape) {
       if (view === "main") {
         exit();
+      } else if (view === "browse" || view === "search") {
+        setView("main");
+      } else if (view === "connectors") {
+        setCategory(null);
+        setView("browse");
       }
     }
-    if (input === "q") {
+    if (input === "q" && view !== "search") {
       exit();
     }
   });

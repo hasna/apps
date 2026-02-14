@@ -90,6 +90,17 @@ export function SearchView({
       if (connectorIdx < results.length) {
         onToggle(results[connectorIdx].name);
       }
+    } else if (input === "i" && selected.size > 0) {
+      onConfirm();
+    } else if (input === "a" && mode === "select") {
+      const allSelected = results.every((c) => selected.has(c.name));
+      for (const c of results) {
+        if (allSelected) {
+          if (selected.has(c.name)) onToggle(c.name);
+        } else {
+          if (!selected.has(c.name)) onToggle(c.name);
+        }
+      }
     }
   });
 
@@ -238,7 +249,7 @@ export function SearchView({
         <Text dimColor>
           {mode === "search"
             ? "type to search  ↓ select results  esc back"
-            : "↑↓ navigate  space toggle  enter confirm  esc search"}
+            : "↑↓ navigate  space/enter toggle  a select all  i install  esc search"}
         </Text>
       </Box>
     </Box>
