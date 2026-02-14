@@ -30,11 +30,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/opensource-connectors.git"
+    "url": "git+https://github.com/hasna/connectors.git"
   },
-  "homepage": "https://github.com/hasna/opensource-connectors#readme",
+  "homepage": "https://github.com/hasna/connectors#readme",
   "bugs": {
-    "url": "https://github.com/hasna/opensource-connectors/issues"
+    "url": "https://github.com/hasna/connectors/issues"
   },
   "keywords": [
     "twilio",
@@ -51,7 +51,7 @@
     "hasna"
   ],
   "author": "Hasna",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5"

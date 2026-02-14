@@ -5,9 +5,16 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { randomBytes } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
 import { getConnectorDocs } from "../lib/installer.js";
+
+/** Timeout for external HTTP requests (10 seconds) */
+const FETCH_TIMEOUT = 10_000;
+
+/** In-memory CSRF state store for OAuth flows */
+const oauthStateStore = new Map<string, { connector: string; createdAt: number }>();
 
 // Google OAuth2 endpoints
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -226,7 +233,8 @@ export function saveApiKey(name: string, key: string, field?: string): void {
   const profileDir = join(configDir, "profiles", profile);
 
   if (existsSync(profileFile)) {
-    const config = JSON.parse(readFileSync(profileFile, "utf-8"));
+    let config: Record<string, unknown> = {};
+    try { config = JSON.parse(readFileSync(profileFile, "utf-8")); } catch { /* use empty */ }
     config[keyField] = key;
     writeFileSync(profileFile, JSON.stringify(config, null, 2));
     return;
@@ -235,9 +243,10 @@ export function saveApiKey(name: string, key: string, field?: string): void {
   // Try pattern 2: profiles/<name>/config.json
   if (existsSync(profileDir)) {
     const configFile = join(profileDir, "config.json");
-    const config = existsSync(configFile)
-      ? JSON.parse(readFileSync(configFile, "utf-8"))
-      : {};
+    let config: Record<string, unknown> = {};
+    if (existsSync(configFile)) {
+      try { config = JSON.parse(readFileSync(configFile, "utf-8")); } catch { /* use empty */ }
+    }
     config[keyField] = key;
     writeFileSync(configFile, JSON.stringify(config, null, 2));
     return;
@@ -314,6 +323,16 @@ export function getOAuthStartUrl(name: string, redirectUri: string): string | nu
   const scopes = GOOGLE_SCOPES[name];
   if (!scopes) return null;
 
+  // Generate CSRF state token
+  const state = randomBytes(32).toString("hex");
+  oauthStateStore.set(state, { connector: name, createdAt: Date.now() });
+
+  // Clean up stale state entries (older than 10 minutes)
+  const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+  for (const [key, val] of oauthStateStore) {
+    if (val.createdAt < tenMinutesAgo) oauthStateStore.delete(key);
+  }
+
   const params = new URLSearchParams({
     client_id: oauthConfig.clientId,
     redirect_uri: redirectUri,
@@ -321,9 +340,22 @@ export function getOAuthStartUrl(name: string, redirectUri: string): string | nu
     scope: scopes,
     access_type: "offline",
     prompt: "consent",
+    state,
   });
 
   return `${GOOGLE_AUTH_URL}?${params.toString()}`;
+}
+
+/**
+ * Validate and consume an OAuth state token (CSRF protection)
+ */
+export function validateOAuthState(state: string | null, expectedConnector: string): boolean {
+  if (!state) return false;
+  const entry = oauthStateStore.get(state);
+  if (!entry || entry.connector !== expectedConnector) return false;
+  oauthStateStore.delete(state);
+  // Reject if older than 10 minutes
+  return Date.now() - entry.createdAt < 10 * 60 * 1000;
 }
 
 /**
@@ -349,6 +381,7 @@ export async function exchangeOAuthCode(
       redirect_uri: redirectUri,
       grant_type: "authorization_code",
     }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
 
   if (!response.ok) {
@@ -410,6 +443,7 @@ export async function refreshOAuthToken(name: string): Promise<OAuthTokens> {
       refresh_token: currentTokens.refreshToken,
       grant_type: "refresh_token",
     }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
 
   if (!response.ok) {

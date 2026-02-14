@@ -42,7 +42,7 @@
     "hasna"
   ],
   "author": "Hasna",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5"
@@ -56,6 +56,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/opensource-connectors.git"
+    "url": "git+https://github.com/hasna/connectors.git"
   }
 }

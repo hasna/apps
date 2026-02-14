@@ -2,7 +2,7 @@
  * Connector installer - handles copying connectors to user projects
  */
 
-import { existsSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, cpSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -56,6 +56,15 @@ export function installConnector(
   options: InstallOptions = {}
 ): InstallResult {
   const { targetDir = process.cwd(), overwrite = false } = options;
+
+  // Validate connector name to prevent path traversal
+  if (!/^[a-z0-9-]+$/.test(name)) {
+    return {
+      connector: name,
+      success: false,
+      error: `Invalid connector name '${name}'`,
+    };
+  }
 
   const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
   const sourcePath = getConnectorPath(name);
@@ -124,7 +133,6 @@ function updateConnectorsIndex(connectorsDir: string): void {
   const indexPath = join(connectorsDir, "index.ts");
 
   // Get all installed connectors
-  const { readdirSync } = require("fs");
   const connectors = readdirSync(connectorsDir).filter(
     (f: string) => f.startsWith("connect-") && !f.includes(".")
   );
@@ -158,7 +166,6 @@ export function getInstalledConnectors(targetDir: string = process.cwd()): strin
     return [];
   }
 
-  const { readdirSync, statSync } = require("fs");
   return readdirSync(connectorsDir)
     .filter((f: string) => {
       const fullPath = join(connectorsDir, f);
@@ -250,7 +257,6 @@ export function removeConnector(
   name: string,
   targetDir: string = process.cwd()
 ): boolean {
-  const { rmSync } = require("fs");
   const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
   const connectorsDir = join(targetDir, ".connectors");
   const connectorPath = join(connectorsDir, connectorName);

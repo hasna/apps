@@ -58,9 +58,9 @@ export function ConnectorSelect({
 
   return (
     <Box flexDirection="column">
-      <Text bold marginBottom={1}>
-        Select connectors to install:
-      </Text>
+      <Box marginBottom={1}>
+        <Text bold>Select connectors to install:</Text>
+      </Box>
 
       {/* Table header */}
       <Box>

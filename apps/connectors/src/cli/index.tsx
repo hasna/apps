@@ -372,6 +372,7 @@ program
 program
   .command("serve")
   .alias("dashboard")
+  .alias("open")
   .option("-p, --port <port>", "Port to run the dashboard on", "19426")
   .option("--open", "Open dashboard in browser (default)", true)
   .option("--no-open", "Don't open browser automatically")
@@ -388,23 +389,6 @@ program
 
     const { startServer } = await import("../server/serve.js");
     await startServer(port, { open: options.open });
-  });
-
-// Open command — quick alias to open the dashboard
-program
-  .command("open")
-  .option("-p, --port <port>", "Port to run the dashboard on", "19426")
-  .description("Open the connectors dashboard in your browser")
-  .action(async (options: { port: string }) => {
-    const port = parseInt(options.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
-      console.log(chalk.red("Invalid port number"));
-      process.exit(1);
-      return;
-    }
-
-    const { startServer } = await import("../server/serve.js");
-    await startServer(port, { open: true });
   });
 
 program.parse();

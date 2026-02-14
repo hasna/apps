@@ -42,7 +42,7 @@ describe("registry", () => {
     test("every connector category exists in CATEGORIES", async () => {
       const { CONNECTORS, CATEGORIES } = await import("./registry.js");
       for (const c of CONNECTORS) {
-        expect(CATEGORIES).toContain(c.category);
+        expect(CATEGORIES as readonly string[]).toContain(c.category);
       }
     });
   });

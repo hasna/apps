@@ -176,13 +176,6 @@ export const CONNECTORS: ConnectorMeta[] = [
     tags: ["scraping", "web"],
   },
   {
-    name: "browseruse",
-    displayName: "Browser Use",
-    description: "Browser automation for AI",
-    category: "Developer Tools",
-    tags: ["browser", "automation"],
-  },
-  {
     name: "shadcn",
     displayName: "shadcn/ui",
     description: "UI component registry",
@@ -464,9 +457,9 @@ export const CONNECTORS: ConnectorMeta[] = [
   {
     name: "tinker",
     displayName: "Tinker",
-    description: "Internal tooling",
-    category: "Business Tools",
-    tags: ["internal", "tools"],
+    description: "LLM fine-tuning and training API",
+    category: "AI & ML",
+    tags: ["ai", "llm", "fine-tuning"],
   },
   {
     name: "sedo",

@@ -118,10 +118,12 @@ export function SearchView({
 
       {results.length > 0 && (
         <Box flexDirection="column">
-          <Text dimColor marginBottom={1}>
-            Found {results.length} connector(s)
-            {mode === "search" ? " — press ↓ to select" : ""}:
-          </Text>
+          <Box marginBottom={1}>
+            <Text dimColor>
+              Found {results.length} connector(s)
+              {mode === "search" ? " — press ↓ to select" : ""}:
+            </Text>
+          </Box>
 
           {/* Table header */}
           <Box>
