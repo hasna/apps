@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
 
 let db: Database | null = null;
 
 export function getDbPath(): string {
+  if (process.env.CONVERSATIONS_DB_PATH) return process.env.CONVERSATIONS_DB_PATH;
   return join(homedir(), ".conversations", "messages.db");
 }
 
@@ -13,7 +14,7 @@ export function getDb(): Database {
   if (db) return db;
 
   const dbPath = getDbPath();
-  mkdirSync(join(homedir(), ".conversations"), { recursive: true });
+  mkdirSync(dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath, { create: true });
   db.exec("PRAGMA journal_mode = WAL");
