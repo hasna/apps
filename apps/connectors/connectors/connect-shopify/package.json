@@ -1,6 +1,7 @@
 {
   "name": "@hasna/connect-shopify",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "Shopify Admin API connector - Products, Orders, Customers, Inventory management",
   "type": "module",
   "main": "./dist/index.js",

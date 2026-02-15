@@ -75,5 +75,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/connectors.git"
+  },
+  "homepage": "https://github.com/hasna/connectors#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/connectors/issues"
   }
 }

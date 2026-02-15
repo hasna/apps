@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-02-15
+
+### Added
+
+- 96 new tests (312 total across 9 test files, 2,120 assertions)
+- Library exports test (`src/index.test.ts`)
+- Dashboard template test (`src/server/dashboard.test.ts`)
+- Server entry point test (`src/server/server-entry.test.ts`)
+- Auth OAuth flow tests (getEnvVars, getOAuthStartUrl, validateOAuthState)
+- Server route tests (refresh, OAuth start/callback, name validation)
+- CLI component tests (SearchView, InstallProgress, ConnectorSelect)
+- Installer edge case tests (path traversal, invalid names)
+- SECURITY.md with vulnerability reporting policy
+
+### Fixed
+
+- Missing `"license": "Apache-2.0"` in 4 connector package.json files
+- Added `homepage` and `bugs` fields to root package.json
+- TypeScript strict null check in component test
+
 ## [0.2.0] - 2026-02-14
 
 ### Added
