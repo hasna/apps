@@ -145,13 +145,17 @@ export function ConnectorsTable({
             <div className="font-medium">{row.original.displayName}</div>
             <div className="text-xs text-muted-foreground">
               {row.original.name}
-              {row.original.version && (
-                <span className="ml-1.5 opacity-60">
-                  v{row.original.version}
-                </span>
-              )}
             </div>
           </div>
+        ),
+      },
+      {
+        accessorKey: "version",
+        header: "Version",
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-sm">
+            {row.original.version ? `v${row.original.version}` : "—"}
+          </span>
         ),
       },
       {
