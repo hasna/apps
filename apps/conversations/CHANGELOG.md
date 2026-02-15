@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.6] - 2026-02-15
+
+### Added
+- Web dashboard with shadcn/Tailwind UI (identical theme to open-connectors)
+- Dashboard server: `conversations dashboard` command (default port 3456)
+- API routes: /api/status, /api/messages, /api/sessions, /api/channels
+- Stats cards: Messages, Sessions, Channels, Unread
+- Messages table with priority badges, read/unread status, time-ago
+- Channels list with member/message counts
+- Send message dialog
+- Dark/light theme toggle with system detection
+- Auto-refresh every 3 seconds
+
 ## [0.0.5] - 2026-02-14
 
 ### Fixed

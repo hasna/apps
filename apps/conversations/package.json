@@ -1,6 +1,6 @@
 {
   "name": "@hasna/conversations",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {
@@ -16,6 +16,7 @@
   "files": [
     "dist/",
     "bin/",
+    "dashboard/dist/",
     "LICENSE",
     "README.md"
   ],
@@ -23,6 +24,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build:dashboard": "cd dashboard && bun install && bun run build",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit",
