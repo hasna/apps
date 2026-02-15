@@ -15,7 +15,7 @@ const program = new Command();
 program
   .name("conversations")
   .description("Real-time CLI messaging for AI agents")
-  .version("0.0.5");
+  .version("0.0.6");
 
 // ---- send ----
 program
@@ -422,6 +422,16 @@ program
   .action(async () => {
     const { startMcpServer } = await import("../mcp/index.js");
     await startMcpServer();
+  });
+
+// ---- dashboard ----
+program
+  .command("dashboard")
+  .description("Start web dashboard")
+  .option("--port <port>", "Port to listen on", parseInt)
+  .action(async (opts) => {
+    const { startDashboardServer } = await import("../server/serve.js");
+    startDashboardServer(opts.port || 3456);
   });
 
 // ---- default: TUI ----
