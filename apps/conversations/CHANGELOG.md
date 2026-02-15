@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.7] - 2026-02-15
+
+### Added
+- 85 tests covering db, messages, sessions, channels, identity, polling, and API server
+- CONVERSATIONS_DB_PATH env var for custom database location (used by tests)
+
 ## [0.0.6] - 2026-02-15
 
 ### Added
