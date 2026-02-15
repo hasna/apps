@@ -358,7 +358,7 @@ describe("ConnectorSelect", () => {
         onBack={() => {}}
       />
     );
-    const frame = lastFrame();
+    const frame = lastFrame()!;
     // All should be checked
     const checkmarks = (frame.match(/\[✓\]/g) || []).length;
     expect(checkmarks).toBe(3);
