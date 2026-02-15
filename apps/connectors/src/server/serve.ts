@@ -12,7 +12,7 @@ import {
   getConnector,
   loadConnectorVersions,
 } from "../lib/registry.js";
-import { getInstalledConnectors, getConnectorDocs } from "../lib/installer.js";
+import { getInstalledConnectors, getConnectorDocs, installConnector } from "../lib/installer.js";
 import {
   getAuthStatus,
   saveApiKey,
@@ -229,6 +229,29 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         } catch (e) {
           return json(
             { success: false, error: e instanceof Error ? e.message : "Failed to refresh" },
+            500, port
+          );
+        }
+      }
+
+      // POST /api/update — re-install all installed connectors from package
+      if (path === "/api/update" && method === "POST") {
+        try {
+          const installed = getInstalledConnectors();
+          if (installed.length === 0) {
+            return json({ updated: [], count: 0 }, 200, port);
+          }
+          const results = installed.map((name) =>
+            installConnector(name, { overwrite: true })
+          );
+          return json({
+            results,
+            count: results.filter((r) => r.success).length,
+            total: installed.length,
+          }, 200, port);
+        } catch (e) {
+          return json(
+            { error: e instanceof Error ? e.message : "Failed to update" },
             500, port
           );
         }

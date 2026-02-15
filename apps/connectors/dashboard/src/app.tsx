@@ -1,5 +1,12 @@
 import * as React from "react";
-import { RefreshCwIcon } from "lucide-react";
+import {
+  RefreshCwIcon,
+  ArrowUpCircleIcon,
+  CopyIcon,
+  CheckIcon,
+  BookOpenIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { ConnectorsTable } from "@/components/connectors-table";
@@ -72,12 +79,45 @@ export function App() {
     }
   }
 
+  const [updating, setUpdating] = React.useState(false);
+  const [copied, setCopied] = React.useState<string | null>(null);
+
   function handleOAuthStart(name: string) {
     window.open(
       `/oauth/${name}/start`,
       "_blank",
       "width=600,height=700"
     );
+  }
+
+  async function handleUpdate() {
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/update", { method: "POST" });
+      const data = await res.json();
+      if (data.count !== undefined) {
+        showToast(
+          data.count > 0
+            ? `Updated ${data.count}/${data.total} connectors`
+            : "No connectors to update",
+          data.count > 0 ? "success" : "error"
+        );
+        loadConnectors();
+      } else {
+        showToast(data.error || "Update failed", "error");
+      }
+    } catch {
+      showToast("Failed to update connectors", "error");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  function copyCommand(cmd: string) {
+    navigator.clipboard.writeText(cmd).then(() => {
+      setCopied(cmd);
+      setTimeout(() => setCopied(null), 2000);
+    });
   }
 
   return (
@@ -118,6 +158,44 @@ export function App() {
       {/* Content */}
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-6">
         <StatsCards connectors={connectors} />
+
+        {/* Global Actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleUpdate}
+            disabled={updating}
+          >
+            <ArrowUpCircleIcon
+              className={`size-3.5 ${updating ? "animate-spin" : ""}`}
+            />
+            {updating ? "Updating..." : "Update All Connectors"}
+          </Button>
+          <CopyableCommand
+            label="Install via npm"
+            command="npx @hasna/connectors"
+            icon={<TerminalIcon className="size-3.5" />}
+            copied={copied}
+            onCopy={copyCommand}
+          />
+          <CopyableCommand
+            label="Update package"
+            command="bun install -g @hasna/connectors@latest"
+            icon={<ArrowUpCircleIcon className="size-3.5" />}
+            copied={copied}
+            onCopy={copyCommand}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.open("https://github.com/hasna/connectors", "_blank")}
+          >
+            <BookOpenIcon className="size-3.5" />
+            Docs
+          </Button>
+        </div>
+
         <ConnectorsTable
           data={connectors}
           onConfigure={handleConfigure}
@@ -150,5 +228,40 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function CopyableCommand({
+  label,
+  command,
+  icon,
+  copied,
+  onCopy,
+}: {
+  label: string;
+  command: string;
+  icon: React.ReactNode;
+  copied: string | null;
+  onCopy: (cmd: string) => void;
+}) {
+  const isCopied = copied === command;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="gap-1.5"
+      onClick={() => onCopy(command)}
+    >
+      {icon}
+      {label}
+      <code className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-muted-foreground">
+        {command}
+      </code>
+      {isCopied ? (
+        <CheckIcon className="size-3 text-green-500" />
+      ) : (
+        <CopyIcon className="size-3 opacity-50" />
+      )}
+    </Button>
   );
 }
