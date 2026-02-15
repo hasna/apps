@@ -375,5 +375,146 @@ describe("installer", () => {
       expect(content).toContain("Auto-generated");
       expect(content).not.toContain("export * as");
     });
+
+    test("removes connector with connect- prefix", () => {
+      installConnector("figma", { targetDir: TEST_DIR });
+      const removed = removeConnector("connect-figma", TEST_DIR);
+      expect(removed).toBe(true);
+
+      const dest = join(TEST_DIR, ".connectors", "connect-figma");
+      expect(existsSync(dest)).toBe(false);
+    });
+
+    test("returns false when .connectors dir does not exist", () => {
+      const removed = removeConnector("figma", TEST_DIR);
+      expect(removed).toBe(false);
+    });
+  });
+
+  describe("installConnector path traversal prevention", () => {
+    test("rejects name with path traversal characters (..)", () => {
+      const result = installConnector("../etc/passwd", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid connector name");
+    });
+
+    test("rejects name with slashes", () => {
+      const result = installConnector("foo/bar", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid connector name");
+    });
+
+    test("rejects name with backslash", () => {
+      const result = installConnector("foo\\bar", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid connector name");
+    });
+
+    test("rejects name with special characters", () => {
+      const result = installConnector("stripe!", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid connector name");
+    });
+
+    test("rejects name with spaces", () => {
+      const result = installConnector("stripe test", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid connector name");
+    });
+
+    test("rejects name with uppercase letters", () => {
+      const result = installConnector("STRIPE", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid connector name");
+    });
+
+    test("accepts name with lowercase letters, digits, and hyphens", () => {
+      // This name doesn't exist but should pass validation
+      const result = installConnector("my-test-123", { targetDir: TEST_DIR });
+      expect(result.success).toBe(false);
+      // It should fail because connector not found, not because of invalid name
+      expect(result.error).toContain("not found");
+    });
+  });
+
+  describe("getConnectorDocs edge cases", () => {
+    test("returns null for empty string name", () => {
+      const docs = getConnectorDocs("");
+      expect(docs).toBeNull();
+    });
+
+    test("handles connector without CLAUDE.md gracefully", () => {
+      const docs = getConnectorDocs("some-fake-connector-xyz");
+      expect(docs).toBeNull();
+    });
+
+    test("returns proper structure for multiple connectors", () => {
+      const connectorNames = ["anthropic", "figma", "github", "gmail"];
+      for (const name of connectorNames) {
+        const docs = getConnectorDocs(name);
+        expect(docs).not.toBeNull();
+        expect(typeof docs!.overview).toBe("string");
+        expect(typeof docs!.auth).toBe("string");
+        expect(Array.isArray(docs!.envVars)).toBe(true);
+        expect(typeof docs!.cliCommands).toBe("string");
+        expect(typeof docs!.dataStorage).toBe("string");
+        expect(typeof docs!.raw).toBe("string");
+        expect(docs!.raw.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  describe("installConnectors edge cases", () => {
+    test("returns results in same order as input", () => {
+      const results = installConnectors(
+        ["figma", "anthropic", "stripe"],
+        { targetDir: TEST_DIR }
+      );
+      expect(results).toHaveLength(3);
+      expect(results[0].connector).toBe("figma");
+      expect(results[1].connector).toBe("anthropic");
+      expect(results[2].connector).toBe("stripe");
+    });
+
+    test("all results have required fields", () => {
+      const results = installConnectors(
+        ["anthropic", "nonexistent-xyz"],
+        { targetDir: TEST_DIR }
+      );
+      for (const r of results) {
+        expect(typeof r.connector).toBe("string");
+        expect(typeof r.success).toBe("boolean");
+        if (r.success) {
+          expect(r.path).toBeDefined();
+        } else {
+          expect(r.error).toBeDefined();
+        }
+      }
+    });
+  });
+
+  describe("getConnectorPath edge cases", () => {
+    test("handles hyphenated names", () => {
+      const path = getConnectorPath("google-calendar");
+      expect(path).toContain("connect-google-calendar");
+    });
+
+    test("handles numeric names", () => {
+      const path = getConnectorPath("e2b");
+      expect(path).toContain("connect-e2b");
+    });
+  });
+
+  describe("connectorExists edge cases", () => {
+    test("returns true for multiple known connectors", () => {
+      const knownConnectors = ["stripe", "figma", "github", "gmail", "anthropic"];
+      for (const name of knownConnectors) {
+        expect(connectorExists(name)).toBe(true);
+      }
+    });
+
+    test("returns false for empty string", () => {
+      expect(connectorExists("")).toBe(false);
+    });
   });
 });

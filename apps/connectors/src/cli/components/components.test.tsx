@@ -4,6 +4,8 @@ import { render } from "ink-testing-library";
 import { Header } from "./Header.js";
 import { CategorySelect } from "./CategorySelect.js";
 import { ConnectorSelect } from "./ConnectorSelect.js";
+import { SearchView } from "./SearchView.js";
+import { InstallProgress } from "./InstallProgress.js";
 import { ConnectorMeta } from "../../lib/registry.js";
 
 const mockConnectors: ConnectorMeta[] = [
@@ -307,5 +309,298 @@ describe("ConnectorSelect", () => {
       />
     );
     expect(lastFrame()).not.toContain("Selected:");
+  });
+
+  test("cursor moves down with arrow key", () => {
+    const { lastFrame, stdin } = render(
+      <ConnectorSelect
+        connectors={mockConnectors}
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    // Move down twice to get to second connector
+    stdin.write("\x1B[B"); // down arrow
+    stdin.write("\x1B[B"); // down arrow again
+    const frame = lastFrame();
+    // Should show cursor indicator and connectors
+    expect(frame).toContain("❯");
+    expect(frame).toContain("stripe");
+    expect(frame).toContain("figma");
+  });
+
+  test("cursor moves up with arrow key", () => {
+    const { lastFrame, stdin } = render(
+      <ConnectorSelect
+        connectors={mockConnectors}
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    // Press up from first item should wrap to last
+    stdin.write("\x1B[A"); // up arrow
+    const frame = lastFrame();
+    // Cursor should still be visible
+    expect(frame).toContain("❯");
+  });
+
+  test("multiple selections show correctly", () => {
+    const { lastFrame } = render(
+      <ConnectorSelect
+        connectors={mockConnectors}
+        selected={new Set(["stripe", "figma", "anthropic"])}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    // All should be checked
+    const checkmarks = (frame.match(/\[✓\]/g) || []).length;
+    expect(checkmarks).toBe(3);
+    // No unchecked
+    const unchecked = (frame.match(/\[ \]/g) || []).length;
+    expect(unchecked).toBe(0);
+    // Install should show count 3
+    expect(frame).toContain("Install selected (3)");
+  });
+
+  test("renders correct layout with all elements", () => {
+    const { lastFrame } = render(
+      <ConnectorSelect
+        connectors={mockConnectors}
+        selected={new Set(["stripe"])}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    // Should have title
+    expect(frame).toContain("Select connectors to install");
+    // Should have back
+    expect(frame).toContain("Back to categories");
+    // Should have connectors
+    expect(frame).toContain("stripe");
+    expect(frame).toContain("figma");
+    expect(frame).toContain("anthropic");
+    // Should have install button
+    expect(frame).toContain("Install selected (1)");
+    // Should have selected summary
+    expect(frame).toContain("Selected: stripe");
+    // Should have help
+    expect(frame).toContain("navigate");
+  });
+
+  test("connectors without version show dash", () => {
+    const noVersionConnectors: ConnectorMeta[] = [
+      {
+        name: "test-no-version",
+        displayName: "No Version",
+        description: "No version connector",
+        category: "Test",
+        tags: [],
+      },
+    ];
+    const { lastFrame } = render(
+      <ConnectorSelect
+        connectors={noVersionConnectors}
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    expect(lastFrame()).toContain("-");
+  });
+});
+
+// ============================================================================
+// SearchView Tests
+// ============================================================================
+
+describe("SearchView", () => {
+  test("renders search input with placeholder", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("Search:");
+    expect(frame).toContain("Type to search");
+  });
+
+  test("shows minimum character hint initially", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    expect(lastFrame()).toContain("Type at least 2 characters");
+  });
+
+  test("shows help text for search mode", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    expect(lastFrame()).toContain("type to search");
+  });
+
+  test("shows selected summary when connectors are selected", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set(["stripe", "figma"])}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("Selected:");
+    expect(frame).toContain("stripe");
+    expect(frame).toContain("figma");
+  });
+
+  test("does not show selected summary when nothing selected", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    expect(lastFrame()).not.toContain("Selected:");
+  });
+
+  test("renders initial layout correctly", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set()}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    // Search label
+    expect(frame).toContain("Search:");
+    // Min chars hint
+    expect(frame).toContain("Type at least 2 characters");
+    // Help text
+    expect(frame).toContain("type to search");
+    expect(frame).toContain("select results");
+    expect(frame).toContain("esc back");
+  });
+
+  test("renders with selected connectors showing summary", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set(["stripe", "anthropic"])}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("Selected:");
+    expect(frame).toContain("stripe");
+    expect(frame).toContain("anthropic");
+  });
+
+  test("renders with single selected connector", () => {
+    const { lastFrame } = render(
+      <SearchView
+        selected={new Set(["gmail"])}
+        onToggle={() => {}}
+        onConfirm={() => {}}
+        onBack={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("Selected: gmail");
+  });
+});
+
+// ============================================================================
+// InstallProgress Tests
+// ============================================================================
+
+describe("InstallProgress", () => {
+  test("renders installing state with connector names", () => {
+    const { lastFrame } = render(
+      <InstallProgress
+        connectors={["anthropic", "figma"]}
+        onComplete={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("Installing connectors");
+    // Should show connector names
+    expect(frame).toContain("anthropic");
+    expect(frame).toContain("figma");
+  });
+
+  test("shows progress counter", () => {
+    const { lastFrame } = render(
+      <InstallProgress
+        connectors={["anthropic", "figma"]}
+        onComplete={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("1/2");
+  });
+
+  test("shows pending items with circle marker", () => {
+    const { lastFrame } = render(
+      <InstallProgress
+        connectors={["anthropic", "figma", "stripe"]}
+        onComplete={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    // Pending items should show circle
+    expect(frame).toContain("○");
+  });
+
+  test("renders with single connector", () => {
+    const { lastFrame } = render(
+      <InstallProgress
+        connectors={["anthropic"]}
+        onComplete={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("1/1");
+    expect(frame).toContain("anthropic");
+  });
+
+  test("passes overwrite option", () => {
+    const { lastFrame } = render(
+      <InstallProgress
+        connectors={["anthropic"]}
+        overwrite={true}
+        onComplete={() => {}}
+      />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain("anthropic");
   });
 });

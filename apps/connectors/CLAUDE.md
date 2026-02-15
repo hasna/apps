@@ -1,233 +1,84 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-`@hasna/connectors` is an open-source monorepo of 63 TypeScript API connectors. It provides:
+`@hasna/connectors` is a monorepo of 62 TypeScript API connectors with four entry points:
 
-- **CLI** (`connectors`) — Install, search, list, and manage connectors
-- **Dashboard** (`connectors serve`) — Local web dashboard (shadcn/ui) for auth management
-- **MCP Server** (`connectors-mcp`) — Model Context Protocol server for AI agents
-- **Library** — Programmatic API for importing connectors into TypeScript projects
+- **CLI** (`src/cli/index.tsx`) — Commander + Ink interactive terminal UI
+- **Library** (`src/index.ts`) — Programmatic API for registry, install, search
+- **MCP Server** (`src/mcp/index.ts`) — Model Context Protocol server for AI agents
+- **Dashboard** (`src/server/serve.ts` + `dashboard/`) — Bun HTTP server serving a Vite/React/shadcn UI
 
-## Build & Run Commands
-
-```bash
-# Install dependencies
-bun install
-
-# Install dashboard dependencies
-cd dashboard && bun install && cd ..
-
-# Run CLI in development
-bun run dev
-
-# Build everything (dashboard + CLI + MCP + serve)
-bun run build
-
-# Build dashboard only
-bun run build:dashboard
-
-# Type check
-bun run typecheck
-
-# Run tests
-bun test
-
-# Publish to npm
-npm publish
-```
-
-## CLI Commands
-
-### Interactive Mode
+## Commands
 
 ```bash
-connectors              # Interactive connector browser (TTY only)
-connectors i            # Alias
+bun install              # Install all deps (dashboard deps auto-install via postinstall)
+bun run dev              # Run CLI from source
+bun run build            # Build everything: dashboard, CLI, MCP, serve, .d.ts declarations
+bun run build:dashboard  # Build dashboard only
+bun run typecheck        # tsc --noEmit
+bun test                 # Run all 216 tests (6 test files)
+bun test src/server      # Run a single test file
+npm publish              # Runs prepublishOnly (test + build), then publishes
 ```
 
-### Install & Remove
+## Architecture
 
-```bash
-connectors install <names...>        # Install one or more connectors
-connectors install figma stripe      # Example
-connectors install figma --overwrite # Overwrite existing
-connectors install figma --json      # JSON output
-connectors add <names...>           # Alias for install
+**Build pipeline:** `bun run build` chains: dashboard Vite build → bun build for 4 targets (CLI, MCP, serve, library) → `tsc --emitDeclarationOnly` for `.d.ts` files. CLI externals ink/react/chalk/conf (loaded at runtime).
 
-connectors remove <name>            # Remove installed connector
-connectors rm <name>                # Alias for remove
-```
+**Connector registry** (`src/lib/registry.ts`): Static array of 62 `ConnectorMeta` entries with `CATEGORIES` as `const` union type. Versions loaded lazily from each connector's `package.json`.
 
-### Browse & Search
+**Installer** (`src/lib/installer.ts`): Copies connector directories to `.connectors/` in user's project. Auto-generates `.connectors/index.ts` with namespace re-exports (`export * as stripe from './connect-stripe/src/index.js'`). Resolves source connectors from multiple paths (works from both `src/lib/` and `bin/`).
 
-```bash
-connectors list                     # List all 63 connectors
-connectors list --installed         # List only installed connectors
-connectors list --category "AI & ML" # Filter by category
-connectors list --json              # JSON output
-connectors ls                       # Alias for list
+**Auth system** (`src/server/auth.ts`): Reads connector CLAUDE.md files to detect auth type (oauth/bearer/apikey). Manages profiles at `~/.connect/connect-{name}/`. Two profile file patterns: `profiles/default.json` (flat) and `profiles/default/config.json` + `tokens.json` (directory). OAuth is Google-only currently (hardcoded endpoints + scopes map). CSRF state tokens stored in-memory.
 
-connectors search <query>           # Search by name, description, or tags
-connectors search payment --json    # JSON output
+**Dashboard server** (`src/server/serve.ts`): Bun.serve() with route matching via regex. Serves Vite-built SPA from `dashboard/dist/` with fallback to `index.html`. API routes return JSON, static files served by MIME type. Dashboard React app at `dashboard/src/app.tsx` uses @tanstack/react-table.
 
-connectors categories               # List all categories with counts
-connectors categories --json        # JSON output
-```
+**Interactive CLI** (`src/cli/components/`): Ink (React for terminals) components. `App.tsx` manages view state machine: main → browse/search → connectors → installing → done. `ConnectorSelect` and `SearchView` share similar table rendering with scroll virtualization.
 
-### Connector Details
+**MCP Server** (`src/mcp/index.ts`): Registers 8 tools using @modelcontextprotocol/sdk. Wraps the same registry/installer functions the CLI uses. Runs on stdio transport.
 
-```bash
-connectors info <name>              # Show connector metadata
-connectors info stripe --json       # JSON output
+## Testing
 
-connectors docs <name>              # Show connector documentation (auth, env vars, API)
-connectors docs gmail --json        # Structured JSON output
-connectors docs gmail --raw         # Raw CLAUDE.md markdown
-```
+Tests use Bun's built-in test runner (`import { describe, test, expect } from "bun:test"`). Key patterns:
 
-### Dashboard (Auth Management)
+- **CLI tests** (`cli.test.ts`): Spawn `bun run ./src/cli/index.tsx` as subprocess, parse stdout
+- **MCP tests** (`mcp.test.ts`): Spawn MCP server process, send JSON-RPC via stdin/stdout
+- **Component tests** (`components.test.tsx`): Use `ink-testing-library` to render and inspect frames
+- **Server tests** (`server.test.ts`): Start real Bun.serve() on random port, test with fetch(). Auth tests write to real `~/.connect/` with unique `zzztest{pid}` prefixed names, cleaned up in afterEach
+- **Installer tests** (`installer.test.ts`): Use temp directories (`.test-cli-tmp/`)
 
-```bash
-connectors serve                    # Start dashboard at http://localhost:19426
-connectors serve --port 3000        # Custom port
-connectors serve --no-open          # Don't open browser
-connectors dashboard                # Alias for serve
-connectors open                     # Start dashboard and open browser
-```
+Note: Bun's `os.homedir()` caches at startup and ignores runtime `HOME` changes. Tests that need isolated home directories use unique connector names instead.
 
-The dashboard provides:
-- All 63 connectors with installed/not-installed status
-- Auth status detection (OAuth, API Key, Bearer Token)
-- API key configuration via dialog
-- OAuth flow for Google connectors (Gmail, Calendar, Drive, etc.)
-- Token refresh and expiry monitoring
-- Light/dark theme toggle
-- Data table with sorting, filtering, pagination (10/page)
-- Copy-to-clipboard install commands for not-installed connectors
+## Adding a Connector
 
-### MCP Server
+1. Verify NOT in the blacklist below
+2. Create `connectors/connect-{name}/` with: `src/`, `package.json` (`@hasna` scope, `Apache-2.0` license), `CLAUDE.md`, `.npmrc`
+3. Add entry to `CONNECTORS` array in `src/lib/registry.ts`
+4. Connector names must match `/^[a-z0-9-]+$/` (validated in installer and server)
 
-```bash
-connectors-mcp                      # Start MCP server on stdio
-```
+## Connector Blacklist
 
-MCP Tools available:
-- `search_connectors` — Search by name, keyword, or description
-- `list_connectors` — List all or by category
-- `connector_docs` — Get auth, env vars, CLI commands for a connector
-- `connector_info` — Get metadata and install status
-- `install_connector` — Install connectors
-- `remove_connector` — Remove connectors
-- `list_installed` — List installed connectors
-- `connector_auth_status` — Check auth status (type, configured, token expiry)
+Do NOT add these connectors:
 
-### Standalone Dashboard
+**Romanian store/baby scrapers:** connect-aboutyou, connect-altex, connect-answear, connect-carrefour, connect-catena, connect-cel, connect-dedeman, connect-drmax, connect-elefant, connect-emag, connect-evomag, connect-farmaciatei, connect-fashiondays, connect-flanco, connect-footshop, connect-glovo, connect-helpnet, connect-ipb, connect-kaufland, connect-leroymerlin, connect-lidl, connect-mediagalaxy, connect-megaimage, connect-mytheresa, connect-notino, connect-olx, connect-pcgarage, connect-sensiblu, connect-tazz, connect-vivre, connect-babyjohn, connect-jacadi, connect-jumbo, connect-mashashop, connect-minikidi, connect-minikids, connect-nichiduta, connect-noriel, connect-smyk
 
-```bash
-connectors-serve                    # Start dashboard server (standalone binary)
-connectors-serve --port 3000        # Custom port
-```
+**Travel scrapers:** connect-googleflights, connect-kayak, connect-kiwi, connect-ryanair, connect-skyscanner, connect-wizzair
 
-## Code Style
-
-- TypeScript with strict mode
-- ESM modules (`type: module`)
-- Async/await for all async operations
-- Minimal dependencies: commander, chalk, ink (for CLI)
-- Type annotations required everywhere
-
-## Project Structure
-
-```
-├── src/
-│   ├── cli/              # Interactive CLI (Ink/React)
-│   │   ├── components/
-│   │   └── index.tsx
-│   ├── lib/              # Core library
-│   │   ├── installer.ts  # Install/remove connectors
-│   │   └── registry.ts   # 63 connector definitions
-│   ├── mcp/              # MCP server for AI agents
-│   │   └── index.ts
-│   ├── server/           # Dashboard server
-│   │   ├── auth.ts       # Auth detection, token management
-│   │   ├── dashboard.ts  # Legacy HTML template (unused)
-│   │   ├── index.ts      # Standalone entry point
-│   │   └── serve.ts      # HTTP server + API routes
-│   └── index.ts          # Library exports
-├── dashboard/            # React frontend (Vite + shadcn/ui)
-│   ├── src/
-│   │   ├── components/   # shadcn/ui + app components
-│   │   ├── app.tsx       # Main dashboard app
-│   │   └── main.tsx      # React entry point
-│   └── dist/             # Built dashboard (served by server)
-├── connectors/           # Individual connector packages
-│   └── connect-*/        # Each connector (63 total)
-└── bin/                  # Built CLI output
-    ├── index.js          # CLI binary
-    ├── mcp.js            # MCP server binary
-    └── serve.js          # Dashboard server binary
-```
+**Other:** connect-clickbank, connect-escrow, connect-farfetch, connect-browseruse
 
 ## Dashboard API Routes
 
-The dashboard server (port 19426) exposes:
-
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/` | GET | Dashboard UI |
 | `/api/connectors` | GET | All connectors with auth status |
 | `/api/connectors/:name` | GET | Single connector details |
 | `/api/connectors/:name/key` | POST | Save API key (`{ key, field? }`) |
 | `/api/connectors/:name/refresh` | POST | Refresh OAuth token |
 | `/oauth/:name/start` | GET | Start OAuth flow (redirects) |
 | `/oauth/:name/callback` | GET | OAuth callback handler |
-
-## Connector Blacklist
-
-The following connectors should NOT be added to this open-source repository:
-
-### Romanian Store Scrapers (browser-use based)
-These are browser automation scrapers for Romanian e-commerce sites:
-- connect-aboutyou, connect-altex, connect-answear
-- connect-carrefour, connect-catena, connect-cel
-- connect-dedeman, connect-drmax, connect-elefant
-- connect-emag, connect-evomag, connect-farmaciatei
-- connect-fashiondays, connect-flanco, connect-footshop
-- connect-glovo, connect-helpnet, connect-ipb
-- connect-kaufland, connect-leroymerlin, connect-lidl
-- connect-mediagalaxy, connect-megaimage, connect-mytheresa
-- connect-notino, connect-olx, connect-pcgarage
-- connect-sensiblu, connect-tazz, connect-vivre
-
-### Romanian Baby/Kids Store Scrapers
-- connect-babyjohn, connect-jacadi, connect-jumbo
-- connect-mashashop, connect-minikidi, connect-minikids
-- connect-nichiduta, connect-noriel, connect-smyk
-
-### Travel Scrapers (browser-use based)
-- connect-googleflights, connect-kayak, connect-kiwi
-- connect-ryanair, connect-skyscanner, connect-wizzair
-
-### Other Blacklisted
-- connect-clickbank (affiliate marketing platform)
-- connect-escrow (financial/sensitive)
-- connect-farfetch (browser scraper)
-- connect-browseruse (wrapper, already have it)
-
-## Adding New Connectors
-
-When adding connectors from the dev folder:
-
-1. Verify it's NOT in the blacklist above
-2. Verify it uses real APIs (not browser-use scrapers)
-3. Copy to `connectors/connect-{name}/`
-4. Update `.npmrc` to use `@hasna` namespace
-5. Remove any internal references (beepmedia, hasnaxyz, etc.)
-6. Ensure no secrets or API keys are committed
-7. Update `src/lib/registry.ts` to include the connector
 
 ## Auth & Data Storage
 
@@ -239,22 +90,12 @@ Connectors store configuration in `~/.connect/connect-{name}/`:
 ## Publishing
 
 ```bash
-# Bump version in package.json
-# Build everything
-bun run build
-
-# Publish
+# 1. Bump version in package.json AND src/cli/index.tsx (.version())
+# 2. Update CHANGELOG.md
+# 3. Publish (runs tests + build automatically via prepublishOnly)
 npm publish
+# 4. Update global install
+bun install -g @hasna/connectors@<version>
 ```
 
 The npm package includes `bin/`, `dist/`, `dashboard/dist/`, and `connectors/`.
-
-## Dependencies
-
-- commander: CLI argument parsing
-- chalk: Terminal styling
-- ink: React-based interactive CLI
-- ink-select-input: Selection component for Ink
-- @modelcontextprotocol/sdk: MCP server
-- zod: Schema validation (MCP)
-- Dashboard: React 19, Tailwind CSS v4, shadcn/ui, @tanstack/react-table, Radix UI
