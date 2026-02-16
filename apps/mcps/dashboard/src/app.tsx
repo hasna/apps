@@ -1,5 +1,5 @@
 import * as React from "react";
-import { RefreshCwIcon, PlusIcon } from "lucide-react";
+import { RefreshCwIcon, PlusIcon, DownloadIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { ServersTable } from "@/components/servers-table";
@@ -11,30 +11,98 @@ export function App() {
   const [servers, setServers] = React.useState<McpServerEntry[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [addOpen, setAddOpen] = React.useState(false);
+  const [updating, setUpdating] = React.useState(false);
+  const [version, setVersion] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<{
     message: string;
     type: "success" | "error";
   } | null>(null);
+  const loadIdRef = React.useRef(0);
+  const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadServers = React.useCallback(async () => {
+    const requestId = ++loadIdRef.current;
+    setLoading(true);
     try {
       const res = await fetch("/api/servers");
+      if (!res.ok) {
+        throw new Error(`Failed to load servers (${res.status})`);
+      }
       const data = await res.json();
+      if (requestId !== loadIdRef.current) return;
       setServers(data);
     } catch {
-      showToast("Failed to load servers", "error");
+      if (requestId === loadIdRef.current) {
+        showToast("Failed to load servers", "error");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === loadIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  const loadVersion = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/version");
+      const data = await res.json();
+      setVersion(data.version);
+    } catch {
+      // ignore
     }
   }, []);
 
   React.useEffect(() => {
     loadServers();
-  }, [loadServers]);
+    loadVersion();
+  }, [loadServers, loadVersion]);
+
+  React.useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  async function handleUpdate() {
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/update", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        showToast(data.error, "error");
+      } else if (data.upToDate) {
+        showToast(`Already up to date (v${data.current})`, "success");
+      } else {
+        showToast(`Updated from v${data.current} to v${data.latest}`, "success");
+        loadVersion();
+      }
+    } catch {
+      showToast("Update failed", "error");
+    } finally {
+      setUpdating(false);
+    }
+  }
 
   function showToast(message: string, type: "success" | "error") {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 3000);
+  }
+
+  async function readJsonSafe(res: Response): Promise<any | null> {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
   }
 
   async function handleToggle(id: string, enabled: boolean) {
@@ -42,12 +110,16 @@ export function App() {
       const res = await fetch(`/api/servers/${id}/${enabled ? "enable" : "disable"}`, {
         method: "POST",
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await readJsonSafe(res);
+      if (!res.ok) {
+        showToast(data?.error || `Failed to update (${res.status})`, "error");
+        return;
+      }
+      if (data?.success) {
         showToast(`Server ${enabled ? "enabled" : "disabled"}`, "success");
         loadServers();
       } else {
-        showToast(data.error || "Failed to update", "error");
+        showToast(data?.error || "Failed to update", "error");
       }
     } catch {
       showToast("Failed to update server", "error");
@@ -59,12 +131,16 @@ export function App() {
       const res = await fetch(`/api/servers/${id}`, {
         method: "DELETE",
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await readJsonSafe(res);
+      if (!res.ok) {
+        showToast(data?.error || `Failed to remove (${res.status})`, "error");
+        return;
+      }
+      if (data?.success) {
         showToast("Server removed", "success");
         loadServers();
       } else {
-        showToast(data.error || "Failed to remove", "error");
+        showToast(data?.error || "Failed to remove", "error");
       }
     } catch {
       showToast("Failed to remove server", "error");
@@ -87,6 +163,11 @@ export function App() {
               <span className="font-normal text-muted-foreground">
                 MCPs
               </span>
+              {version && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  v{version}
+                </span>
+              )}
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -97,6 +178,17 @@ export function App() {
             >
               <PlusIcon className="size-3.5" />
               Add Server
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleUpdate}
+              disabled={updating}
+            >
+              <DownloadIcon
+                className={`size-3.5 ${updating ? "animate-pulse" : ""}`}
+              />
+              {updating ? "Updating..." : "Update"}
             </Button>
             <Button
               variant="ghost"

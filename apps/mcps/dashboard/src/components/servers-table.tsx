@@ -68,10 +68,15 @@ function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = React.useState(false);
 
   function handleCopy() {
-    navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    navigator.clipboard
+      .writeText(command)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {
+        setCopied(false);
+      });
   }
 
   return (

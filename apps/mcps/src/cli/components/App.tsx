@@ -1,10 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { ServerList } from "./ServerList.js";
 import { ServerDetail } from "./ServerDetail.js";
 import { SearchView } from "./SearchView.js";
 import { ToolCall } from "./ToolCall.js";
 import type { TuiView, McpServerEntry, McpTool } from "../../types.js";
+import { disconnectAll } from "../../lib/proxy.js";
+import { closeDb } from "../../lib/db.js";
 
 export function App() {
   const { exit } = useApp();
@@ -13,7 +15,7 @@ export function App() {
   const [selectedTool, setSelectedTool] = useState<McpTool | null>(null);
 
   useInput((input, key) => {
-    if (input === "q" && view === "servers") {
+    if (input === "q" && view !== "search" && view !== "call") {
       exit();
     }
     if (key.escape) {
@@ -30,6 +32,12 @@ export function App() {
       }
     }
   });
+
+  useEffect(() => {
+    return () => {
+      void disconnectAll().catch(() => undefined).finally(() => closeDb());
+    };
+  }, []);
 
   const handleSelectServer = (server: McpServerEntry) => {
     setSelectedServer(server);
@@ -95,7 +103,9 @@ export function App() {
         <Text dimColor>
           {view === "servers"
             ? "↑↓ navigate · enter select · s search · q quit"
-            : "esc back · q quit"}
+            : view === "detail"
+              ? "esc back · q quit"
+              : "esc back"}
         </Text>
       </Box>
     </Box>

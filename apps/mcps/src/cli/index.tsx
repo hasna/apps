@@ -4,6 +4,9 @@ import { Command } from "commander";
 import React from "react";
 import { render } from "ink";
 import chalk from "chalk";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import {
   addServer,
   removeServer,
@@ -11,6 +14,7 @@ import {
   getServer,
   enableServer,
   disableServer,
+  getToolCounts,
 } from "../lib/registry.js";
 import { searchRegistry, installFromRegistry } from "../lib/remote.js";
 import {
@@ -26,12 +30,22 @@ import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
 import { App } from "./components/App.js";
 
+const VERSION = (() => {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string };
+    return pkg.version || "0.0.1";
+  } catch {
+    return "0.0.1";
+  }
+})();
+
 const program = new Command();
 
 program
   .name("mcps")
   .description("Meta-MCP registry & CLI — discover, manage, and proxy MCP servers")
-  .version("0.0.1")
+  .version(VERSION)
   .enablePositionalOptions();
 
 // --- list ---
@@ -45,10 +59,11 @@ program
       closeDb();
       return;
     }
+    const toolCounts = getToolCounts();
     for (const s of servers) {
       const status = s.enabled ? chalk.green("enabled") : chalk.red("disabled");
-      const cached = getCachedTools(s.id);
-      const toolCount = cached.length > 0 ? chalk.dim(` (${cached.length} tools)`) : "";
+      const cachedCount = toolCounts.get(s.id) ?? 0;
+      const toolCount = cachedCount > 0 ? chalk.dim(` (${cachedCount} tools)`) : "";
       console.log(`  ${chalk.bold(s.name)} ${chalk.dim(`[${s.id}]`)} — ${status}${toolCount}`);
       if (s.description) console.log(`    ${chalk.dim(s.description)}`);
       console.log(`    ${chalk.dim(`${s.command} ${s.args.join(" ")}`)}`);
@@ -79,8 +94,9 @@ program
     } catch (err) {
       console.error(chalk.red(`Search failed: ${(err as Error).message}`));
       process.exit(1);
+    } finally {
+      closeDb();
     }
-    closeDb();
   });
 
 // --- add ---
@@ -109,6 +125,7 @@ program
 
       if (!command) {
         console.error(chalk.red("Error: command is required (or use --from-registry)"));
+        closeDb();
         process.exit(1);
       }
 
@@ -116,6 +133,7 @@ program
       if (opts.env) {
         for (const pair of opts.env) {
           const [key, ...rest] = pair.split("=");
+          if (!key) continue;
           envMap[key] = rest.join("=");
         }
       }
@@ -138,6 +156,7 @@ program
       } else {
         console.error(chalk.red(`Failed to add server: ${err.message}`));
       }
+      closeDb();
       process.exit(1);
     }
     closeDb();
@@ -152,6 +171,7 @@ program
     const server = getServer(id);
     if (!server) {
       console.error(chalk.red(`Server "${id}" not found.`));
+      closeDb();
       process.exit(1);
     }
     removeServer(id);
@@ -168,6 +188,7 @@ program
     const server = getServer(id);
     if (!server) {
       console.error(chalk.red(`Server "${id}" not found.`));
+      closeDb();
       process.exit(1);
     }
     enableServer(id);
@@ -184,6 +205,7 @@ program
     const server = getServer(id);
     if (!server) {
       console.error(chalk.red(`Server "${id}" not found.`));
+      closeDb();
       process.exit(1);
     }
     disableServer(id);
@@ -274,6 +296,7 @@ program
       }
     }
 
+    let exitCode = 0;
     try {
       console.log(chalk.dim(`Connecting to servers...`));
       await connectAllEnabled();
@@ -282,12 +305,13 @@ program
       for (const c of result.content) {
         console.log(c.text);
       }
-      await disconnectAll();
     } catch (err) {
       console.error(chalk.red(`Call failed: ${(err as Error).message}`));
-      process.exit(1);
+      exitCode = 1;
     }
+    await disconnectAll().catch(() => undefined);
     closeDb();
+    if (exitCode !== 0) process.exit(exitCode);
   });
 
 // --- info ---
@@ -299,6 +323,7 @@ program
     const server = getServer(id);
     if (!server) {
       console.error(chalk.red(`Server "${id}" not found.`));
+      closeDb();
       process.exit(1);
     }
 
@@ -334,10 +359,9 @@ program
     const servers = listServers();
     const enabled = servers.filter((s) => s.enabled).length;
     const disabled = servers.length - enabled;
+    const toolCounts = getToolCounts();
     let totalTools = 0;
-    for (const s of servers) {
-      totalTools += getCachedTools(s.id).length;
-    }
+    for (const s of servers) totalTools += toolCounts.get(s.id) ?? 0;
 
     console.log(chalk.bold("Registry Status"));
     console.log(`  Servers:  ${servers.length} (${chalk.green(`${enabled} enabled`)}, ${chalk.red(`${disabled} disabled`)})`);
@@ -350,9 +374,39 @@ program
   .command("serve")
   .description("Start the web dashboard")
   .option("--port <port>", "Port to listen on", "19427")
+  .option("--host <host>", "Host to bind (default: 127.0.0.1)", "127.0.0.1")
   .option("--no-open", "Don't open browser automatically")
   .action(async (opts) => {
-    await startServer(parseInt(opts.port, 10), { open: opts.open });
+    await startServer(parseInt(opts.port, 10), { open: opts.open, host: opts.host });
+  });
+
+// --- update ---
+program
+  .command("update")
+  .description("Update mcps to the latest version")
+  .action(async () => {
+    const { execFileSync } = await import("child_process");
+    const pkg = await import("../../package.json");
+    const currentVersion = pkg.version;
+    console.log(chalk.dim(`Current version: ${currentVersion}`));
+    console.log(chalk.dim("Checking for updates..."));
+    try {
+      const latest = execFileSync("npm", ["view", "@hasna/mcps", "version"], {
+        encoding: "utf-8",
+      }).trim();
+      if (latest === currentVersion) {
+        console.log(chalk.green(`Already on the latest version (${currentVersion}).`));
+        return;
+      }
+      console.log(chalk.dim(`New version available: ${latest}`));
+      console.log(chalk.dim("Updating..."));
+      execFileSync("bun", ["install", "-g", "@hasna/mcps@latest"], { stdio: "inherit" });
+      console.log(chalk.green(`Updated to ${latest}`));
+    } catch (err) {
+      console.error(chalk.red(`Update failed: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    }
   });
 
 // --- mcp ---

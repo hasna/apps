@@ -7,8 +7,8 @@ function parseRow(row: Record<string, unknown>): McpServerEntry {
     name: row.name as string,
     description: (row.description as string) || null,
     command: row.command as string,
-    args: JSON.parse(row.args as string),
-    env: JSON.parse(row.env as string),
+    args: safeJsonParse(row.args as string, []),
+    env: safeJsonParse(row.env as string, {}),
     transport: row.transport as McpServerEntry["transport"],
     url: (row.url as string) || null,
     source: row.source as McpServerEntry["source"],
@@ -18,6 +18,15 @@ function parseRow(row: Record<string, unknown>): McpServerEntry {
   };
 }
 
+function safeJsonParse<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string") return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function generateId(name: string): string {
   return name
     .toLowerCase()
@@ -25,10 +34,50 @@ function generateId(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
+function normalizeCandidate(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function pickNameFromArgs(args?: string[]): string | undefined {
+  if (!args || args.length === 0) return undefined;
+  const ddIndex = args.indexOf("--");
+  if (ddIndex >= 0 && ddIndex < args.length - 1) {
+    const after = normalizeCandidate(args[ddIndex + 1]);
+    if (after) return after;
+  }
+  for (const arg of args) {
+    const candidate = normalizeCandidate(arg);
+    if (!candidate) continue;
+    if (candidate.startsWith("-")) continue;
+    return candidate;
+  }
+  return undefined;
+}
+
+function pickId(candidates: Array<string | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const id = generateId(candidate);
+    if (id) return id;
+  }
+  return null;
+}
+
 export function addServer(opts: AddServerOptions): McpServerEntry {
   const db = getDb();
-  const name = opts.name || opts.args?.[0] || opts.command;
-  const id = generateId(name);
+  const command = normalizeCandidate(opts.command);
+  if (!command) {
+    throw new Error("Command is required");
+  }
+  const argName = pickNameFromArgs(opts.args);
+  const name = normalizeCandidate(opts.name) || argName || command;
+  const id =
+    pickId([normalizeCandidate(opts.name), argName, command]) ||
+    null;
+  if (!id) {
+    throw new Error("Unable to generate a valid server ID");
+  }
 
   const row = db
     .prepare(
@@ -40,7 +89,7 @@ export function addServer(opts: AddServerOptions): McpServerEntry {
       id,
       name,
       opts.description || null,
-      opts.command,
+      command,
       JSON.stringify(opts.args || []),
       JSON.stringify(opts.env || {}),
       opts.transport || "stdio",
@@ -114,7 +163,11 @@ export function updateServer(
 
   const row = db
     .prepare(`UPDATE servers SET ${sets.join(", ")} WHERE id = ? RETURNING *`)
-    .get(...values) as Record<string, unknown>;
+    .get(...values) as Record<string, unknown> | null;
+
+  if (!row) {
+    throw new Error(`Server "${id}" not found`);
+  }
 
   return parseRow(row);
 }
@@ -132,26 +185,50 @@ export function cacheTools(
   tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>
 ): void {
   const db = getDb();
-  db.prepare("DELETE FROM tool_cache WHERE server_id = ?").run(serverId);
-
   const insert = db.prepare(
     "INSERT INTO tool_cache (server_id, name, description, input_schema) VALUES (?, ?, ?, ?)"
   );
 
+  const uniqueTools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }> = [];
+  const seen = new Set<string>();
   for (const tool of tools) {
-    insert.run(serverId, tool.name, tool.description, JSON.stringify(tool.input_schema));
+    const name = tool.name?.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    uniqueTools.push({
+      name,
+      description: tool.description || "",
+      input_schema: tool.input_schema || {},
+    });
   }
+
+  const run = db.transaction((rows: typeof uniqueTools) => {
+    db.prepare("DELETE FROM tool_cache WHERE server_id = ?").run(serverId);
+    for (const tool of rows) {
+      insert.run(serverId, tool.name, tool.description, JSON.stringify(tool.input_schema));
+    }
+  });
+
+  run(uniqueTools);
+}
+
+export function getToolCounts(): Map<string, number> {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT server_id, COUNT(*) as count FROM tool_cache GROUP BY server_id")
+    .all() as Array<{ server_id: string; count: number }>;
+  return new Map(rows.map((row) => [row.server_id, Number(row.count)]));
 }
 
 export function getCachedTools(serverId: string): Array<{ name: string; description: string; input_schema: Record<string, unknown> }> {
   const db = getDb();
   const rows = db
-    .prepare("SELECT name, description, input_schema FROM tool_cache WHERE server_id = ?")
+    .prepare("SELECT name, description, input_schema FROM tool_cache WHERE server_id = ? ORDER BY name")
     .all(serverId) as Array<{ name: string; description: string; input_schema: string }>;
 
   return rows.map((r) => ({
     name: r.name,
     description: r.description,
-    input_schema: JSON.parse(r.input_schema),
+    input_schema: safeJsonParse(r.input_schema, {}),
   }));
 }

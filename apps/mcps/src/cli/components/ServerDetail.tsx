@@ -18,8 +18,13 @@ export function ServerDetail({ server, onSelectTool, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const cachedTools = getCachedTools(server.id);
+  const cachedKey = cachedTools
+    .map((t) => `${t.name}|${t.description}|${JSON.stringify(t.input_schema)}`)
+    .join(";");
 
   useEffect(() => {
+    setLoading(false);
+    setError(null);
     if (cachedTools.length > 0) {
       setTools(
         cachedTools.map((t) => ({
@@ -29,8 +34,10 @@ export function ServerDetail({ server, onSelectTool, onBack }: Props) {
           input_schema: t.input_schema,
         }))
       );
+    } else {
+      setTools([]);
     }
-  }, [server.id]);
+  }, [server.id, cachedKey]);
 
   const handleConnect = async () => {
     setLoading(true);

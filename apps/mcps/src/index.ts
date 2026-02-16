@@ -14,6 +14,7 @@ export {
   updateServer,
   enableServer,
   disableServer,
+  getToolCounts,
 } from "./lib/registry.js";
 
 export { searchRegistry, getRegistryServer, installFromRegistry } from "./lib/remote.js";

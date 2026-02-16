@@ -1,8 +1,7 @@
 import React from "react";
 import { Box, Text, useInput } from "ink";
 import SelectInput from "ink-select-input";
-import { listServers } from "../../lib/registry.js";
-import { getCachedTools } from "../../lib/registry.js";
+import { listServers, getToolCounts } from "../../lib/registry.js";
 import type { McpServerEntry } from "../../types.js";
 
 interface Props {
@@ -12,6 +11,7 @@ interface Props {
 
 export function ServerList({ onSelect, onSearch }: Props) {
   const servers = listServers();
+  const toolCounts = getToolCounts();
 
   useInput((input) => {
     if (input === "s") {
@@ -29,10 +29,9 @@ export function ServerList({ onSelect, onSearch }: Props) {
   }
 
   const items = servers.map((s) => {
-    const cached = getCachedTools(s.id);
+    const cachedCount = toolCounts.get(s.id) ?? 0;
     const status = s.enabled ? "●" : "○";
-    const statusColor = s.enabled ? "green" : "red";
-    const toolInfo = cached.length > 0 ? ` (${cached.length} tools)` : "";
+    const toolInfo = cachedCount > 0 ? ` (${cachedCount} tools)` : "";
 
     return {
       label: `${status} ${s.name} [${s.id}]${toolInfo}`,

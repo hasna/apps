@@ -39,6 +39,25 @@ export function AddServerDialog({
     }
   }, [open]);
 
+  function parseArgs(input: string): string[] {
+    const result: string[] = [];
+    const regex = /"([^"\\]*(\\.[^"\\]*)*)"|'([^'\\]*(\\.[^'\\]*)*)'|[^\s]+/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(input)) !== null) {
+      const raw = match[1] ?? match[3] ?? match[0];
+      result.push(raw.replace(/\\(["'\\])/g, "$1"));
+    }
+    return result;
+  }
+
+  async function readJsonSafe(res: Response): Promise<any | null> {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
   async function handleSave() {
     if (!command.trim()) return;
     setSaving(true);
@@ -51,19 +70,20 @@ export function AddServerDialog({
         body: JSON.stringify({
           name: name.trim() || undefined,
           command: command.trim(),
-          args: args
-            .trim()
-            .split(/\s+/)
-            .filter((a) => a),
+          args: parseArgs(args.trim()),
           description: description.trim() || undefined,
         }),
       });
-      const data = await res.json();
-      if (data.id) {
+      const data = await readJsonSafe(res);
+      if (!res.ok) {
+        setError(data?.error || `Failed to add server (${res.status})`);
+        return;
+      }
+      if (data?.id) {
         onOpenChange(false);
         onAdded();
       } else {
-        setError(data.error || "Failed to add server");
+        setError(data?.error || "Failed to add server");
       }
     } catch {
       setError("Failed to add server");

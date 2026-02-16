@@ -1,6 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import {
   addServer,
   removeServer,
@@ -12,15 +15,30 @@ import {
 import { searchRegistry, installFromRegistry } from "../lib/remote.js";
 import {
   connectAllEnabled,
+  connectToServer,
   listAllTools,
   callTool,
   disconnectAll,
 } from "../lib/proxy.js";
 import { TOOL_PREFIX_SEPARATOR } from "../lib/config.js";
 
+function redactServerEnv<T extends { env: Record<string, string> }>(server: T): T {
+  return { ...server, env: {} };
+}
+
+const VERSION = (() => {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string };
+    return pkg.version || "0.0.1";
+  } catch {
+    return "0.0.1";
+  }
+})();
+
 const server = new McpServer({
   name: "mcps",
-  version: "0.0.1",
+  version: VERSION,
 });
 
 // --- Management Tools ---
@@ -32,7 +50,7 @@ server.tool(
   async () => {
     const servers = listServers();
     return {
-      content: [{ type: "text", text: JSON.stringify(servers, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(servers.map(redactServerEnv), null, 2) }],
     };
   }
 );
@@ -119,6 +137,13 @@ server.tool(
   "Enable a registered MCP server",
   { id: z.string().describe("Server ID to enable") },
   async ({ id }) => {
+    const existing = getServer(id);
+    if (!existing) {
+      return {
+        content: [{ type: "text", text: `Server "${id}" not found.` }],
+        isError: true,
+      };
+    }
     const entry = enableServer(id);
     return {
       content: [{ type: "text", text: JSON.stringify(entry, null, 2) }],
@@ -131,6 +156,13 @@ server.tool(
   "Disable a registered MCP server",
   { id: z.string().describe("Server ID to disable") },
   async ({ id }) => {
+    const existing = getServer(id);
+    if (!existing) {
+      return {
+        content: [{ type: "text", text: `Server "${id}" not found.` }],
+        isError: true,
+      };
+    }
     const entry = disableServer(id);
     return {
       content: [{ type: "text", text: JSON.stringify(entry, null, 2) }],
@@ -151,7 +183,7 @@ server.tool(
       };
     }
     return {
-      content: [{ type: "text", text: JSON.stringify(entry, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(redactServerEnv(entry), null, 2) }],
     };
   }
 );
@@ -163,8 +195,13 @@ server.tool(
   "Connect to all enabled MCP servers and list their available tools",
   {},
   async () => {
-    await connectAllEnabled();
-    const tools = listAllTools();
+    let tools = [];
+    try {
+      await connectAllEnabled();
+      tools = listAllTools();
+    } finally {
+      await disconnectAll().catch(() => undefined);
+    }
     return {
       content: [{ type: "text", text: JSON.stringify(tools, null, 2) }],
     };
@@ -185,6 +222,28 @@ server.tool(
   },
   async ({ tool_name, arguments: args }) => {
     try {
+      const sepIdx = tool_name.indexOf(TOOL_PREFIX_SEPARATOR);
+      if (sepIdx === -1) {
+        return {
+          content: [{ type: "text", text: `Error: Invalid tool name "${tool_name}"` }],
+          isError: true,
+        };
+      }
+      const serverId = tool_name.slice(0, sepIdx);
+      const entry = getServer(serverId);
+      if (!entry) {
+        return {
+          content: [{ type: "text", text: `Error: Server "${serverId}" not found.` }],
+          isError: true,
+        };
+      }
+      if (!entry.enabled) {
+        return {
+          content: [{ type: "text", text: `Error: Server "${serverId}" is disabled.` }],
+          isError: true,
+        };
+      }
+      await connectToServer(entry);
       const result = await callTool(tool_name, args || {});
       return { content: result.content as any };
     } catch (err) {
