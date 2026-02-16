@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { readMessages } from "./messages.js";
 import type { Message } from "../types.js";
 
@@ -15,25 +15,50 @@ export interface PollOptions {
  */
 export function startPolling(opts: PollOptions): { stop: () => void } {
   const interval = opts.interval_ms ?? 200;
-  let lastSeen = new Date().toISOString();
   let stopped = false;
+  let inFlight = false;
+  let lastSeenId = 0;
 
-  const poll = () => {
-    if (stopped) return;
-
-    const messages = readMessages({
+  const seedLastSeen = () => {
+    const latest = readMessages({
       session_id: opts.session_id,
       to: opts.to_agent,
       channel: opts.channel,
-      since: lastSeen,
+      order: "desc",
+      limit: 1,
     });
-
-    if (messages.length > 0) {
-      lastSeen = messages[messages.length - 1].created_at;
-      opts.on_messages(messages);
+    if (latest.length > 0) {
+      lastSeenId = latest[0].id;
     }
   };
 
+  const poll = () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+
+    try {
+      const messages = readMessages({
+        session_id: opts.session_id,
+        to: opts.to_agent,
+        channel: opts.channel,
+        since_id: lastSeenId,
+        order: "asc",
+      });
+
+      if (messages.length > 0) {
+        lastSeenId = messages[messages.length - 1].id;
+        try {
+          opts.on_messages(messages);
+        } catch (error) {
+          console.error("Polling callback error:", error);
+        }
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  seedLastSeen();
   const timer = setInterval(poll, interval);
 
   return {
@@ -49,14 +74,10 @@ export function startPolling(opts: PollOptions): { stop: () => void } {
  */
 export function useMessages(sessionId: string, agent?: string): Message[] {
   const [messages, setMessages] = useState<Message[]>([]);
-  const initialLoad = useRef(false);
 
   useEffect(() => {
-    if (!initialLoad.current) {
-      const existing = readMessages({ session_id: sessionId });
-      setMessages(existing);
-      initialLoad.current = true;
-    }
+    const existing = readMessages({ session_id: sessionId });
+    setMessages(existing);
 
     const { stop } = startPolling({
       session_id: sessionId,
@@ -77,14 +98,10 @@ export function useMessages(sessionId: string, agent?: string): Message[] {
  */
 export function useChannelMessages(channelName: string): Message[] {
   const [messages, setMessages] = useState<Message[]>([]);
-  const initialLoad = useRef(false);
 
   useEffect(() => {
-    if (!initialLoad.current) {
-      const existing = readMessages({ channel: channelName });
-      setMessages(existing);
-      initialLoad.current = true;
-    }
+    const existing = readMessages({ channel: channelName });
+    setMessages(existing);
 
     const { stop } = startPolling({
       channel: channelName,

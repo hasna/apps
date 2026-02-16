@@ -3,16 +3,30 @@ import type { Message, SendMessageOptions, ReadMessagesOptions } from "../types.
 import { randomUUID } from "crypto";
 
 function parseMessage(row: Record<string, unknown>): Message {
+  let metadata: Record<string, unknown> | null = null;
+  if (row.metadata) {
+    try {
+      metadata = JSON.parse(row.metadata as string);
+    } catch {
+      metadata = null;
+    }
+  }
+
   return {
     ...row,
-    metadata: row.metadata ? JSON.parse(row.metadata as string) : null,
+    metadata,
   } as Message;
 }
 
 export function sendMessage(opts: SendMessageOptions): Message {
   const db = getDb();
-  const sessionId = opts.session_id || `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`;
+  const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id : undefined;
+  const sessionId = explicitSession
+    ?? (opts.channel ? `channel:${opts.channel}` : `${[opts.from, opts.to].sort().join("-")}-${randomUUID().slice(0, 8)}`);
   const metadata = opts.metadata ? JSON.stringify(opts.metadata) : null;
+  const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
+    ? opts.priority
+    : "normal";
 
   const stmt = db.prepare(`
     INSERT INTO messages (session_id, from_agent, to_agent, channel, content, priority, working_dir, repository, branch, metadata)
@@ -26,7 +40,7 @@ export function sendMessage(opts: SendMessageOptions): Message {
     opts.to,
     opts.channel || null,
     opts.content,
-    opts.priority || "normal",
+    normalizedPriority,
     opts.working_dir || null,
     opts.repository || null,
     opts.branch || null,
@@ -61,15 +75,22 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
     conditions.push("created_at > ?");
     params.push(opts.since);
   }
+  if (opts.since_id !== undefined) {
+    conditions.push("id > ?");
+    params.push(opts.since_id);
+  }
   if (opts.unread_only) {
     conditions.push("read_at IS NULL");
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const limit = opts.limit ? `LIMIT ${opts.limit}` : "";
+  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
+    ? `LIMIT ${Math.floor(opts.limit as number)}`
+    : "";
+  const order = opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC";
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ASC ${limit}`
+    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} ${limit}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map(parseMessage);

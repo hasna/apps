@@ -32,14 +32,41 @@ program
   .option("--metadata <json>", "JSON metadata string")
   .option("--json", "Output as JSON")
   .action((message, opts) => {
-    const from = resolveIdentity(opts.from);
-    const metadata = opts.metadata ? JSON.parse(opts.metadata) : undefined;
+    const from = resolveIdentity(opts.from).trim();
+    const to = typeof opts.to === "string" ? opts.to.trim() : "";
+    const content = typeof message === "string" ? message : "";
+    const session = typeof opts.session === "string" && opts.session.trim()
+      ? opts.session.trim()
+      : undefined;
+
+    if (!from) {
+      console.error(chalk.red("Sender identity is required."));
+      process.exit(1);
+    }
+    if (!to) {
+      console.error(chalk.red("Recipient is required."));
+      process.exit(1);
+    }
+    if (!content.trim()) {
+      console.error(chalk.red("Message content cannot be empty."));
+      process.exit(1);
+    }
+
+    let metadata: Record<string, unknown> | undefined;
+    if (opts.metadata) {
+      try {
+        metadata = JSON.parse(opts.metadata);
+      } catch {
+        console.error(chalk.red("Invalid --metadata JSON."));
+        process.exit(1);
+      }
+    }
 
     const msg = sendMessage({
       from,
-      to: opts.to,
-      content: message,
-      session_id: opts.session,
+      to,
+      content,
+      session_id: session,
       priority: opts.priority,
       working_dir: opts.workingDir,
       repository: opts.repository,
@@ -79,9 +106,16 @@ program
       unread_only: opts.unread,
     });
 
-    if (opts.markRead && opts.to) {
-      const ids = messages.filter((m) => m.to_agent === opts.to && !m.read_at).map((m) => m.id);
-      if (ids.length > 0) markRead(ids, opts.to);
+    if (opts.markRead) {
+      const reader = resolveIdentity(opts.to);
+      if (opts.channel) {
+        markChannelRead(opts.channel, reader);
+      } else if (opts.session) {
+        markSessionRead(opts.session, reader);
+      } else {
+        const ids = messages.filter((m) => m.to_agent === reader && !m.read_at).map((m) => m.id);
+        if (ids.length > 0) markRead(ids, reader);
+      }
     }
 
     if (opts.json) {
@@ -146,13 +180,29 @@ program
       process.exit(1);
     }
 
-    const from = resolveIdentity(opts.from);
+    const from = resolveIdentity(opts.from).trim();
+    const content = typeof message === "string" ? message : "";
+    if (!from) {
+      console.error(chalk.red("Sender identity is required."));
+      process.exit(1);
+    }
+    if (!content.trim()) {
+      console.error(chalk.red("Reply content cannot be empty."));
+      process.exit(1);
+    }
+    const channel =
+      original.channel ||
+      (original.session_id?.startsWith("channel:") ? original.session_id.slice(8) : undefined);
+    const to = channel
+      ? channel
+      : (original.from_agent === from ? original.to_agent : original.from_agent);
     const msg = sendMessage({
       from,
-      to: original.from_agent,
-      content: message,
+      to,
+      content,
       session_id: original.session_id,
       priority: opts.priority,
+      channel,
     });
 
     if (opts.json) {
@@ -229,6 +279,72 @@ program
     closeDb();
   });
 
+// ---- update ----
+program
+  .command("update")
+  .description("Check for and install updates")
+  .option("--check", "Only check for updates, don't install")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const pkg = await import("../../package.json");
+    const current = pkg.version;
+
+    let latest: string;
+    try {
+      const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
+      const data = await res.json() as { version: string };
+      latest = data.version;
+    } catch {
+      if (opts.json) {
+        console.log(JSON.stringify({ error: "Failed to check npm registry" }));
+      } else {
+        console.error(chalk.red("Failed to check npm registry for updates."));
+      }
+      process.exit(1);
+    }
+
+    const updateAvailable = current !== latest;
+
+    if (opts.check || !updateAvailable) {
+      if (opts.json) {
+        console.log(JSON.stringify({ current, latest, updateAvailable }));
+      } else if (updateAvailable) {
+        console.log(`Current version: ${chalk.yellow(current)}`);
+        console.log(`Latest version:  ${chalk.green(latest)}`);
+        console.log(chalk.cyan(`Run ${chalk.bold("conversations update")} to install.`));
+      } else {
+        console.log(chalk.green(`Already on latest version (${current})`));
+      }
+      return;
+    }
+
+    // Install update
+    if (opts.json) {
+      console.log(JSON.stringify({ current, latest, updateAvailable, status: "updating" }));
+    } else {
+      console.log(`Updating from ${chalk.yellow(current)} to ${chalk.green(latest)}...`);
+    }
+
+    const proc = Bun.spawn(["bun", "install", "-g", `@hasna/conversations@${latest}`], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await proc.exited;
+
+    if (exitCode === 0) {
+      if (!opts.json) {
+        console.log(chalk.green(`\nSuccessfully updated to v${latest}`));
+      }
+    } else {
+      if (opts.json) {
+        console.log(JSON.stringify({ error: "Update failed", exitCode }));
+      } else {
+        console.error(chalk.red(`\nUpdate failed (exit code ${exitCode})`));
+      }
+      process.exit(1);
+    }
+  });
+
 // ---- channel ----
 const channel = program
   .command("channel")
@@ -242,9 +358,21 @@ channel
   .option("--from <agent>", "Creator agent ID")
   .option("--json", "Output as JSON")
   .action((name, opts) => {
-    const agent = resolveIdentity(opts.from);
+    const agent = resolveIdentity(opts.from).trim();
+    const channelName = typeof name === "string" ? name.trim() : "";
+    if (!agent) {
+      console.error(chalk.red("Creator identity is required."));
+      process.exit(1);
+    }
+    if (!channelName) {
+      console.error(chalk.red("Channel name cannot be empty."));
+      process.exit(1);
+    }
     try {
-      const ch = createChannel(name, agent, opts.description);
+      const description = typeof opts.description === "string" && opts.description.trim()
+        ? opts.description.trim()
+        : undefined;
+      const ch = createChannel(channelName, agent, description);
       if (opts.json) {
         console.log(JSON.stringify(ch, null, 2));
       } else {
@@ -252,7 +380,7 @@ channel
       }
     } catch (e: any) {
       if (e.message?.includes("UNIQUE constraint")) {
-        console.error(chalk.red(`Channel #${name} already exists.`));
+        console.error(chalk.red(`Channel #${channelName} already exists.`));
         process.exit(1);
       }
       throw e;
@@ -291,27 +419,42 @@ channel
   .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
   .option("--json", "Output as JSON")
   .action((channelName, message, opts) => {
-    const from = resolveIdentity(opts.from);
+    const from = resolveIdentity(opts.from).trim();
+    const channel = typeof channelName === "string" ? channelName.trim() : "";
+    const content = typeof message === "string" ? message : "";
 
-    const ch = getChannel(channelName);
+    if (!from) {
+      console.error(chalk.red("Sender identity is required."));
+      process.exit(1);
+    }
+    if (!channel) {
+      console.error(chalk.red("Channel name cannot be empty."));
+      process.exit(1);
+    }
+    if (!content.trim()) {
+      console.error(chalk.red("Message content cannot be empty."));
+      process.exit(1);
+    }
+
+    const ch = getChannel(channel);
     if (!ch) {
-      console.error(chalk.red(`Channel #${channelName} not found.`));
+      console.error(chalk.red(`Channel #${channel} not found.`));
       process.exit(1);
     }
 
     const msg = sendMessage({
       from,
-      to: channelName,
-      content: message,
-      channel: channelName,
-      session_id: `channel:${channelName}`,
+      to: channel,
+      content,
+      channel,
+      session_id: `channel:${channel}`,
       priority: opts.priority,
     });
 
     if (opts.json) {
       console.log(JSON.stringify(msg, null, 2));
     } else {
-      console.log(chalk.green(`Message sent to #${channelName}`) + chalk.dim(` (id: ${msg.id})`));
+      console.log(chalk.green(`Message sent to #${channel}`) + chalk.dim(` (id: ${msg.id})`));
     }
     closeDb();
   });
@@ -324,8 +467,13 @@ channel
   .option("--limit <n>", "Max messages to return", parseInt)
   .option("--json", "Output as JSON")
   .action((channelName, opts) => {
+    const channel = typeof channelName === "string" ? channelName.trim() : "";
+    if (!channel) {
+      console.error(chalk.red("Channel name cannot be empty."));
+      process.exit(1);
+    }
     const messages = readMessages({
-      channel: channelName,
+      channel,
       since: opts.since,
       limit: opts.limit,
     });
@@ -334,13 +482,13 @@ channel
       console.log(JSON.stringify(messages, null, 2));
     } else {
       if (messages.length === 0) {
-        console.log(chalk.dim(`No messages in #${channelName}.`));
+        console.log(chalk.dim(`No messages in #${channel}.`));
       } else {
         for (const msg of messages) {
           const time = chalk.dim(msg.created_at.slice(11, 19));
           const from = chalk.cyan(msg.from_agent);
           const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
-          console.log(`${time} ${from} → ${chalk.magenta(`#${channelName}`)}${priority}: ${msg.content}`);
+          console.log(`${time} ${from} → ${chalk.magenta(`#${channel}`)}${priority}: ${msg.content}`);
         }
       }
     }
@@ -354,18 +502,29 @@ channel
   .option("--from <agent>", "Agent ID")
   .option("--json", "Output as JSON")
   .action((channelName, opts) => {
-    const agent = resolveIdentity(opts.from);
-    const ok = joinChannel(channelName, agent);
+    const agent = resolveIdentity(opts.from).trim();
+    const channel = typeof channelName === "string" ? channelName.trim() : "";
+
+    if (!agent) {
+      console.error(chalk.red("Agent identity is required."));
+      process.exit(1);
+    }
+    if (!channel) {
+      console.error(chalk.red("Channel name cannot be empty."));
+      process.exit(1);
+    }
+
+    const ok = joinChannel(channel, agent);
 
     if (!ok) {
-      console.error(chalk.red(`Channel #${channelName} not found.`));
+      console.error(chalk.red(`Channel #${channel} not found.`));
       process.exit(1);
     }
 
     if (opts.json) {
-      console.log(JSON.stringify({ channel: channelName, agent, joined: true }));
+      console.log(JSON.stringify({ channel, agent, joined: true }));
     } else {
-      console.log(chalk.green(`${agent} joined #${channelName}`));
+      console.log(chalk.green(`${agent} joined #${channel}`));
     }
     closeDb();
   });
@@ -377,16 +536,27 @@ channel
   .option("--from <agent>", "Agent ID")
   .option("--json", "Output as JSON")
   .action((channelName, opts) => {
-    const agent = resolveIdentity(opts.from);
-    const ok = leaveChannel(channelName, agent);
+    const agent = resolveIdentity(opts.from).trim();
+    const channel = typeof channelName === "string" ? channelName.trim() : "";
+
+    if (!agent) {
+      console.error(chalk.red("Agent identity is required."));
+      process.exit(1);
+    }
+    if (!channel) {
+      console.error(chalk.red("Channel name cannot be empty."));
+      process.exit(1);
+    }
+
+    const ok = leaveChannel(channel, agent);
 
     if (opts.json) {
-      console.log(JSON.stringify({ channel: channelName, agent, left: ok }));
+      console.log(JSON.stringify({ channel, agent, left: ok }));
     } else {
       if (ok) {
-        console.log(chalk.green(`${agent} left #${channelName}`));
+        console.log(chalk.green(`${agent} left #${channel}`));
       } else {
-        console.log(chalk.dim(`${agent} was not a member of #${channelName}`));
+        console.log(chalk.dim(`${agent} was not a member of #${channel}`));
       }
     }
     closeDb();
@@ -398,15 +568,20 @@ channel
   .argument("<channel>", "Channel name")
   .option("--json", "Output as JSON")
   .action((channelName, opts) => {
-    const members = getChannelMembers(channelName);
+    const channel = typeof channelName === "string" ? channelName.trim() : "";
+    if (!channel) {
+      console.error(chalk.red("Channel name cannot be empty."));
+      process.exit(1);
+    }
+    const members = getChannelMembers(channel);
 
     if (opts.json) {
       console.log(JSON.stringify(members, null, 2));
     } else {
       if (members.length === 0) {
-        console.log(chalk.dim(`No members in #${channelName}.`));
+        console.log(chalk.dim(`No members in #${channel}.`));
       } else {
-        console.log(chalk.magenta(`#${channelName}`) + chalk.dim(` — ${members.length} member(s)`));
+        console.log(chalk.magenta(`#${channel}`) + chalk.dim(` — ${members.length} member(s)`));
         for (const m of members) {
           console.log(`  ${chalk.cyan(m.agent)} ${chalk.dim(`joined ${m.joined_at.slice(0, 10)}`)}`);
         }
@@ -429,9 +604,13 @@ program
   .command("dashboard")
   .description("Start web dashboard")
   .option("--port <port>", "Port to listen on", parseInt)
+  .option("--host <host>", "Host to bind (default: 127.0.0.1)")
   .action(async (opts) => {
     const { startDashboardServer } = await import("../server/serve.js");
-    startDashboardServer(opts.port || 3456);
+    const port = Number.isFinite(opts.port) && opts.port >= 0 && opts.port <= 65535
+      ? opts.port
+      : 3456;
+    startDashboardServer(port, opts.host);
   });
 
 // ---- default: TUI ----

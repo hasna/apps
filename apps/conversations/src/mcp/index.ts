@@ -38,7 +38,17 @@ server.registerTool("send_message", {
   },
 }, async ({ to, content, session_id, priority, working_dir, repository, branch, metadata }) => {
   const from = resolveIdentity();
-  const parsedMetadata = metadata ? JSON.parse(metadata) : undefined;
+  let parsedMetadata: Record<string, unknown> | undefined;
+  if (metadata) {
+    try {
+      parsedMetadata = JSON.parse(metadata);
+    } catch {
+      return {
+        content: [{ type: "text", text: "Invalid metadata JSON." }],
+        isError: true,
+      };
+    }
+  }
 
   const msg = sendMessage({
     from,
@@ -109,12 +119,19 @@ server.registerTool("reply", {
   }
 
   const from = resolveIdentity();
+  const channel =
+    original.channel ||
+    (original.session_id?.startsWith("channel:") ? original.session_id.slice(8) : undefined);
+  const to = channel
+    ? channel
+    : (original.from_agent === from ? original.to_agent : original.from_agent);
   const msg = sendMessage({
     from,
-    to: original.from_agent,
+    to,
     content,
     session_id: original.session_id,
     priority,
+    channel,
   });
 
   return {

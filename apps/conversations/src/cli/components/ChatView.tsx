@@ -21,9 +21,11 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState(initialSessionId);
   const isChannel = !!channelName;
+  const seenIds = useRef<Set<number>>(new Set());
 
   // Load existing messages + poll for new ones
   useEffect(() => {
+    seenIds.current = new Set();
     const opts = isChannel
       ? { channel: channelName }
       : sessionId
@@ -33,7 +35,12 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     // Only load if we have something to query
     if (isChannel || sessionId) {
       const existing = readMessages(opts);
+      for (const msg of existing) {
+        seenIds.current.add(msg.id);
+      }
       setMessages(existing);
+    } else {
+      setMessages([]);
     }
 
     const pollOpts = isChannel
@@ -48,7 +55,12 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
       ...pollOpts,
       interval_ms: 200,
       on_messages: (newMsgs) => {
-        setMessages((prev) => [...prev, ...newMsgs]);
+        const unseen = newMsgs.filter((msg) => !seenIds.current.has(msg.id));
+        if (unseen.length === 0) return;
+        for (const msg of unseen) {
+          seenIds.current.add(msg.id);
+        }
+        setMessages((prev) => [...prev, ...unseen]);
       },
     });
 
@@ -63,7 +75,7 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     } else if (sessionId) {
       markSessionRead(sessionId, agent);
     }
-  }, [messages.length]);
+  }, [messages.length, isChannel, channelName, sessionId, agent]);
 
   useInput((_, key) => {
     if (key.escape) onBack();
@@ -80,7 +92,7 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
         channel: channelName,
         session_id: `channel:${channelName}`,
       });
-      // If we weren't polling yet (shouldn't happen for channels), add it
+      seenIds.current.add(msg.id);
       setMessages((prev) => [...prev, msg]);
     } else {
       const to = recipient || agent;
@@ -90,6 +102,8 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
         content: value.trim(),
         session_id: sessionId,
       });
+      seenIds.current.add(msg.id);
+      setMessages((prev) => [...prev, msg]);
       // For new conversations, capture the real session ID from the first message
       if (!sessionId) {
         setSessionId(msg.session_id);

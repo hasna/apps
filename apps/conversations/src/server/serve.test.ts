@@ -8,24 +8,23 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-server-${Date.now()}.db`);
-const PORT = 23456 + Math.floor(Math.random() * 1000);
 let server: ReturnType<typeof startDashboardServer>;
 
 beforeAll(() => {
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
   closeDb();
-  server = startDashboardServer(PORT);
+  server = startDashboardServer(0);
 });
 
 afterAll(() => {
-  server.stop();
+  server?.stop();
   closeDb();
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
 });
 
-const base = () => `http://localhost:${PORT}`;
+const base = () => `http://localhost:${server.port}`;
 
 describe("API /api/status", () => {
   test("returns status object", async () => {

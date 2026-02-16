@@ -1,10 +1,11 @@
 import * as React from "react";
-import { RefreshCwIcon, SendIcon, HashIcon, MessageSquareIcon } from "lucide-react";
+import { RefreshCwIcon, SendIcon, HashIcon, MessageSquareIcon, DownloadIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { MessagesTable } from "@/components/messages-table";
 import { ChannelsList } from "@/components/channels-list";
 import { SendDialog } from "@/components/send-dialog";
+import { UpdateDialog } from "@/components/update-dialog";
 import { Button } from "@/components/ui/button";
 import type { Message, Channel, DashboardStatus } from "@/types";
 
@@ -17,27 +18,74 @@ export function App() {
   const [loading, setLoading] = React.useState(true);
   const [tab, setTab] = React.useState<Tab>("messages");
   const [sendOpen, setSendOpen] = React.useState(false);
+  const [updateOpen, setUpdateOpen] = React.useState(false);
+  const [versionInfo, setVersionInfo] = React.useState<{
+    current: string;
+    latest: string;
+    updateAvailable: boolean;
+  } | null>(null);
   const [toast, setToast] = React.useState<{
     message: string;
     type: "success" | "error";
   } | null>(null);
 
+  const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadInFlight = React.useRef(false);
+
+  const showToast = React.useCallback((message: string, type: "success" | "error") => {
+    setToast({ message, type });
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const fetchJson = React.useCallback(async <T,>(input: RequestInfo, init?: RequestInit): Promise<T> => {
+    const res = await fetch(input, init);
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      // ignore parse errors for now
+    }
+    if (!res.ok) {
+      const errorMessage = typeof (data as { error?: string })?.error === "string"
+        ? (data as { error?: string }).error
+        : `Request failed (${res.status})`;
+      throw new Error(errorMessage);
+    }
+    if (data === null) {
+      throw new Error("Invalid server response");
+    }
+    return data as T;
+  }, []);
+
+  const isVersionInfo = (value: unknown): value is { current: string; latest: string; updateAvailable: boolean } => {
+    if (!value || typeof value !== "object") return false;
+    const v = value as Record<string, unknown>;
+    return typeof v.current === "string" && typeof v.latest === "string" && typeof v.updateAvailable === "boolean";
+  };
+
   const loadData = React.useCallback(async () => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     try {
       const [statusRes, messagesRes, channelsRes] = await Promise.all([
-        fetch("/api/status"),
-        fetch("/api/messages?limit=50"),
-        fetch("/api/channels"),
+        fetchJson<DashboardStatus>("/api/status"),
+        fetchJson<Message[]>("/api/messages?limit=50"),
+        fetchJson<Channel[]>("/api/channels"),
       ]);
-      setStatus(await statusRes.json());
-      setMessages(await messagesRes.json());
-      setChannels(await channelsRes.json());
-    } catch {
-      showToast("Failed to load data", "error");
+      setStatus(statusRes);
+      setMessages(messagesRes);
+      setChannels(channelsRes);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load data";
+      showToast(message, "error");
     } finally {
+      loadInFlight.current = false;
       setLoading(false);
     }
-  }, []);
+  }, [fetchJson, showToast]);
 
   React.useEffect(() => {
     loadData();
@@ -45,10 +93,17 @@ export function App() {
     return () => clearInterval(timer);
   }, [loadData]);
 
-  function showToast(message: string, type: "success" | "error") {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  }
+  React.useEffect(() => {
+    fetchJson("/api/version")
+      .then((data) => {
+        if (isVersionInfo(data)) {
+          setVersionInfo(data);
+        } else {
+          setVersionInfo(null);
+        }
+      })
+      .catch(() => setVersionInfo(null));
+  }, [fetchJson]);
 
   return (
     <div className="min-h-screen">
@@ -83,6 +138,23 @@ export function App() {
               />
               Reload
             </Button>
+            {versionInfo && (
+              versionInfo.updateAvailable ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setUpdateOpen(true)}
+                  className="text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300"
+                >
+                  <DownloadIcon className="size-3.5" />
+                  Update v{versionInfo.latest}
+                </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground px-2">
+                  v{versionInfo.current}
+                </span>
+              )
+            )}
             <ThemeToggle />
           </div>
         </div>
@@ -136,6 +208,30 @@ export function App() {
           loadData();
         }}
       />
+
+      {/* Update Dialog */}
+      {versionInfo?.updateAvailable && (
+        <UpdateDialog
+          open={updateOpen}
+          onOpenChange={setUpdateOpen}
+          current={versionInfo.current}
+          latest={versionInfo.latest}
+          onUpdated={(message, type) => {
+            showToast(message, type);
+            if (type === "success") {
+              fetchJson("/api/version")
+                .then((data) => {
+                  if (isVersionInfo(data)) {
+                    setVersionInfo(data);
+                  } else {
+                    setVersionInfo(null);
+                  }
+                })
+                .catch(() => setVersionInfo(null));
+            }
+          }}
+        />
+      )}
 
       {/* Toast */}
       {toast && (

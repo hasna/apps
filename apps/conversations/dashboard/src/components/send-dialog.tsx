@@ -24,7 +24,18 @@ export function SendDialog({ open, onOpenChange, onSent }: SendDialogProps) {
   const [sending, setSending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  React.useEffect(() => {
+    if (!open) {
+      setFrom("");
+      setTo("");
+      setContent("");
+      setError(null);
+      setSending(false);
+    }
+  }, [open]);
+
   async function handleSend() {
+    if (sending) return;
     if (!from.trim() || !to.trim() || !content.trim()) return;
     setSending(true);
     setError(null);
@@ -39,15 +50,22 @@ export function SendDialog({ open, onOpenChange, onSent }: SendDialogProps) {
           content: content.trim(),
         }),
       });
-      const data = await res.json();
-      if (data.id) {
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!res.ok) {
+        setError(data?.error || `Failed to send (${res.status})`);
+      } else if (data?.id) {
         setFrom("");
         setTo("");
         setContent("");
         onOpenChange(false);
         onSent();
       } else {
-        setError(data.error || "Failed to send");
+        setError(data?.error || "Failed to send");
       }
     } catch {
       setError("Failed to send message");

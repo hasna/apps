@@ -40,8 +40,10 @@ function PriorityBadge({ priority }: { priority: string }) {
 
 function timeAgo(dateStr: string): string {
   const now = Date.now();
-  const then = new Date(dateStr + "Z").getTime();
-  const diff = now - then;
+  const normalized = dateStr.endsWith("Z") ? dateStr : `${dateStr}Z`;
+  const then = Date.parse(normalized);
+  if (Number.isNaN(then)) return "—";
+  const diff = Math.max(0, now - then);
   const secs = Math.floor(diff / 1000);
   if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(secs / 60);

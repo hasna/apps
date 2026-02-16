@@ -61,6 +61,8 @@ export interface ReadMessagesOptions {
   to?: string;
   channel?: string;
   since?: string;
+  since_id?: number;
   limit?: number;
   unread_only?: boolean;
+  order?: "asc" | "desc";
 }
