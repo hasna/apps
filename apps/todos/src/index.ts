@@ -48,6 +48,27 @@ export {
   deleteComment,
 } from "./db/comments.js";
 
+// Agents
+export {
+  registerAgent,
+  getAgent,
+  getAgentByName,
+  listAgents,
+  updateAgentActivity,
+  deleteAgent,
+} from "./db/agents.js";
+
+// Task Lists
+export {
+  createTaskList,
+  getTaskList,
+  getTaskListBySlug,
+  listTaskLists,
+  updateTaskList,
+  deleteTaskList,
+  ensureTaskList,
+} from "./db/task-lists.js";
+
 // Sessions
 export {
   createSession,
@@ -88,6 +109,13 @@ export type {
   PlanStatus,
   Session,
   CreateSessionInput,
+  Agent,
+  AgentRow,
+  RegisterAgentInput,
+  TaskList,
+  TaskListRow,
+  CreateTaskListInput,
+  UpdateTaskListInput,
   LockResult,
   TaskRow,
   SessionRow,
@@ -103,4 +131,6 @@ export {
   PlanNotFoundError,
   LockError,
   DependencyCycleError,
+  AgentNotFoundError,
+  TaskListNotFoundError,
 } from "./types/index.js";

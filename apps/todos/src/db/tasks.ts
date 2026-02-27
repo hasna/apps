@@ -47,13 +47,14 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const tags = input.tags || [];
 
   d.run(
-    `INSERT INTO tasks (id, project_id, parent_id, plan_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO tasks (id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     [
       id,
       input.project_id || null,
       input.parent_id || null,
       input.plan_id || null,
+      input.task_list_id || null,
       input.title,
       input.description || null,
       input.status || "pending",
@@ -205,6 +206,11 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     params.push(filter.plan_id);
   }
 
+  if (filter.task_list_id) {
+    conditions.push("task_list_id = ?");
+    params.push(filter.task_list_id);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const limitVal = filter.limit || 100;
@@ -274,6 +280,10 @@ export function updateTask(
   if (input.plan_id !== undefined) {
     sets.push("plan_id = ?");
     params.push(input.plan_id);
+  }
+  if (input.task_list_id !== undefined) {
+    sets.push("task_list_id = ?");
+    params.push(input.task_list_id);
   }
 
   params.push(id, input.version);

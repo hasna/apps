@@ -15,6 +15,7 @@ function rowToTask(row: TaskRow): Task {
 export function searchTasks(
   query: string,
   projectId?: string,
+  taskListId?: string,
   db?: Database,
 ): Task[] {
   const d = db || getDatabase();
@@ -27,6 +28,11 @@ export function searchTasks(
   if (projectId) {
     sql += " AND project_id = ?";
     params.push(projectId);
+  }
+
+  if (taskListId) {
+    sql += " AND task_list_id = ?";
+    params.push(taskListId);
   }
 
   sql += ` ORDER BY

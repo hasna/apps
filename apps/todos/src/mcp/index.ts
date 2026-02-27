@@ -28,6 +28,8 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
+import { registerAgent, getAgent, getAgentByName, listAgents } from "../db/agents.js";
+import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
 import { getAgentTaskListId } from "../lib/config.js";
@@ -38,6 +40,7 @@ import {
   LockError,
   DependencyCycleError,
   PlanNotFoundError,
+  TaskListNotFoundError,
 } from "../types/index.js";
 import type { Task } from "../types/index.js";
 
@@ -50,6 +53,7 @@ function formatError(error: unknown): string {
   if (error instanceof VersionConflictError) return `Version conflict: ${error.message}`;
   if (error instanceof TaskNotFoundError) return `Not found: ${error.message}`;
   if (error instanceof PlanNotFoundError) return `Not found: ${error.message}`;
+  if (error instanceof TaskListNotFoundError) return `Not found: ${error.message}`;
   if (error instanceof LockError) return `Lock error: ${error.message}`;
   if (error instanceof DependencyCycleError) return `Dependency cycle: ${error.message}`;
   if (error instanceof Error) return error.message;
@@ -119,6 +123,7 @@ server.tool(
     session_id: z.string().optional().describe("Session ID"),
     working_dir: z.string().optional().describe("Working directory context"),
     plan_id: z.string().optional().describe("Plan ID to assign task to"),
+    task_list_id: z.string().optional().describe("Task list ID to assign task to"),
     tags: z.array(z.string()).optional().describe("Task tags"),
     metadata: z.record(z.unknown()).optional().describe("Arbitrary metadata"),
   },
@@ -128,6 +133,7 @@ server.tool(
       if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
       if (resolved.parent_id) resolved.parent_id = resolveId(resolved.parent_id);
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
       const task = createTask(resolved);
       return { content: [{ type: "text" as const, text: `Task created:\n${formatTask(task)}` }] };
     } catch (e) {
@@ -153,12 +159,14 @@ server.tool(
     assigned_to: z.string().optional().describe("Filter by assigned agent"),
     tags: z.array(z.string()).optional().describe("Filter by tags (any match)"),
     plan_id: z.string().optional().describe("Filter by plan"),
+    task_list_id: z.string().optional().describe("Filter by task list"),
   },
   async (params) => {
     try {
       const resolved = { ...params };
       if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
       const tasks = listTasks(resolved);
       if (tasks.length === 0) {
         return { content: [{ type: "text" as const, text: "No tasks found." }] };
@@ -241,6 +249,7 @@ server.tool(
     tags: z.array(z.string()).optional().describe("New tags"),
     metadata: z.record(z.unknown()).optional().describe("New metadata"),
     plan_id: z.string().optional().describe("Plan ID to assign task to"),
+    task_list_id: z.string().optional().describe("Task list ID"),
   },
   async ({ id, ...rest }) => {
     try {
@@ -605,11 +614,13 @@ server.tool(
   {
     query: z.string().describe("Search query"),
     project_id: z.string().optional().describe("Limit to project"),
+    task_list_id: z.string().optional().describe("Filter by task list"),
   },
-  async ({ query, project_id }) => {
+  async ({ query, project_id, task_list_id }) => {
     try {
       const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
-      const tasks = searchTasks(query, resolvedProjectId);
+      const resolvedTaskListId = task_list_id ? resolveId(task_list_id, "task_lists") : undefined;
+      const tasks = searchTasks(query, resolvedProjectId, resolvedTaskListId);
       if (tasks.length === 0) {
         return { content: [{ type: "text" as const, text: `No tasks matching "${query}".` }] };
       }
@@ -684,6 +695,217 @@ server.tool(
   },
 );
 
+// === AGENT TOOLS ===
+
+// register_agent
+server.tool(
+  "register_agent",
+  "Register an agent and get a short UUID. Idempotent: same name returns existing agent.",
+  {
+    name: z.string().describe("Agent name"),
+    description: z.string().optional().describe("Agent description"),
+  },
+  async ({ name, description }) => {
+    try {
+      const agent = registerAgent({ name, description });
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// list_agents
+server.tool(
+  "list_agents",
+  "List all registered agents",
+  {},
+  async () => {
+    try {
+      const agents = listAgents();
+      if (agents.length === 0) {
+        return { content: [{ type: "text" as const, text: "No agents registered." }] };
+      }
+      const text = agents.map((a) => {
+        return `${a.id} | ${a.name}${a.description ? ` - ${a.description}` : ""} (last seen: ${a.last_seen_at})`;
+      }).join("\n");
+      return { content: [{ type: "text" as const, text: `${agents.length} agent(s):\n${text}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_agent
+server.tool(
+  "get_agent",
+  "Get agent details by ID or name",
+  {
+    id: z.string().optional().describe("Agent ID"),
+    name: z.string().optional().describe("Agent name"),
+  },
+  async ({ id, name }) => {
+    try {
+      if (!id && !name) {
+        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+      }
+      const agent = id ? getAgent(id) : getAgentByName(name!);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+      }
+      const parts = [
+        `ID: ${agent.id}`,
+        `Name: ${agent.name}`,
+      ];
+      if (agent.description) parts.push(`Description: ${agent.description}`);
+      if (Object.keys(agent.metadata).length > 0) parts.push(`Metadata: ${JSON.stringify(agent.metadata)}`);
+      parts.push(`Created: ${agent.created_at}`);
+      parts.push(`Last seen: ${agent.last_seen_at}`);
+      return { content: [{ type: "text" as const, text: parts.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// === TASK LIST TOOLS ===
+
+// create_task_list
+server.tool(
+  "create_task_list",
+  "Create a new task list",
+  {
+    name: z.string().describe("Task list name"),
+    slug: z.string().optional().describe("URL-friendly slug (auto-generated from name if omitted)"),
+    project_id: z.string().optional().describe("Project ID to associate with"),
+    description: z.string().optional().describe("Task list description"),
+  },
+  async (params) => {
+    try {
+      const resolved = { ...params };
+      if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
+      const list = createTaskList(resolved);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Task list created:\nID: ${list.id}\nName: ${list.name}\nSlug: ${list.slug}${list.project_id ? `\nProject: ${list.project_id}` : ""}${list.description ? `\nDescription: ${list.description}` : ""}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// list_task_lists
+server.tool(
+  "list_task_lists",
+  "List task lists, optionally filtered by project",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+  },
+  async ({ project_id }) => {
+    try {
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const lists = listTaskLists(resolvedProjectId);
+      if (lists.length === 0) {
+        return { content: [{ type: "text" as const, text: "No task lists found." }] };
+      }
+      const text = lists.map((l) => {
+        const project = l.project_id ? ` (project: ${l.project_id.slice(0, 8)})` : "";
+        return `${l.id.slice(0, 8)} | ${l.name} [${l.slug}]${project}${l.description ? ` - ${l.description}` : ""}`;
+      }).join("\n");
+      return { content: [{ type: "text" as const, text: `${lists.length} task list(s):\n${text}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_task_list
+server.tool(
+  "get_task_list",
+  "Get task list details",
+  {
+    id: z.string().describe("Task list ID (full or partial)"),
+  },
+  async ({ id }) => {
+    try {
+      const resolvedId = resolveId(id, "task_lists");
+      const list = getTaskList(resolvedId);
+      if (!list) {
+        return { content: [{ type: "text" as const, text: `Task list not found: ${id}` }], isError: true };
+      }
+      const parts = [
+        `ID: ${list.id}`,
+        `Name: ${list.name}`,
+        `Slug: ${list.slug}`,
+      ];
+      if (list.project_id) parts.push(`Project: ${list.project_id}`);
+      if (list.description) parts.push(`Description: ${list.description}`);
+      if (Object.keys(list.metadata).length > 0) parts.push(`Metadata: ${JSON.stringify(list.metadata)}`);
+      parts.push(`Created: ${list.created_at}`);
+      parts.push(`Updated: ${list.updated_at}`);
+      return { content: [{ type: "text" as const, text: parts.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// update_task_list
+server.tool(
+  "update_task_list",
+  "Update a task list",
+  {
+    id: z.string().describe("Task list ID (full or partial)"),
+    name: z.string().optional().describe("New name"),
+    description: z.string().optional().describe("New description"),
+  },
+  async ({ id, ...rest }) => {
+    try {
+      const resolvedId = resolveId(id, "task_lists");
+      const list = updateTaskList(resolvedId, rest);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Task list updated:\nID: ${list.id}\nName: ${list.name}\nSlug: ${list.slug}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// delete_task_list
+server.tool(
+  "delete_task_list",
+  "Delete a task list. Tasks in this list keep their data but lose their list association.",
+  {
+    id: z.string().describe("Task list ID (full or partial)"),
+  },
+  async ({ id }) => {
+    try {
+      const resolvedId = resolveId(id, "task_lists");
+      const deleted = deleteTaskList(resolvedId);
+      return {
+        content: [{
+          type: "text" as const,
+          text: deleted ? `Task list ${id} deleted.` : `Task list ${id} not found.`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
 // === RESOURCES ===
 
 // todos://tasks - All active tasks
@@ -705,6 +927,28 @@ server.resource(
   async () => {
     const projects = listProjects();
     return { contents: [{ uri: "todos://projects", text: JSON.stringify(projects, null, 2), mimeType: "application/json" }] };
+  },
+);
+
+// todos://agents - All registered agents
+server.resource(
+  "agents",
+  "todos://agents",
+  { description: "All registered agents", mimeType: "application/json" },
+  async () => {
+    const agents = listAgents();
+    return { contents: [{ uri: "todos://agents", text: JSON.stringify(agents, null, 2), mimeType: "application/json" }] };
+  },
+);
+
+// todos://task-lists - All task lists
+server.resource(
+  "task-lists",
+  "todos://task-lists",
+  { description: "All task lists", mimeType: "application/json" },
+  async () => {
+    const lists = listTaskLists();
+    return { contents: [{ uri: "todos://task-lists", text: JSON.stringify(lists, null, 2), mimeType: "application/json" }] };
   },
 );
 

@@ -27,6 +27,8 @@ import {
   ensureProject,
   getProjectByPath,
 } from "../db/projects.js";
+import { registerAgent, listAgents } from "../db/agents.js";
+import { createTaskList, listTaskLists, deleteTaskList } from "../db/task-lists.js";
 import {
   createPlan,
   getPlan,
@@ -146,9 +148,19 @@ program
   .option("--plan <id>", "Assign to a plan")
   .option("--assign <agent>", "Assign to agent")
   .option("--status <status>", "Initial status")
+  .option("--list <id>", "Task list ID")
   .action((title: string, opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
+    const taskListId = opts.list ? (() => {
+      const db = getDatabase();
+      const id = resolvePartialId(db, "task_lists", opts.list);
+      if (!id) {
+        console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+        process.exit(1);
+      }
+      return id;
+    })() : undefined;
     const task = createTask({
       title,
       description: opts.description,
@@ -166,6 +178,7 @@ program
       })() : undefined,
       assigned_to: opts.assign,
       status: opts.status as TaskStatus | undefined,
+      task_list_id: taskListId,
       agent_id: globalOpts.agent,
       session_id: globalOpts.session,
       project_id: projectId,
@@ -189,12 +202,22 @@ program
   .option("--assigned <agent>", "Filter by assigned agent")
   .option("--tags <tags>", "Filter by tags (comma-separated)")
   .option("-a, --all", "Show all tasks (including completed/cancelled)")
+  .option("--list <id>", "Filter by task list ID")
   .action((opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
 
     const filter: Record<string, unknown> = {};
     if (projectId) filter["project_id"] = projectId;
+    if (opts.list) {
+      const db = getDatabase();
+      const listId = resolvePartialId(db, "task_lists", opts.list);
+      if (!listId) {
+        console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+        process.exit(1);
+      }
+      filter["task_list_id"] = listId;
+    }
     if (opts.status) {
       filter["status"] = opts.status.includes(",")
         ? opts.status.split(",").map((s: string) => s.trim())
@@ -302,6 +325,7 @@ program
   .option("-p, --priority <priority>", "New priority")
   .option("--assign <agent>", "Assign to agent")
   .option("--tags <tags>", "New tags (comma-separated)")
+  .option("--list <id>", "Move to a task list")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -310,6 +334,16 @@ program
       console.error(chalk.red(`Task not found: ${id}`));
       process.exit(1);
     }
+
+    const taskListId = opts.list ? (() => {
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "task_lists", opts.list);
+      if (!resolved) {
+        console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+        process.exit(1);
+      }
+      return resolved;
+    })() : undefined;
 
     let task;
     try {
@@ -321,6 +355,7 @@ program
         priority: opts.priority as TaskPriority | undefined,
         assigned_to: opts.assign,
         tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+        task_list_id: taskListId,
       });
     } catch (e) {
       handleError(e);
@@ -1145,6 +1180,109 @@ function unregisterMcp(agent: string, global?: boolean): void {
     }
   }
 }
+
+// init
+program
+  .command("init <name>")
+  .description("Register an agent and get a short UUID")
+  .option("-d, --description <text>", "Agent description")
+  .action((name: string, opts) => {
+    const globalOpts = program.opts();
+    try {
+      const agent = registerAgent({ name, description: opts.description });
+      if (globalOpts.json) {
+        output(agent, true);
+      } else {
+        console.log(chalk.green("Agent registered:"));
+        console.log(`  ${chalk.dim("ID:")}   ${agent.id}`);
+        console.log(`  ${chalk.dim("Name:")} ${agent.name}`);
+        console.log(`\nUse ${chalk.cyan(`--agent ${agent.id}`)} on future commands.`);
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+// agents
+program
+  .command("agents")
+  .description("List registered agents")
+  .action(() => {
+    const globalOpts = program.opts();
+    try {
+      const agents = listAgents();
+      if (globalOpts.json) {
+        output(agents, true);
+        return;
+      }
+      if (agents.length === 0) {
+        console.log(chalk.dim("No agents registered. Use 'todos init <name>' to register."));
+        return;
+      }
+      for (const a of agents) {
+        console.log(`  ${chalk.cyan(a.id)} ${chalk.bold(a.name)} ${chalk.dim(a.last_seen_at)}`);
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
+// lists
+program
+  .command("lists")
+  .aliases(["task-lists", "tl"])
+  .description("List and manage task lists")
+  .option("--add <name>", "Create a task list")
+  .option("--slug <slug>", "Custom slug (with --add)")
+  .option("-d, --description <text>", "Description (with --add)")
+  .option("--delete <id>", "Delete a task list")
+  .action((opts) => {
+    try {
+      const globalOpts = program.opts();
+      const projectId = autoProject(globalOpts);
+
+      if (opts.add) {
+        const list = createTaskList({ name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId });
+        if (globalOpts.json) {
+          output(list, true);
+          return;
+        }
+        console.log(chalk.green("Task list created:"));
+        console.log(`  ${chalk.dim("ID:")}   ${list.id.slice(0, 8)}`);
+        console.log(`  ${chalk.dim("Slug:")} ${list.slug}`);
+        console.log(`  ${chalk.dim("Name:")} ${list.name}`);
+        return;
+      }
+
+      if (opts.delete) {
+        const db = getDatabase();
+        const resolved = resolvePartialId(db, "task_lists", opts.delete);
+        if (!resolved) {
+          console.error(chalk.red("Task list not found"));
+          process.exit(1);
+        }
+        deleteTaskList(resolved);
+        console.log(chalk.green("Task list deleted."));
+        return;
+      }
+
+      // Default: list task lists
+      const lists = listTaskLists(projectId);
+      if (globalOpts.json) {
+        output(lists, true);
+        return;
+      }
+      if (lists.length === 0) {
+        console.log(chalk.dim("No task lists. Use 'todos lists --add <name>' to create one."));
+        return;
+      }
+      for (const l of lists) {
+        console.log(`  ${chalk.dim(l.id.slice(0, 8))} ${chalk.bold(l.name)} ${chalk.dim(`(${l.slug})`)}`);
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
 
 // upgrade (self-update)
 program
