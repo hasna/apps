@@ -63,7 +63,7 @@ describe("searchTasks", () => {
 
     const results = searchTasks("Build feature", project1.id, undefined, db);
     expect(results).toHaveLength(1);
-    expect(results[0]!.title).toBe("Build feature alpha");
+    expect(results[0]!.title).toContain("Build feature alpha");
   });
 
   it("should filter by taskListId", () => {
@@ -89,7 +89,7 @@ describe("searchTasks", () => {
 
     const results = searchTasks("Fix bug", project.id, list.id, db);
     expect(results).toHaveLength(1);
-    expect(results[0]!.title).toBe("Fix bug A");
+    expect(results[0]!.title).toContain("Fix bug A");
   });
 
   it("should be case-insensitive", () => {

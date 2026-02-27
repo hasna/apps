@@ -22,6 +22,7 @@ import {
   DependencyCycleError,
 } from "../types/index.js";
 import { createTaskList, deleteTaskList } from "./task-lists.js";
+import { createProject } from "./projects.js";
 
 let db: Database;
 
@@ -411,5 +412,53 @@ describe("task_list_id support", () => {
 
     const listTasks_ = listTasks({ task_list_id: taskList.id }, db);
     expect(listTasks_).toHaveLength(0);
+  });
+});
+
+describe("short_id and task prefix", () => {
+  it("should generate short_id from project prefix", () => {
+    const project = createProject({ name: "Alpha Project", path: "/alpha" }, db);
+    const task = createTask({ title: "Fix login bug", project_id: project.id }, db);
+    expect(task.short_id).not.toBeNull();
+    expect(task.short_id).toMatch(/^[A-Z]+-\d{5}$/);
+    expect(task.title).toContain("Fix login bug");
+    expect(task.title).toStartWith(task.short_id!);
+  });
+
+  it("should increment counter for each task", () => {
+    const project = createProject({ name: "Beta", path: "/beta" }, db);
+    const t1 = createTask({ title: "Task 1", project_id: project.id }, db);
+    const t2 = createTask({ title: "Task 2", project_id: project.id }, db);
+    const t3 = createTask({ title: "Task 3", project_id: project.id }, db);
+    expect(t1.short_id).toMatch(/-00001$/);
+    expect(t2.short_id).toMatch(/-00002$/);
+    expect(t3.short_id).toMatch(/-00003$/);
+  });
+
+  it("should have null short_id for tasks without project", () => {
+    const task = createTask({ title: "Standalone task" }, db);
+    expect(task.short_id).toBeNull();
+    expect(task.title).toBe("Standalone task");
+  });
+
+  it("should use custom prefix if provided", () => {
+    const project = createProject({ name: "My App", path: "/app", task_prefix: "APP" }, db);
+    const task = createTask({ title: "Build UI", project_id: project.id }, db);
+    expect(task.short_id).toBe("APP-00001");
+    expect(task.title).toBe("APP-00001: Build UI");
+  });
+
+  it("should auto-generate unique prefix from project name", () => {
+    const p1 = createProject({ name: "Alpha Beta", path: "/ab1" }, db);
+    const p2 = createProject({ name: "Alpha Bravo", path: "/ab2" }, db);
+    expect(p1.task_prefix).toBeTruthy();
+    expect(p2.task_prefix).toBeTruthy();
+    expect(p1.task_prefix).not.toBe(p2.task_prefix);
+  });
+
+  it("should prepend short_id to title", () => {
+    const project = createProject({ name: "Test", path: "/test", task_prefix: "TST" }, db);
+    const task = createTask({ title: "Original title", project_id: project.id }, db);
+    expect(task.title).toBe("TST-00001: Original title");
   });
 });

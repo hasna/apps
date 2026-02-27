@@ -206,6 +206,16 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (5);
   `,
+  // Migration 6: Task prefixes and short IDs
+  `
+  ALTER TABLE projects ADD COLUMN task_prefix TEXT;
+  ALTER TABLE projects ADD COLUMN task_counter INTEGER NOT NULL DEFAULT 0;
+
+  ALTER TABLE tasks ADD COLUMN short_id TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_short_id ON tasks(short_id) WHERE short_id IS NOT NULL;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (6);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -253,7 +263,7 @@ function runMigrations(db: Database): void {
 
 function ensureTableMigrations(db: Database): void {
   // Migration 5 (agents + task_lists) may be skipped on DBs that had
-  // old SaaS migrations with the same IDs. Check by table existence.
+  // old SaaS migration IDs (5,6,7). Check by table existence.
   try {
     const hasAgents = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agents'").get();
     if (!hasAgents) {
@@ -261,6 +271,17 @@ function ensureTableMigrations(db: Database): void {
     }
   } catch {
     // ignore
+  }
+
+  // Migration 6 (task_prefix, short_id) — check by column existence
+  try {
+    db.query("SELECT task_prefix FROM projects LIMIT 0").get();
+  } catch {
+    try {
+      db.exec(MIGRATIONS[5]!); // Migration 6 is at index 5
+    } catch {
+      // ignore if already partially applied
+    }
   }
 }
 

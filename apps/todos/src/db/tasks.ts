@@ -16,6 +16,7 @@ import {
   VersionConflictError,
 } from "../types/index.js";
 import { clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now, uuid } from "./database.js";
+import { nextTaskShortId } from "./projects.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -46,16 +47,23 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const timestamp = now();
   const tags = input.tags || [];
 
+  // Generate short_id from project prefix if project has one
+  const shortId = input.project_id ? nextTaskShortId(input.project_id, d) : null;
+
+  // Prepend short_id to title if generated
+  const title = shortId ? `${shortId}: ${input.title}` : input.title;
+
   d.run(
-    `INSERT INTO tasks (id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     [
       id,
+      shortId,
       input.project_id || null,
       input.parent_id || null,
       input.plan_id || null,
       input.task_list_id || null,
-      input.title,
+      title,
       input.description || null,
       input.status || "pending",
       input.priority || "medium",

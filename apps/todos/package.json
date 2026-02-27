@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",

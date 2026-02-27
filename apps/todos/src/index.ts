@@ -28,6 +28,7 @@ export {
   updateProject,
   deleteProject,
   ensureProject,
+  nextTaskShortId,
   slugify,
 } from "./db/projects.js";
 

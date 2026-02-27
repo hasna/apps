@@ -28,6 +28,8 @@ export interface Project {
   path: string;
   description: string | null;
   task_list_id: string | null;
+  task_prefix: string | null;
+  task_counter: number;
   created_at: string;
   updated_at: string;
 }
@@ -37,6 +39,7 @@ export interface CreateProjectInput {
   path: string;
   description?: string;
   task_list_id?: string;
+  task_prefix?: string;
 }
 
 // Plan
@@ -128,6 +131,7 @@ export interface UpdateTaskListInput {
 // Task
 export interface Task {
   id: string;
+  short_id: string | null;
   project_id: string | null;
   parent_id: string | null;
   plan_id: string | null;
@@ -249,6 +253,7 @@ export interface CreateSessionInput {
 // DB row types (raw from SQLite - JSON fields are strings)
 export interface TaskRow {
   id: string;
+  short_id: string | null;
   project_id: string | null;
   parent_id: string | null;
   plan_id: string | null;
