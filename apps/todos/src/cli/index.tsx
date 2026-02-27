@@ -144,14 +144,18 @@ program
   .option("-d, --description <text>", "Task description")
   .option("-p, --priority <level>", "Priority: low, medium, high, critical")
   .option("--parent <id>", "Parent task ID")
-  .option("--tags <tags>", "Comma-separated tags")
+  .option("-t, --tags <tags>", "Comma-separated tags")
+  .option("--tag <tags>", "Comma-separated tags (alias for --tags)")
   .option("--plan <id>", "Assign to a plan")
   .option("--assign <agent>", "Assign to agent")
   .option("--status <status>", "Initial status")
   .option("--list <id>", "Task list ID")
+  .option("--task-list <id>", "Task list ID (alias for --list)")
   .action((title: string, opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
+    opts.tags = opts.tags || opts.tag;
+    opts.list = opts.list || opts.taskList;
     const taskListId = opts.list ? (() => {
       const db = getDatabase();
       const id = resolvePartialId(db, "task_lists", opts.list);
@@ -201,10 +205,14 @@ program
   .option("-p, --priority <priority>", "Filter by priority")
   .option("--assigned <agent>", "Filter by assigned agent")
   .option("--tags <tags>", "Filter by tags (comma-separated)")
+  .option("--tag <tags>", "Filter by tags (alias for --tags)")
   .option("-a, --all", "Show all tasks (including completed/cancelled)")
   .option("--list <id>", "Filter by task list ID")
+  .option("--task-list <id>", "Filter by task list ID (alias for --list)")
   .action((opts) => {
     const globalOpts = program.opts();
+    opts.tags = opts.tags || opts.tag;
+    opts.list = opts.list || opts.taskList;
     const projectId = autoProject(globalOpts);
 
     const filter: Record<string, unknown> = {};
@@ -325,9 +333,13 @@ program
   .option("-p, --priority <priority>", "New priority")
   .option("--assign <agent>", "Assign to agent")
   .option("--tags <tags>", "New tags (comma-separated)")
+  .option("--tag <tags>", "New tags (alias for --tags)")
   .option("--list <id>", "Move to a task list")
+  .option("--task-list <id>", "Move to a task list (alias for --list)")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
+    opts.tags = opts.tags || opts.tag;
+    opts.list = opts.list || opts.taskList;
     const resolvedId = resolveTaskId(id);
     const current = getTask(resolvedId);
     if (!current) {
