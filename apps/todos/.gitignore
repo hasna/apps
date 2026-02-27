@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.todos/
+.env
+.DS_Store
+*.tgz
+*.png
+.playwright-mcp/
