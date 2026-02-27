@@ -125,6 +125,14 @@ export function ensureProject(
 ): Project {
   const d = db || getDatabase();
   const existing = getProjectByPath(path, d);
-  if (existing) return existing;
+  if (existing) {
+    // Backfill prefix for projects created before migration 6
+    if (!existing.task_prefix) {
+      const prefix = generatePrefix(existing.name, d);
+      d.run("UPDATE projects SET task_prefix = ?, updated_at = ? WHERE id = ?", [prefix, now(), existing.id]);
+      return getProject(existing.id, d)!;
+    }
+    return existing;
+  }
   return createProject({ name, path }, d);
 }
