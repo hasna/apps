@@ -245,6 +245,23 @@ function runMigrations(db: Database): void {
       db.exec(migration);
     }
   }
+
+  // Run table-existence-based migrations for DBs that may have
+  // old SaaS migration IDs (5,6,7) but lack the new open-source tables
+  ensureTableMigrations(db);
+}
+
+function ensureTableMigrations(db: Database): void {
+  // Migration 5 (agents + task_lists) may be skipped on DBs that had
+  // old SaaS migrations with the same IDs. Check by table existence.
+  try {
+    const hasAgents = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agents'").get();
+    if (!hasAgents) {
+      db.exec(MIGRATIONS[4]!); // Migration 5 is at index 4
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function backfillTaskTags(db: Database): void {
