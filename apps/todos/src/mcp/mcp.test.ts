@@ -52,7 +52,7 @@ describe("MCP tool operations", () => {
     createTask({ title: "Fix authentication bug" }, db);
     createTask({ title: "Add dark mode" }, db);
 
-    const results = searchTasks("auth", undefined, db);
+    const results = searchTasks("auth", undefined, undefined, db);
     expect(results).toHaveLength(1);
     expect(results[0]!.title).toBe("Fix authentication bug");
   });

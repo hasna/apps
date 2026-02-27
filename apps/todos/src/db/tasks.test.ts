@@ -21,6 +21,7 @@ import {
   LockError,
   DependencyCycleError,
 } from "../types/index.js";
+import { createTaskList, deleteTaskList } from "./task-lists.js";
 
 let db: Database;
 
@@ -330,5 +331,85 @@ describe("dependencies", () => {
     expect(() => addDependency(a.id, "non-existent", db)).toThrow(
       TaskNotFoundError,
     );
+  });
+});
+
+describe("task_list_id support", () => {
+  it("should create task with task_list_id", () => {
+    const taskList = createTaskList({ name: "Dev Tasks", slug: "dev-tasks" }, db);
+    const task = createTask({ title: "Task in list", task_list_id: taskList.id }, db);
+    expect(task.task_list_id).toBe(taskList.id);
+  });
+
+  it("should create task without task_list_id (default null)", () => {
+    const task = createTask({ title: "Task without list" }, db);
+    expect(task.task_list_id).toBeNull();
+  });
+
+  it("should filter tasks by task_list_id", () => {
+    const list1 = createTaskList({ name: "List One", slug: "list-one" }, db);
+    const list2 = createTaskList({ name: "List Two", slug: "list-two" }, db);
+    createTask({ title: "Task in list 1", task_list_id: list1.id }, db);
+    createTask({ title: "Task in list 2", task_list_id: list2.id }, db);
+    createTask({ title: "Task with no list" }, db);
+
+    const list1Tasks = listTasks({ task_list_id: list1.id }, db);
+    expect(list1Tasks).toHaveLength(1);
+    expect(list1Tasks[0]!.title).toBe("Task in list 1");
+
+    const list2Tasks = listTasks({ task_list_id: list2.id }, db);
+    expect(list2Tasks).toHaveLength(1);
+    expect(list2Tasks[0]!.title).toBe("Task in list 2");
+  });
+
+  it("should update task_list_id", () => {
+    const task = createTask({ title: "Task to assign" }, db);
+    expect(task.task_list_id).toBeNull();
+
+    const taskList = createTaskList({ name: "Target List", slug: "target-list" }, db);
+    const updated = updateTask(task.id, { version: task.version, task_list_id: taskList.id }, db);
+    expect(updated.task_list_id).toBe(taskList.id);
+  });
+
+  it("should move task between task lists", () => {
+    const list1 = createTaskList({ name: "List A", slug: "list-a" }, db);
+    const list2 = createTaskList({ name: "List B", slug: "list-b" }, db);
+    const task = createTask({ title: "Movable task", task_list_id: list1.id }, db);
+    expect(task.task_list_id).toBe(list1.id);
+
+    const moved = updateTask(task.id, { version: task.version, task_list_id: list2.id }, db);
+    expect(moved.task_list_id).toBe(list2.id);
+
+    // Verify it no longer appears in list1
+    const list1Tasks = listTasks({ task_list_id: list1.id }, db);
+    expect(list1Tasks).toHaveLength(0);
+
+    // Verify it appears in list2
+    const list2Tasks = listTasks({ task_list_id: list2.id }, db);
+    expect(list2Tasks).toHaveLength(1);
+    expect(list2Tasks[0]!.id).toBe(task.id);
+  });
+
+  it("should set task_list_id to null when task list is deleted", () => {
+    const taskList = createTaskList({ name: "Doomed List", slug: "doomed-list" }, db);
+    const task = createTask({ title: "Orphaned task", task_list_id: taskList.id }, db);
+    expect(task.task_list_id).toBe(taskList.id);
+
+    deleteTaskList(taskList.id, db);
+    const orphaned = getTask(task.id, db);
+    expect(orphaned).not.toBeNull();
+    expect(orphaned!.task_list_id).toBeNull();
+  });
+
+  it("should remove task from list by setting task_list_id to null", () => {
+    const taskList = createTaskList({ name: "Removable List", slug: "removable-list" }, db);
+    const task = createTask({ title: "Removable task", task_list_id: taskList.id }, db);
+    expect(task.task_list_id).toBe(taskList.id);
+
+    const updated = updateTask(task.id, { version: task.version, task_list_id: null as unknown as string }, db);
+    expect(updated.task_list_id).toBeNull();
+
+    const listTasks_ = listTasks({ task_list_id: taskList.id }, db);
+    expect(listTasks_).toHaveLength(0);
   });
 });
