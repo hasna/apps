@@ -237,7 +237,7 @@ function runMigrations(db: Database): void {
     const currentLevel = result?.max_id ?? 0;
 
     for (let i = currentLevel; i < MIGRATIONS.length; i++) {
-      db.run(MIGRATIONS[i]!);
+      db.exec(MIGRATIONS[i]!);
     }
   } catch {
     // _migrations table doesn't exist yet, run all migrations
