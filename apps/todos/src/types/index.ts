@@ -63,12 +63,75 @@ export interface UpdatePlanInput {
   status?: PlanStatus;
 }
 
+// Agent
+export interface Agent {
+  id: string; // 8-char short UUID
+  name: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface AgentRow {
+  id: string;
+  name: string;
+  description: string | null;
+  metadata: string | null;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface RegisterAgentInput {
+  name: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// Task List
+export interface TaskList {
+  id: string;
+  project_id: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskListRow {
+  id: string;
+  project_id: string | null;
+  slug: string;
+  name: string;
+  description: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTaskListInput {
+  name: string;
+  slug?: string;
+  project_id?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateTaskListInput {
+  name?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // Task
 export interface Task {
   id: string;
   project_id: string | null;
   parent_id: string | null;
   plan_id: string | null;
+  task_list_id: string | null;
   title: string;
   description: string | null;
   status: TaskStatus;
@@ -102,6 +165,7 @@ export interface CreateTaskInput {
   project_id?: string;
   parent_id?: string;
   plan_id?: string;
+  task_list_id?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
   agent_id?: string;
@@ -119,6 +183,7 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   assigned_to?: string;
   plan_id?: string;
+  task_list_id?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
   version: number; // required for optimistic locking
@@ -128,6 +193,7 @@ export interface TaskFilter {
   project_id?: string;
   parent_id?: string | null;
   plan_id?: string;
+  task_list_id?: string;
   status?: TaskStatus | TaskStatus[];
   priority?: TaskPriority | TaskPriority[];
   assigned_to?: string;
@@ -186,6 +252,7 @@ export interface TaskRow {
   project_id: string | null;
   parent_id: string | null;
   plan_id: string | null;
+  task_list_id: string | null;
   title: string;
   description: string | null;
   status: string;
@@ -264,6 +331,20 @@ export class LockError extends Error {
   ) {
     super(`Task ${taskId} is locked by ${lockedBy}`);
     this.name = "LockError";
+  }
+}
+
+export class AgentNotFoundError extends Error {
+  constructor(public agentId: string) {
+    super(`Agent not found: ${agentId}`);
+    this.name = "AgentNotFoundError";
+  }
+}
+
+export class TaskListNotFoundError extends Error {
+  constructor(public taskListId: string) {
+    super(`Task list not found: ${taskListId}`);
+    this.name = "TaskListNotFoundError";
   }
 }
 

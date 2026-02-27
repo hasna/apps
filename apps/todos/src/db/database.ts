@@ -175,6 +175,37 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (4);
   `,
+  // Migration 5: Agents and task lists
+  `
+  CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name);
+
+  CREATE TABLE IF NOT EXISTS task_lists (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, slug)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_lists_project ON task_lists(project_id);
+  CREATE INDEX IF NOT EXISTS idx_task_lists_slug ON task_lists(slug);
+
+  ALTER TABLE tasks ADD COLUMN task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_task_list ON tasks(task_list_id);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (5);
+  `,
 ];
 
 let _db: Database | null = null;
