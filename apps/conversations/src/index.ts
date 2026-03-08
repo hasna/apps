@@ -25,6 +25,7 @@ export {
   pinMessage,
   unpinMessage,
   getPinnedMessages,
+  getUnreadBlockers,
 } from "./lib/messages.js";
 
 export {
@@ -76,6 +77,7 @@ export {
   getPresence,
   listAgents,
   removePresence,
+  renameAgent,
 } from "./lib/presence.js";
 
 export type {

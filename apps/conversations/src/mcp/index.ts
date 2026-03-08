@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages } from "../lib/messages.js";
+import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../lib/messages.js";
 import { listSessions } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -40,8 +40,9 @@ server.registerTool("send_message", {
     repository: z.string().optional().describe("Repository context"),
     branch: z.string().optional().describe("Branch context"),
     metadata: z.string().optional().describe("JSON metadata string"),
+    blocking: z.boolean().optional().describe("Send as a blocking message. Recipients must acknowledge before continuing."),
   },
-}, async ({ from: fromParam, to, content, session_id, priority, working_dir, repository, branch, metadata }) => {
+}, async ({ from: fromParam, to, content, session_id, priority, working_dir, repository, branch, metadata, blocking }) => {
   const from = resolveIdentity(fromParam);
   let parsedMetadata: Record<string, unknown> | undefined;
   if (metadata) {
@@ -65,6 +66,7 @@ server.registerTool("send_message", {
     repository,
     branch,
     metadata: parsedMetadata,
+    blocking,
   });
 
   return {
@@ -276,8 +278,9 @@ server.registerTool("send_to_space", {
     space: z.string().describe("Space name"),
     content: z.string().describe("Message content"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Message priority"),
+    blocking: z.boolean().optional().describe("Send as a blocking message. All space members must acknowledge."),
   },
-}, async ({ from: fromParam, space, content, priority }) => {
+}, async ({ from: fromParam, space, content, priority, blocking }) => {
   const from = resolveIdentity(fromParam);
 
   const sp = getSpace(space);
@@ -295,6 +298,7 @@ server.registerTool("send_to_space", {
     space,
     session_id: `space:${space}`,
     priority,
+    blocking,
   });
 
   return {
@@ -775,6 +779,21 @@ server.registerTool("list_agents", {
 
   return {
     content: [{ type: "text", text: JSON.stringify(agents, null, 2) }],
+  };
+});
+
+server.registerTool("get_blockers", {
+  title: "Get Blockers",
+  description: "Check for unread blocking messages targeting you. Returns messages that must be acknowledged before continuing.",
+  inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
+  },
+}, async ({ from: fromParam }) => {
+  const agent = resolveIdentity(fromParam);
+  const blockers = getUnreadBlockers(agent);
+
+  return {
+    content: [{ type: "text", text: JSON.stringify(blockers, null, 2) }],
   };
 });
 

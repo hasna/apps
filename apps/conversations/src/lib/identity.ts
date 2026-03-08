@@ -8,9 +8,24 @@ const AGENT_ID_FILE = join(homedir(), ".conversations", "agent-id");
 let cachedAutoName: string | null = null;
 
 /**
+ * Check if a name is already taken in the agent_presence table.
+ * Uses a lazy import to avoid circular dependency with db.ts.
+ */
+function isNameTaken(name: string): boolean {
+  try {
+    const { getDb } = require("./db.js");
+    const db = getDb();
+    const row = db.prepare("SELECT agent FROM agent_presence WHERE agent = ?").get(name);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get or create a persistent auto-generated agent name.
  * Stored in ~/.conversations/agent-id so the same installation
- * always gets the same name.
+ * always gets the same name. Checks the DB to avoid duplicates.
  */
 export function getAutoName(): string {
   if (cachedAutoName) return cachedAutoName;
@@ -26,8 +41,16 @@ export function getAutoName(): string {
     // File doesn't exist yet
   }
 
-  // Pick a random name from the pool
-  const name = AGENT_NAMES[Math.floor(Math.random() * AGENT_NAMES.length)];
+  // Pick a random name that isn't already taken
+  const shuffled = [...AGENT_NAMES].sort(() => Math.random() - 0.5);
+  let name = shuffled[0];
+  for (const candidate of shuffled) {
+    if (!isNameTaken(candidate)) {
+      name = candidate;
+      break;
+    }
+  }
+
   cachedAutoName = name;
 
   // Persist it

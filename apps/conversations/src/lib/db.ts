@@ -169,6 +169,10 @@ export function getDb(): Database {
     db.exec("ALTER TABLE messages ADD COLUMN pinned_at TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(pinned_at)");
   }
+  if (!colNames2.includes("blocking")) {
+    db.exec("ALTER TABLE messages ADD COLUMN blocking INTEGER NOT NULL DEFAULT 0");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_blocking ON messages(blocking)");
+  }
 
   return db;
 }

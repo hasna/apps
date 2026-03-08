@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages } from "./messages";
+import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers } from "./messages";
+import { createSpace, joinSpace } from "./spaces";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -518,5 +519,60 @@ describe("searchMessages", () => {
     const results = searchMessages({ query: "deploy", from: "alice", space: "general" });
     expect(results).toHaveLength(1);
     expect(results[0].content).toBe("deploy v1");
+  });
+});
+
+describe("blocking messages", () => {
+  test("sendMessage with blocking flag sets blocking to true", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "stop!", blocking: true });
+    expect(msg.blocking).toBe(true);
+  });
+
+  test("sendMessage without blocking flag defaults to false", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "hello" });
+    expect(msg.blocking).toBe(false);
+  });
+
+  test("getUnreadBlockers returns blocking DMs for agent", () => {
+    sendMessage({ from: "alice", to: "bob", content: "blocker 1", blocking: true });
+    sendMessage({ from: "alice", to: "bob", content: "normal msg" });
+    sendMessage({ from: "alice", to: "bob", content: "blocker 2", blocking: true });
+
+    const blockers = getUnreadBlockers("bob");
+    expect(blockers).toHaveLength(2);
+    expect(blockers[0].content).toBe("blocker 1");
+    expect(blockers[1].content).toBe("blocker 2");
+    expect(blockers.every((b) => b.blocking === true)).toBe(true);
+  });
+
+  test("getUnreadBlockers excludes read blockers", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "blocker", blocking: true });
+    markRead([msg.id], "bob");
+
+    const blockers = getUnreadBlockers("bob");
+    expect(blockers).toHaveLength(0);
+  });
+
+  test("getUnreadBlockers returns blockers from spaces", () => {
+    createSpace("blocker-space", "alice");
+    joinSpace("blocker-space", "bob");
+
+    sendMessage({ from: "alice", to: "blocker-space", content: "space blocker", space: "blocker-space", blocking: true });
+
+    const blockers = getUnreadBlockers("bob");
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0].content).toBe("space blocker");
+  });
+
+  test("getUnreadBlockers returns empty for no blockers", () => {
+    sendMessage({ from: "alice", to: "bob", content: "normal" });
+    const blockers = getUnreadBlockers("bob");
+    expect(blockers).toHaveLength(0);
+  });
+
+  test("getUnreadBlockers does not return blockers for other agents", () => {
+    sendMessage({ from: "alice", to: "bob", content: "for bob", blocking: true });
+    const blockers = getUnreadBlockers("charlie");
+    expect(blockers).toHaveLength(0);
   });
 });

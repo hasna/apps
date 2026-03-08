@@ -16,6 +16,7 @@ export interface Message {
   read_at: string | null;
   edited_at: string | null;
   pinned_at: string | null;
+  blocking: boolean;
 }
 
 export interface Session {
@@ -77,6 +78,7 @@ export interface SendMessageOptions {
   repository?: string;
   branch?: string;
   metadata?: Record<string, unknown>;
+  blocking?: boolean;
 }
 
 export interface ReadMessagesOptions {

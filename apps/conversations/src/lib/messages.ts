@@ -15,6 +15,7 @@ function parseMessage(row: Record<string, unknown>): Message {
   return {
     ...row,
     metadata,
+    blocking: !!(row.blocking as number),
   } as Message;
 }
 
@@ -28,9 +29,11 @@ export function sendMessage(opts: SendMessageOptions): Message {
     ? opts.priority
     : "normal";
 
+  const blocking = opts.blocking ? 1 : 0;
+
   const stmt = db.prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, space, content, priority, working_dir, repository, branch, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (session_id, from_agent, to_agent, space, content, priority, working_dir, repository, branch, metadata, blocking)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
 
@@ -44,7 +47,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
     opts.working_dir || null,
     opts.repository || null,
     opts.branch || null,
-    metadata
+    metadata,
+    blocking
   ) as Record<string, unknown>;
 
   return parseMessage(row);
@@ -272,6 +276,20 @@ export function getPinnedMessages(opts?: { space?: string; session_id?: string; 
     `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limit}`
   ).all(...params) as Record<string, unknown>[];
 
+  return rows.map(parseMessage);
+}
+
+export function getUnreadBlockers(agent: string): Message[] {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT * FROM messages
+    WHERE blocking = 1 AND read_at IS NULL
+    AND (
+      to_agent = ?
+      OR space IN (SELECT space FROM space_members WHERE agent = ?)
+    )
+    ORDER BY created_at ASC, id ASC
+  `).all(agent, agent) as Record<string, unknown>[];
   return rows.map(parseMessage);
 }
 

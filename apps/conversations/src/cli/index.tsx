@@ -3,7 +3,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
-import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages } from "../lib/messages.js";
+import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../lib/messages.js";
 import { listSessions, getSession } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -33,6 +33,7 @@ program
   .option("--repository <repo>", "Repository context")
   .option("--branch <branch>", "Branch context")
   .option("--metadata <json>", "JSON metadata string")
+  .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
   .option("--json", "Output as JSON")
   .action((message, opts) => {
     const from = resolveIdentity(opts.from).trim();
@@ -75,6 +76,7 @@ program
       repository: opts.repository,
       branch: opts.branch,
       metadata,
+      blocking: opts.blocking,
     });
 
     if (opts.json) {
@@ -1155,6 +1157,34 @@ agents
     } catch (e: any) {
       console.error(chalk.red(e.message));
       process.exit(1);
+    }
+    closeDb();
+  });
+
+// ---- blockers ----
+program
+  .command("blockers")
+  .description("Check for unread blocking messages")
+  .option("--from <agent>", "Agent to check blockers for")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const agent = resolveIdentity(opts.from);
+    const blockers = getUnreadBlockers(agent);
+
+    if (opts.json) {
+      console.log(JSON.stringify(blockers, null, 2));
+    } else {
+      if (blockers.length === 0) {
+        console.log(chalk.dim("No blocking messages."));
+      } else {
+        console.log(chalk.red.bold(`${blockers.length} blocking message(s):\n`));
+        for (const b of blockers) {
+          const where = b.space ? chalk.magenta(`#${b.space}`) : chalk.yellow("DM");
+          const time = chalk.dim(b.created_at.slice(11, 19));
+          console.log(`  ${chalk.red(`[#${b.id}]`)} ${time} ${chalk.cyan(b.from_agent)} ${where}: ${b.content}`);
+        }
+        console.log(chalk.dim(`\nAcknowledge with: conversations mark-read ${blockers.map(b => b.id).join(" ")}`));
+      }
     }
     closeDb();
   });
