@@ -1,12 +1,16 @@
 #!/usr/bin/env bun
 /**
  * Claude Code PreToolUse hook for blocking messages.
- * Checks for unread blocking messages and blocks tool use if any exist.
+ * Checks for unread blocking messages and warns the agent.
  * Designed to be fast: single indexed SQLite query, minimal imports.
  *
+ * Uses exit 0 with stdout output (not exit 2) to avoid deadlocking
+ * the agent — it needs tools to acknowledge the blockers.
+ * The stdout message acts as a system prompt that compels the agent
+ * to acknowledge before continuing with other work.
+ *
  * Exit codes:
- *   0 = no blockers, proceed
- *   2 = blockers found, stderr fed to Claude as blocking error
+ *   0 = always (no output if no blockers, JSON warning if blockers found)
  */
 import { getDb, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
@@ -31,16 +35,12 @@ if (blockers.length === 0) {
   process.exit(0);
 }
 
-const lines = blockers.map((b) => {
-  const where = b.space ? `in #${b.space}` : "via DM";
-  return `[BLOCKER #${b.id}] ${b.from_agent} ${where}: ${b.content}`;
-});
+// Output as stdout JSON so it appears as a system message.
+// Exit 0 to avoid deadlock — agent needs tools to acknowledge.
+const ids = blockers.map((b) => b.id);
+const details = blockers.map((b) => {
+  const where = b.space ? `#${b.space}` : "DM";
+  return `[#${b.id}] ${b.from_agent} (${where}): ${b.content}`;
+}).join("\n");
 
-console.error(`⚠ You have ${blockers.length} blocking message(s) that require acknowledgment:\n`);
-for (const line of lines) {
-  console.error(line);
-}
-console.error(`\nUse mark_read to acknowledge these messages before continuing.`);
-console.error(`Message IDs: ${blockers.map((b) => b.id).join(", ")}`);
-
-process.exit(2);
+console.log(`BLOCKING MESSAGES — You have ${blockers.length} unread blocker(s). You MUST acknowledge them by calling mark_read with IDs [${ids.join(", ")}] BEFORE doing any other work.\n\n${details}`);
