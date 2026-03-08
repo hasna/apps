@@ -18,7 +18,7 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat, listAgents } from "../lib/presence.js";
 
-const server = new McpServer({
+export const server = new McpServer({
   name: "conversations",
   version: "0.1.0",
 });
@@ -27,8 +27,9 @@ const server = new McpServer({
 
 server.registerTool("send_message", {
   title: "Send Message",
-  description: "Send a direct message to another agent. The sender is auto-resolved from CONVERSATIONS_AGENT_ID env var.",
+  description: "Send a direct message to another agent. Pass 'from' to identify yourself, or it falls back to CONVERSATIONS_AGENT_ID env var.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID (e.g. 'claude-1', 'assistant'). Falls back to CONVERSATIONS_AGENT_ID env var."),
     to: z.string().describe("Recipient agent ID"),
     content: z.string().describe("Message content"),
     session_id: z.string().optional().describe("Session ID (auto-generated if omitted)"),
@@ -38,8 +39,8 @@ server.registerTool("send_message", {
     branch: z.string().optional().describe("Branch context"),
     metadata: z.string().optional().describe("JSON metadata string"),
   },
-}, async ({ to, content, session_id, priority, working_dir, repository, branch, metadata }) => {
-  const from = resolveIdentity();
+}, async ({ from: fromParam, to, content, session_id, priority, working_dir, repository, branch, metadata }) => {
+  const from = resolveIdentity(fromParam);
   let parsedMetadata: Record<string, unknown> | undefined;
   if (metadata) {
     try {
@@ -107,11 +108,12 @@ server.registerTool("reply", {
   title: "Reply to Message",
   description: "Reply to a message by its ID. Automatically uses the same session and sends to the original sender.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     message_id: z.number().describe("ID of the message to reply to"),
     content: z.string().describe("Reply content"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Message priority"),
   },
-}, async ({ message_id, content, priority }) => {
+}, async ({ from: fromParam, message_id, content, priority }) => {
   const original = getMessageById(message_id);
   if (!original) {
     return {
@@ -120,7 +122,7 @@ server.registerTool("reply", {
     };
   }
 
-  const from = resolveIdentity();
+  const from = resolveIdentity(fromParam);
   const space =
     original.space ||
     (original.session_id?.startsWith("space:") ? original.session_id.slice(6) : undefined);
@@ -145,11 +147,12 @@ server.registerTool("mark_read", {
   title: "Mark Read",
   description: "Mark message IDs as read for the current agent. Set 'all' to true to mark all unread messages as read.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     ids: z.array(z.number()).optional().describe("Message IDs to mark as read"),
     all: z.boolean().optional().describe("Mark all unread messages as read"),
   },
-}, async ({ ids, all }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, ids, all }) => {
+  const agent = resolveIdentity(fromParam);
   let count: number;
 
   if (all) {
@@ -211,13 +214,14 @@ server.registerTool("create_space", {
   title: "Create Space",
   description: "Create a new space. The creator is auto-joined. Spaces can be nested (max 3 levels) and associated with a project.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     name: z.string().describe("Space name (e.g. 'deployments', 'code-review')"),
     description: z.string().optional().describe("Space description"),
     parent_id: z.string().optional().describe("Parent space name for nesting (max 3 levels deep)"),
     project_id: z.string().optional().describe("Project ID to associate this space with"),
   },
-}, async ({ name, description, parent_id, project_id }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, name, description, parent_id, project_id }) => {
+  const agent = resolveIdentity(fromParam);
   try {
     const sp = createSpace(name, agent, { description, parent_id, project_id });
     return {
@@ -266,12 +270,13 @@ server.registerTool("send_to_space", {
   title: "Send to Space",
   description: "Send a message to a space. All members can see it.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     space: z.string().describe("Space name"),
     content: z.string().describe("Message content"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Message priority"),
   },
-}, async ({ space, content, priority }) => {
-  const from = resolveIdentity();
+}, async ({ from: fromParam, space, content, priority }) => {
+  const from = resolveIdentity(fromParam);
 
   const sp = getSpace(space);
   if (!sp) {
@@ -315,10 +320,11 @@ server.registerTool("join_space", {
   title: "Join Space",
   description: "Join a space to receive messages.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     space: z.string().describe("Space name to join"),
   },
-}, async ({ space }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, space }) => {
+  const agent = resolveIdentity(fromParam);
   const ok = joinSpace(space, agent);
 
   if (!ok) {
@@ -337,10 +343,11 @@ server.registerTool("leave_space", {
   title: "Leave Space",
   description: "Leave a space.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     space: z.string().describe("Space name to leave"),
   },
-}, async ({ space }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, space }) => {
+  const agent = resolveIdentity(fromParam);
   const left = leaveSpace(space, agent);
 
   return {
@@ -422,6 +429,7 @@ server.registerTool("create_project", {
   title: "Create Project",
   description: "Create a new project. Projects organize spaces and provide context for agent collaboration.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     name: z.string().describe("Project name (unique)"),
     description: z.string().optional().describe("Project description"),
     path: z.string().optional().describe("Absolute path to project on disk"),
@@ -430,8 +438,8 @@ server.registerTool("create_project", {
     metadata: z.string().optional().describe("JSON metadata string"),
     settings: z.string().optional().describe("JSON settings string"),
   },
-}, async ({ name, description, path, repository, tags, metadata, settings }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, name, description, path, repository, tags, metadata, settings }) => {
+  const agent = resolveIdentity(fromParam);
 
   let parsedTags: string[] | undefined;
   if (tags) {
@@ -633,12 +641,13 @@ server.registerTool("delete_project", {
 
 server.registerTool("delete_message", {
   title: "Delete Message",
-  description: "Delete a message. Only the sender can delete their own messages. The agent is auto-resolved.",
+  description: "Delete a message. Only the sender can delete their own messages.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     id: z.number().describe("Message ID to delete"),
   },
-}, async ({ id }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, id }) => {
+  const agent = resolveIdentity(fromParam);
   const deleted = deleteMessage(id, agent);
 
   if (!deleted) {
@@ -655,13 +664,14 @@ server.registerTool("delete_message", {
 
 server.registerTool("edit_message", {
   title: "Edit Message",
-  description: "Edit a message's content. Only the sender can edit their own messages. The agent is auto-resolved.",
+  description: "Edit a message's content. Only the sender can edit their own messages.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     id: z.number().describe("Message ID to edit"),
     content: z.string().describe("New message content"),
   },
-}, async ({ id, content }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, id, content }) => {
+  const agent = resolveIdentity(fromParam);
   const msg = editMessage(id, agent, content);
 
   if (!msg) {
@@ -738,12 +748,13 @@ server.registerTool("get_pinned_messages", {
 
 server.registerTool("heartbeat", {
   title: "Heartbeat",
-  description: "Send a heartbeat to indicate agent is alive. Auto-resolves agent from CONVERSATIONS_AGENT_ID env var. Optionally set a status.",
+  description: "Send a heartbeat to indicate agent is alive. Optionally set a status.",
   inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     status: z.string().optional().describe("Agent status (e.g. 'online', 'busy', 'idle'). Defaults to 'online'."),
   },
-}, async ({ status }) => {
-  const agent = resolveIdentity();
+}, async ({ from: fromParam, status }) => {
+  const agent = resolveIdentity(fromParam);
   heartbeat(agent, status);
 
   return {
