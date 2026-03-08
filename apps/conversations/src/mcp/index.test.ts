@@ -5,6 +5,7 @@ import { server } from "./index.js";
 import { closeDb } from "../lib/db.js";
 import { sendMessage, readMessages } from "../lib/messages.js";
 import { createSpace } from "../lib/spaces.js";
+import { resolveIdentity } from "../lib/identity.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -55,13 +56,15 @@ describe("send_message from parameter", () => {
     expect(msg.content).toBe("hello from alpha");
   });
 
-  test("falls back to 'user' when from is omitted and no env var", async () => {
+  test("falls back to auto-generated name when from is omitted and no env var", async () => {
+    const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "send_message",
       arguments: { to: "someone", content: "no from" },
     });
     const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe("user");
+    expect(msg.from_agent).toBe(autoName);
+    expect(msg.from_agent).not.toBe("user");
   });
 
   test("uses env var when from is omitted", async () => {
@@ -101,14 +104,15 @@ describe("reply from parameter", () => {
     expect(msg.session_id).toBe(sent.session_id);
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
-    const sent = sendMessage({ from: "alice", to: "user", content: "hey user" });
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
+    const sent = sendMessage({ from: "alice", to: autoName, content: "hey auto" });
     const result = await client.callTool({
       name: "reply",
       arguments: { message_id: sent.id, content: "reply without from" },
     });
     const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe("user");
+    expect(msg.from_agent).toBe(autoName);
   });
 });
 
@@ -125,8 +129,9 @@ describe("mark_read from parameter", () => {
     expect(data.marked_read).toBe(1);
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
-    const sent = sendMessage({ from: "alice", to: "user", content: "for user" });
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
+    const sent = sendMessage({ from: "alice", to: autoName, content: "for auto" });
     const result = await client.callTool({
       name: "mark_read",
       arguments: { ids: [sent.id] },
@@ -149,13 +154,14 @@ describe("create_space from parameter", () => {
     expect(sp.created_by).toBe("space-creator");
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "create_space",
       arguments: { name: "test-space-no-from" },
     });
     const sp = parseResult(result as any) as any;
-    expect(sp.created_by).toBe("user");
+    expect(sp.created_by).toBe(autoName);
   });
 });
 
@@ -173,14 +179,15 @@ describe("send_to_space from parameter", () => {
     expect(msg.space).toBe("msg-space");
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
     createSpace("msg-space-2", "creator");
     const result = await client.callTool({
       name: "send_to_space",
       arguments: { space: "msg-space-2", content: "no from" },
     });
     const msg = parseResult(result as any) as any;
-    expect(msg.from_agent).toBe("user");
+    expect(msg.from_agent).toBe(autoName);
   });
 });
 
@@ -198,14 +205,15 @@ describe("join_space from parameter", () => {
     expect(data.joined).toBe(true);
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
     createSpace("join-space-2", "creator");
     const result = await client.callTool({
       name: "join_space",
       arguments: { space: "join-space-2" },
     });
     const data = parseResult(result as any) as any;
-    expect(data.agent).toBe("user");
+    expect(data.agent).toBe(autoName);
   });
 });
 
@@ -237,13 +245,14 @@ describe("create_project from parameter", () => {
     expect(proj.created_by).toBe("proj-creator");
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "create_project",
       arguments: { name: "test-project-no-from" },
     });
     const proj = parseResult(result as any) as any;
-    expect(proj.created_by).toBe("user");
+    expect(proj.created_by).toBe(autoName);
   });
 });
 
@@ -306,13 +315,14 @@ describe("heartbeat from parameter", () => {
     expect(data.heartbeat).toBe(true);
   });
 
-  test("falls back to 'user' when from is omitted", async () => {
+  test("falls back to auto-generated name when from is omitted", async () => {
+    const autoName = resolveIdentity();
     const result = await client.callTool({
       name: "heartbeat",
       arguments: {},
     });
     const data = parseResult(result as any) as any;
-    expect(data.agent).toBe("user");
+    expect(data.agent).toBe(autoName);
   });
 
   test("includes custom status", async () => {
