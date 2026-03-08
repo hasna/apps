@@ -16,7 +16,7 @@ import { listSessions } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { resolveIdentity } from "../lib/identity.js";
-import { heartbeat, listAgents } from "../lib/presence.js";
+import { heartbeat, listAgents, removePresence, renameAgent } from "../lib/presence.js";
 
 import pkg from "../../package.json";
 
@@ -776,6 +776,68 @@ server.registerTool("list_agents", {
   return {
     content: [{ type: "text", text: JSON.stringify(agents, null, 2) }],
   };
+});
+
+server.registerTool("remove_agent", {
+  title: "Remove Agent",
+  description: "Remove an agent from the presence list. Only the agent itself should remove its own presence.",
+  inputSchema: {
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
+    agent: z.string().optional().describe("Agent to remove (defaults to yourself)"),
+  },
+}, async ({ from: fromParam, agent: targetAgent }) => {
+  const self = resolveIdentity(fromParam);
+  const agent = targetAgent?.trim() || self;
+
+  const removed = removePresence(agent);
+  if (!removed) {
+    return {
+      content: [{ type: "text", text: `Agent "${agent}" not found` }],
+      isError: true,
+    };
+  }
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ agent, removed: true }, null, 2) }],
+  };
+});
+
+server.registerTool("rename_agent", {
+  title: "Rename Agent",
+  description: "Rename an agent in the presence list. By default renames yourself.",
+  inputSchema: {
+    from: z.string().optional().describe("Your current agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
+    new_name: z.string().describe("The new name for the agent"),
+  },
+}, async ({ from: fromParam, new_name }) => {
+  const oldName = resolveIdentity(fromParam);
+  const newName = new_name.trim();
+
+  if (!newName) {
+    return {
+      content: [{ type: "text", text: "New name cannot be empty" }],
+      isError: true,
+    };
+  }
+
+  try {
+    const renamed = renameAgent(oldName, newName);
+    if (!renamed) {
+      return {
+        content: [{ type: "text", text: `Agent "${oldName}" not found in presence list` }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true }, null, 2) }],
+    };
+  } catch (e: any) {
+    return {
+      content: [{ type: "text", text: e.message }],
+      isError: true,
+    };
+  }
 });
 
 // ---- Start server ----

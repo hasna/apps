@@ -69,3 +69,15 @@ export function removePresence(agent: string): boolean {
   const result = db.prepare("DELETE FROM agent_presence WHERE agent = ?").run(agent);
   return result.changes > 0;
 }
+
+export function renameAgent(oldName: string, newName: string): boolean {
+  const db = getDb();
+  const existing = db.prepare("SELECT agent FROM agent_presence WHERE agent = ?").get(oldName);
+  if (!existing) return false;
+
+  const conflict = db.prepare("SELECT agent FROM agent_presence WHERE agent = ?").get(newName);
+  if (conflict) throw new Error(`Agent "${newName}" already exists`);
+
+  db.prepare("UPDATE agent_presence SET agent = ? WHERE agent = ?").run(newName, oldName);
+  return true;
+}

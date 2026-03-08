@@ -9,7 +9,7 @@ import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, get
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { getDb, getDbPath, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
-import { heartbeat, listAgents } from "../lib/presence.js";
+import { heartbeat, listAgents, removePresence, renameAgent } from "../lib/presence.js";
 import { App } from "./components/App.js";
 import pkg from "../../package.json";
 
@@ -1066,8 +1066,12 @@ program
   });
 
 // ---- agents ----
-program
+const agents = program
   .command("agents")
+  .description("Manage agents");
+
+agents
+  .command("list")
   .description("List all agents with their presence status")
   .option("--online", "Only show online agents")
   .option("--json", "Output as JSON")
@@ -1075,21 +1079,82 @@ program
     const agent = resolveIdentity();
     heartbeat(agent);
 
-    const agents = listAgents({ online_only: opts.online });
+    const agentsList = listAgents({ online_only: opts.online });
 
     if (opts.json) {
-      console.log(JSON.stringify(agents, null, 2));
+      console.log(JSON.stringify(agentsList, null, 2));
     } else {
-      if (agents.length === 0) {
+      if (agentsList.length === 0) {
         console.log(chalk.dim("No agents found."));
       } else {
-        for (const a of agents) {
+        for (const a of agentsList) {
           const status = a.online ? chalk.green("online") : chalk.dim("offline");
           const lastSeen = chalk.dim(a.last_seen_at.slice(0, 19));
           const agentName = a.agent === agent ? chalk.cyan(`${a.agent} (you)`) : chalk.cyan(a.agent);
           console.log(`  ${agentName}  ${status}  ${chalk.dim(a.status)}  ${lastSeen}`);
         }
       }
+    }
+    closeDb();
+  });
+
+agents
+  .command("remove")
+  .description("Remove an agent from the presence list")
+  .argument("<name>", "Agent name to remove")
+  .option("--json", "Output as JSON")
+  .action((name, opts) => {
+    const agentName = typeof name === "string" ? name.trim() : "";
+    if (!agentName) {
+      console.error(chalk.red("Agent name cannot be empty."));
+      process.exit(1);
+    }
+
+    const removed = removePresence(agentName);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ agent: agentName, removed }));
+    } else {
+      if (removed) {
+        console.log(chalk.green(`Agent "${agentName}" removed.`));
+      } else {
+        console.error(chalk.red(`Agent "${agentName}" not found.`));
+        process.exit(1);
+      }
+    }
+    closeDb();
+  });
+
+agents
+  .command("rename")
+  .description("Rename an agent in the presence list")
+  .argument("<old-name>", "Current agent name")
+  .argument("<new-name>", "New agent name")
+  .option("--json", "Output as JSON")
+  .action((oldName, newName, opts) => {
+    const old = typeof oldName === "string" ? oldName.trim() : "";
+    const renamed = typeof newName === "string" ? newName.trim() : "";
+
+    if (!old || !renamed) {
+      console.error(chalk.red("Both old and new names are required."));
+      process.exit(1);
+    }
+
+    try {
+      const ok = renameAgent(old, renamed);
+      if (!ok) {
+        console.error(chalk.red(`Agent "${old}" not found.`));
+        process.exit(1);
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify({ old_name: old, new_name: renamed, renamed: true }));
+      } else {
+        console.log(chalk.green(`Agent "${old}" renamed to "${renamed}".`));
+      }
+    } catch (e: any) {
+      console.error(chalk.red(e.message));
+      process.exit(1);
     }
     closeDb();
   });

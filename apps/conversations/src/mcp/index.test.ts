@@ -385,3 +385,87 @@ describe("read-only tools work without from", () => {
     expect(Array.isArray(agents)).toBe(true);
   });
 });
+
+// ---- remove_agent ----
+
+describe("remove_agent", () => {
+  test("removes an agent by name", async () => {
+    // First register via heartbeat
+    await client.callTool({
+      name: "heartbeat",
+      arguments: { from: "to-remove" },
+    });
+    const result = await client.callTool({
+      name: "remove_agent",
+      arguments: { agent: "to-remove" },
+    });
+    const data = parseResult(result as any) as any;
+    expect(data.removed).toBe(true);
+    expect(data.agent).toBe("to-remove");
+  });
+
+  test("returns error for nonexistent agent", async () => {
+    const result = await client.callTool({
+      name: "remove_agent",
+      arguments: { agent: "ghost-agent-xyz" },
+    });
+    expect((result as any).isError).toBe(true);
+  });
+
+  test("removes self when no agent specified", async () => {
+    await client.callTool({
+      name: "heartbeat",
+      arguments: { from: "self-remover" },
+    });
+    const result = await client.callTool({
+      name: "remove_agent",
+      arguments: { from: "self-remover" },
+    });
+    const data = parseResult(result as any) as any;
+    expect(data.removed).toBe(true);
+    expect(data.agent).toBe("self-remover");
+  });
+});
+
+// ---- rename_agent ----
+
+describe("rename_agent", () => {
+  test("renames an agent", async () => {
+    await client.callTool({
+      name: "heartbeat",
+      arguments: { from: "old-name-mcp" },
+    });
+    const result = await client.callTool({
+      name: "rename_agent",
+      arguments: { from: "old-name-mcp", new_name: "new-name-mcp" },
+    });
+    const data = parseResult(result as any) as any;
+    expect(data.renamed).toBe(true);
+    expect(data.old_name).toBe("old-name-mcp");
+    expect(data.new_name).toBe("new-name-mcp");
+  });
+
+  test("returns error when agent not found", async () => {
+    const result = await client.callTool({
+      name: "rename_agent",
+      arguments: { from: "nonexistent-rename", new_name: "whatever" },
+    });
+    expect((result as any).isError).toBe(true);
+  });
+
+  test("returns error when target name already exists", async () => {
+    await client.callTool({
+      name: "heartbeat",
+      arguments: { from: "rename-src" },
+    });
+    await client.callTool({
+      name: "heartbeat",
+      arguments: { from: "rename-dst" },
+    });
+    const result = await client.callTool({
+      name: "rename_agent",
+      arguments: { from: "rename-src", new_name: "rename-dst" },
+    });
+    expect((result as any).isError).toBe(true);
+  });
+});

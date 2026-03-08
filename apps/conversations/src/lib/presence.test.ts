@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { heartbeat, getPresence, listAgents, removePresence } from "./presence";
+import { heartbeat, getPresence, listAgents, removePresence, renameAgent } from "./presence";
 import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -151,5 +151,35 @@ describe("removePresence", () => {
   test("returns false for nonexistent agent", () => {
     const removed = removePresence("nonexistent");
     expect(removed).toBe(false);
+  });
+});
+
+describe("renameAgent", () => {
+  test("renames agent and returns true", () => {
+    heartbeat("old-name");
+    const renamed = renameAgent("old-name", "new-name");
+    expect(renamed).toBe(true);
+    expect(getPresence("old-name")).toBeNull();
+    expect(getPresence("new-name")).toBeTruthy();
+    expect(getPresence("new-name")!.agent).toBe("new-name");
+  });
+
+  test("preserves status and metadata after rename", () => {
+    heartbeat("rename-me", "busy", { task: "testing" });
+    renameAgent("rename-me", "renamed");
+    const p = getPresence("renamed");
+    expect(p!.status).toBe("busy");
+    expect(p!.metadata).toEqual({ task: "testing" });
+  });
+
+  test("returns false for nonexistent agent", () => {
+    const renamed = renameAgent("nonexistent", "whatever");
+    expect(renamed).toBe(false);
+  });
+
+  test("throws when target name already exists", () => {
+    heartbeat("agent-a");
+    heartbeat("agent-b");
+    expect(() => renameAgent("agent-a", "agent-b")).toThrow('Agent "agent-b" already exists');
   });
 });
