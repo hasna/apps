@@ -1,13 +1,56 @@
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { join, dirname } from "path";
+import { homedir } from "os";
+import { AGENT_NAMES } from "./names.js";
+
+const AGENT_ID_FILE = join(homedir(), ".conversations", "agent-id");
+
+let cachedAutoName: string | null = null;
+
+/**
+ * Get or create a persistent auto-generated agent name.
+ * Stored in ~/.conversations/agent-id so the same installation
+ * always gets the same name.
+ */
+export function getAutoName(): string {
+  if (cachedAutoName) return cachedAutoName;
+
+  // Try to read existing name
+  try {
+    const name = readFileSync(AGENT_ID_FILE, "utf-8").trim();
+    if (name) {
+      cachedAutoName = name;
+      return name;
+    }
+  } catch {
+    // File doesn't exist yet
+  }
+
+  // Pick a random name from the pool
+  const name = AGENT_NAMES[Math.floor(Math.random() * AGENT_NAMES.length)];
+  cachedAutoName = name;
+
+  // Persist it
+  try {
+    mkdirSync(dirname(AGENT_ID_FILE), { recursive: true });
+    writeFileSync(AGENT_ID_FILE, name + "\n", "utf-8");
+  } catch {
+    // Non-fatal: name works for this session even if we can't persist
+  }
+
+  return name;
+}
+
 /**
  * Resolve agent identity.
- * Priority: explicit flag → CONVERSATIONS_AGENT_ID env → "user" fallback
+ * Priority: explicit flag → CONVERSATIONS_AGENT_ID env → auto-generated persistent name
  */
 export function resolveIdentity(explicit?: string): string {
   const explicitValue = explicit?.trim();
   if (explicitValue) return explicitValue;
   const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
   if (envValue) return envValue;
-  return "user";
+  return getAutoName();
 }
 
 /**
@@ -22,4 +65,11 @@ export function requireIdentity(explicit?: string): string {
   throw new Error(
     "Agent identity required. Set CONVERSATIONS_AGENT_ID env var or pass --from flag."
   );
+}
+
+/**
+ * Reset the cached auto name (for testing).
+ */
+export function _resetAutoName(): void {
+  cachedAutoName = null;
 }
