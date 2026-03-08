@@ -1,5 +1,5 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { MessageSquareIcon, MessagesSquareIcon, HashIcon, MailOpenIcon } from "lucide-react";
+import { MessageSquareIcon, MessagesSquareIcon, HashIcon, FolderIcon, MailOpenIcon } from "lucide-react";
 import type { DashboardStatus } from "@/types";
 
 interface StatsCardsProps {
@@ -8,7 +8,7 @@ interface StatsCardsProps {
 
 export function StatsCards({ status }: StatsCardsProps) {
   return (
-    <div className="grid gap-4 md:grid-cols-4">
+    <div className="grid gap-4 md:grid-cols-5">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -37,11 +37,23 @@ export function StatsCards({ status }: StatsCardsProps) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <HashIcon className="size-4" />
-            Channels
+            Spaces
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-3xl font-bold">{status?.total_channels ?? "—"}</div>
+          <div className="text-3xl font-bold">{status?.total_spaces ?? "—"}</div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <FolderIcon className="size-4" />
+            Projects
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-3xl font-bold">{status?.total_projects ?? "—"}</div>
         </CardContent>
       </Card>
 

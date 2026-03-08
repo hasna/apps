@@ -7,10 +7,12 @@
  *   conversations dashboard          # Start dashboard server
  */
 
-import { readMessages, sendMessage, markRead } from "../lib/messages.js";
+import { readMessages, sendMessage, markRead, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages } from "../lib/messages.js";
 import { listSessions, getSession } from "../lib/sessions.js";
-import { listChannels, getChannel, createChannel, joinChannel, leaveChannel, getChannelMembers } from "../lib/channels.js";
+import { listSpaces, getSpace, createSpace, updateSpace, archiveSpace, unarchiveSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
+import { listProjects, getProject, getProjectByName, createProject, updateProject, deleteProject } from "../lib/projects.js";
 import { getDb, getDbPath } from "../lib/db.js";
+import { listAgents } from "../lib/presence.js";
 import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
 
@@ -50,13 +52,15 @@ function getStatus() {
   const totalMessages = (db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number }).count;
   const totalSessions = (db.prepare("SELECT COUNT(DISTINCT session_id) as count FROM messages").get() as { count: number }).count;
   const totalUnread = (db.prepare("SELECT COUNT(*) as count FROM messages WHERE read_at IS NULL").get() as { count: number }).count;
-  const totalChannels = (db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number }).count;
+  const totalSpaces = (db.prepare("SELECT COUNT(*) as count FROM spaces").get() as { count: number }).count;
+  const totalProjects = (db.prepare("SELECT COUNT(*) as count FROM projects").get() as { count: number }).count;
 
   return {
     db_path: dbPath,
     total_messages: totalMessages,
     total_sessions: totalSessions,
-    total_channels: totalChannels,
+    total_spaces: totalSpaces,
+    total_projects: totalProjects,
     unread_messages: totalUnread,
   };
 }
@@ -106,10 +110,10 @@ export function startDashboardServer(port = 3456, host?: string) {
         if (!Number.isFinite(limit) || limit <= 0) limit = 50;
         if (limit > 500) limit = 500;
         const session = url.searchParams.get("session") || undefined;
-        const channel = url.searchParams.get("channel") || undefined;
+        const space = url.searchParams.get("space") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const messages = readMessages({ session_id: session, channel, from, to, limit, order: "desc" });
+        const messages = readMessages({ session_id: session, space, from, to, limit, order: "desc" });
         // Return newest first for the dashboard
         return jsonResponse(messages);
       }
@@ -120,11 +124,11 @@ export function startDashboardServer(port = 3456, host?: string) {
         }
         try {
           const text = await req.text();
-          const body = JSON.parse(text) as { from?: string; to?: string; content?: string; channel?: string; priority?: string };
+          const body = JSON.parse(text) as { from?: string; to?: string; content?: string; space?: string; priority?: string };
           const from = typeof body.from === "string" ? body.from.trim() : "";
           const to = typeof body.to === "string" ? body.to.trim() : "";
           const content = typeof body.content === "string" ? body.content.trim() : "";
-          const channel = typeof body.channel === "string" ? body.channel.trim() : undefined;
+          const space = typeof body.space === "string" ? body.space.trim() : undefined;
           const priority = typeof body.priority === "string" ? body.priority.trim().toLowerCase() : undefined;
 
           if (!from || !to || !content) {
@@ -137,7 +141,7 @@ export function startDashboardServer(port = 3456, host?: string) {
             from,
             to,
             content,
-            channel,
+            space,
             priority: priority as any,
           });
           return jsonResponse(msg);
@@ -146,33 +150,285 @@ export function startDashboardServer(port = 3456, host?: string) {
         }
       }
 
+      if (path === "/api/messages/search" && req.method === "GET") {
+        const q = url.searchParams.get("q") || "";
+        if (!q.trim()) {
+          return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
+        }
+        const rawLimit = url.searchParams.get("limit");
+        let limit = parseInt(rawLimit || "50", 10);
+        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+        if (limit > 500) limit = 500;
+        const space = url.searchParams.get("space") || undefined;
+        const from = url.searchParams.get("from") || undefined;
+        const to = url.searchParams.get("to") || undefined;
+        const messages = searchMessages({ query: q.trim(), space, from, to, limit });
+        return jsonResponse(messages);
+      }
+
+      if (path === "/api/export" && req.method === "GET") {
+        const space = url.searchParams.get("space") || undefined;
+        const session = url.searchParams.get("session") || undefined;
+        const from = url.searchParams.get("from") || undefined;
+        const since = url.searchParams.get("since") || undefined;
+        const until = url.searchParams.get("until") || undefined;
+        const format = url.searchParams.get("format") === "csv" ? "csv" : "json";
+        const result = exportMessages({ space, session_id: session, from, since, until, format });
+
+        if (format === "csv") {
+          return new Response(result, {
+            status: 200,
+            headers: securityHeaders({
+              "Content-Type": "text/csv; charset=utf-8",
+              "Content-Disposition": "attachment; filename=\"messages.csv\"",
+              "Cache-Control": "no-store",
+            }),
+          });
+        }
+        return jsonResponse(JSON.parse(result));
+      }
+
+      if (path === "/api/messages/pinned" && req.method === "GET") {
+        const space = url.searchParams.get("space") || undefined;
+        const session_id = url.searchParams.get("session_id") || undefined;
+        const rawLimit = url.searchParams.get("limit");
+        let limit: number | undefined;
+        if (rawLimit) {
+          limit = parseInt(rawLimit, 10);
+          if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+          if (limit > 500) limit = 500;
+        }
+        const messages = getPinnedMessages({ space, session_id, limit });
+        return jsonResponse(messages);
+      }
+
+      // Message pin/unpin by ID: /api/messages/:id/pin
+      const pinMatch = path.match(/^\/api\/messages\/(\d+)\/pin$/);
+      if (pinMatch) {
+        const messageId = parseInt(pinMatch[1], 10);
+        if (req.method === "POST") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          const msg = pinMessage(messageId);
+          if (!msg) return jsonResponse({ error: "Message not found" }, 404);
+          return jsonResponse(msg);
+        }
+        if (req.method === "DELETE") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          const msg = unpinMessage(messageId);
+          if (!msg) return jsonResponse({ error: "Message not found" }, 404);
+          return jsonResponse(msg);
+        }
+      }
+
+      // Message delete/edit by ID: /api/messages/:id
+      const messageMatch = path.match(/^\/api\/messages\/(\d+)$/);
+      if (messageMatch) {
+        const messageId = parseInt(messageMatch[1], 10);
+        if (req.method === "DELETE") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          const from = url.searchParams.get("from") || "";
+          if (!from) {
+            return jsonResponse({ error: "'from' query parameter is required" }, 400);
+          }
+          const deleted = deleteMessage(messageId, from);
+          if (!deleted) return jsonResponse({ error: "Message not found or not your message" }, 404);
+          return jsonResponse({ id: messageId, deleted: true });
+        }
+        if (req.method === "PUT") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          try {
+            const text = await req.text();
+            const body = JSON.parse(text) as { content?: string; from?: string };
+            const content = typeof body.content === "string" ? body.content.trim() : "";
+            const from = typeof body.from === "string" ? body.from.trim() : "";
+            if (!content || !from) {
+              return jsonResponse({ error: "content and from are required" }, 400);
+            }
+            const msg = editMessage(messageId, from, content);
+            if (!msg) return jsonResponse({ error: "Message not found or not your message" }, 404);
+            return jsonResponse(msg);
+          } catch (e: any) {
+            return jsonResponse({ error: e.message }, 400);
+          }
+        }
+      }
+
       if (path === "/api/sessions") {
         const agent = url.searchParams.get("agent") || undefined;
         return jsonResponse(listSessions(agent));
       }
 
-      if (path === "/api/channels" && req.method === "GET") {
-        return jsonResponse(listChannels());
+      if (path === "/api/spaces" && req.method === "GET") {
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const includeArchived = url.searchParams.get("include_archived") === "true";
+        const listOpts: { project_id?: string; include_archived?: boolean } = {};
+        if (projectId) listOpts.project_id = projectId;
+        if (includeArchived) listOpts.include_archived = true;
+        return jsonResponse(listSpaces(Object.keys(listOpts).length > 0 ? listOpts : undefined));
       }
 
-      if (path === "/api/channels" && req.method === "POST") {
+      if (path === "/api/spaces" && req.method === "POST") {
         if (!isSameOrigin(req)) {
           return jsonResponse({ error: "Invalid origin" }, 403);
         }
         try {
           const text = await req.text();
-          const body = JSON.parse(text) as { name?: string; created_by?: string; description?: string };
+          const body = JSON.parse(text) as { name?: string; created_by?: string; description?: string; parent_id?: string; project_id?: string };
           const name = typeof body.name === "string" ? body.name.trim() : "";
           const createdBy = typeof body.created_by === "string" ? body.created_by.trim() : "";
           const description = typeof body.description === "string" ? body.description.trim() : undefined;
+          const parent_id = typeof body.parent_id === "string" ? body.parent_id.trim() : undefined;
+          const project_id = typeof body.project_id === "string" ? body.project_id.trim() : undefined;
           if (!name || !createdBy) {
             return jsonResponse({ error: "name and created_by are required" }, 400);
           }
-          const ch = createChannel(name, createdBy, description);
-          return jsonResponse(ch);
+          const sp = createSpace(name, createdBy, { description, parent_id, project_id });
+          return jsonResponse(sp);
         } catch (e: any) {
           return jsonResponse({ error: e.message }, 400);
         }
+      }
+
+      // Space update/archive/unarchive by name
+      const spaceArchiveMatch = path.match(/^\/api\/spaces\/([^/]+)\/archive$/);
+      if (spaceArchiveMatch && req.method === "POST") {
+        if (!isSameOrigin(req)) {
+          return jsonResponse({ error: "Invalid origin" }, 403);
+        }
+        try {
+          const sp = archiveSpace(decodeURIComponent(spaceArchiveMatch[1]));
+          return jsonResponse(sp);
+        } catch (e: any) {
+          return jsonResponse({ error: e.message }, 400);
+        }
+      }
+
+      const spaceUnarchiveMatch = path.match(/^\/api\/spaces\/([^/]+)\/unarchive$/);
+      if (spaceUnarchiveMatch && req.method === "POST") {
+        if (!isSameOrigin(req)) {
+          return jsonResponse({ error: "Invalid origin" }, 403);
+        }
+        try {
+          const sp = unarchiveSpace(decodeURIComponent(spaceUnarchiveMatch[1]));
+          return jsonResponse(sp);
+        } catch (e: any) {
+          return jsonResponse({ error: e.message }, 400);
+        }
+      }
+
+      const spaceMatch = path.match(/^\/api\/spaces\/([^/]+)$/);
+      if (spaceMatch) {
+        const spaceName = decodeURIComponent(spaceMatch[1]);
+        if (req.method === "GET") {
+          const sp = getSpace(spaceName);
+          if (!sp) return jsonResponse({ error: "Space not found" }, 404);
+          return jsonResponse(sp);
+        }
+        if (req.method === "PUT") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          try {
+            const text = await req.text();
+            const body = JSON.parse(text) as { description?: string; parent_id?: string | null; project_id?: string | null };
+            const updates: { description?: string; parent_id?: string | null; project_id?: string | null } = {};
+            if (body.description !== undefined) updates.description = body.description;
+            if (body.parent_id !== undefined) updates.parent_id = body.parent_id;
+            if (body.project_id !== undefined) updates.project_id = body.project_id;
+            const sp = updateSpace(spaceName, updates);
+            return jsonResponse(sp);
+          } catch (e: any) {
+            return jsonResponse({ error: e.message }, 400);
+          }
+        }
+      }
+
+      if (path === "/api/projects" && req.method === "GET") {
+        const status = url.searchParams.get("status") as "active" | "archived" | null;
+        return jsonResponse(listProjects(status ? { status } : undefined));
+      }
+
+      if (path === "/api/projects" && req.method === "POST") {
+        if (!isSameOrigin(req)) {
+          return jsonResponse({ error: "Invalid origin" }, 403);
+        }
+        try {
+          const text = await req.text();
+          const body = JSON.parse(text) as {
+            name?: string; created_by?: string; description?: string;
+            path?: string; repository?: string; tags?: string[]; metadata?: Record<string, unknown>;
+            settings?: Record<string, unknown>;
+          };
+          const name = typeof body.name === "string" ? body.name.trim() : "";
+          const createdBy = typeof body.created_by === "string" ? body.created_by.trim() : "";
+          if (!name || !createdBy) {
+            return jsonResponse({ error: "name and created_by are required" }, 400);
+          }
+          const project = createProject({
+            name,
+            created_by: createdBy,
+            description: body.description,
+            path: body.path,
+            repository: body.repository,
+            tags: body.tags,
+            metadata: body.metadata,
+            settings: body.settings,
+          });
+          return jsonResponse(project);
+        } catch (e: any) {
+          return jsonResponse({ error: e.message }, 400);
+        }
+      }
+
+      // Project update/delete by ID
+      const projectMatch = path.match(/^\/api\/projects\/([^/]+)$/);
+      if (projectMatch) {
+        const projectId = projectMatch[1];
+        if (req.method === "GET") {
+          let project = getProject(projectId);
+          if (!project) project = getProjectByName(projectId);
+          if (!project) return jsonResponse({ error: "Project not found" }, 404);
+          return jsonResponse(project);
+        }
+        if (req.method === "PUT") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          try {
+            const text = await req.text();
+            const body = JSON.parse(text);
+            const project = updateProject(projectId, body);
+            return jsonResponse(project);
+          } catch (e: any) {
+            return jsonResponse({ error: e.message }, 400);
+          }
+        }
+        if (req.method === "DELETE") {
+          if (!isSameOrigin(req)) {
+            return jsonResponse({ error: "Invalid origin" }, 403);
+          }
+          try {
+            const deleted = deleteProject(projectId);
+            if (!deleted) return jsonResponse({ error: "Project not found" }, 404);
+            return jsonResponse({ id: projectId, deleted: true });
+          } catch (e: any) {
+            return jsonResponse({ error: e.message }, 400);
+          }
+        }
+      }
+
+      if (path === "/api/agents" && req.method === "GET") {
+        const onlineOnly = url.searchParams.get("online_only") === "true";
+        const agents = listAgents({ online_only: onlineOnly });
+        return jsonResponse(agents);
       }
 
       if (path === "/api/version" && req.method === "GET") {

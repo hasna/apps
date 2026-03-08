@@ -5,7 +5,7 @@ import { SessionList } from "./SessionList.js";
 import { ChatView } from "./ChatView.js";
 import type { Session } from "../../types.js";
 
-type View = "sessions" | "chat" | "channel" | "new";
+type View = "sessions" | "chat" | "space" | "new";
 
 interface AppProps {
   agent: string;
@@ -15,7 +15,7 @@ export function App({ agent }: AppProps) {
   const { exit } = useApp();
   const [view, setView] = useState<View>("sessions");
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
-  const [currentChannel, setCurrentChannel] = useState<string | null>(null);
+  const [currentSpace, setCurrentSpace] = useState<string | null>(null);
   const [newTo, setNewTo] = useState("");
 
   useInput((input, key) => {
@@ -33,9 +33,9 @@ export function App({ agent }: AppProps) {
     setView("chat");
   };
 
-  const handleSelectChannel = (channelName: string) => {
-    setCurrentChannel(channelName);
-    setView("channel");
+  const handleSelectSpace = (spaceName: string) => {
+    setCurrentSpace(spaceName);
+    setView("space");
   };
 
   const handleNewConversation = () => {
@@ -57,7 +57,7 @@ export function App({ agent }: AppProps) {
 
   const handleBack = () => {
     setCurrentSession(null);
-    setCurrentChannel(null);
+    setCurrentSpace(null);
     setView("sessions");
   };
 
@@ -79,11 +79,11 @@ export function App({ agent }: AppProps) {
     );
   }
 
-  if (view === "channel" && currentChannel) {
+  if (view === "space" && currentSpace) {
     return (
       <ChatView
         agent={agent}
-        channelName={currentChannel}
+        spaceName={currentSpace}
         onBack={handleBack}
       />
     );
@@ -105,7 +105,7 @@ export function App({ agent }: AppProps) {
     <SessionList
       agent={agent}
       onSelect={handleSelectSession}
-      onSelectChannel={handleSelectChannel}
+      onSelectSpace={handleSelectSpace}
       onNew={handleNewConversation}
     />
   );

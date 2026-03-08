@@ -38,8 +38,9 @@ describe("db", () => {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
     const tableNames = tables.map((t) => t.name);
     expect(tableNames).toContain("messages");
-    expect(tableNames).toContain("channels");
-    expect(tableNames).toContain("channel_members");
+    expect(tableNames).toContain("spaces");
+    expect(tableNames).toContain("space_members");
+    expect(tableNames).toContain("projects");
   });
 
   test("getDb returns singleton", () => {
@@ -61,7 +62,11 @@ describe("db", () => {
     expect(names).toContain("idx_messages_session");
     expect(names).toContain("idx_messages_to");
     expect(names).toContain("idx_messages_created");
-    expect(names).toContain("idx_messages_channel");
+    expect(names).toContain("idx_messages_space");
+    expect(names).toContain("idx_projects_name");
+    expect(names).toContain("idx_projects_status");
+    expect(names).toContain("idx_spaces_parent");
+    expect(names).toContain("idx_spaces_project");
   });
 
   test("closeDb closes and resets singleton", () => {
@@ -77,10 +82,10 @@ describe("db", () => {
     closeDb(); // Should not throw
   });
 
-  test("messages table has channel column", () => {
+  test("messages table has space column", () => {
     const db = getDb();
     const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     const colNames = cols.map((c) => c.name);
-    expect(colNames).toContain("channel");
+    expect(colNames).toContain("space");
   });
 });

@@ -1,24 +1,33 @@
 import * as React from "react";
-import { RefreshCwIcon, SendIcon, HashIcon, MessageSquareIcon, DownloadIcon } from "lucide-react";
+import { RefreshCwIcon, SendIcon, HashIcon, MessageSquareIcon, FolderIcon, DownloadIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { MessagesTable } from "@/components/messages-table";
-import { ChannelsList } from "@/components/channels-list";
+import { SpacesList } from "@/components/spaces-list";
+import { ProjectsList } from "@/components/projects-list";
+import { ChatPanel } from "@/components/chat-panel";
 import { SendDialog } from "@/components/send-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
 import { Button } from "@/components/ui/button";
-import type { Message, Channel, DashboardStatus } from "@/types";
+import type { Message, Space, Project, DashboardStatus } from "@/types";
 
-type Tab = "messages" | "channels";
+type Tab = "messages" | "spaces" | "projects";
 
 export function App() {
   const [status, setStatus] = React.useState<DashboardStatus | null>(null);
   const [messages, setMessages] = React.useState<Message[]>([]);
-  const [channels, setChannels] = React.useState<Channel[]>([]);
+  const [spaces, setSpaces] = React.useState<Space[]>([]);
+  const [projects, setProjects] = React.useState<Project[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [tab, setTab] = React.useState<Tab>("messages");
   const [sendOpen, setSendOpen] = React.useState(false);
   const [updateOpen, setUpdateOpen] = React.useState(false);
+  const [chatOpen, setChatOpen] = React.useState(false);
+  const [chatSpace, setChatSpace] = React.useState<string | undefined>();
+  const [chatSession, setChatSession] = React.useState<string | undefined>();
+  const [chatTitle, setChatTitle] = React.useState("");
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [searchResults, setSearchResults] = React.useState<Message[] | null>(null);
   const [versionInfo, setVersionInfo] = React.useState<{
     current: string;
     latest: string;
@@ -70,14 +79,16 @@ export function App() {
     if (loadInFlight.current) return;
     loadInFlight.current = true;
     try {
-      const [statusRes, messagesRes, channelsRes] = await Promise.all([
+      const [statusRes, messagesRes, spacesRes, projectsRes] = await Promise.all([
         fetchJson<DashboardStatus>("/api/status"),
         fetchJson<Message[]>("/api/messages?limit=50"),
-        fetchJson<Channel[]>("/api/channels"),
+        fetchJson<Space[]>("/api/spaces"),
+        fetchJson<Project[]>("/api/projects"),
       ]);
       setStatus(statusRes);
       setMessages(messagesRes);
-      setChannels(channelsRes);
+      setSpaces(spacesRes);
+      setProjects(projectsRes);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load data";
       showToast(message, "error");
@@ -86,6 +97,30 @@ export function App() {
       setLoading(false);
     }
   }, [fetchJson, showToast]);
+
+  const handleSearch = React.useCallback(async (query: string) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setSearchResults(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/messages/search?q=${encodeURIComponent(query)}&limit=50`);
+      if (res.ok) {
+        const data = await res.json() as Message[];
+        setSearchResults(data);
+      }
+    } catch {
+      setSearchResults(null);
+    }
+  }, []);
+
+  const openChat = React.useCallback((opts: { spaceName?: string; sessionId?: string; title: string }) => {
+    setChatSpace(opts.spaceName);
+    setChatSession(opts.sessionId);
+    setChatTitle(opts.title);
+    setChatOpen(true);
+  }, []);
 
   React.useEffect(() => {
     loadData();
@@ -178,25 +213,66 @@ export function App() {
             Messages
           </button>
           <button
-            onClick={() => setTab("channels")}
+            onClick={() => setTab("spaces")}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "channels"
+              tab === "spaces"
                 ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
             <HashIcon className="size-4" />
-            Channels
-            {channels.length > 0 && (
+            Spaces
+            {spaces.length > 0 && (
               <span className="text-xs text-muted-foreground">
-                {channels.length}
+                {spaces.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setTab("projects")}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === "projects"
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <FolderIcon className="size-4" />
+            Projects
+            {projects.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {projects.length}
               </span>
             )}
           </button>
         </div>
 
-        {tab === "messages" && <MessagesTable messages={messages} />}
-        {tab === "channels" && <ChannelsList channels={channels} />}
+        {tab === "messages" && (
+          <>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  placeholder="Search messages..."
+                  className="w-full rounded-lg border px-4 py-2 text-sm bg-background pl-9"
+                />
+                <svg className="absolute left-3 top-2.5 size-4 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              </div>
+              {searchQuery && (
+                <button
+                  onClick={() => { setSearchQuery(""); setSearchResults(null); }}
+                  className="text-sm text-muted-foreground hover:text-foreground"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <MessagesTable messages={searchResults ?? messages} />
+          </>
+        )}
+        {tab === "spaces" && <SpacesList spaces={spaces} onSelectSpace={(name) => openChat({ spaceName: name, title: `#${name}` })} />}
+        {tab === "projects" && <ProjectsList projects={projects} />}
       </main>
 
       {/* Send Dialog */}
@@ -232,6 +308,15 @@ export function App() {
           }}
         />
       )}
+
+      {/* Chat Panel */}
+      <ChatPanel
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        spaceName={chatSpace}
+        sessionId={chatSession}
+        title={chatTitle}
+      />
 
       {/* Toast */}
       {toast && (

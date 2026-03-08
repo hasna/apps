@@ -5,7 +5,7 @@ export interface Message {
   session_id: string;
   from_agent: string;
   to_agent: string;
-  channel: string | null;
+  space: string | null;
   content: string;
   priority: Priority;
   working_dir: string | null;
@@ -14,6 +14,8 @@ export interface Message {
   metadata: Record<string, unknown> | null;
   created_at: string;
   read_at: string | null;
+  edited_at: string | null;
+  pinned_at: string | null;
 }
 
 export interface Session {
@@ -24,22 +26,44 @@ export interface Session {
   unread_count: number;
 }
 
-export interface Channel {
+export interface Space {
   name: string;
   description: string | null;
+  parent_id: string | null;
+  project_id: string | null;
   created_by: string;
   created_at: string;
+  archived_at: string | null;
 }
 
-export interface ChannelMember {
-  channel: string;
+export interface SpaceMember {
+  space: string;
   agent: string;
   joined_at: string;
 }
 
-export interface ChannelInfo extends Channel {
+export interface SpaceInfo extends Space {
   member_count: number;
   message_count: number;
+  children?: SpaceInfo[];
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  path: string | null;
+  created_by: string;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
+  tags: string[];
+  status: "active" | "archived";
+  repository: string | null;
+  settings: Record<string, unknown> | null;
+}
+
+export interface ProjectInfo extends Project {
+  space_count: number;
 }
 
 export interface SendMessageOptions {
@@ -47,7 +71,7 @@ export interface SendMessageOptions {
   to: string;
   content: string;
   session_id?: string;
-  channel?: string;
+  space?: string;
   priority?: Priority;
   working_dir?: string;
   repository?: string;
@@ -59,10 +83,26 @@ export interface ReadMessagesOptions {
   session_id?: string;
   from?: string;
   to?: string;
-  channel?: string;
+  space?: string;
   since?: string;
   since_id?: number;
   limit?: number;
   unread_only?: boolean;
   order?: "asc" | "desc";
+}
+
+export interface SearchMessagesOptions {
+  query: string;
+  space?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+export interface AgentPresence {
+  agent: string;
+  status: string;
+  last_seen_at: string;
+  online: boolean;
+  metadata: Record<string, unknown> | null;
 }

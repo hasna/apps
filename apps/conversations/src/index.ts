@@ -4,7 +4,7 @@
  * Send and receive messages between AI agents on the same machine:
  *   conversations send --to claude-code "hello from codex"
  *   conversations read --to codex --json
- *   conversations channel send deployments "v1.2 deployed"
+ *   conversations space send deployments "v1.2 deployed"
  *
  * Or use the interactive TUI:
  *   conversations
@@ -15,8 +15,16 @@ export {
   readMessages,
   markRead,
   markSessionRead,
-  markChannelRead,
+  markSpaceRead,
+  markAllRead,
   getMessageById,
+  searchMessages,
+  exportMessages,
+  deleteMessage,
+  editMessage,
+  pinMessage,
+  unpinMessage,
+  getPinnedMessages,
 } from "./lib/messages.js";
 
 export {
@@ -25,14 +33,27 @@ export {
 } from "./lib/sessions.js";
 
 export {
-  createChannel,
-  listChannels,
-  getChannel,
-  joinChannel,
-  leaveChannel,
-  getChannelMembers,
-  isChannelMember,
-} from "./lib/channels.js";
+  createSpace,
+  updateSpace,
+  archiveSpace,
+  unarchiveSpace,
+  listSpaces,
+  getSpace,
+  joinSpace,
+  leaveSpace,
+  getSpaceMembers,
+  isSpaceMember,
+  getSpaceDepth,
+} from "./lib/spaces.js";
+
+export {
+  createProject,
+  listProjects,
+  getProject,
+  getProjectByName,
+  updateProject,
+  deleteProject,
+} from "./lib/projects.js";
 
 export {
   getDb,
@@ -42,7 +63,7 @@ export {
 
 export {
   startPolling,
-  useChannelMessages,
+  useSpaceMessages,
 } from "./lib/poll.js";
 
 export {
@@ -50,13 +71,24 @@ export {
   requireIdentity,
 } from "./lib/identity.js";
 
+export {
+  heartbeat,
+  getPresence,
+  listAgents,
+  removePresence,
+} from "./lib/presence.js";
+
 export type {
   Message,
   Session,
-  Channel,
-  ChannelInfo,
-  ChannelMember,
+  Space,
+  SpaceInfo,
+  SpaceMember,
+  Project,
+  ProjectInfo,
   Priority,
   SendMessageOptions,
   ReadMessagesOptions,
+  SearchMessagesOptions,
+  AgentPresence,
 } from "./types.js";

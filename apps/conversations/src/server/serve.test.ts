@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { startDashboardServer } from "./serve";
 import { sendMessage } from "../lib/messages";
-import { createChannel, joinChannel } from "../lib/channels";
+import { createSpace, joinSpace } from "../lib/spaces";
+import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -34,7 +35,8 @@ describe("API /api/status", () => {
     expect(data.db_path).toBeTruthy();
     expect(typeof data.total_messages).toBe("number");
     expect(typeof data.total_sessions).toBe("number");
-    expect(typeof data.total_channels).toBe("number");
+    expect(typeof data.total_spaces).toBe("number");
+    expect(typeof data.total_projects).toBe("number");
     expect(typeof data.unread_messages).toBe("number");
   });
 });
@@ -105,34 +107,116 @@ describe("API /api/sessions", () => {
   });
 });
 
-describe("API /api/channels", () => {
-  test("GET returns channels array", async () => {
-    createChannel("api-test-ch", "tester", "Test channel");
-    const res = await fetch(`${base()}/api/channels`);
+describe("API /api/spaces", () => {
+  test("GET returns spaces array", async () => {
+    createSpace("api-test-sp", "tester", { description: "Test space" });
+    const res = await fetch(`${base()}/api/spaces`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
-    expect(data.some((ch: any) => ch.name === "api-test-ch")).toBe(true);
+    expect(data.some((sp: any) => sp.name === "api-test-sp")).toBe(true);
   });
 
-  test("POST creates a channel", async () => {
-    const res = await fetch(`${base()}/api/channels`, {
+  test("POST creates a space", async () => {
+    const res = await fetch(`${base()}/api/spaces`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "web-channel", created_by: "web-user", description: "Created via API" }),
+      body: JSON.stringify({ name: "web-space", created_by: "web-user", description: "Created via API" }),
     });
     expect(res.status).toBe(200);
-    const ch = await res.json() as any;
-    expect(ch.name).toBe("web-channel");
+    const sp = await res.json() as any;
+    expect(sp.name).toBe("web-space");
   });
 
   test("POST returns 400 on duplicate", async () => {
-    createChannel("dup-ch", "tester");
-    const res = await fetch(`${base()}/api/channels`, {
+    createSpace("dup-sp", "tester");
+    const res = await fetch(`${base()}/api/spaces`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "dup-ch", created_by: "tester" }),
+      body: JSON.stringify({ name: "dup-sp", created_by: "tester" }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("API /api/projects", () => {
+  test("GET returns projects array", async () => {
+    createProject({ name: "api-test-proj", created_by: "tester" });
+    const res = await fetch(`${base()}/api/projects`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data.some((p: any) => p.name === "api-test-proj")).toBe(true);
+  });
+
+  test("POST creates a project", async () => {
+    const res = await fetch(`${base()}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "web-project", created_by: "web-user", description: "Created via API" }),
+    });
+    expect(res.status).toBe(200);
+    const p = await res.json() as any;
+    expect(p.name).toBe("web-project");
+    expect(p.id).toBeTruthy();
+  });
+});
+
+describe("API /api/messages/search", () => {
+  test("returns matching messages", async () => {
+    sendMessage({ from: "search-agent", to: "other", content: "unique-search-term-xyz" });
+    sendMessage({ from: "search-agent", to: "other", content: "no match here" });
+    const res = await fetch(`${base()}/api/messages/search?q=unique-search-term-xyz`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data).toHaveLength(1);
+    expect(data[0].content).toBe("unique-search-term-xyz");
+  });
+
+  test("returns 400 when query is missing", async () => {
+    const res = await fetch(`${base()}/api/messages/search`);
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("returns 400 when query is empty", async () => {
+    const res = await fetch(`${base()}/api/messages/search?q=`);
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("respects limit param", async () => {
+    sendMessage({ from: "a", to: "b", content: "searchlimit-item-1" });
+    sendMessage({ from: "a", to: "b", content: "searchlimit-item-2" });
+    sendMessage({ from: "a", to: "b", content: "searchlimit-item-3" });
+    const res = await fetch(`${base()}/api/messages/search?q=searchlimit-item&limit=2`);
+    const data = await res.json() as any[];
+    expect(data).toHaveLength(2);
+  });
+
+  test("filters by from param", async () => {
+    sendMessage({ from: "search-sender-a", to: "b", content: "searchfrom-test" });
+    sendMessage({ from: "search-sender-b", to: "b", content: "searchfrom-test" });
+    const res = await fetch(`${base()}/api/messages/search?q=searchfrom-test&from=search-sender-a`);
+    const data = await res.json() as any[];
+    expect(data).toHaveLength(1);
+    expect(data[0].from_agent).toBe("search-sender-a");
+  });
+
+  test("filters by space param", async () => {
+    sendMessage({ from: "a", to: "search-sp", content: "searchspace-test", space: "search-sp" });
+    sendMessage({ from: "a", to: "b", content: "searchspace-test" });
+    const res = await fetch(`${base()}/api/messages/search?q=searchspace-test&space=search-sp`);
+    const data = await res.json() as any[];
+    expect(data).toHaveLength(1);
+    expect(data[0].space).toBe("search-sp");
+  });
+
+  test("returns empty array when no matches", async () => {
+    const res = await fetch(`${base()}/api/messages/search?q=absolutely-nothing-matches-this-9876`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data).toEqual([]);
   });
 });
 

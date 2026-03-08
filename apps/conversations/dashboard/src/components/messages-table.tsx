@@ -85,9 +85,9 @@ export function MessagesTable({ messages }: MessagesTableProps) {
                 <span className="font-medium">{msg.from_agent}</span>
               </TableCell>
               <TableCell>
-                {msg.channel ? (
+                {msg.space ? (
                   <Badge className="bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 border-0">
-                    #{msg.channel}
+                    #{msg.space}
                   </Badge>
                 ) : (
                   <span>{msg.to_agent}</span>
