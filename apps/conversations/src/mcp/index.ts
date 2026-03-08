@@ -18,9 +18,11 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat, listAgents } from "../lib/presence.js";
 
+import pkg from "../../package.json";
+
 export const server = new McpServer({
   name: "conversations",
-  version: "0.1.0",
+  version: pkg.version,
 });
 
 // ---- DM Tools ----

@@ -11,13 +11,14 @@ import { getDb, getDbPath, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat, listAgents } from "../lib/presence.js";
 import { App } from "./components/App.js";
+import pkg from "../../package.json";
 
 const program = new Command();
 
 program
   .name("conversations")
   .description("Real-time CLI messaging for AI agents")
-  .version("0.1.0");
+  .version(pkg.version);
 
 // ---- send ----
 program
