@@ -39,7 +39,7 @@ import {
 import { addComment } from "../db/comments.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
-import { getAgentTaskListId } from "../lib/config.js";
+import { getAgentTaskListId, loadConfig } from "../lib/config.js";
 import type { Project, Task, TaskStatus, TaskPriority } from "../types/index.js";
 
 function getPackageVersion(): string {
@@ -56,7 +56,12 @@ const program = new Command();
 // Helpers
 
 function handleError(e: unknown): never {
-  console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+  const globalOpts = program.opts();
+  if (globalOpts.json) {
+    console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+  } else {
+    console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+  }
   process.exit(1);
 }
 
@@ -64,7 +69,14 @@ function resolveTaskId(partialId: string): string {
   const db = getDatabase();
   const id = resolvePartialId(db, "tasks", partialId);
   if (!id) {
-    console.error(chalk.red(`Could not resolve task ID: ${partialId}`));
+    // Try to find similar
+    const similar = db.query("SELECT id FROM tasks WHERE id LIKE ? LIMIT 3").all(`%${partialId}%`) as { id: string }[];
+    if (similar.length > 0) {
+      console.error(chalk.red(`Could not resolve task ID: ${partialId}`));
+      console.error(chalk.dim(`Did you mean: ${similar.map(s => s.id.slice(0, 8)).join(", ")}?`));
+    } else {
+      console.error(chalk.red(`Could not resolve task ID: ${partialId}`));
+    }
     process.exit(1);
   }
   return id;
@@ -209,6 +221,9 @@ program
   .option("-a, --all", "Show all tasks (including completed/cancelled)")
   .option("--list <id>", "Filter by task list ID")
   .option("--task-list <id>", "Filter by task list ID (alias for --list)")
+  .option("--project-name <name>", "Filter by project name")
+  .option("--agent-name <name>", "Filter by agent name/assigned")
+  .option("--sort <field>", "Sort by: updated, created, priority, status")
   .action((opts) => {
     const globalOpts = program.opts();
     opts.tags = opts.tags || opts.tag;
@@ -236,8 +251,32 @@ program
     if (opts.priority) filter["priority"] = opts.priority;
     if (opts.assigned) filter["assigned_to"] = opts.assigned;
     if (opts.tags) filter["tags"] = opts.tags.split(",").map((t: string) => t.trim());
+    if (opts.projectName) {
+      const projects = listProjects();
+      const match = projects.find(p => p.name.toLowerCase().includes(opts.projectName.toLowerCase()));
+      if (match) {
+        filter["project_id"] = match.id;
+      } else {
+        console.error(chalk.red(`No project matching: ${opts.projectName}`));
+        process.exit(1);
+      }
+    }
+    if (opts.agentName) {
+      filter["assigned_to"] = opts.agentName;
+    }
 
     const tasks = listTasks(filter as any);
+
+    if (opts.sort) {
+      const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+      tasks.sort((a: Task, b: Task) => {
+        if (opts.sort === "updated") return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+        if (opts.sort === "created") return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        if (opts.sort === "priority") return (priorityOrder[a.priority] ?? 4) - (priorityOrder[b.priority] ?? 4);
+        if (opts.sort === "status") return a.status.localeCompare(b.status);
+        return 0;
+      });
+    }
 
     if (globalOpts.json) {
       output(tasks, true);
@@ -252,6 +291,32 @@ program
     console.log(chalk.bold(`${tasks.length} task(s):\n`));
     for (const t of tasks) {
       console.log(formatTaskLine(t));
+    }
+  });
+
+// count
+program
+  .command("count")
+  .description("Show task count by status")
+  .action(() => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts);
+    const all = listTasks({ project_id: projectId });
+    const counts: Record<string, number> = { total: all.length };
+    for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
+
+    if (globalOpts.json) {
+      output(counts, true);
+    } else {
+      const parts = [
+        `total: ${chalk.bold(String(counts.total))}`,
+        `pending: ${chalk.yellow(String(counts["pending"] || 0))}`,
+        `in_progress: ${chalk.blue(String(counts["in_progress"] || 0))}`,
+        `completed: ${chalk.green(String(counts["completed"] || 0))}`,
+        `failed: ${chalk.red(String(counts["failed"] || 0))}`,
+        `cancelled: ${chalk.gray(String(counts["cancelled"] || 0))}`,
+      ];
+      console.log(parts.join("  "));
     }
   });
 
@@ -487,6 +552,46 @@ program
     } else {
       console.error(chalk.red("Task not found."));
       process.exit(1);
+    }
+  });
+
+// bulk
+program
+  .command("bulk <action> <ids...>")
+  .description("Bulk operation on multiple tasks (done, start, delete)")
+  .action((action: string, ids: string[]) => {
+    const globalOpts = program.opts();
+    const results: { id: string; success: boolean; error?: string }[] = [];
+    for (const rawId of ids) {
+      try {
+        const resolvedId = resolveTaskId(rawId);
+        if (action === "done" || action === "complete") {
+          completeTask(resolvedId, globalOpts.agent);
+          results.push({ id: resolvedId, success: true });
+        } else if (action === "start") {
+          startTask(resolvedId, globalOpts.agent || "cli");
+          results.push({ id: resolvedId, success: true });
+        } else if (action === "delete") {
+          deleteTask(resolvedId);
+          results.push({ id: resolvedId, success: true });
+        } else {
+          console.error(chalk.red(`Unknown action: ${action}. Use: done, start, delete`));
+          process.exit(1);
+        }
+      } catch (e) {
+        results.push({ id: rawId, success: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    const succeeded = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+
+    if (globalOpts.json) {
+      output({ results, succeeded, failed }, true);
+    } else {
+      console.log(chalk.green(`${action}: ${succeeded} succeeded, ${failed} failed`));
+      for (const r of results.filter(r => !r.success)) {
+        console.log(chalk.red(`  ${r.id}: ${r.error}`));
+      }
     }
   });
 
@@ -1350,6 +1455,67 @@ program
     }
   });
 
+// config
+program
+  .command("config")
+  .description("View or update configuration")
+  .option("--get <key>", "Get a config value")
+  .option("--set <key=value>", "Set a config value (e.g. completion_guard.enabled=true)")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const configPath = join(process.env["HOME"] || "~", ".todos", "config.json");
+
+    if (opts.get) {
+      const config = loadConfig();
+      const keys = opts.get.split(".");
+      let value: any = config;
+      for (const k of keys) { value = value?.[k]; }
+      if (globalOpts.json) {
+        output({ key: opts.get, value }, true);
+      } else {
+        console.log(value !== undefined ? JSON.stringify(value, null, 2) : chalk.dim("(not set)"));
+      }
+      return;
+    }
+
+    if (opts.set) {
+      const [key, ...valueParts] = opts.set.split("=");
+      const rawValue = valueParts.join("=");
+      let parsedValue: any;
+      try { parsedValue = JSON.parse(rawValue); } catch { parsedValue = rawValue; }
+
+      let config: any = {};
+      try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+
+      const keys = key.split(".");
+      let obj = config;
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (!obj[keys[i]] || typeof obj[keys[i]] !== "object") obj[keys[i]] = {};
+        obj = obj[keys[i]];
+      }
+      obj[keys[keys.length - 1]] = parsedValue;
+
+      const dir = dirname(configPath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      if (globalOpts.json) {
+        output({ key, value: parsedValue }, true);
+      } else {
+        console.log(chalk.green(`Set ${key} = ${JSON.stringify(parsedValue)}`));
+      }
+      return;
+    }
+
+    // No args: show full config
+    const config = loadConfig();
+    if (globalOpts.json) {
+      output(config, true);
+    } else {
+      console.log(JSON.stringify(config, null, 2));
+    }
+  });
+
 // serve (web dashboard)
 program
   .command("serve")
@@ -1359,6 +1525,64 @@ program
   .action(async (opts) => {
     const { startServer } = await import("../server/serve.js");
     await startServer(parseInt(opts.port, 10), { open: opts.open !== false });
+  });
+
+// watch
+program
+  .command("watch")
+  .description("Live-updating task list (refreshes every few seconds)")
+  .option("-s, --status <status>", "Filter by status (default: pending,in_progress)")
+  .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts);
+    const interval = parseInt(opts.interval, 10) * 1000;
+    const statusFilter = opts.status ? opts.status.split(",").map((s: string) => s.trim()) : ["pending", "in_progress"];
+
+    function render() {
+      const tasks = listTasks({ project_id: projectId, status: statusFilter as any });
+      const all = listTasks({ project_id: projectId });
+      const counts: Record<string, number> = {};
+      for (const t of all) counts[t.status] = (counts[t.status] || 0) + 1;
+
+      // Clear screen
+      process.stdout.write("\x1B[2J\x1B[0f");
+
+      // Header
+      const now = new Date().toLocaleTimeString();
+      console.log(chalk.bold(`todos watch`) + chalk.dim(` — ${now} — refreshing every ${opts.interval}s — Ctrl+C to stop\n`));
+
+      // Stats line
+      const parts = [
+        `total: ${chalk.bold(String(all.length))}`,
+        `pending: ${chalk.yellow(String(counts["pending"] || 0))}`,
+        `in_progress: ${chalk.blue(String(counts["in_progress"] || 0))}`,
+        `completed: ${chalk.green(String(counts["completed"] || 0))}`,
+        `failed: ${chalk.red(String(counts["failed"] || 0))}`,
+      ];
+      console.log(parts.join("  ") + "\n");
+
+      if (tasks.length === 0) {
+        console.log(chalk.dim("No matching tasks."));
+        return;
+      }
+
+      for (const t of tasks) {
+        console.log(formatTaskLine(t));
+      }
+      console.log(chalk.dim(`\n${tasks.length} task(s) shown`));
+    }
+
+    render();
+    const timer = setInterval(render, interval);
+
+    process.on("SIGINT", () => {
+      clearInterval(timer);
+      process.exit(0);
+    });
+
+    // Keep alive
+    await new Promise(() => {});
   });
 
 // interactive (TUI)
