@@ -6,11 +6,15 @@ import {
   CheckIcon,
   BookOpenIcon,
   TerminalIcon,
+  DownloadIcon,
+  UploadIcon,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { ConnectorsTable } from "@/components/connectors-table";
 import { ConfigureDialog } from "@/components/configure-dialog";
+import { ConnectorDetailDialog } from "@/components/connector-detail";
+import { ActivityLog } from "@/components/activity-log";
 import { Button } from "@/components/ui/button";
 import type { ConnectorWithAuth } from "@/types";
 
@@ -19,6 +23,12 @@ export function App() {
   const [loading, setLoading] = React.useState(true);
   const [configuring, setConfiguring] = React.useState<ConnectorWithAuth | null>(null);
   const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [detailOpen, setDetailOpen] = React.useState(false);
+  const [detailData, setDetailData] = React.useState<Record<string, unknown> | null>(null);
+  const [detailLoading, setDetailLoading] = React.useState(false);
+  const [activities, setActivities] = React.useState<
+    { action: string; connector: string; timestamp: number; detail?: string }[]
+  >([]);
   const [toast, setToast] = React.useState<{
     message: string;
     type: "success" | "error";
@@ -26,9 +36,16 @@ export function App() {
 
   const loadConnectors = React.useCallback(async () => {
     try {
-      const res = await fetch("/api/connectors");
-      const data = await res.json();
-      setConnectors(data);
+      const [connectorsRes, activityRes] = await Promise.all([
+        fetch("/api/connectors"),
+        fetch("/api/activity"),
+      ]);
+      const connectorsData = await connectorsRes.json();
+      setConnectors(connectorsData);
+      if (activityRes.ok) {
+        const activityData = await activityRes.json();
+        setActivities(activityData);
+      }
     } catch {
       showToast("Failed to load connectors", "error");
     } finally {
@@ -82,12 +99,62 @@ export function App() {
   const [updating, setUpdating] = React.useState(false);
   const [copied, setCopied] = React.useState<string | null>(null);
 
+  async function handleRowClick(connector: ConnectorWithAuth) {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setDetailData(null);
+    try {
+      const res = await fetch(`/api/connectors/${connector.name}`);
+      const data = await res.json();
+      setDetailData(data);
+    } catch {
+      showToast("Failed to load connector details", "error");
+      setDetailOpen(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   function handleOAuthStart(name: string) {
     window.open(
       `/oauth/${name}/start`,
       "_blank",
       "width=600,height=700"
     );
+  }
+
+  async function handleInstall(name: string) {
+    try {
+      const res = await fetch(`/api/connectors/${name}/install`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Installed ${name}`, "success");
+        await loadConnectors();
+      } else {
+        showToast(data.error || `Failed to install ${name}`, "error");
+      }
+    } catch {
+      showToast(`Failed to install ${name}`, "error");
+    }
+  }
+
+  async function handleUninstall(name: string) {
+    try {
+      const res = await fetch(`/api/connectors/${name}/uninstall`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Uninstalled ${name}`, "success");
+        await loadConnectors();
+      } else {
+        showToast(data.error || `Failed to uninstall ${name}`, "error");
+      }
+    } catch {
+      showToast(`Failed to uninstall ${name}`, "error");
+    }
   }
 
   async function handleUpdate() {
@@ -118,6 +185,59 @@ export function App() {
       setCopied(cmd);
       setTimeout(() => setCopied(null), 2000);
     });
+  }
+
+  const importInputRef = React.useRef<HTMLInputElement>(null);
+
+  async function handleExport() {
+    try {
+      const res = await fetch("/api/export");
+      if (!res.ok) {
+        const data = await res.json();
+        showToast(data.error || "Export failed", "error");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const disposition = res.headers.get("Content-Disposition");
+      const filenameMatch = disposition?.match(/filename="(.+)"/);
+      a.download = filenameMatch?.[1] || "connectors-backup.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("Credentials exported", "success");
+    } catch {
+      showToast("Failed to export credentials", "error");
+    }
+  }
+
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        showToast(`Imported ${result.imported} credential profiles`, "success");
+        loadConnectors();
+      } else {
+        showToast(result.error || "Import failed", "error");
+      }
+    } catch {
+      showToast("Failed to import credentials — invalid file", "error");
+    } finally {
+      // Reset input so the same file can be selected again
+      if (importInputRef.current) importInputRef.current.value = "";
+    }
   }
 
   return (
@@ -189,6 +309,29 @@ export function App() {
           <Button
             variant="outline"
             size="sm"
+            onClick={handleExport}
+          >
+            <DownloadIcon className="size-3.5" />
+            Export Credentials
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => importInputRef.current?.click()}
+          >
+            <UploadIcon className="size-3.5" />
+            Import Credentials
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleImport}
+          />
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => window.open("https://github.com/hasna/connectors", "_blank")}
           >
             <BookOpenIcon className="size-3.5" />
@@ -201,7 +344,12 @@ export function App() {
           onConfigure={handleConfigure}
           onRefresh={handleRefresh}
           onOAuthStart={handleOAuthStart}
+          onInstall={handleInstall}
+          onUninstall={handleUninstall}
+          onRowClick={handleRowClick}
         />
+
+        <ActivityLog activities={activities} />
       </main>
 
       {/* Configure Dialog */}
@@ -213,6 +361,14 @@ export function App() {
           showToast(`Key saved for ${configuring?.name}`, "success");
           loadConnectors();
         }}
+      />
+
+      {/* Connector Detail Dialog */}
+      <ConnectorDetailDialog
+        connector={detailData as any}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        loading={detailLoading}
       />
 
       {/* Toast */}
