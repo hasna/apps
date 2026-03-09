@@ -21,50 +21,89 @@ export function ConnectorSelect({
   onConfirm,
   onBack,
 }: ConnectorSelectProps) {
-  // Items: back + connectors + confirm
-  const totalItems = connectors.length + 2;
   const [cursor, setCursor] = useState(0);
+  const [filter, setFilter] = useState("");
+
+  // Filter connectors by the current search text
+  const filteredConnectors = useMemo(() => {
+    if (!filter) return connectors;
+    const lower = filter.toLowerCase();
+    return connectors.filter(
+      (c) =>
+        c.name.toLowerCase().includes(lower) ||
+        (c.description && c.description.toLowerCase().includes(lower))
+    );
+  }, [connectors, filter]);
+
+  // Items: back + filtered connectors + confirm
+  const totalItems = filteredConnectors.length + 2;
+
+  // Clamp cursor when filter changes reduce the list
+  const clampedCursor = useMemo(() => {
+    if (cursor >= totalItems) return totalItems - 1;
+    return cursor;
+  }, [cursor, totalItems]);
 
   // Visible window for scrolling
   const maxVisible = 16;
   const scrollOffset = useMemo(() => {
     if (totalItems <= maxVisible) return 0;
     const half = Math.floor(maxVisible / 2);
-    if (cursor < half) return 0;
-    if (cursor > totalItems - maxVisible + half) return totalItems - maxVisible;
-    return cursor - half;
-  }, [cursor, totalItems]);
+    if (clampedCursor < half) return 0;
+    if (clampedCursor > totalItems - maxVisible + half) return totalItems - maxVisible;
+    return clampedCursor - half;
+  }, [clampedCursor, totalItems]);
 
   useInput((input, key) => {
     if (key.escape) {
-      onBack();
-    } else if (key.upArrow) {
-      setCursor((c) => (c > 0 ? c - 1 : totalItems - 1));
-    } else if (key.downArrow) {
-      setCursor((c) => (c < totalItems - 1 ? c + 1 : 0));
-    } else if (key.return) {
-      if (cursor === 0) {
+      if (filter) {
+        // Clear filter first; only go back if filter is already empty
+        setFilter("");
+        setCursor(0);
+      } else {
         onBack();
-      } else if (cursor === totalItems - 1) {
+      }
+    } else if (key.upArrow) {
+      setCursor((c) => {
+        const total = filteredConnectors.length + 2;
+        return c > 0 ? c - 1 : total - 1;
+      });
+    } else if (key.downArrow) {
+      setCursor((c) => {
+        const total = filteredConnectors.length + 2;
+        return c < total - 1 ? c + 1 : 0;
+      });
+    } else if (key.return) {
+      const cur = clampedCursor;
+      const total = filteredConnectors.length + 2;
+      if (cur === 0) {
+        onBack();
+      } else if (cur === total - 1) {
         if (selected.size > 0) onConfirm();
       } else {
-        // Enter on a connector toggles it; if there's a selection, also confirm
-        onToggle(connectors[cursor - 1].name);
+        onToggle(filteredConnectors[cur - 1].name);
       }
-    } else if (input === " " && cursor > 0 && cursor < totalItems - 1) {
-      onToggle(connectors[cursor - 1].name);
+    } else if (input === " " && clampedCursor > 0 && clampedCursor < filteredConnectors.length + 1) {
+      onToggle(filteredConnectors[clampedCursor - 1].name);
     } else if (input === "i" && selected.size > 0) {
       onConfirm();
     } else if (input === "a") {
-      // Toggle all: if all are selected, deselect all; otherwise select all
-      const allSelected = connectors.every((c) => selected.has(c.name));
-      for (const c of connectors) {
+      // Toggle all visible (filtered) connectors
+      const allSelected = filteredConnectors.every((c) => selected.has(c.name));
+      for (const c of filteredConnectors) {
         if (allSelected) {
           if (selected.has(c.name)) onToggle(c.name);
         } else {
           if (!selected.has(c.name)) onToggle(c.name);
         }
       }
+    } else if (key.backspace || key.delete) {
+      setFilter((f) => f.slice(0, -1));
+      setCursor(0);
+    } else if (input && /^[a-zA-Z0-9\-_.]$/.test(input) && input !== "a" && input !== "i") {
+      // Alphanumeric typing appends to filter (excluding reserved keys)
+      setFilter((f) => f + input);
+      setCursor(0);
     }
   });
 
@@ -75,6 +114,14 @@ export function ConnectorSelect({
     <Box flexDirection="column">
       <Box marginBottom={1}>
         <Text bold>Select connectors to install:</Text>
+        {filter ? (
+          <Text color="yellow"> Filter: {filter}</Text>
+        ) : null}
+        {filter && filteredConnectors.length === 0 ? (
+          <Text dimColor> (no matches)</Text>
+        ) : filter ? (
+          <Text dimColor> ({filteredConnectors.length} match{filteredConnectors.length !== 1 ? "es" : ""})</Text>
+        ) : null}
       </Box>
 
       {/* Table header */}
@@ -107,7 +154,7 @@ export function ConnectorSelect({
 
         // Back row
         if (idx === 0) {
-          const isActive = cursor === 0;
+          const isActive = clampedCursor === 0;
           return (
             <Box key="__back__">
               <Text
@@ -122,7 +169,7 @@ export function ConnectorSelect({
 
         // Confirm row
         if (idx === totalItems - 1) {
-          const isActive = cursor === totalItems - 1;
+          const isActive = clampedCursor === totalItems - 1;
           const hasSelection = selected.size > 0;
           return (
             <Box key="__confirm__">
@@ -138,8 +185,8 @@ export function ConnectorSelect({
         }
 
         // Connector row
-        const c = connectors[idx - 1];
-        const isActive = cursor === idx;
+        const c = filteredConnectors[idx - 1];
+        const isActive = clampedCursor === idx;
         const isChecked = selected.has(c.name);
 
         return (
@@ -186,7 +233,7 @@ export function ConnectorSelect({
       {/* Help */}
       <Box marginTop={1}>
         <Text dimColor>
-          ↑↓ navigate  space/enter toggle  a select all  i install  esc back
+          ↑↓ navigate  space/enter toggle  a select all  i install  type to filter  esc {filter ? "clear filter" : "back"}
         </Text>
       </Box>
     </Box>
