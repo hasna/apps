@@ -71,7 +71,7 @@ OAuth authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-x/
+~/.connectors/connect-x/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

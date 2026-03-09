@@ -63,10 +63,10 @@ const client = new Exa({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-exa/`:
+Configuration stored in `~/.connectors/connect-exa/`:
 
 ```
-~/.connect/connect-exa/
+~/.connectors/connect-exa/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

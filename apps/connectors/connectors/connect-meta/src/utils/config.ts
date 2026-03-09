@@ -19,9 +19,9 @@ export interface ProfileConfig {
 // Store for --profile flag override (set by CLI before commands run)
 let profileOverride: string | undefined;
 
-// Store config in ~/.connect/connect-meta/ (always in home directory)
+// Store config in ~/.connectors/connect-meta/ (always in home directory)
 function resolveBaseConfigDir(): string {
-  return join(homedir(), '.connect', CONNECTOR_NAME);
+  return join(homedir(), '.connectors', CONNECTOR_NAME);
 }
 
 const BASE_CONFIG_DIR = resolveBaseConfigDir();

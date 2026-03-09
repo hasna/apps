@@ -32,7 +32,7 @@ npm publish              # Runs prepublishOnly (test + build), then publishes
 
 **Installer** (`src/lib/installer.ts`): Copies connector directories to `.connectors/` in user's project. Auto-generates `.connectors/index.ts` with namespace re-exports (`export * as stripe from './connect-stripe/src/index.js'`). Resolves source connectors from multiple paths (works from both `src/lib/` and `bin/`).
 
-**Auth system** (`src/server/auth.ts`): Reads connector CLAUDE.md files to detect auth type (oauth/bearer/apikey). Manages profiles at `~/.connect/connect-{name}/`. Two profile file patterns: `profiles/default.json` (flat) and `profiles/default/config.json` + `tokens.json` (directory). OAuth is Google-only currently (hardcoded endpoints + scopes map). CSRF state tokens stored in-memory.
+**Auth system** (`src/server/auth.ts`): Reads connector CLAUDE.md files to detect auth type (oauth/bearer/apikey). Manages profiles at `~/.connectors/connect-{name}/`. Two profile file patterns: `profiles/default.json` (flat) and `profiles/default/config.json` + `tokens.json` (directory). OAuth is Google-only currently (hardcoded endpoints + scopes map). CSRF state tokens stored in-memory.
 
 **Dashboard server** (`src/server/serve.ts`): Bun.serve() with route matching via regex. Serves Vite-built SPA from `dashboard/dist/` with fallback to `index.html`. API routes return JSON, static files served by MIME type. Dashboard React app at `dashboard/src/app.tsx` uses @tanstack/react-table.
 
@@ -47,7 +47,7 @@ Tests use Bun's built-in test runner (`import { describe, test, expect } from "b
 - **CLI tests** (`cli.test.ts`): Spawn `bun run ./src/cli/index.tsx` as subprocess, parse stdout
 - **MCP tests** (`mcp.test.ts`): Spawn MCP server process, send JSON-RPC via stdin/stdout
 - **Component tests** (`components.test.tsx`): Use `ink-testing-library` to render and inspect frames
-- **Server tests** (`server.test.ts`): Start real Bun.serve() on random port, test with fetch(). Auth tests write to real `~/.connect/` with unique `zzztest{pid}` prefixed names, cleaned up in afterEach
+- **Server tests** (`server.test.ts`): Start real Bun.serve() on random port, test with fetch(). Auth tests write to real `~/.connectors/` with unique `zzztest{pid}` prefixed names, cleaned up in afterEach
 - **Installer tests** (`installer.test.ts`): Use temp directories (`.test-cli-tmp/`)
 
 Note: Bun's `os.homedir()` caches at startup and ignores runtime `HOME` changes. Tests that need isolated home directories use unique connector names instead.
@@ -82,7 +82,7 @@ Do NOT add these connectors:
 
 ## Auth & Data Storage
 
-Connectors store configuration in `~/.connect/connect-{name}/`:
+Connectors store configuration in `~/.connectors/connect-{name}/`:
 - `current_profile` — Active profile name
 - `credentials.json` — OAuth client credentials (shared across profiles)
 - `profiles/` — Profile JSON files with API keys and tokens

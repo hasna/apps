@@ -126,10 +126,10 @@ const client = new Tinker({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-tinker/`:
+Configuration stored in `~/.connectors/connect-tinker/`:
 
 ```
-~/.connect/connect-tinker/
+~/.connectors/connect-tinker/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

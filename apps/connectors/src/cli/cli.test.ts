@@ -379,7 +379,7 @@ describe("CLI", () => {
     test("shows data storage section", async () => {
       const { stdout } = await run("docs gmail");
       expect(stdout).toContain("Data Storage");
-      expect(stdout).toContain(".connect/connect-gmail");
+      expect(stdout).toContain(".connectors/connect-gmail");
     });
 
     test("shows overview section", async () => {

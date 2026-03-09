@@ -63,10 +63,10 @@ const client = new Meta({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-meta/`:
+Configuration stored in `~/.connectors/connect-meta/`:
 
 ```
-~/.connect/connect-meta/
+~/.connectors/connect-meta/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

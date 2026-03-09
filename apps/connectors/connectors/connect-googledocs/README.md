@@ -81,10 +81,10 @@ const client = new Googledocs({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-googledocs/`:
+Configuration stored in `~/.connectors/connect-googledocs/`:
 
 ```
-~/.connect/connect-googledocs/
+~/.connectors/connect-googledocs/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

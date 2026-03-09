@@ -84,7 +84,7 @@ connect-xai profile list|use|create|delete|show
 ## Data Storage
 
 ```
-~/.connect/connect-xai/
+~/.connectors/connect-xai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

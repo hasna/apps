@@ -101,7 +101,7 @@ export function ConfigureDialog({
           <DialogDescription>
             Stored locally at{" "}
             <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-              ~/.connect/connect-{connector.name}/
+              ~/.connectors/connect-{connector.name}/
             </code>
           </DialogDescription>
         </DialogHeader>

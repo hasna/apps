@@ -67,10 +67,10 @@ const client = new Elevenlabs({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-elevenlabs/`:
+Configuration stored in `~/.connectors/connect-elevenlabs/`:
 
 ```
-~/.connect/connect-elevenlabs/
+~/.connectors/connect-elevenlabs/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

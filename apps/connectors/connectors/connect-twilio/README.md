@@ -63,10 +63,10 @@ const client = new Twilio({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-twilio/`:
+Configuration stored in `~/.connectors/connect-twilio/`:
 
 ```
-~/.connect/connect-twilio/
+~/.connectors/connect-twilio/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

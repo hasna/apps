@@ -115,10 +115,10 @@ const client = new Substack({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-substack/`:
+Configuration stored in `~/.connectors/connect-substack/`:
 
 ```
-~/.connect/connect-substack/
+~/.connectors/connect-substack/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

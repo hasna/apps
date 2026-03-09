@@ -63,10 +63,10 @@ const client = new Quo({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-quo/`:
+Configuration stored in `~/.connectors/connect-quo/`:
 
 ```
-~/.connect/connect-quo/
+~/.connectors/connect-quo/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

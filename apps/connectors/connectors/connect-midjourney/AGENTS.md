@@ -58,7 +58,7 @@ Bearer Token authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/midjourney/profiles/`:
+Profiles stored in `~/.connectors/midjourney/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -91,7 +91,7 @@ May need adjustment based on third-party API provider.
 ## Data Storage
 
 ```
-~/.connect/connect-midjourney/
+~/.connectors/connect-midjourney/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

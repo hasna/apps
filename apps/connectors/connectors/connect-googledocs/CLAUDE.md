@@ -117,7 +117,7 @@ connect-googledocs profile show [name]        # Show profile config
 ## Data Storage
 
 ```
-~/.connect/connect-googledocs/
+~/.connectors/connect-googledocs/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

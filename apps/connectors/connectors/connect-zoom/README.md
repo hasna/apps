@@ -114,10 +114,10 @@ const client = new Zoom({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-zoom/`:
+Configuration stored in `~/.connectors/connect-zoom/`:
 
 ```
-~/.connect/connect-zoom/
+~/.connectors/connect-zoom/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

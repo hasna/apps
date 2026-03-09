@@ -58,7 +58,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-zoom/profiles/`:
+Profiles stored in `~/.connectors/connect-zoom/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -151,7 +151,7 @@ connect-zoom reports daily --year <year> --month <month>
 ## Data Storage
 
 ```
-~/.connect/connect-zoom/
+~/.connectors/connect-zoom/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

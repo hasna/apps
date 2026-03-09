@@ -66,10 +66,10 @@ const client = new Gmail({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-gmail/`:
+Configuration stored in `~/.connectors/connect-gmail/`:
 
 ```
-~/.connect/connect-gmail/
+~/.connectors/connect-gmail/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

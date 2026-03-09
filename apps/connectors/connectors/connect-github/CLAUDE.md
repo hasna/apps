@@ -58,7 +58,7 @@ Bearer Token authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-github/profiles/`:
+Profiles stored in `~/.connectors/connect-github/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -137,7 +137,7 @@ connect-github user following username  # List who user follows
 ## Data Storage
 
 ```
-~/.connect/connect-github/
+~/.connectors/connect-github/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/heygen/profiles/`:
+Profiles stored in `~/.connectors/heygen/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -89,7 +89,7 @@ HeyGen uses X-Api-Key header authentication:
 ## Data Storage
 
 ```
-~/.connect/connect-heygen/
+~/.connectors/connect-heygen/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -84,7 +84,7 @@ connect-anthropic profile list|use|create|delete|show
 ## Data Storage
 
 ```
-~/.connect/connect-anthropic/
+~/.connectors/connect-anthropic/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

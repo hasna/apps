@@ -78,7 +78,7 @@ connect-brandsight config set-secret <api-secret>
 connect-brandsight config set-customer-id <customer-id>
 connect-brandsight config show
 
-# Contact Management (stored in ~/.connect/connect-brandsight/contacts/)
+# Contact Management (stored in ~/.connectors/connect-brandsight/contacts/)
 connect-brandsight contacts add <name> \
   --first-name "John" --last-name "Doe" \
   --email "john@example.com" --phone "+1.5551234567" \
@@ -115,7 +115,7 @@ connect-brandsight dns add <domain> <type> <name> <data>
 ## Data Storage
 
 ```
-~/.connect/connect-brandsight/
+~/.connectors/connect-brandsight/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

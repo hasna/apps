@@ -63,10 +63,10 @@ const client = new Resend({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-resend/`:
+Configuration stored in `~/.connectors/connect-resend/`:
 
 ```
-~/.connect/connect-resend/
+~/.connectors/connect-resend/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -258,7 +258,7 @@ describe("installer", () => {
 
     test("parses data storage section", () => {
       const docs = getConnectorDocs("stripe");
-      expect(docs!.dataStorage).toContain(".connect/connect-stripe");
+      expect(docs!.dataStorage).toContain(".connectors/connect-stripe");
     });
 
     test("handles connector with no CLI commands section", () => {
@@ -316,12 +316,12 @@ describe("installer", () => {
   describe("installConnector edge cases", () => {
     test("creates proper .connectors directory structure", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
-      // Verify it's .connectors/connect-anthropic (not .connect)
+      // Verify it's .connectors/connect-anthropic (not old path)
       expect(existsSync(join(TEST_DIR, ".connectors"))).toBe(true);
       expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic"))).toBe(true);
       expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic", "src"))).toBe(true);
       // Verify it's NOT .connect
-      expect(existsSync(join(TEST_DIR, ".connect"))).toBe(false);
+      expect(existsSync(join(TEST_DIR, ".connectors"))).toBe(false);
     });
 
     test("connector has all expected files after install", () => {

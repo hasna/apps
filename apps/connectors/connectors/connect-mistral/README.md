@@ -78,10 +78,10 @@ const client = new Mistral({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-mistral/`:
+Configuration stored in `~/.connectors/connect-mistral/`:
 
 ```
-~/.connect/connect-mistral/
+~/.connectors/connect-mistral/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

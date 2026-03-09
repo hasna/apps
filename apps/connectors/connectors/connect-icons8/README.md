@@ -64,10 +64,10 @@ const client = new Icons8({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-icons8/`:
+Configuration stored in `~/.connectors/connect-icons8/`:
 
 ```
-~/.connect/connect-icons8/
+~/.connectors/connect-icons8/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-figma/profiles/`:
+Profiles stored in `~/.connectors/connect-figma/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -172,7 +172,7 @@ connect-figma config show                            # Show configuration
 ## Data Storage
 
 ```
-~/.connect/connect-figma/
+~/.connectors/connect-figma/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

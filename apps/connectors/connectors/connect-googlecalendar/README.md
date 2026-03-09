@@ -66,10 +66,10 @@ const client = new Googlecalendar({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-googlecalendar/`:
+Configuration stored in `~/.connectors/connect-googlecalendar/`:
 
 ```
-~/.connect/connect-googlecalendar/
+~/.connectors/connect-googlecalendar/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -95,10 +95,10 @@ const client = new Github({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-github/`:
+Configuration stored in `~/.connectors/connect-github/`:
 
 ```
-~/.connect/connect-github/
+~/.connectors/connect-github/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -292,7 +292,7 @@ export function ConnectorDetailDialog({
     ? `import { ${connector.name} } from './.connectors'`
     : "";
   const storagePath = connector
-    ? `~/.connect/connect-${connector.name}/`
+    ? `~/.connectors/connect-${connector.name}/`
     : "";
 
   return (

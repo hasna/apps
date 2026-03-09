@@ -150,10 +150,10 @@ const client = new Stripe({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-stripe/`:
+Configuration stored in `~/.connectors/connect-stripe/`:
 
 ```
-~/.connect/connect-stripe/
+~/.connectors/connect-stripe/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

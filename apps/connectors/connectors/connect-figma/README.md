@@ -133,10 +133,10 @@ const client = new Figma({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-figma/`:
+Configuration stored in `~/.connectors/connect-figma/`:
 
 ```
-~/.connect/connect-figma/
+~/.connectors/connect-figma/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

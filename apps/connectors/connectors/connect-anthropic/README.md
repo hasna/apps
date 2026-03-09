@@ -75,10 +75,10 @@ const client = new Anthropic({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-anthropic/`:
+Configuration stored in `~/.connectors/connect-anthropic/`:
 
 ```
-~/.connect/connect-anthropic/
+~/.connectors/connect-anthropic/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

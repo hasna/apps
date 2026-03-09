@@ -331,7 +331,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
         try {
           const profiles = listProfiles(name);
-          const configDir = join(homedir(), ".connect", name.startsWith("connect-") ? name : `connect-${name}`);
+          const configDir = join(homedir(), ".connectors", name.startsWith("connect-") ? name : `connect-${name}`);
           const currentProfileFile = join(configDir, "current_profile");
           let current = "default";
           if (existsSync(currentProfileFile)) {
@@ -383,7 +383,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
       // GET /api/export — Export all connector credentials (excluding OAuth tokens)
       if (path === "/api/export" && method === "GET") {
         try {
-          const connectDir = join(homedir(), ".connect");
+          const connectDir = join(homedir(), ".connectors");
           const result: Record<string, { profiles: Record<string, unknown> }> = {};
 
           if (existsSync(connectDir)) {
@@ -451,7 +451,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
           }
 
           let imported = 0;
-          const connectDir = join(homedir(), ".connect");
+          const connectDir = join(homedir(), ".connectors");
 
           for (const [connectorName, data] of Object.entries(body.connectors)) {
             if (!isValidConnectorName(connectorName)) continue;
@@ -490,7 +490,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
           return htmlResponse(errorPage(
             "OAuth Not Available",
             `No OAuth client credentials found for <strong>${name}</strong>.`,
-            `Set up credentials at <code>~/.connect/connect-${name}/credentials.json</code>`
+            `Set up credentials at <code>~/.connectors/connect-${name}/credentials.json</code>`
           ));
         }
 

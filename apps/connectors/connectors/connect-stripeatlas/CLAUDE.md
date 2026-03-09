@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/stripeatlas/profiles/`:
+Profiles stored in `~/.connectors/stripeatlas/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -89,7 +89,7 @@ Since Stripe Atlas has no public API, all interactions are done via browser auto
 ## Data Storage
 
 ```
-~/.connect/connect-stripeatlas/
+~/.connectors/connect-stripeatlas/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -13,7 +13,7 @@ export function setProfileOverride(profile: string): void {
 }
 
 export function getBaseConfigDir(): string {
-  return join(homedir(), '.connect', APP_NAME);
+  return join(homedir(), '.connectors', APP_NAME);
 }
 
 export function getConfigDir(): string {

@@ -58,7 +58,7 @@ Bearer Token authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-discord/profiles/`:
+Profiles stored in `~/.connectors/connect-discord/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -174,7 +174,7 @@ connect-discord config show                # Show config
 ## Data Storage
 
 ```
-~/.connect/connect-discord/
+~/.connectors/connect-discord/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

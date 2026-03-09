@@ -58,7 +58,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-googlecalendar/profiles/`:
+Profiles stored in `~/.connectors/connect-googlecalendar/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -104,7 +104,7 @@ Tokens are automatically refreshed when expired if refresh token is available.
 ## Data Storage
 
 ```
-~/.connect/connect-googlecalendar/
+~/.connectors/connect-googlecalendar/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

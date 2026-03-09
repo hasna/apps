@@ -64,10 +64,10 @@ const client = new Openai({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-openai/`:
+Configuration stored in `~/.connectors/connect-openai/`:
 
 ```
-~/.connect/connect-openai/
+~/.connectors/connect-openai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

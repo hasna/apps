@@ -15,8 +15,8 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override
 let profileOverride: string | undefined;
 
-// Config directory: ~/.connect/connect-twilio/
-const BASE_CONFIG_DIR = join(homedir(), '.connect', CONNECTOR_NAME);
+// Config directory: ~/.connectors/connect-twilio/
+const BASE_CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
 
 // ============================================
 // Profile Management
@@ -230,7 +230,7 @@ This directory contains configuration and data for the connect-twilio CLI.
 ## Directory Structure
 
 \`\`\`
-~/.connect/connect-twilio/
+~/.connectors/connect-twilio/
 ├── current_profile      # Current active profile name
 └── profiles/
     ├── default/

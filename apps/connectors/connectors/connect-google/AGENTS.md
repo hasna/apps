@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-google/
+~/.connectors/connect-google/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

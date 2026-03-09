@@ -98,7 +98,7 @@ connect-sedo domains remove example.com
 ## Data Storage
 
 ```
-~/.connect/connect-sedo/
+~/.connectors/connect-sedo/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

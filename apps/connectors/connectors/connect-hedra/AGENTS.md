@@ -58,7 +58,7 @@ Bearer Token authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-hedra/profiles/`:
+Profiles stored in `~/.connectors/connect-hedra/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -88,7 +88,7 @@ Uses Bearer token authentication:
 ## Data Storage
 
 ```
-~/.connect/connect-hedra/
+~/.connectors/connect-hedra/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

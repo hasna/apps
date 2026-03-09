@@ -66,10 +66,10 @@ const client = new Docker({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-docker/`:
+Configuration stored in `~/.connectors/connect-docker/`:
 
 ```
-~/.connect/connect-docker/
+~/.connectors/connect-docker/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

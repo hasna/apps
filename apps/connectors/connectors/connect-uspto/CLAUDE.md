@@ -67,7 +67,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-uspto/
+~/.connectors/connect-uspto/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

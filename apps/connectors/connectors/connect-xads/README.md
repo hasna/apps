@@ -130,10 +130,10 @@ const client = new Xads({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-xads/`:
+Configuration stored in `~/.connectors/connect-xads/`:
 
 ```
-~/.connect/connect-xads/
+~/.connectors/connect-xads/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

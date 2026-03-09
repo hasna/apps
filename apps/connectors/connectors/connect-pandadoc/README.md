@@ -63,10 +63,10 @@ const client = new Pandadoc({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-pandadoc/`:
+Configuration stored in `~/.connectors/connect-pandadoc/`:
 
 ```
-~/.connect/connect-pandadoc/
+~/.connectors/connect-pandadoc/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

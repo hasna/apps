@@ -268,7 +268,7 @@ describe("MCP Server", () => {
     test("returns data storage for github", async () => {
       const res = await callMcp("connector_docs", { name: "github" });
       const data = parseContent(res);
-      expect(data.dataStorage).toContain(".connect/connect-github");
+      expect(data.dataStorage).toContain(".connectors/connect-github");
     });
 
     test("returns version and category in docs", async () => {

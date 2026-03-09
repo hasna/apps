@@ -121,10 +121,10 @@ const client = new Googlemaps({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-googlemaps/`:
+Configuration stored in `~/.connectors/connect-googlemaps/`:
 
 ```
-~/.connect/connect-googlemaps/
+~/.connectors/connect-googlemaps/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

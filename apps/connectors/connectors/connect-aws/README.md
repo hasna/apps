@@ -100,10 +100,10 @@ const client = new Aws({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-aws/`:
+Configuration stored in `~/.connectors/connect-aws/`:
 
 ```
-~/.connect/connect-aws/
+~/.connectors/connect-aws/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

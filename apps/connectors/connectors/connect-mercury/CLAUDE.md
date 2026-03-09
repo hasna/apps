@@ -124,7 +124,7 @@ connect-mercury profile list|use|create|delete|show
 ## Data Storage
 
 ```
-~/.connect/connect-mercury/
+~/.connectors/connect-mercury/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

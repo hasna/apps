@@ -118,10 +118,10 @@ const client = new Mixpanel({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-mixpanel/`:
+Configuration stored in `~/.connectors/connect-mixpanel/`:
 
 ```
-~/.connect/connect-mixpanel/
+~/.connectors/connect-mixpanel/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

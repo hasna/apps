@@ -93,7 +93,7 @@ connect-openweathermap geo reverse <lat> <lon>
 ## Data Storage
 
 ```
-~/.connect/connect-openweathermap/
+~/.connectors/connect-openweathermap/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

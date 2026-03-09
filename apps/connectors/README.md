@@ -285,10 +285,10 @@ connect-figma -p personal files get <key>
 connect-figma profile list
 ```
 
-Configuration stored in `~/.connect/{connector-name}/`:
+Configuration stored in `~/.connectors/{connector-name}/`:
 
 ```
-~/.connect/connect-figma/
+~/.connectors/connect-figma/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

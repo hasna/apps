@@ -64,7 +64,7 @@ Bearer Token authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-openai/
+~/.connectors/connect-openai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

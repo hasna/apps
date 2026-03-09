@@ -71,7 +71,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-cloudflare/
+~/.connectors/connect-cloudflare/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

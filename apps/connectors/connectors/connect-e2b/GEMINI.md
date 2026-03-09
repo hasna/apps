@@ -113,7 +113,7 @@ connect-e2b profile show [name]
 ## Data Storage
 
 ```
-~/.connect/connect-e2b/
+~/.connectors/connect-e2b/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -71,10 +71,10 @@ const client = new X({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-x/`:
+Configuration stored in `~/.connectors/connect-x/`:
 
 ```
-~/.connect/connect-x/
+~/.connectors/connect-x/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

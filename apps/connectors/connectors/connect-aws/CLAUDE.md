@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-aws/profiles/`:
+Profiles stored in `~/.connectors/connect-aws/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -132,7 +132,7 @@ connect-aws config show
 ## Data Storage
 
 ```
-~/.connect/connect-aws/
+~/.connectors/connect-aws/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

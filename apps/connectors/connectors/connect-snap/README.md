@@ -63,10 +63,10 @@ const client = new Snap({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-snap/`:
+Configuration stored in `~/.connectors/connect-snap/`:
 
 ```
-~/.connect/connect-snap/
+~/.connectors/connect-snap/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

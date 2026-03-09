@@ -100,10 +100,10 @@ const client = new Googletasks({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-googletasks/`:
+Configuration stored in `~/.connectors/connect-googletasks/`:
 
 ```
-~/.connect/connect-googletasks/
+~/.connectors/connect-googletasks/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

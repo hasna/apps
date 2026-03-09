@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-pandadoc/
+~/.connectors/connect-pandadoc/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

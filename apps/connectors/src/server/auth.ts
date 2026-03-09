@@ -98,7 +98,7 @@ export function getAuthType(name: string): AuthType {
  */
 function getConnectorConfigDir(name: string): string {
   const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
-  return join(homedir(), ".connect", connectorName);
+  return join(homedir(), ".connectors", connectorName);
 }
 
 /**
@@ -486,7 +486,7 @@ export function getTokenExpiry(name: string): number | null {
 
 /**
  * List all profile names for a connector.
- * Reads ~/.connect/connect-{name}/profiles/ directory entries —
+ * Reads ~/.connectors/connect-{name}/profiles/ directory entries —
  * both .json files (pattern 1) and subdirectories (pattern 2).
  */
 export function listProfiles(name: string): string[] {
@@ -521,7 +521,7 @@ export function listProfiles(name: string): string[] {
 
 /**
  * Switch the active profile for a connector.
- * Writes the profile name to ~/.connect/connect-{name}/current_profile
+ * Writes the profile name to ~/.connectors/connect-{name}/current_profile
  */
 export function switchProfile(name: string, profile: string): void {
   const configDir = getConnectorConfigDir(name);
@@ -531,7 +531,7 @@ export function switchProfile(name: string, profile: string): void {
 
 /**
  * Delete a profile for a connector.
- * Removes the profile file or directory from ~/.connect/connect-{name}/profiles/.
+ * Removes the profile file or directory from ~/.connectors/connect-{name}/profiles/.
  * Refuses to delete the "default" profile.
  * Returns true if deletion succeeded, false if profile not found or is "default".
  */

@@ -75,10 +75,10 @@ const client = new Xai({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-xai/`:
+Configuration stored in `~/.connectors/connect-xai/`:
 
 ```
-~/.connect/connect-xai/
+~/.connectors/connect-xai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

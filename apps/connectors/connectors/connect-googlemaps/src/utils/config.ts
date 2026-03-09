@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const CONFIG_DIR = path.join(os.homedir(), '.connect', 'connect-googlemaps');
+const CONFIG_DIR = path.join(os.homedir(), '.connectors', 'connect-googlemaps');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 interface Config {

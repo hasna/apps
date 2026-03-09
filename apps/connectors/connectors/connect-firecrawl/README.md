@@ -64,10 +64,10 @@ const client = new Firecrawl({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-firecrawl/`:
+Configuration stored in `~/.connectors/connect-firecrawl/`:
 
 ```
-~/.connect/connect-firecrawl/
+~/.connectors/connect-firecrawl/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

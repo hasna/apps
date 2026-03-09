@@ -4,7 +4,7 @@ This file provides guidance to Gemini when working with this repository.
 
 ## Project Overview
 
-connect-gmail is a TypeScript CLI and library for interacting with Gmail API. It provides OAuth2 authentication with browser-based login flow and stores tokens securely in `.connect/connect-gmail/`.
+connect-gmail is a TypeScript CLI and library for interacting with Gmail API. It provides OAuth2 authentication with browser-based login flow and stores tokens securely in `.connectors/connect-gmail/`.
 
 ## Build & Run Commands
 
@@ -66,7 +66,7 @@ OAuth authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connect/connect-gmail/
+~/.connectors/connect-gmail/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

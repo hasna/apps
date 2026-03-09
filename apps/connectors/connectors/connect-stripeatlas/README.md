@@ -64,10 +64,10 @@ const client = new Stripeatlas({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-stripeatlas/`:
+Configuration stored in `~/.connectors/connect-stripeatlas/`:
 
 ```
-~/.connect/connect-stripeatlas/
+~/.connectors/connect-stripeatlas/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

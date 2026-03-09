@@ -10,9 +10,9 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override (set by CLI before commands run)
 let profileOverride: string | undefined;
 
-// Store config in ~/.connect/connect-notion/ (always in home directory)
+// Store config in ~/.connectors/connect-notion/ (always in home directory)
 function resolveBaseConfigDir(): string {
-  return join(homedir(), '.connect', 'connect-notion');
+  return join(homedir(), '.connectors', 'connect-notion');
 }
 
 const BASE_CONFIG_DIR = resolveBaseConfigDir();

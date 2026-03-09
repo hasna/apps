@@ -65,10 +65,10 @@ const client = new Sentry({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-sentry/`:
+Configuration stored in `~/.connectors/connect-sentry/`:
 
 ```
-~/.connect/connect-sentry/
+~/.connectors/connect-sentry/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -3,7 +3,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { Units } from '../types';
 
-const CONFIG_DIR = join(homedir(), '.connect', 'connect-openweathermap');
+const CONFIG_DIR = join(homedir(), '.connectors', 'connect-openweathermap');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 export interface CliConfig {

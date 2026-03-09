@@ -64,10 +64,10 @@ const client = new Hedra({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-hedra/`:
+Configuration stored in `~/.connectors/connect-hedra/`:
 
 ```
-~/.connect/connect-hedra/
+~/.connectors/connect-hedra/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

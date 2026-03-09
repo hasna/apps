@@ -129,10 +129,10 @@ const client = new Reddit({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-reddit/`:
+Configuration stored in `~/.connectors/connect-reddit/`:
 
 ```
-~/.connect/connect-reddit/
+~/.connectors/connect-reddit/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

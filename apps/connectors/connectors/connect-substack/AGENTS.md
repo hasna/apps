@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-substack/profiles/`:
+Profiles stored in `~/.connectors/connect-substack/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -155,7 +155,7 @@ connect-substack config clear                  # Clear configuration
 ## Data Storage
 
 ```
-~/.connect/connect-substack/
+~/.connectors/connect-substack/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

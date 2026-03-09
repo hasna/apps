@@ -66,7 +66,7 @@ Two authentication methods supported:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-notion/profiles/`:
+Profiles stored in `~/.connectors/connect-notion/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -178,7 +178,7 @@ connect-notion profiles delete <name>  # Delete profile
 ## Data Storage
 
 ```
-~/.connect/connect-notion/
+~/.connectors/connect-notion/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -114,10 +114,10 @@ const client = new Revolut({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-revolut/`:
+Configuration stored in `~/.connectors/connect-revolut/`:
 
 ```
-~/.connect/connect-revolut/
+~/.connectors/connect-revolut/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

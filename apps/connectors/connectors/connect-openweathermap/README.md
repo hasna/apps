@@ -84,10 +84,10 @@ const client = new Openweathermap({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-openweathermap/`:
+Configuration stored in `~/.connectors/connect-openweathermap/`:
 
 ```
-~/.connect/connect-openweathermap/
+~/.connectors/connect-openweathermap/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile
