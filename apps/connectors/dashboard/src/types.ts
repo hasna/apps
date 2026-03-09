@@ -4,6 +4,8 @@ export interface AuthStatus {
   tokenExpiry?: number;
   hasRefreshToken?: boolean;
   envVars: { variable: string; description: string; set: boolean }[];
+  envVarSetCount: number;
+  envVarTotalCount: number;
 }
 
 export interface ConnectorWithAuth {

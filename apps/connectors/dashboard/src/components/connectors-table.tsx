@@ -8,6 +8,7 @@ import {
   useReactTable,
   type ColumnDef,
   type ColumnFiltersState,
+  type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
 import {
@@ -21,6 +22,9 @@ import {
   CircleDashedIcon,
   CopyIcon,
   CheckIcon,
+  DownloadIcon,
+  TrashIcon,
+  LoaderIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -106,11 +110,45 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
+function CopyImportButton({ name }: { name: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const importName = name.replace(/^connect-/, "").replace(/-/g, "");
+  const statement = `import { ${importName} } from './.connectors'`;
+
+  function handleCopy(e: React.MouseEvent) {
+    e.stopPropagation();
+    navigator.clipboard.writeText(statement).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="text-muted-foreground"
+      onClick={handleCopy}
+      title={statement}
+    >
+      {copied ? (
+        <CheckIcon className="size-3.5 text-green-500" />
+      ) : (
+        <CopyIcon className="size-3.5" />
+      )}
+      {copied ? "Copied!" : "Import"}
+    </Button>
+  );
+}
+
 interface ConnectorsTableProps {
   data: ConnectorWithAuth[];
   onConfigure: (connector: ConnectorWithAuth) => void;
   onRefresh: (name: string) => void;
   onOAuthStart: (name: string) => void;
+  onInstall?: (name: string) => Promise<void>;
+  onUninstall?: (name: string) => Promise<void>;
+  onRowClick?: (connector: ConnectorWithAuth) => void;
 }
 
 export function ConnectorsTable({
@@ -118,14 +156,90 @@ export function ConnectorsTable({
   onConfigure,
   onRefresh,
   onOAuthStart,
+  onInstall,
+  onUninstall,
+  onRowClick,
 }: ConnectorsTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] =
     React.useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = React.useState({});
+  const [categoryFilter, setCategoryFilter] = React.useState<string>("all");
+  const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
+  const [installingSet, setInstallingSet] = React.useState<Set<string>>(new Set());
+  const [bulkInstalling, setBulkInstalling] = React.useState(false);
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Keyboard shortcut: / to focus search, Escape to clear
+  React.useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+      if (e.key === "Escape" && document.activeElement === searchInputRef.current) {
+        table.getColumn("displayName")?.setFilterValue("");
+        searchInputRef.current?.blur();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  });
+
+  // Derive unique categories from data
+  const categories = React.useMemo(() => {
+    const cats = new Map<string, number>();
+    data.forEach((c) => cats.set(c.category, (cats.get(c.category) || 0) + 1));
+    return Array.from(cats.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [data]);
+
+  // Filter data by category before passing to table
+  const filteredData = React.useMemo(() => {
+    if (categoryFilter === "all") return data;
+    return data.filter((c) => c.category === categoryFilter);
+  }, [data, categoryFilter]);
+
+  async function handleInstall(name: string) {
+    if (!onInstall) return;
+    setInstallingSet((prev) => new Set(prev).add(name));
+    try {
+      await onInstall(name);
+    } finally {
+      setInstallingSet((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+    }
+  }
 
   const columns: ColumnDef<ConnectorWithAuth>[] = React.useMemo(
     () => [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <input
+            type="checkbox"
+            className="size-4 rounded border-gray-300 accent-primary cursor-pointer"
+            checked={table.getIsAllPageRowsSelected()}
+            ref={(el) => {
+              if (el) el.indeterminate = table.getIsSomePageRowsSelected();
+            }}
+            onChange={table.getToggleAllPageRowsSelectedHandler()}
+          />
+        ),
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            className="size-4 rounded border-gray-300 accent-primary cursor-pointer"
+            checked={row.getIsSelected()}
+            onChange={row.getToggleSelectedHandler()}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+      },
       {
         accessorKey: "displayName",
         header: ({ column }) => (
@@ -146,8 +260,20 @@ export function ConnectorsTable({
             <div className="text-xs text-muted-foreground">
               {row.original.name}
             </div>
+            {row.original.description && (
+              <div className="text-[11px] text-muted-foreground/60 line-clamp-1">
+                {row.original.description}
+              </div>
+            )}
           </div>
         ),
+        filterFn: (row, _columnId, filterValue) => {
+          const search = (filterValue as string).toLowerCase();
+          return (
+            row.original.displayName.toLowerCase().includes(search) ||
+            row.original.name.toLowerCase().includes(search)
+          );
+        },
       },
       {
         accessorKey: "version",
@@ -212,10 +338,37 @@ export function ConnectorsTable({
         id: "status",
         accessorFn: (row) => {
           if (!row.installed) return "not installed";
-          return row.auth?.configured ? "configured" : "not configured";
+          if (!row.auth?.configured) {
+            // Partially configured: some env vars set but not all
+            const auth = row.auth;
+            if (auth && auth.type !== "oauth" && auth.envVarTotalCount > 1 && auth.envVarSetCount > 0) {
+              return "partial";
+            }
+            return "needs auth";
+          }
+          if (row.auth?.type === "oauth" && row.auth?.tokenExpiry && row.auth.tokenExpiry < Date.now()) return "expired";
+          return "configured";
         },
-        header: "Status",
+        header: ({ column }) => (
+          <Button
+            variant="ghost"
+            onClick={() =>
+              column.toggleSorting(column.getIsSorted() === "asc")
+            }
+            className="-ml-3"
+          >
+            Status
+            <ArrowUpDownIcon />
+          </Button>
+        ),
+        sortingFn: (rowA, rowB) => {
+          const order: Record<string, number> = { "needs auth": 0, "partial": 1, "expired": 2, "not installed": 3, "configured": 4 };
+          const a = order[rowA.getValue("status") as string] ?? 3;
+          const b = order[rowB.getValue("status") as string] ?? 3;
+          return a - b;
+        },
         cell: ({ row }) => {
+          const auth = row.original.auth;
           if (!row.original.installed) {
             return (
               <Badge
@@ -226,13 +379,24 @@ export function ConnectorsTable({
               </Badge>
             );
           }
-          if (row.original.auth?.configured) {
+          if (auth?.configured) {
             return (
               <Badge
                 variant="outline"
                 className="border-green-300 text-green-700 dark:border-green-800 dark:text-green-400"
               >
                 Configured
+              </Badge>
+            );
+          }
+          // Partially configured: some env vars set for multi-field connectors
+          if (auth && auth.type !== "oauth" && auth.envVarTotalCount > 1 && auth.envVarSetCount > 0) {
+            return (
+              <Badge
+                variant="outline"
+                className="border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-400"
+              >
+                {auth.envVarSetCount}/{auth.envVarTotalCount} fields set
               </Badge>
             );
           }
@@ -280,10 +444,29 @@ export function ConnectorsTable({
         cell: ({ row }) => {
           const c = row.original;
 
+          // Stop propagation so action buttons don't trigger row click
+          const stop = (e: React.MouseEvent) => e.stopPropagation();
+
           if (!c.installed) {
+            const isInstalling = installingSet.has(c.name);
             return (
-              <div className="flex justify-end">
-                <CopyCommand command={`connectors install ${c.name}`} />
+              <div className="flex justify-end gap-1" onClick={stop}>
+                {onInstall ? (
+                  <Button
+                    size="sm"
+                    onClick={() => handleInstall(c.name)}
+                    disabled={isInstalling}
+                  >
+                    {isInstalling ? (
+                      <LoaderIcon className="size-3.5 animate-spin" />
+                    ) : (
+                      <DownloadIcon className="size-3.5" />
+                    )}
+                    {isInstalling ? "Installing..." : "Install"}
+                  </Button>
+                ) : (
+                  <CopyCommand command={`connectors install ${c.name}`} />
+                )}
               </div>
             );
           }
@@ -292,7 +475,8 @@ export function ConnectorsTable({
           if (auth?.type === "oauth") {
             if (auth.configured) {
               return (
-                <div className="flex justify-end gap-1">
+                <div className="flex justify-end gap-1" onClick={stop}>
+                  <CopyImportButton name={c.name} />
                   <Button
                     variant="ghost"
                     size="sm"
@@ -313,7 +497,8 @@ export function ConnectorsTable({
               );
             }
             return (
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-1" onClick={stop}>
+                <CopyImportButton name={c.name} />
                 <Button size="sm" onClick={() => onOAuthStart(c.name)}>
                   <ExternalLinkIcon className="size-3.5" />
                   Connect
@@ -323,7 +508,8 @@ export function ConnectorsTable({
           }
 
           return (
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-1" onClick={stop}>
+              <CopyImportButton name={c.name} />
               <Button
                 variant={auth?.configured ? "ghost" : "default"}
                 size="sm"
@@ -346,12 +532,40 @@ export function ConnectorsTable({
         },
       },
     ],
-    [onConfigure, onRefresh, onOAuthStart]
+    [onConfigure, onRefresh, onOAuthStart, onInstall, installingSet]
   );
 
+  // Derive selected rows and compute which are installable (not yet installed)
+  const selectedRows = React.useMemo(() => {
+    return Object.keys(rowSelection)
+      .filter((key) => rowSelection[key])
+      .map((key) => filteredData[parseInt(key)])
+      .filter(Boolean);
+  }, [rowSelection, filteredData]);
+
+  const installableSelected = React.useMemo(
+    () => selectedRows.filter((c) => !c.installed),
+    [selectedRows]
+  );
+
+  async function handleBulkInstall() {
+    if (!onInstall || installableSelected.length === 0) return;
+    setBulkInstalling(true);
+    try {
+      for (const connector of installableSelected) {
+        await onInstall(connector.name);
+      }
+    } finally {
+      setBulkInstalling(false);
+      setRowSelection({});
+    }
+  }
+
   const table = useReactTable({
-    data,
+    data: filteredData,
     columns,
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
@@ -366,6 +580,7 @@ export function ConnectorsTable({
       sorting,
       columnFilters,
       columnVisibility,
+      rowSelection,
     },
   });
 
@@ -373,7 +588,8 @@ export function ConnectorsTable({
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Input
-          placeholder="Filter connectors..."
+          ref={searchInputRef}
+          placeholder="Filter connectors... (press / to focus)"
           value={
             (table.getColumn("displayName")?.getFilterValue() as string) ?? ""
           }
@@ -382,6 +598,18 @@ export function ConnectorsTable({
           }
           className="max-w-sm"
         />
+        <select
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="all">All Categories ({data.length})</option>
+          {categories.map(([cat, count]) => (
+            <option key={cat} value={cat}>
+              {cat} ({count})
+            </option>
+          ))}
+        </select>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="ml-auto">
@@ -430,9 +658,10 @@ export function ConnectorsTable({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
-                  className={
-                    !row.original.installed ? "opacity-60" : undefined
-                  }
+                  className={`cursor-pointer hover:bg-muted/50 ${
+                    !row.original.installed ? "opacity-60" : ""
+                  }`}
+                  onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
@@ -457,6 +686,37 @@ export function ConnectorsTable({
           </TableBody>
         </Table>
       </div>
+      {/* Floating bulk action bar */}
+      {selectedRows.length > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border bg-muted/50 px-4 py-2.5">
+          <span className="text-sm font-medium">
+            {selectedRows.length} selected
+          </span>
+          {installableSelected.length > 0 && (
+            <Button
+              size="sm"
+              onClick={handleBulkInstall}
+              disabled={bulkInstalling}
+            >
+              {bulkInstalling ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <DownloadIcon className="size-3.5" />
+              )}
+              {bulkInstalling
+                ? "Installing..."
+                : `Install ${installableSelected.length} Selected`}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setRowSelection({})}
+          >
+            Clear Selection
+          </Button>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="text-muted-foreground text-sm">
           Page {table.getState().pagination.pageIndex + 1} of{" "}
