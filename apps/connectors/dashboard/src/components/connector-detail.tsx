@@ -299,9 +299,15 @@ export function ConnectorDetailDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         {loading || !connector ? (
-          <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-            Loading connector details...
-          </div>
+          <>
+            <DialogHeader>
+              <DialogTitle>Loading...</DialogTitle>
+              <DialogDescription>Fetching connector details</DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
+              Loading connector details...
+            </div>
+          </>
         ) : (
           <>
             <DialogHeader>
