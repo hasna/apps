@@ -6,6 +6,7 @@ import { MessagesTable } from "@/components/messages-table";
 import { SpacesList } from "@/components/spaces-list";
 import { ProjectsList } from "@/components/projects-list";
 import { ChatPanel } from "@/components/chat-panel";
+import { SpaceFeed } from "@/components/space-feed";
 import { SendDialog } from "@/components/send-dialog";
 import { UpdateDialog } from "@/components/update-dialog";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ export function App() {
   const [chatTitle, setChatTitle] = React.useState("");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<Message[] | null>(null);
+  const [selectedSpace, setSelectedSpace] = React.useState<string | null>(null);
   const [versionInfo, setVersionInfo] = React.useState<{
     current: string;
     latest: string;
@@ -207,7 +209,7 @@ export function App() {
         {/* Tabs */}
         <div className="flex items-center gap-1 border-b">
           <button
-            onClick={() => setTab("messages")}
+            onClick={() => { setTab("messages"); setSelectedSpace(null); }}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               tab === "messages"
                 ? "border-foreground text-foreground"
@@ -218,7 +220,7 @@ export function App() {
             Messages
           </button>
           <button
-            onClick={() => setTab("spaces")}
+            onClick={() => { setTab("spaces"); setSelectedSpace(null); }}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               tab === "spaces"
                 ? "border-foreground text-foreground"
@@ -234,7 +236,7 @@ export function App() {
             )}
           </button>
           <button
-            onClick={() => setTab("projects")}
+            onClick={() => { setTab("projects"); setSelectedSpace(null); }}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               tab === "projects"
                 ? "border-foreground text-foreground"
@@ -277,7 +279,8 @@ export function App() {
               messages={searchResults ?? messages}
               onSelectMessage={(msg) => {
                 if (msg.space) {
-                  openChat({ spaceName: msg.space, title: `#${msg.space}` });
+                  setSelectedSpace(msg.space);
+                  setTab("spaces");
                 } else {
                   openChat({ sessionId: msg.session_id, title: `${msg.from_agent} ↔ ${msg.to_agent}` });
                 }
@@ -285,7 +288,13 @@ export function App() {
             />
           </>
         )}
-        {tab === "spaces" && <SpacesList spaces={spaces} onSelectSpace={(name) => openChat({ spaceName: name, title: `#${name}` })} />}
+        {tab === "spaces" && (
+          selectedSpace ? (
+            <SpaceFeed spaceName={selectedSpace} onBack={() => setSelectedSpace(null)} />
+          ) : (
+            <SpacesList spaces={spaces} onSelectSpace={(name) => setSelectedSpace(name)} />
+          )
+        )}
         {tab === "projects" && <ProjectsList projects={projects} />}
       </main>
 
