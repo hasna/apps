@@ -1350,6 +1350,17 @@ program
     }
   });
 
+// serve (web dashboard)
+program
+  .command("serve")
+  .description("Start the web dashboard")
+  .option("--port <port>", "Port number", "19427")
+  .option("--no-open", "Don't open browser automatically")
+  .action(async (opts) => {
+    const { startServer } = await import("../server/serve.js");
+    await startServer(parseInt(opts.port, 10), { open: opts.open !== false });
+  });
+
 // interactive (TUI)
 program
   .command("interactive")

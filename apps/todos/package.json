@@ -1,13 +1,14 @@
 {
   "name": "@hasna/todos",
-  "version": "0.9.6",
+  "version": "0.9.8",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "todos": "dist/cli/index.js",
-    "todos-mcp": "dist/mcp/index.js"
+    "todos-mcp": "dist/mcp/index.js",
+    "todos-serve": "dist/server/index.js"
   },
   "exports": {
     ".": {
@@ -17,15 +18,19 @@
   },
   "files": [
     "dist",
+    "dashboard/dist",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:dashboard": "cd dashboard && bun run build",
+    "postinstall": "cd dashboard && bun install",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
-    "dev:mcp": "bun run src/mcp/index.ts"
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/server/index.ts"
   },
   "keywords": [
     "todos",
@@ -37,7 +42,8 @@
     "codex",
     "gemini",
     "tui",
-    "cli"
+    "cli",
+    "dashboard"
   ],
   "author": "hasna",
   "license": "Apache-2.0",

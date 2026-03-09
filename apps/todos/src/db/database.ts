@@ -216,6 +216,12 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (6);
   `,
+  // Migration 7: Add due_at column to tasks
+  `
+  ALTER TABLE tasks ADD COLUMN due_at TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (7);
+  `,
 ];
 
 let _db: Database | null = null;
