@@ -41,6 +41,7 @@ import {
   DependencyCycleError,
   PlanNotFoundError,
   TaskListNotFoundError,
+  CompletionGuardError,
 } from "../types/index.js";
 import type { Task } from "../types/index.js";
 
@@ -56,6 +57,10 @@ function formatError(error: unknown): string {
   if (error instanceof TaskListNotFoundError) return `Not found: ${error.message}`;
   if (error instanceof LockError) return `Lock error: ${error.message}`;
   if (error instanceof DependencyCycleError) return `Dependency cycle: ${error.message}`;
+  if (error instanceof CompletionGuardError) {
+    const retry = error.retryAfterSeconds ? ` (retry after ${error.retryAfterSeconds}s)` : "";
+    return `Completion blocked: ${error.reason}${retry}`;
+  }
   if (error instanceof Error) return error.message;
   return String(error);
 }

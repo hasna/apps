@@ -152,6 +152,7 @@ export interface Task {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  due_at: string | null;
 }
 
 // Task with relations loaded
@@ -178,6 +179,7 @@ export interface CreateTaskInput {
   working_dir?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
+  due_at?: string;
 }
 
 export interface UpdateTaskInput {
@@ -190,6 +192,7 @@ export interface UpdateTaskInput {
   task_list_id?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
+  due_at?: string;
   version: number; // required for optimistic locking
 }
 
@@ -274,6 +277,7 @@ export interface TaskRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  due_at: string | null;
 }
 
 export interface SessionRow {
@@ -362,5 +366,15 @@ export class DependencyCycleError extends Error {
       `Adding dependency ${taskId} -> ${dependsOn} would create a cycle`,
     );
     this.name = "DependencyCycleError";
+  }
+}
+
+export class CompletionGuardError extends Error {
+  constructor(
+    public reason: string,
+    public retryAfterSeconds?: number,
+  ) {
+    super(reason);
+    this.name = "CompletionGuardError";
   }
 }

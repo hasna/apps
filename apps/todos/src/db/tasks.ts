@@ -17,6 +17,7 @@ import {
 } from "../types/index.js";
 import { clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now, uuid } from "./database.js";
 import { nextTaskShortId } from "./projects.js";
+import { checkCompletionGuard } from "../lib/completion-guard.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -54,8 +55,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -75,6 +76,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       JSON.stringify(input.metadata || {}),
       timestamp,
       timestamp,
+      input.due_at || null,
     ],
   );
 
@@ -221,15 +223,21 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  const limitVal = filter.limit || 100;
-  const offsetVal = filter.offset || 0;
-  params.push(limitVal, offsetVal);
+  let limitClause = "";
+  if (filter.limit) {
+    limitClause = " LIMIT ?";
+    params.push(filter.limit);
+    if (filter.offset) {
+      limitClause += " OFFSET ?";
+      params.push(filter.offset);
+    }
+  }
 
   const rows = d
     .query(
       `SELECT * FROM tasks ${where} ORDER BY
        CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
-       created_at DESC LIMIT ? OFFSET ?`,
+       created_at DESC${limitClause}`,
     )
     .all(...params) as TaskRow[];
 
@@ -262,6 +270,10 @@ export function updateTask(
     params.push(input.description);
   }
   if (input.status !== undefined) {
+    // Completion guard when transitioning to completed
+    if (input.status === "completed") {
+      checkCompletionGuard(task, task.assigned_to || task.agent_id || null, d);
+    }
     sets.push("status = ?");
     params.push(input.status);
     if (input.status === "completed") {
@@ -292,6 +304,10 @@ export function updateTask(
   if (input.task_list_id !== undefined) {
     sets.push("task_list_id = ?");
     params.push(input.task_list_id);
+  }
+  if (input.due_at !== undefined) {
+    sets.push("due_at = ?");
+    params.push(input.due_at);
   }
 
   params.push(id, input.version);
@@ -367,6 +383,9 @@ export function completeTask(
   ) {
     throw new LockError(id, task.locked_by);
   }
+
+  // Completion guard: rate limit, min work time, cooldown
+  checkCompletionGuard(task, agentId || null, d);
 
   const timestamp = now();
   d.run(

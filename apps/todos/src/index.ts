@@ -87,8 +87,11 @@ export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js"
 export type { SyncResult } from "./lib/sync-types.js";
 
 // Config
-export { loadConfig } from "./lib/config.js";
-export type { TodosConfig, AgentConfig } from "./lib/config.js";
+export { loadConfig, getCompletionGuardConfig } from "./lib/config.js";
+export type { TodosConfig, AgentConfig, CompletionGuardConfig } from "./lib/config.js";
+
+// Completion Guard
+export { checkCompletionGuard } from "./lib/completion-guard.js";
 
 // Types
 export type {
@@ -134,4 +137,5 @@ export {
   DependencyCycleError,
   AgentNotFoundError,
   TaskListNotFoundError,
+  CompletionGuardError,
 } from "./types/index.js";

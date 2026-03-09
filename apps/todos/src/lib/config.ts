@@ -12,12 +12,26 @@ export interface TaskPrefixConfig {
   start_from?: number;  // starting number, defaults to 1
 }
 
+export interface CompletionGuardConfig {
+  enabled?: boolean;
+  min_work_seconds?: number;
+  max_completions_per_window?: number;
+  window_minutes?: number;
+  cooldown_seconds?: number;
+}
+
+export interface ProjectOverrideConfig {
+  completion_guard?: CompletionGuardConfig;
+}
+
 export interface TodosConfig {
   sync_agents?: string[] | string;
   task_list_id?: string;
   agent_tasks_dir?: string;
   agents?: Record<string, AgentConfig>;
   task_prefix?: TaskPrefixConfig;
+  completion_guard?: CompletionGuardConfig;
+  project_overrides?: Record<string, ProjectOverrideConfig>;
 }
 
 const CONFIG_PATH = join(HOME, ".todos", "config.json");
@@ -67,4 +81,23 @@ export function getAgentTasksDir(agent: string): string | null {
 export function getTaskPrefixConfig(): TaskPrefixConfig | null {
   const config = loadConfig();
   return config.task_prefix || null;
+}
+
+const GUARD_DEFAULTS: Required<CompletionGuardConfig> = {
+  enabled: false,
+  min_work_seconds: 30,
+  max_completions_per_window: 5,
+  window_minutes: 10,
+  cooldown_seconds: 60,
+};
+
+export function getCompletionGuardConfig(projectPath?: string | null): Required<CompletionGuardConfig> {
+  const config = loadConfig();
+  const global = { ...GUARD_DEFAULTS, ...config.completion_guard };
+
+  if (projectPath && config.project_overrides?.[projectPath]?.completion_guard) {
+    return { ...global, ...config.project_overrides[projectPath].completion_guard };
+  }
+
+  return global;
 }
