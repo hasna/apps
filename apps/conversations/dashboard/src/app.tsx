@@ -273,7 +273,16 @@ export function App() {
                 </button>
               )}
             </div>
-            <MessagesTable messages={searchResults ?? messages} />
+            <MessagesTable
+              messages={searchResults ?? messages}
+              onSelectMessage={(msg) => {
+                if (msg.space) {
+                  openChat({ spaceName: msg.space, title: `#${msg.space}` });
+                } else {
+                  openChat({ sessionId: msg.session_id, title: `${msg.from_agent} ↔ ${msg.to_agent}` });
+                }
+              }}
+            />
           </>
         )}
         {tab === "spaces" && <SpacesList spaces={spaces} onSelectSpace={(name) => openChat({ spaceName: name, title: `#${name}` })} />}

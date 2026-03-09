@@ -12,6 +12,7 @@ import type { Message } from "@/types";
 
 interface MessagesTableProps {
   messages: Message[];
+  onSelectMessage?: (message: Message) => void;
 }
 
 function PriorityBadge({ priority }: { priority: string }) {
@@ -55,7 +56,7 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`;
 }
 
-export function MessagesTable({ messages }: MessagesTableProps) {
+export function MessagesTable({ messages, onSelectMessage }: MessagesTableProps) {
   if (messages.length === 0) {
     return (
       <div className="rounded-xl border p-8 text-center text-muted-foreground">
@@ -80,7 +81,11 @@ export function MessagesTable({ messages }: MessagesTableProps) {
         </TableHeader>
         <TableBody>
           {messages.map((msg) => (
-            <TableRow key={msg.id}>
+            <TableRow
+              key={msg.id}
+              className={onSelectMessage ? "cursor-pointer hover:bg-muted/50" : ""}
+              onClick={() => onSelectMessage?.(msg)}
+            >
               <TableCell className="text-muted-foreground">{msg.id}</TableCell>
               <TableCell>
                 <span className="font-medium">{msg.from_agent}</span>
