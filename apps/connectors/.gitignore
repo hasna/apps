@@ -24,3 +24,4 @@ coverage/
 
 # Local connector installs
 .connectors/
+.playwright-mcp/
