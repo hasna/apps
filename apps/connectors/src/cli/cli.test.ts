@@ -406,8 +406,17 @@ describe("CLI", () => {
       await run("install anthropic figma");
       const { stdout } = await run("list --installed --json");
       const data = JSON.parse(stdout);
-      expect(data).toContain("anthropic");
-      expect(data).toContain("figma");
+      expect(Array.isArray(data)).toBe(true);
+      const names = data.map((s: { name: string }) => s.name);
+      expect(names).toContain("anthropic");
+      expect(names).toContain("figma");
+      // Each entry should have auth status fields
+      for (const entry of data) {
+        expect(entry).toHaveProperty("name");
+        expect(entry).toHaveProperty("category");
+        expect(entry).toHaveProperty("authType");
+        expect(entry).toHaveProperty("configured");
+      }
     });
   });
 
