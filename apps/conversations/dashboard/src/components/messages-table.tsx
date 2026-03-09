@@ -7,6 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Markdown } from "@/components/markdown";
 import type { Message } from "@/types";
 
 interface MessagesTableProps {
@@ -93,7 +94,11 @@ export function MessagesTable({ messages }: MessagesTableProps) {
                   <span>{msg.to_agent}</span>
                 )}
               </TableCell>
-              <TableCell className="max-w-xs truncate">{msg.content}</TableCell>
+              <TableCell className="max-w-xs">
+                <div className="line-clamp-2">
+                  <Markdown>{msg.content}</Markdown>
+                </div>
+              </TableCell>
               <TableCell>
                 <PriorityBadge priority={msg.priority} />
               </TableCell>

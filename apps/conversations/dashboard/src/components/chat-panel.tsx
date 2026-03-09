@@ -2,6 +2,7 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { XIcon, SendIcon } from "lucide-react";
+import { Markdown } from "@/components/markdown";
 import type { Message } from "@/types";
 
 interface ChatPanelProps {
@@ -97,7 +98,9 @@ export function ChatPanel({ open, onClose, spaceName, sessionId, title }: ChatPa
                   {msg.created_at.slice(11, 19)}
                 </span>
               </div>
-              <p className="mt-0.5 text-sm">{msg.content}</p>
+              <div className="mt-0.5 text-sm">
+                <Markdown>{msg.content}</Markdown>
+              </div>
             </div>
           ))
         )}
