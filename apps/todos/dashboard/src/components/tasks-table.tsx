@@ -24,6 +24,8 @@ import {
   CalendarIcon,
   Trash2Icon,
   MoreHorizontalIcon,
+  LayoutListIcon,
+  LayoutGridIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +48,7 @@ import {
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { KanbanView } from "@/components/kanban-view";
 import type { TaskSummary, ProjectSummary } from "@/types";
 
 // ── Minimal Markdown renderer ──────────────────────────────────────────────
@@ -365,6 +368,7 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = React.useState("");
+  const [viewMode, setViewMode] = React.useState<"table" | "kanban">("table");
   const [selectedTask, setSelectedTask] = React.useState<TaskSummary | null>(null);
   const [deleteConfirm, setDeleteConfirm] = React.useState<string | null>(null);
   const [rowSelection, setRowSelection] = React.useState<Record<string, boolean>>({});
@@ -479,10 +483,33 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
               })}
             </SelectContent>
           </Select>
+          <div className="ml-auto flex items-center border rounded-md">
+            <Button variant={viewMode === "table" ? "secondary" : "ghost"} size="icon" className="size-8 rounded-r-none"
+              onClick={() => setViewMode("table")} title="Table view">
+              <LayoutListIcon className="size-4" />
+            </Button>
+            <Button variant={viewMode === "kanban" ? "secondary" : "ghost"} size="icon" className="size-8 rounded-l-none"
+              onClick={() => setViewMode("kanban")} title="Kanban view">
+              <LayoutGridIcon className="size-4" />
+            </Button>
+          </div>
         </div>
 
-        {/* Table */}
-        <div className="rounded-md border">
+        {/* Kanban View */}
+        {viewMode === "kanban" && (
+          <KanbanView
+            data={table.getFilteredRowModel().rows.map(r => r.original)}
+            projectMap={projectMap}
+            onStart={onStart}
+            onComplete={onComplete}
+            onDelete={confirmDelete}
+            onEdit={onEdit}
+            onSelect={setSelectedTask}
+          />
+        )}
+
+        {/* Table View */}
+        {viewMode === "table" && <div className="rounded-md border">
           <Table>
             <TableHeader>
               {table.getHeaderGroups().map((hg) => (
@@ -510,7 +537,7 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
               )}
             </TableBody>
           </Table>
-        </div>
+        </div>}
 
         {/* Pagination */}
         <div className="flex items-center justify-between">
