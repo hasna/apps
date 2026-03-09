@@ -4,15 +4,16 @@
  * Serves the Vite-built React/shadcn dashboard from dashboard/dist/.
  */
 
-import { existsSync } from "fs";
-import { join, dirname, extname } from "path";
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { join, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
+import { homedir } from "os";
 import {
   CONNECTORS,
   getConnector,
   loadConnectorVersions,
 } from "../lib/registry.js";
-import { getInstalledConnectors, getConnectorDocs, installConnector } from "../lib/installer.js";
+import { getInstalledConnectors, getConnectorDocs, installConnector, removeConnector } from "../lib/installer.js";
 import {
   getAuthStatus,
   saveApiKey,
@@ -20,8 +21,29 @@ import {
   exchangeOAuthCode,
   refreshOAuthToken,
   validateOAuthState,
+  listProfiles,
+  switchProfile,
+  deleteProfile,
   type AuthStatus,
 } from "./auth.js";
+
+// ── Activity Log ──
+interface ActivityEntry {
+  action: string;
+  connector: string;
+  timestamp: number;
+  detail?: string;
+}
+
+const activityLog: ActivityEntry[] = [];
+const MAX_ACTIVITY_LOG = 100;
+
+function logActivity(action: string, connector: string, detail?: string) {
+  activityLog.unshift({ action, connector, timestamp: Date.now(), detail });
+  if (activityLog.length > MAX_ACTIVITY_LOG) {
+    activityLog.length = MAX_ACTIVITY_LOG;
+  }
+}
 
 interface ConnectorWithAuth {
   name: string;
@@ -212,6 +234,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
           const body = (await req.json()) as { key: string; field?: string };
           if (!body.key) return json({ error: "Missing 'key' in request body" }, 400, port);
           saveApiKey(name, body.key, body.field);
+          logActivity("key_saved", name, body.field ? `Field: ${body.field}` : undefined);
           return json({ success: true }, 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to save key" }, 500, port);
@@ -225,12 +248,49 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
         try {
           const tokens = await refreshOAuthToken(name);
+          logActivity("token_refreshed", name, tokens.expiresAt ? `Expires: ${new Date(tokens.expiresAt).toISOString()}` : undefined);
           return json({ success: true, expiresAt: tokens.expiresAt }, 200, port);
         } catch (e) {
           return json(
             { success: false, error: e instanceof Error ? e.message : "Failed to refresh" },
             500, port
           );
+        }
+      }
+
+      // POST /api/connectors/:name/install
+      const installMatch = path.match(/^\/api\/connectors\/([^/]+)\/install$/);
+      if (installMatch && method === "POST") {
+        const name = installMatch[1];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        const meta = getConnector(name);
+        if (!meta) return json({ error: `Connector '${name}' not found` }, 404, port);
+        try {
+          const result = installConnector(name);
+          if (!result.success) {
+            return json({ error: result.error || "Failed to install connector" }, 500, port);
+          }
+          logActivity("installed", name);
+          return json({ success: true, name }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to install connector" }, 500, port);
+        }
+      }
+
+      // POST /api/connectors/:name/uninstall
+      const uninstallMatch = path.match(/^\/api\/connectors\/([^/]+)\/uninstall$/);
+      if (uninstallMatch && method === "POST") {
+        const name = uninstallMatch[1];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        try {
+          const removed = removeConnector(name);
+          if (!removed) {
+            return json({ error: `Connector '${name}' is not installed` }, 404, port);
+          }
+          logActivity("uninstalled", name);
+          return json({ success: true, name }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to uninstall connector" }, 500, port);
         }
       }
 
@@ -254,6 +314,166 @@ export async function startServer(port: number, options?: { open?: boolean }): P
             { error: e instanceof Error ? e.message : "Failed to update" },
             500, port
           );
+        }
+      }
+
+      // GET /api/activity
+      if (path === "/api/activity" && method === "GET") {
+        return json(activityLog, 200, port);
+      }
+
+      // ── Profile Routes ──
+
+      // GET /api/connectors/:name/profiles
+      const profilesMatch = path.match(/^\/api\/connectors\/([^/]+)\/profiles$/);
+      if (profilesMatch && method === "GET") {
+        const name = profilesMatch[1];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        try {
+          const profiles = listProfiles(name);
+          const configDir = join(homedir(), ".connect", name.startsWith("connect-") ? name : `connect-${name}`);
+          const currentProfileFile = join(configDir, "current_profile");
+          let current = "default";
+          if (existsSync(currentProfileFile)) {
+            try { current = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch { /* default */ }
+          }
+          return json({ current, profiles }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to list profiles" }, 500, port);
+        }
+      }
+
+      // POST /api/connectors/:name/profiles/switch
+      const profileSwitchMatch = path.match(/^\/api\/connectors\/([^/]+)\/profiles\/switch$/);
+      if (profileSwitchMatch && method === "POST") {
+        const name = profileSwitchMatch[1];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
+          const body = (await req.json()) as { profile: string };
+          if (!body.profile) return json({ error: "Missing 'profile' in request body" }, 400, port);
+          switchProfile(name, body.profile);
+          logActivity("profile_switch", name, `Switched to profile: ${body.profile}`);
+          return json({ success: true, profile: body.profile }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to switch profile" }, 500, port);
+        }
+      }
+
+      // DELETE /api/connectors/:name/profiles/:profile
+      const profileDeleteMatch = path.match(/^\/api\/connectors\/([^/]+)\/profiles\/([^/]+)$/);
+      if (profileDeleteMatch && method === "DELETE") {
+        const name = profileDeleteMatch[1];
+        const profile = profileDeleteMatch[2];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        if (profile === "default") return json({ error: "Cannot delete the default profile" }, 400, port);
+        try {
+          const deleted = deleteProfile(name, profile);
+          if (!deleted) return json({ error: `Profile '${profile}' not found` }, 404, port);
+          logActivity("profile_delete", name, `Deleted profile: ${profile}`);
+          return json({ success: true }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to delete profile" }, 500, port);
+        }
+      }
+
+      // ── Export/Import Routes ──
+
+      // GET /api/export — Export all connector credentials (excluding OAuth tokens)
+      if (path === "/api/export" && method === "GET") {
+        try {
+          const connectDir = join(homedir(), ".connect");
+          const result: Record<string, { profiles: Record<string, unknown> }> = {};
+
+          if (existsSync(connectDir)) {
+            const entries = readdirSync(connectDir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (!entry.isDirectory() || !entry.name.startsWith("connect-")) continue;
+              const connectorName = entry.name.replace(/^connect-/, "");
+              const profilesDir = join(connectDir, entry.name, "profiles");
+              if (!existsSync(profilesDir)) continue;
+
+              const profiles: Record<string, unknown> = {};
+              const profileEntries = readdirSync(profilesDir, { withFileTypes: true });
+
+              for (const pEntry of profileEntries) {
+                // Pattern 1: profiles/<name>.json (flat file)
+                if (pEntry.isFile() && pEntry.name.endsWith(".json")) {
+                  const profileName = basename(pEntry.name, ".json");
+                  try {
+                    const config = JSON.parse(readFileSync(join(profilesDir, pEntry.name), "utf-8"));
+                    profiles[profileName] = config;
+                  } catch { /* skip unreadable */ }
+                }
+                // Pattern 2: profiles/<name>/config.json (directory)
+                if (pEntry.isDirectory()) {
+                  const configPath = join(profilesDir, pEntry.name, "config.json");
+                  if (existsSync(configPath)) {
+                    try {
+                      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+                      profiles[pEntry.name] = config;
+                    } catch { /* skip unreadable */ }
+                  }
+                }
+              }
+
+              if (Object.keys(profiles).length > 0) {
+                result[connectorName] = { profiles };
+              }
+            }
+          }
+
+          const exportData = { connectors: result, exportedAt: new Date().toISOString() };
+          return new Response(JSON.stringify(exportData, null, 2), {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Disposition": `attachment; filename="connectors-backup-${new Date().toISOString().slice(0, 10)}.json"`,
+              "Access-Control-Allow-Origin": port ? `http://localhost:${port}` : "*",
+              ...SECURITY_HEADERS,
+            },
+          });
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to export credentials" }, 500, port);
+        }
+      }
+
+      // POST /api/import — Import connector credentials from backup JSON
+      if (path === "/api/import" && method === "POST") {
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
+
+          const body = (await req.json()) as { connectors: Record<string, { profiles: Record<string, unknown> }> };
+          if (!body.connectors || typeof body.connectors !== "object") {
+            return json({ error: "Invalid import format: missing 'connectors' object" }, 400, port);
+          }
+
+          let imported = 0;
+          const connectDir = join(homedir(), ".connect");
+
+          for (const [connectorName, data] of Object.entries(body.connectors)) {
+            if (!isValidConnectorName(connectorName)) continue;
+            if (!data.profiles || typeof data.profiles !== "object") continue;
+
+            const connectorDir = join(connectDir, `connect-${connectorName}`);
+            const profilesDir = join(connectorDir, "profiles");
+
+            for (const [profileName, config] of Object.entries(data.profiles)) {
+              if (!config || typeof config !== "object") continue;
+
+              mkdirSync(profilesDir, { recursive: true });
+              const profileFile = join(profilesDir, `${profileName}.json`);
+              writeFileSync(profileFile, JSON.stringify(config, null, 2));
+              imported++;
+            }
+          }
+
+          logActivity("credentials_imported", "all", `Imported ${imported} profiles`);
+          return json({ success: true, imported }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to import credentials" }, 500, port);
         }
       }
 
@@ -308,6 +528,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         try {
           const redirectUri = `http://localhost:${port}/oauth/${name}/callback`;
           await exchangeOAuthCode(name, code, redirectUri);
+          logActivity("oauth_connected", name);
 
           return htmlResponse(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#e5e5e5;">
             <div style="text-align:center;">
@@ -335,7 +556,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         return new Response(null, {
           headers: {
             "Access-Control-Allow-Origin": `http://localhost:${port}`,
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
           },
         });

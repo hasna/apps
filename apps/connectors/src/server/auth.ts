@@ -4,7 +4,7 @@
  * directories for stored credentials, and handles token operations.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from "fs";
 import { randomBytes } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
@@ -68,6 +68,8 @@ export interface AuthStatus {
   tokenExpiry?: number;
   hasRefreshToken?: boolean;
   envVars: { variable: string; description: string; set: boolean }[];
+  envVarSetCount: number;
+  envVarTotalCount: number;
 }
 
 export interface OAuthTokens {
@@ -180,6 +182,9 @@ export function getAuthStatus(name: string): AuthStatus {
     set: !!process.env[v.variable],
   }));
 
+  const envVarTotalCount = envVars.length;
+  const envVarSetCount = envVars.filter((v) => v.set).length;
+
   if (authType === "oauth") {
     const tokens = loadTokens(name);
     const config = loadProfileConfig(name);
@@ -193,6 +198,8 @@ export function getAuthStatus(name: string): AuthStatus {
       tokenExpiry,
       hasRefreshToken,
       envVars,
+      envVarSetCount,
+      envVarTotalCount,
     };
   }
 
@@ -207,6 +214,8 @@ export function getAuthStatus(name: string): AuthStatus {
     type: authType,
     configured: hasKey || hasEnvVar,
     envVars,
+    envVarSetCount,
+    envVarTotalCount,
   };
 }
 
@@ -473,4 +482,85 @@ export async function refreshOAuthToken(name: string): Promise<OAuthTokens> {
 export function getTokenExpiry(name: string): number | null {
   const tokens = loadTokens(name);
   return tokens?.expiresAt || null;
+}
+
+/**
+ * List all profile names for a connector.
+ * Reads ~/.connect/connect-{name}/profiles/ directory entries —
+ * both .json files (pattern 1) and subdirectories (pattern 2).
+ */
+export function listProfiles(name: string): string[] {
+  const configDir = getConnectorConfigDir(name);
+  const profilesDir = join(configDir, "profiles");
+
+  if (!existsSync(profilesDir)) return ["default"];
+
+  const seen = new Set<string>();
+  try {
+    const entries = readdirSync(profilesDir);
+    for (const entry of entries) {
+      const fullPath = join(profilesDir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        // Pattern 2: profiles/<name>/ directory
+        seen.add(entry);
+      } else if (entry.endsWith(".json")) {
+        // Pattern 1: profiles/<name>.json file
+        seen.add(entry.replace(/\.json$/, ""));
+      }
+    }
+  } catch {
+    // If we can't read the directory, return default
+  }
+
+  // Ensure "default" is always present
+  seen.add("default");
+
+  return Array.from(seen).sort();
+}
+
+/**
+ * Switch the active profile for a connector.
+ * Writes the profile name to ~/.connect/connect-{name}/current_profile
+ */
+export function switchProfile(name: string, profile: string): void {
+  const configDir = getConnectorConfigDir(name);
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "current_profile"), profile);
+}
+
+/**
+ * Delete a profile for a connector.
+ * Removes the profile file or directory from ~/.connect/connect-{name}/profiles/.
+ * Refuses to delete the "default" profile.
+ * Returns true if deletion succeeded, false if profile not found or is "default".
+ */
+export function deleteProfile(name: string, profile: string): boolean {
+  if (profile === "default") return false;
+
+  const configDir = getConnectorConfigDir(name);
+  const profilesDir = join(configDir, "profiles");
+
+  // Try pattern 1: profiles/<name>.json
+  const profileFile = join(profilesDir, `${profile}.json`);
+  if (existsSync(profileFile)) {
+    rmSync(profileFile);
+    // If this was the current profile, switch back to default
+    if (getCurrentProfile(name) === profile) {
+      switchProfile(name, "default");
+    }
+    return true;
+  }
+
+  // Try pattern 2: profiles/<name>/ directory
+  const profileDir = join(profilesDir, profile);
+  if (existsSync(profileDir)) {
+    rmSync(profileDir, { recursive: true });
+    if (getCurrentProfile(name) === profile) {
+      switchProfile(name, "default");
+    }
+    return true;
+  }
+
+  return false;
 }
