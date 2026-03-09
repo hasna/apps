@@ -1,18 +1,18 @@
 import * as React from "react";
-import { RefreshCwIcon, SendIcon, HashIcon, MessageSquareIcon, FolderIcon, DownloadIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { MessagesTable } from "@/components/messages-table";
-import { SpacesList } from "@/components/spaces-list";
+import { SpacesTree } from "@/components/spaces-tree";
 import { ProjectsList } from "@/components/projects-list";
 import { ChatPanel } from "@/components/chat-panel";
 import { SpaceFeed } from "@/components/space-feed";
 import { SendDialog } from "@/components/send-dialog";
-import { UpdateDialog } from "@/components/update-dialog";
+import { HelpPage } from "@/components/help-page";
 import { Button } from "@/components/ui/button";
 import type { Message, Space, Project, DashboardStatus } from "@/types";
 
-type Tab = "messages" | "spaces" | "projects";
+type Page = "dashboard" | "messages" | "spaces" | "projects" | "help";
 
 export function App() {
   const [status, setStatus] = React.useState<DashboardStatus | null>(null);
@@ -20,62 +20,34 @@ export function App() {
   const [spaces, setSpaces] = React.useState<Space[]>([]);
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [loading, setLoading] = React.useState(true);
-  const [tab, setTab] = React.useState<Tab>("messages");
+  const [page, setPage] = React.useState<Page>("dashboard");
   const [sendOpen, setSendOpen] = React.useState(false);
-  const [updateOpen, setUpdateOpen] = React.useState(false);
   const [chatOpen, setChatOpen] = React.useState(false);
-  const [chatSpace, setChatSpace] = React.useState<string | undefined>();
   const [chatSession, setChatSession] = React.useState<string | undefined>();
   const [chatTitle, setChatTitle] = React.useState("");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<Message[] | null>(null);
   const [selectedSpace, setSelectedSpace] = React.useState<string | null>(null);
-  const [versionInfo, setVersionInfo] = React.useState<{
-    current: string;
-    latest: string;
-    updateAvailable: boolean;
-  } | null>(null);
-  const [toast, setToast] = React.useState<{
-    message: string;
-    type: "success" | "error";
-  } | null>(null);
+  const [toast, setToast] = React.useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadInFlight = React.useRef(false);
 
   const showToast = React.useCallback((message: string, type: "success" | "error") => {
     setToast({ message, type });
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-    }
-    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3000);
   }, []);
 
   const fetchJson = React.useCallback(async <T,>(input: RequestInfo, init?: RequestInit): Promise<T> => {
     const res = await fetch(input, init);
     let data: unknown = null;
-    try {
-      data = await res.json();
-    } catch {
-      // ignore parse errors for now
-    }
+    try { data = await res.json(); } catch {}
     if (!res.ok) {
-      const errorMessage = typeof (data as { error?: string })?.error === "string"
-        ? (data as { error?: string }).error
-        : `Request failed (${res.status})`;
-      throw new Error(errorMessage);
+      const msg = typeof (data as any)?.error === "string" ? (data as any).error : `Request failed (${res.status})`;
+      throw new Error(msg);
     }
-    if (data === null) {
-      throw new Error("Invalid server response");
-    }
+    if (data === null) throw new Error("Invalid server response");
     return data as T;
   }, []);
-
-  const isVersionInfo = (value: unknown): value is { current: string; latest: string; updateAvailable: boolean } => {
-    if (!value || typeof value !== "object") return false;
-    const v = value as Record<string, unknown>;
-    return typeof v.current === "string" && typeof v.latest === "string" && typeof v.updateAvailable === "boolean";
-  };
 
   const loadData = React.useCallback(async () => {
     if (loadInFlight.current) return;
@@ -88,12 +60,12 @@ export function App() {
         fetchJson<Project[]>("/api/projects"),
       ]);
       setStatus(statusRes);
-      setMessages(messagesRes);
+      // Filter to DMs only for the messages page
+      setMessages(messagesRes.filter((m) => !m.space));
       setSpaces(spacesRes);
       setProjects(projectsRes);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load data";
-      showToast(message, "error");
+      showToast(error instanceof Error ? error.message : "Failed to load data", "error");
     } finally {
       loadInFlight.current = false;
       setLoading(false);
@@ -102,254 +74,140 @@ export function App() {
 
   const handleSearch = React.useCallback(async (query: string) => {
     setSearchQuery(query);
-    if (!query.trim()) {
-      setSearchResults(null);
-      return;
-    }
+    if (!query.trim()) { setSearchResults(null); return; }
     try {
       const res = await fetch(`/api/messages/search?q=${encodeURIComponent(query)}&limit=50`);
       if (res.ok) {
         const data = await res.json() as Message[];
-        setSearchResults(data);
+        // Filter to DMs only
+        setSearchResults(data.filter((m) => !m.space));
       }
-    } catch {
-      setSearchResults(null);
-    }
+    } catch { setSearchResults(null); }
   }, []);
 
-  const openChat = React.useCallback((opts: { spaceName?: string; sessionId?: string; title: string }) => {
-    setChatSpace(opts.spaceName);
+  const openChat = React.useCallback((opts: { sessionId?: string; title: string }) => {
     setChatSession(opts.sessionId);
     setChatTitle(opts.title);
     setChatOpen(true);
   }, []);
 
+  React.useEffect(() => { loadData(); const t = setInterval(loadData, 3000); return () => clearInterval(t); }, [loadData]);
+
+  // Keyboard shortcuts
   React.useEffect(() => {
-    loadData();
-    const timer = setInterval(loadData, 3000);
-    return () => clearInterval(timer);
+    function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "0") setPage("dashboard");
+      if (e.key === "1") setPage("messages");
+      if (e.key === "2") { setPage("spaces"); setSelectedSpace(null); }
+      if (e.key === "3") setPage("projects");
+      if (e.key === "4") setPage("help");
+      if (e.key === "n" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setSendOpen(true); }
+      if (e.key === "r" && !e.ctrlKey && !e.metaKey) loadData();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [loadData]);
 
-  React.useEffect(() => {
-    fetchJson("/api/version")
-      .then((data) => {
-        if (isVersionInfo(data)) {
-          setVersionInfo(data);
-        } else {
-          setVersionInfo(null);
-        }
-      })
-      .catch(() => setVersionInfo(null));
-  }, [fetchJson]);
+  const navItems: { key: Page; label: string }[] = [
+    { key: "dashboard", label: "Dashboard" },
+    { key: "messages", label: "Messages" },
+    { key: "spaces", label: "Spaces" },
+    { key: "projects", label: "Projects" },
+    { key: "help", label: "Help" },
+  ];
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <img
-              src="/logo.jpg"
-              alt="Hasna"
-              className="h-7 w-auto rounded"
-            />
-            <h1 className="text-base font-semibold">
-              Hasna{" "}
-              <span className="font-normal text-muted-foreground">
-                Conversations
-              </span>
-            </h1>
+          <div className="flex items-center gap-6">
+            <button className="flex items-center gap-3 hover:opacity-80 transition-opacity" onClick={() => setPage("dashboard")}>
+              <img src="/logo.jpg" alt="Hasna" className="h-7 w-auto rounded" />
+              <h1 className="text-base font-semibold">Hasna <span className="font-normal text-muted-foreground">Conversations</span></h1>
+            </button>
+            <nav className="flex items-center gap-1">
+              {navItems.map((item) => (
+                <Button
+                  key={item.key}
+                  variant={page === item.key ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => { setPage(item.key); if (item.key === "spaces") setSelectedSpace(null); }}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </nav>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setSendOpen(true)}
-            >
-              <SendIcon className="size-3.5" />
-              Send
+            <Button variant="outline" size="icon" className="size-8" onClick={loadData} disabled={loading} title="Reload (r)">
+              <RefreshCwIcon className={`size-4 ${loading ? "animate-spin" : ""}`} />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => { setLoading(true); loadData(); }}
-              disabled={loading}
-            >
-              <RefreshCwIcon
-                className={`size-3.5 ${loading ? "animate-spin" : ""}`}
-              />
-              Reload
-            </Button>
-            {versionInfo && (
-              versionInfo.updateAvailable ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setUpdateOpen(true)}
-                  className="text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300"
-                >
-                  <DownloadIcon className="size-3.5" />
-                  Update v{versionInfo.latest}
-                </Button>
-              ) : (
-                <span className="text-xs text-muted-foreground px-2">
-                  v{versionInfo.current}
-                </span>
-              )
-            )}
             <ThemeToggle />
           </div>
         </div>
       </header>
 
-      {/* Content */}
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-6">
-        <StatsCards status={status} />
+        {page === "dashboard" && <StatsCards status={status} />}
 
-        {/* Tabs */}
-        <div className="flex items-center gap-1 border-b">
-          <button
-            onClick={() => { setTab("messages"); setSelectedSpace(null); }}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "messages"
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <MessageSquareIcon className="size-4" />
-            Messages
-          </button>
-          <button
-            onClick={() => { setTab("spaces"); setSelectedSpace(null); }}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "spaces"
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <HashIcon className="size-4" />
-            Spaces
-            {spaces.length > 0 && (
-              <span className="text-xs text-muted-foreground">
-                {spaces.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => { setTab("projects"); setSelectedSpace(null); }}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "projects"
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <FolderIcon className="size-4" />
-            Projects
-            {projects.length > 0 && (
-              <span className="text-xs text-muted-foreground">
-                {projects.length}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {tab === "messages" && (
+        {page === "messages" && (
           <>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Direct Messages</h2>
+              <Button size="sm" onClick={() => setSendOpen(true)} title="Press n">Send Message</Button>
+            </div>
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => handleSearch(e.target.value)}
-                  placeholder="Search messages..."
+                  placeholder="Search DMs..."
                   className="w-full rounded-lg border px-4 py-2 text-sm bg-background pl-9"
                 />
                 <svg className="absolute left-3 top-2.5 size-4 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
               </div>
               {searchQuery && (
-                <button
-                  onClick={() => { setSearchQuery(""); setSearchResults(null); }}
-                  className="text-sm text-muted-foreground hover:text-foreground"
-                >
-                  Clear
-                </button>
+                <button onClick={() => { setSearchQuery(""); setSearchResults(null); }} className="text-sm text-muted-foreground hover:text-foreground">Clear</button>
               )}
             </div>
             <MessagesTable
               messages={searchResults ?? messages}
-              onSelectMessage={(msg) => {
-                if (msg.space) {
-                  setSelectedSpace(msg.space);
-                  setTab("spaces");
-                } else {
-                  openChat({ sessionId: msg.session_id, title: `${msg.from_agent} ↔ ${msg.to_agent}` });
-                }
-              }}
+              onSelectMessage={(msg) => openChat({ sessionId: msg.session_id, title: `${msg.from_agent} ↔ ${msg.to_agent}` })}
             />
           </>
         )}
-        {tab === "spaces" && (
+
+        {page === "spaces" && (
           selectedSpace ? (
             <SpaceFeed spaceName={selectedSpace} onBack={() => setSelectedSpace(null)} />
           ) : (
-            <SpacesList spaces={spaces} onSelectSpace={(name) => setSelectedSpace(name)} />
+            <SpacesTree spaces={spaces} onSelectSpace={(name) => setSelectedSpace(name)} />
           )
         )}
-        {tab === "projects" && <ProjectsList projects={projects} />}
+
+        {page === "projects" && <ProjectsList projects={projects} />}
+
+        {page === "help" && <HelpPage />}
       </main>
 
-      {/* Send Dialog */}
-      <SendDialog
-        open={sendOpen}
-        onOpenChange={setSendOpen}
-        onSent={() => {
-          showToast("Message sent", "success");
-          loadData();
-        }}
-      />
+      <SendDialog open={sendOpen} onOpenChange={setSendOpen} onSent={() => { showToast("Message sent", "success"); loadData(); }} />
 
-      {/* Update Dialog */}
-      {versionInfo?.updateAvailable && (
-        <UpdateDialog
-          open={updateOpen}
-          onOpenChange={setUpdateOpen}
-          current={versionInfo.current}
-          latest={versionInfo.latest}
-          onUpdated={(message, type) => {
-            showToast(message, type);
-            if (type === "success") {
-              fetchJson("/api/version")
-                .then((data) => {
-                  if (isVersionInfo(data)) {
-                    setVersionInfo(data);
-                  } else {
-                    setVersionInfo(null);
-                  }
-                })
-                .catch(() => setVersionInfo(null));
-            }
-          }}
-        />
-      )}
-
-      {/* Chat Panel */}
       <ChatPanel
         open={chatOpen}
         onClose={() => setChatOpen(false)}
-        spaceName={chatSpace}
         sessionId={chatSession}
         title={chatTitle}
       />
 
-      {/* Toast */}
       {toast && (
-        <div
-          className={`fixed bottom-6 right-6 z-50 rounded-lg border px-4 py-3 text-sm shadow-lg transition-all ${
-            toast.type === "success"
-              ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950 dark:text-green-200"
-              : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
-          }`}
-        >
+        <div className={`fixed bottom-6 right-6 z-50 rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          toast.type === "success"
+            ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950 dark:text-green-200"
+            : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
+        }`}>
           {toast.message}
         </div>
       )}
