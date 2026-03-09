@@ -146,6 +146,11 @@ export function App() {
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-3">
+            <img
+              src="/logo.jpg"
+              alt="Hasna"
+              className="h-7 w-auto rounded"
+            />
             <h1 className="text-base font-semibold">
               Hasna{" "}
               <span className="font-normal text-muted-foreground">
