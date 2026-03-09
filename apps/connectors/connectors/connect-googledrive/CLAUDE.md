@@ -49,16 +49,16 @@ src/
 
 ## Authentication
 
-API Key authentication. Credentials can be set via:
-- Environment variable (see below)
-- Profile configuration: `connect-googledrive config set-key <key>`
-
+OAuth authentication (Google OAuth2). Credentials can be set via:
+- OAuth flow through the dashboard
+- Profile configuration with client credentials at `~/.connect/connect-googledrive/credentials.json`
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `GOOGLEDRIVE_API_KEY` | API key |
+| `GOOGLEDRIVE_CLIENT_ID` | OAuth client ID |
+| `GOOGLEDRIVE_CLIENT_SECRET` | OAuth client secret |
 
 ## Data Storage
 
