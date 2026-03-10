@@ -220,6 +220,377 @@ describe("API /api/messages/search", () => {
   });
 });
 
+describe("API /api/messages/pinned", () => {
+  test("GET returns pinned messages", async () => {
+    const msg = sendMessage({ from: "pin-user", to: "other", content: "pin-me-msg" });
+    // Pin the message first via the pin endpoint
+    await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
+    const res = await fetch(`${base()}/api/messages/pinned`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data.some((m: any) => m.id === msg.id)).toBe(true);
+  });
+
+  test("GET filters by space", async () => {
+    createSpace("pin-sp", "tester");
+    const msg = sendMessage({ from: "a", to: "pin-sp", content: "pinned-in-space", space: "pin-sp" });
+    await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
+    const res = await fetch(`${base()}/api/messages/pinned?space=pin-sp`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data.every((m: any) => m.space === "pin-sp")).toBe(true);
+  });
+
+  test("GET respects limit param", async () => {
+    const m1 = sendMessage({ from: "a", to: "b", content: "pinlimit-1" });
+    const m2 = sendMessage({ from: "a", to: "b", content: "pinlimit-2" });
+    await fetch(`${base()}/api/messages/${m1.id}/pin`, { method: "POST" });
+    await fetch(`${base()}/api/messages/${m2.id}/pin`, { method: "POST" });
+    const res = await fetch(`${base()}/api/messages/pinned?limit=1`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data).toHaveLength(1);
+  });
+});
+
+describe("API /api/messages/:id/pin", () => {
+  test("POST pins a message", async () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "to-pin" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.id).toBe(msg.id);
+  });
+
+  test("POST returns 404 for non-existent message", async () => {
+    const res = await fetch(`${base()}/api/messages/999999/pin`, { method: "POST" });
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("DELETE unpins a message", async () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "to-unpin" });
+    await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.id).toBe(msg.id);
+  });
+
+  test("DELETE returns 404 for non-existent message", async () => {
+    const res = await fetch(`${base()}/api/messages/999999/pin`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/messages/:id (DELETE)", () => {
+  test("DELETE deletes a message", async () => {
+    const msg = sendMessage({ from: "del-user", to: "b", content: "delete-me" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}?from=del-user`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.id).toBe(msg.id);
+    expect(data.deleted).toBe(true);
+  });
+
+  test("DELETE returns 400 when from param is missing", async () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "del-no-from" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}`, { method: "DELETE" });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("DELETE returns 404 for wrong sender", async () => {
+    const msg = sendMessage({ from: "real-sender", to: "b", content: "not-yours" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}?from=wrong-sender`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("DELETE returns 404 for non-existent message", async () => {
+    const res = await fetch(`${base()}/api/messages/999999?from=a`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("API /api/messages/:id (PUT)", () => {
+  test("PUT edits a message", async () => {
+    const msg = sendMessage({ from: "edit-user", to: "b", content: "original-content" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "edit-user", content: "updated-content" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.content).toBe("updated-content");
+  });
+
+  test("PUT returns 400 when content is missing", async () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "edit-no-content" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "a" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("PUT returns 400 when from is missing", async () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "edit-no-from" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "new" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("PUT returns 404 for wrong sender", async () => {
+    const msg = sendMessage({ from: "real-owner", to: "b", content: "cant-edit" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "wrong-owner", content: "hacked" }),
+    });
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("PUT returns 400 on invalid JSON", async () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "edit-bad-json" });
+    const res = await fetch(`${base()}/api/messages/${msg.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: "not json",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("API /api/spaces/:name (GET)", () => {
+  test("GET returns a single space", async () => {
+    createSpace("get-single-sp", "tester", { description: "A test space" });
+    const res = await fetch(`${base()}/api/spaces/get-single-sp`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.name).toBe("get-single-sp");
+    expect(data.description).toBe("A test space");
+  });
+
+  test("GET returns 404 for non-existent space", async () => {
+    const res = await fetch(`${base()}/api/spaces/does-not-exist-sp`);
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/spaces/:name (PUT)", () => {
+  test("PUT updates a space description", async () => {
+    createSpace("update-sp", "tester", { description: "old desc" });
+    const res = await fetch(`${base()}/api/spaces/update-sp`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "new desc" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.description).toBe("new desc");
+  });
+
+  test("PUT returns 400 for non-existent space", async () => {
+    const res = await fetch(`${base()}/api/spaces/nonexistent-update-sp`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "wont work" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/spaces/:name/archive", () => {
+  test("POST archives a space", async () => {
+    createSpace("archive-sp", "tester");
+    const res = await fetch(`${base()}/api/spaces/archive-sp/archive`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.name).toBe("archive-sp");
+  });
+
+  test("POST returns 400 for non-existent space", async () => {
+    const res = await fetch(`${base()}/api/spaces/nonexistent-archive-sp/archive`, { method: "POST" });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/spaces/:name/unarchive", () => {
+  test("POST unarchives a space", async () => {
+    createSpace("unarchive-sp", "tester");
+    // Archive first
+    await fetch(`${base()}/api/spaces/unarchive-sp/archive`, { method: "POST" });
+    const res = await fetch(`${base()}/api/spaces/unarchive-sp/unarchive`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.name).toBe("unarchive-sp");
+  });
+
+  test("POST returns 400 for non-existent space", async () => {
+    const res = await fetch(`${base()}/api/spaces/nonexistent-unarchive-sp/unarchive`, { method: "POST" });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/projects/:id (GET)", () => {
+  test("GET returns a project by ID", async () => {
+    const proj = createProject({ name: "get-proj-byid", created_by: "tester" });
+    const res = await fetch(`${base()}/api/projects/${proj.id}`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.name).toBe("get-proj-byid");
+    expect(data.id).toBe(proj.id);
+  });
+
+  test("GET returns a project by name", async () => {
+    createProject({ name: "get-proj-byname", created_by: "tester" });
+    const res = await fetch(`${base()}/api/projects/get-proj-byname`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.name).toBe("get-proj-byname");
+  });
+
+  test("GET returns 404 for non-existent project", async () => {
+    const res = await fetch(`${base()}/api/projects/nonexistent-project-id`);
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/projects/:id (PUT)", () => {
+  test("PUT updates a project", async () => {
+    const proj = createProject({ name: "update-proj", created_by: "tester" });
+    const res = await fetch(`${base()}/api/projects/${proj.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "updated desc", tags: ["tag1"] }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.description).toBe("updated desc");
+  });
+
+  test("PUT returns 400 for non-existent project", async () => {
+    const res = await fetch(`${base()}/api/projects/nonexistent-proj-id`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "wont work" }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/projects/:id (DELETE)", () => {
+  test("DELETE deletes a project", async () => {
+    const proj = createProject({ name: "delete-proj", created_by: "tester" });
+    const res = await fetch(`${base()}/api/projects/${proj.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.id).toBe(proj.id);
+    expect(data.deleted).toBe(true);
+  });
+
+  test("DELETE returns 404 for non-existent project", async () => {
+    const res = await fetch(`${base()}/api/projects/nonexistent-del-proj`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+
+  test("DELETE returns 400 when spaces reference the project", async () => {
+    const proj = createProject({ name: "nodelete-proj", created_by: "tester" });
+    createSpace("proj-ref-sp", "tester", { project_id: proj.id });
+    const res = await fetch(`${base()}/api/projects/${proj.id}`, { method: "DELETE" });
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toBeTruthy();
+  });
+});
+
+describe("API /api/agents", () => {
+  test("GET returns agents array", async () => {
+    const res = await fetch(`${base()}/api/agents`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  test("GET supports online_only param", async () => {
+    const res = await fetch(`${base()}/api/agents?online_only=true`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+  });
+});
+
+describe("API /api/export", () => {
+  test("GET exports messages as JSON by default", async () => {
+    sendMessage({ from: "export-user", to: "other", content: "export-test-msg" });
+    const res = await fetch(`${base()}/api/export`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get("content-type") || "";
+    expect(ct).toContain("application/json");
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("GET exports messages as CSV", async () => {
+    sendMessage({ from: "csv-user", to: "other", content: "csv-export-msg" });
+    const res = await fetch(`${base()}/api/export?format=csv`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get("content-type") || "";
+    expect(ct).toContain("text/csv");
+    const text = await res.text();
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  test("GET filters by space", async () => {
+    createSpace("export-sp", "tester");
+    sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", space: "export-sp" });
+    const res = await fetch(`${base()}/api/export?space=export-sp`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data.every((m: any) => m.space === "export-sp")).toBe(true);
+  });
+
+  test("GET filters by from", async () => {
+    sendMessage({ from: "export-sender", to: "b", content: "export-from-msg" });
+    const res = await fetch(`${base()}/api/export?from=export-sender`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(data.every((m: any) => m.from_agent === "export-sender")).toBe(true);
+  });
+});
+
 describe("Static files", () => {
   test("unknown paths return HTML (SPA fallback) or 404", async () => {
     const res = await fetch(`${base()}/some/random/path`);
