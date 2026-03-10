@@ -9,6 +9,7 @@ function shortUuid(): string {
 function rowToAgent(row: AgentRow): Agent {
   return {
     ...row,
+    permissions: JSON.parse(row.permissions || '["*"]') as string[],
     metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
   };
 }
@@ -30,9 +31,10 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, metadata, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.name, input.description || null, input.role || "agent", JSON.stringify(input.metadata || {}), timestamp, timestamp],
+    `INSERT INTO agents (id, name, description, role, permissions, metadata, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.name, input.description || null, input.role || "agent",
+     JSON.stringify(input.permissions || ["*"]), JSON.stringify(input.metadata || {}), timestamp, timestamp],
   );
 
   return getAgent(id, d)!;
@@ -62,7 +64,7 @@ export function updateAgentActivity(id: string, db?: Database): void {
 
 export function updateAgent(
   id: string,
-  input: { name?: string; description?: string; role?: string; metadata?: Record<string, unknown> },
+  input: { name?: string; description?: string; role?: string; permissions?: string[]; metadata?: Record<string, unknown> },
   db?: Database,
 ): Agent {
   const d = db || getDatabase();
@@ -83,6 +85,10 @@ export function updateAgent(
   if (input.role !== undefined) {
     sets.push("role = ?");
     params.push(input.role);
+  }
+  if (input.permissions !== undefined) {
+    sets.push("permissions = ?");
+    params.push(JSON.stringify(input.permissions));
   }
   if (input.metadata !== undefined) {
     sets.push("metadata = ?");

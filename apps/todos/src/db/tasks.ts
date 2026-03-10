@@ -26,6 +26,7 @@ function rowToTask(row: TaskRow): Task {
     metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
     status: row.status as Task["status"],
     priority: row.priority as Task["priority"],
+    requires_approval: !!row.requires_approval,
   };
 }
 
@@ -55,8 +56,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -77,6 +78,10 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       timestamp,
       timestamp,
       input.due_at || null,
+      input.estimated_minutes || null,
+      input.requires_approval ? 1 : 0,
+      null,
+      null,
     ],
   );
 
@@ -308,6 +313,20 @@ export function updateTask(
   if (input.due_at !== undefined) {
     sets.push("due_at = ?");
     params.push(input.due_at);
+  }
+  if (input.estimated_minutes !== undefined) {
+    sets.push("estimated_minutes = ?");
+    params.push(input.estimated_minutes);
+  }
+  if (input.requires_approval !== undefined) {
+    sets.push("requires_approval = ?");
+    params.push(input.requires_approval ? 1 : 0);
+  }
+  if (input.approved_by !== undefined) {
+    sets.push("approved_by = ?");
+    params.push(input.approved_by);
+    sets.push("approved_at = ?");
+    params.push(now());
   }
 
   params.push(id, input.version);

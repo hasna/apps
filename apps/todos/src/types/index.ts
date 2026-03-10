@@ -78,6 +78,7 @@ export interface Agent {
   name: string;
   description: string | null;
   role: string | null;
+  permissions: string[];
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
@@ -88,6 +89,7 @@ export interface AgentRow {
   name: string;
   description: string | null;
   role: string | null;
+  permissions: string | null;
   metadata: string | null;
   created_at: string;
   last_seen_at: string;
@@ -97,6 +99,7 @@ export interface RegisterAgentInput {
   name: string;
   description?: string;
   role?: string;
+  permissions?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -162,6 +165,10 @@ export interface Task {
   updated_at: string;
   completed_at: string | null;
   due_at: string | null;
+  estimated_minutes: number | null;
+  requires_approval: boolean;
+  approved_by: string | null;
+  approved_at: string | null;
 }
 
 // Task with relations loaded
@@ -189,6 +196,8 @@ export interface CreateTaskInput {
   tags?: string[];
   metadata?: Record<string, unknown>;
   due_at?: string;
+  estimated_minutes?: number;
+  requires_approval?: boolean;
 }
 
 export interface UpdateTaskInput {
@@ -202,6 +211,9 @@ export interface UpdateTaskInput {
   tags?: string[];
   metadata?: Record<string, unknown>;
   due_at?: string;
+  estimated_minutes?: number;
+  requires_approval?: boolean;
+  approved_by?: string;
   version: number; // required for optimistic locking
 }
 
@@ -287,6 +299,10 @@ export interface TaskRow {
   updated_at: string;
   completed_at: string | null;
   due_at: string | null;
+  estimated_minutes: number | null;
+  requires_approval: number;
+  approved_by: string | null;
+  approved_at: string | null;
 }
 
 export interface SessionRow {
@@ -305,6 +321,59 @@ export interface LockResult {
   locked_by?: string;
   locked_at?: string;
   error?: string;
+}
+
+// Task History (audit log)
+export interface TaskHistory {
+  id: string;
+  task_id: string;
+  action: string;
+  field: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  agent_id: string | null;
+  created_at: string;
+}
+
+// Webhook
+export interface Webhook {
+  id: string;
+  url: string;
+  events: string[];
+  secret: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface CreateWebhookInput {
+  url: string;
+  events?: string[];
+  secret?: string;
+}
+
+// Task Template
+export interface TaskTemplate {
+  id: string;
+  name: string;
+  title_pattern: string;
+  description: string | null;
+  priority: TaskPriority;
+  tags: string[];
+  project_id: string | null;
+  plan_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreateTemplateInput {
+  name: string;
+  title_pattern: string;
+  description?: string;
+  priority?: TaskPriority;
+  tags?: string[];
+  project_id?: string;
+  plan_id?: string;
+  metadata?: Record<string, unknown>;
 }
 
 // Version conflict error

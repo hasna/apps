@@ -80,6 +80,15 @@ export {
   deleteSession,
 } from "./db/sessions.js";
 
+// Audit
+export { logTaskChange, getTaskHistory, getRecentActivity } from "./db/audit.js";
+
+// Webhooks
+export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
+
+// Templates
+export { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./db/templates.js";
+
 // Search
 export { searchTasks } from "./lib/search.js";
 
@@ -124,6 +133,11 @@ export type {
   LockResult,
   TaskRow,
   SessionRow,
+  TaskHistory,
+  Webhook,
+  CreateWebhookInput,
+  TaskTemplate,
+  CreateTemplateInput,
 } from "./types/index.js";
 
 export {

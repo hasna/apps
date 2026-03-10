@@ -235,6 +235,52 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_plans_agent ON plans(agent_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (9);
   `,
+  // Migration 10: Audit log, webhooks, task templates, estimated time, approval workflow, agent permissions
+  `
+  CREATE TABLE IF NOT EXISTS task_history (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    field TEXT,
+    old_value TEXT,
+    new_value TEXT,
+    agent_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_history_agent ON task_history(agent_id);
+
+  CREATE TABLE IF NOT EXISTS webhooks (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    events TEXT NOT NULL DEFAULT '[]',
+    secret TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS task_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    title_pattern TEXT NOT NULL,
+    description TEXT,
+    priority TEXT DEFAULT 'medium',
+    tags TEXT DEFAULT '[]',
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  ALTER TABLE tasks ADD COLUMN estimated_minutes INTEGER;
+  ALTER TABLE tasks ADD COLUMN requires_approval INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN approved_by TEXT;
+  ALTER TABLE tasks ADD COLUMN approved_at TEXT;
+
+  ALTER TABLE agents ADD COLUMN permissions TEXT DEFAULT '["*"]';
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (10);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -302,6 +348,22 @@ function ensureTableMigrations(db: Database): void {
       // ignore if already partially applied
     }
   }
+
+  // Migration 10 ALTER TABLE columns — ensure each exists individually
+  // (SQLite stops at first error in multi-statement exec)
+  const ensureColumn = (table: string, column: string, type: string) => {
+    try { db.query(`SELECT ${column} FROM ${table} LIMIT 0`).get(); }
+    catch { try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); } catch {} }
+  };
+  ensureColumn("tasks", "due_at", "TEXT");
+  ensureColumn("tasks", "estimated_minutes", "INTEGER");
+  ensureColumn("tasks", "requires_approval", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("tasks", "approved_by", "TEXT");
+  ensureColumn("tasks", "approved_at", "TEXT");
+  ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
+  ensureColumn("agents", "permissions", 'TEXT DEFAULT \'["*"]\'');
+  ensureColumn("plans", "task_list_id", "TEXT");
+  ensureColumn("plans", "agent_id", "TEXT");
 }
 
 function backfillTaskTags(db: Database): void {
