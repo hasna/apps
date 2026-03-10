@@ -1,7 +1,5 @@
 import * as React from "react";
-import {
-  RefreshCwIcon,
-} from "lucide-react";
+import { RefreshCwIcon, HelpCircleIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DashboardPage } from "@/components/dashboard-page";
 import { TasksTable } from "@/components/tasks-table";
@@ -11,6 +9,13 @@ import { HelpPage } from "@/components/help-page";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { EditTaskDialog } from "@/components/edit-task-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  NavigationMenu,
+  NavigationMenuList,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  navigationMenuTriggerStyle,
+} from "@/components/ui/navigation-menu";
 import type { TaskSummary, DashboardStats, ProjectSummary } from "@/types";
 
 type Page = "dashboard" | "tasks" | "projects" | "agents" | "help";
@@ -61,7 +66,7 @@ export function App() {
       if (e.key === "1") setPage("tasks");
       if (e.key === "2") setPage("projects");
       if (e.key === "3") setPage("agents");
-      if (e.key === "4") setPage("help");
+      if (e.key === "?" || e.key === "4") setPage("help");
       if (e.key === "r" && !e.ctrlKey && !e.metaKey) loadData();
     }
     document.addEventListener("keydown", handleKeyDown);
@@ -107,29 +112,46 @@ export function App() {
     { key: "tasks", label: "Tasks" },
     { key: "projects", label: "Projects" },
     { key: "agents", label: "Agents" },
-    { key: "help", label: "Help" },
   ];
 
   return (
     <div className="min-h-screen">
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4">
             <button className="flex items-center gap-3 hover:opacity-80 transition-opacity" onClick={() => setPage("dashboard")}>
               <img src="/logo.jpg" alt="Hasna" className="h-7 w-auto rounded" />
               <h1 className="text-base font-semibold">Hasna <span className="font-normal text-muted-foreground">Todos</span></h1>
             </button>
-            <nav className="flex items-center gap-1">
-              {navItems.map((item) => (
-                <Button key={item.key} variant={page === item.key ? "secondary" : "ghost"} size="sm" onClick={() => setPage(item.key)}>
-                  {item.label}
-                </Button>
-              ))}
-            </nav>
+            <NavigationMenu>
+              <NavigationMenuList>
+                {navItems.map((item) => (
+                  <NavigationMenuItem key={item.key}>
+                    <NavigationMenuLink
+                      className={navigationMenuTriggerStyle()}
+                      data-active={page === item.key ? "" : undefined}
+                      onClick={() => setPage(item.key)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {item.label}
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                ))}
+              </NavigationMenuList>
+            </NavigationMenu>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="icon" className="size-8" onClick={loadData} disabled={loading} title="Reload (r)">
               <RefreshCwIcon className={`size-4 ${loading ? "animate-spin" : ""}`} />
+            </Button>
+            <Button
+              variant={page === "help" ? "secondary" : "outline"}
+              size="icon"
+              className="size-8"
+              onClick={() => setPage("help")}
+              title="Help (?)"
+            >
+              <HelpCircleIcon className="size-4" />
             </Button>
             <ThemeToggle />
           </div>
