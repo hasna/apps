@@ -131,6 +131,8 @@ server.tool(
     task_list_id: z.string().optional().describe("Task list ID to assign task to"),
     tags: z.array(z.string()).optional().describe("Task tags"),
     metadata: z.record(z.unknown()).optional().describe("Arbitrary metadata"),
+    estimated_minutes: z.number().optional().describe("Estimated time in minutes"),
+    requires_approval: z.boolean().optional().describe("Require approval before completion"),
   },
   async (params) => {
     try {
@@ -492,11 +494,14 @@ server.tool(
     project_id: z.string().optional().describe("Project ID"),
     description: z.string().optional().describe("Plan description"),
     status: z.enum(["active", "completed", "archived"]).optional().describe("Plan status"),
+    task_list_id: z.string().optional().describe("Task list ID"),
+    agent_id: z.string().optional().describe("Owner agent ID"),
   },
   async (params) => {
     try {
       const resolved = { ...params };
       if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
       const plan = createPlan(resolved);
       return {
         content: [{
@@ -572,11 +577,15 @@ server.tool(
     name: z.string().optional().describe("New name"),
     description: z.string().optional().describe("New description"),
     status: z.enum(["active", "completed", "archived"]).optional().describe("New status"),
+    task_list_id: z.string().optional().describe("Task list ID"),
+    agent_id: z.string().optional().describe("Owner agent ID"),
   },
   async ({ id, ...rest }) => {
     try {
       const resolvedId = resolveId(id, "plans");
-      const plan = updatePlan(resolvedId, rest);
+      const resolved = { ...rest };
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
+      const plan = updatePlan(resolvedId, resolved);
       return {
         content: [{
           type: "text" as const,
@@ -908,6 +917,199 @@ server.tool(
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
+  },
+);
+
+// === AUDIT LOG TOOLS ===
+
+// get_task_history
+server.tool(
+  "get_task_history",
+  "Get change history for a task (audit log)",
+  {
+    task_id: z.string().describe("Task ID (full or partial)"),
+  },
+  async ({ task_id }) => {
+    try {
+      const resolvedId = resolveId(task_id);
+      const { getTaskHistory } = await import("../db/audit.js");
+      const history = getTaskHistory(resolvedId);
+      if (history.length === 0) return { content: [{ type: "text" as const, text: "No history for this task." }] };
+      const text = history.map(h => `${h.created_at} | ${h.action}${h.field ? ` ${h.field}` : ""}${h.old_value ? ` from "${h.old_value}"` : ""}${h.new_value ? ` to "${h.new_value}"` : ""}${h.agent_id ? ` by ${h.agent_id}` : ""}`).join("\n");
+      return { content: [{ type: "text" as const, text: `${history.length} change(s):\n${text}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// get_recent_activity
+server.tool(
+  "get_recent_activity",
+  "Get recent task changes across all tasks (audit log)",
+  {
+    limit: z.number().optional().describe("Max entries (default 50)"),
+  },
+  async ({ limit }) => {
+    try {
+      const { getRecentActivity } = await import("../db/audit.js");
+      const activity = getRecentActivity(limit || 50);
+      if (activity.length === 0) return { content: [{ type: "text" as const, text: "No recent activity." }] };
+      const text = activity.map(h => `${h.created_at} | ${h.task_id.slice(0, 8)} | ${h.action}${h.field ? ` ${h.field}` : ""}${h.agent_id ? ` by ${h.agent_id}` : ""}`).join("\n");
+      return { content: [{ type: "text" as const, text: `${activity.length} recent change(s):\n${text}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// === WEBHOOK TOOLS ===
+
+// create_webhook
+server.tool(
+  "create_webhook",
+  "Register a webhook URL to receive task change notifications",
+  {
+    url: z.string().describe("Webhook URL"),
+    events: z.array(z.string()).optional().describe("Event types to subscribe to (empty = all)"),
+    secret: z.string().optional().describe("HMAC secret for signature verification"),
+  },
+  async (params) => {
+    try {
+      const { createWebhook } = await import("../db/webhooks.js");
+      const wh = createWebhook(params);
+      return { content: [{ type: "text" as const, text: `Webhook created: ${wh.id.slice(0, 8)} | ${wh.url} | events: ${wh.events.length === 0 ? "all" : wh.events.join(",")}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// list_webhooks
+server.tool(
+  "list_webhooks",
+  "List all registered webhooks",
+  {},
+  async () => {
+    try {
+      const { listWebhooks } = await import("../db/webhooks.js");
+      const webhooks = listWebhooks();
+      if (webhooks.length === 0) return { content: [{ type: "text" as const, text: "No webhooks registered." }] };
+      const text = webhooks.map(w => `${w.id.slice(0, 8)} | ${w.active ? "active" : "inactive"} | ${w.url} | events: ${w.events.length === 0 ? "all" : w.events.join(",")}`).join("\n");
+      return { content: [{ type: "text" as const, text: `${webhooks.length} webhook(s):\n${text}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// delete_webhook
+server.tool(
+  "delete_webhook",
+  "Delete a webhook",
+  {
+    id: z.string().describe("Webhook ID"),
+  },
+  async ({ id }) => {
+    try {
+      const { deleteWebhook } = await import("../db/webhooks.js");
+      const deleted = deleteWebhook(id);
+      return { content: [{ type: "text" as const, text: deleted ? "Webhook deleted." : "Webhook not found." }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// === TEMPLATE TOOLS ===
+
+// create_template
+server.tool(
+  "create_template",
+  "Create a reusable task template",
+  {
+    name: z.string().describe("Template name"),
+    title_pattern: z.string().describe("Title pattern for tasks created from this template"),
+    description: z.string().optional().describe("Default description"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Default priority"),
+    tags: z.array(z.string()).optional().describe("Default tags"),
+    project_id: z.string().optional().describe("Default project"),
+    plan_id: z.string().optional().describe("Default plan"),
+  },
+  async (params) => {
+    try {
+      const { createTemplate } = await import("../db/templates.js");
+      const t = createTemplate(params);
+      return { content: [{ type: "text" as const, text: `Template created: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}"` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// list_templates
+server.tool(
+  "list_templates",
+  "List all task templates",
+  {},
+  async () => {
+    try {
+      const { listTemplates } = await import("../db/templates.js");
+      const templates = listTemplates();
+      if (templates.length === 0) return { content: [{ type: "text" as const, text: "No templates." }] };
+      const text = templates.map(t => `${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}" | ${t.priority}`).join("\n");
+      return { content: [{ type: "text" as const, text: `${templates.length} template(s):\n${text}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// create_task_from_template
+server.tool(
+  "create_task_from_template",
+  "Create a task from a template with optional overrides",
+  {
+    template_id: z.string().describe("Template ID"),
+    title: z.string().optional().describe("Override title"),
+    description: z.string().optional().describe("Override description"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Override priority"),
+    assigned_to: z.string().optional().describe("Assign to agent"),
+    project_id: z.string().optional().describe("Override project"),
+  },
+  async (params) => {
+    try {
+      const { taskFromTemplate } = await import("../db/templates.js");
+      const input = taskFromTemplate(params.template_id, {
+        title: params.title, description: params.description,
+        priority: params.priority as any, assigned_to: params.assigned_to, project_id: params.project_id,
+      });
+      const task = createTask(input);
+      return { content: [{ type: "text" as const, text: `Task created from template:\n${task.id.slice(0, 8)} | ${task.priority} | ${task.title}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// delete_template
+server.tool(
+  "delete_template",
+  "Delete a task template",
+  { id: z.string().describe("Template ID") },
+  async ({ id }) => {
+    try {
+      const { deleteTemplate } = await import("../db/templates.js");
+      const deleted = deleteTemplate(id);
+      return { content: [{ type: "text" as const, text: deleted ? "Template deleted." : "Template not found." }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// === APPROVAL TOOLS ===
+
+// approve_task
+server.tool(
+  "approve_task",
+  "Approve a task that requires approval before completion",
+  {
+    id: z.string().describe("Task ID (full or partial)"),
+    agent_id: z.string().optional().describe("Agent approving the task"),
+  },
+  async ({ id, agent_id }) => {
+    try {
+      const resolvedId = resolveId(id);
+      const task = getTaskWithRelations(resolvedId);
+      if (!task) return { content: [{ type: "text" as const, text: `Task not found: ${id}` }], isError: true };
+      if (!task.requires_approval) return { content: [{ type: "text" as const, text: `Task ${id} does not require approval.` }] };
+      if (task.approved_by) return { content: [{ type: "text" as const, text: `Task already approved by ${task.approved_by}.` }] };
+      const updated = updateTask(resolvedId, { approved_by: agent_id || "system", version: task.version });
+      return { content: [{ type: "text" as const, text: `Task approved by ${agent_id || "system"}: ${updated.id.slice(0, 8)} | ${updated.title}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
 

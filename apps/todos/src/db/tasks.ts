@@ -18,6 +18,7 @@ import {
 import { clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now, uuid } from "./database.js";
 import { nextTaskShortId } from "./projects.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { logTaskChange } from "./audit.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -337,7 +338,6 @@ export function updateTask(
   );
 
   if (result.changes === 0) {
-    // Re-fetch to get actual version for error message
     const current = getTask(id, d);
     throw new VersionConflictError(
       id,
@@ -349,6 +349,14 @@ export function updateTask(
   if (input.tags !== undefined) {
     replaceTaskTags(id, input.tags, d);
   }
+
+  // Audit log — record each changed field
+  const agentId = task.assigned_to || task.agent_id || null;
+  if (input.status !== undefined && input.status !== task.status) logTaskChange(id, "update", "status", task.status, input.status, agentId, d);
+  if (input.priority !== undefined && input.priority !== task.priority) logTaskChange(id, "update", "priority", task.priority, input.priority, agentId, d);
+  if (input.title !== undefined && input.title !== task.title) logTaskChange(id, "update", "title", task.title, input.title, agentId, d);
+  if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
+  if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
   return getTask(id, d)!;
 }
@@ -381,6 +389,7 @@ export function startTask(
     }
   }
 
+  logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
   return getTask(id, d)!;
 }
 
@@ -413,6 +422,7 @@ export function completeTask(
     [timestamp, timestamp, id],
   );
 
+  logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
   return getTask(id, d)!;
 }
 
