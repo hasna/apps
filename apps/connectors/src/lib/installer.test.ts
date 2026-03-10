@@ -321,7 +321,7 @@ describe("installer", () => {
       expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic"))).toBe(true);
       expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic", "src"))).toBe(true);
       // Verify it's NOT .connect
-      expect(existsSync(join(TEST_DIR, ".connectors"))).toBe(false);
+      expect(existsSync(join(TEST_DIR, ".connect"))).toBe(false);
     });
 
     test("connector has all expected files after install", () => {

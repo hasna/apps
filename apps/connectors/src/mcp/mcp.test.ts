@@ -337,4 +337,34 @@ describe("MCP Server", () => {
       expect(data.tags).toContain("payments");
     });
   });
+
+  describe("connector_auth_status", () => {
+    test("returns auth status for bearer connector", async () => {
+      const res = await callMcp("connector_auth_status", { name: "stripe" });
+      const data = parseContent(res);
+      expect(data.type).toBe("bearer");
+      expect(typeof data.configured).toBe("boolean");
+    });
+
+    test("returns auth status for oauth connector", async () => {
+      const res = await callMcp("connector_auth_status", { name: "gmail" });
+      const data = parseContent(res);
+      expect(data.type).toBe("oauth");
+      expect(typeof data.hasRefreshToken).toBe("boolean");
+    });
+
+    test("errors for non-existent connector", async () => {
+      const res = await callMcp("connector_auth_status", { name: "nonexistent" });
+      expect(res.result?.isError).toBe(true);
+    });
+
+    test("returns envVars array with variable and description", async () => {
+      const res = await callMcp("connector_auth_status", { name: "stripe" });
+      const data = parseContent(res);
+      expect(Array.isArray(data.envVars)).toBe(true);
+      expect(data.envVars.length).toBeGreaterThan(0);
+      expect(data.envVars[0]).toHaveProperty("variable");
+      expect(data.envVars[0]).toHaveProperty("description");
+    });
+  });
 });
