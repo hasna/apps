@@ -26,6 +26,8 @@ import {
   MoreHorizontalIcon,
   LayoutListIcon,
   LayoutGridIcon,
+  PlusIcon,
+  DownloadIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -362,9 +364,10 @@ interface TasksTableProps {
   onDelete: (id: string) => void;
   onEdit: (task: TaskSummary) => void;
   onBulkAction: (ids: string[], action: "complete" | "start" | "delete") => void;
+  onNewTask?: () => void;
 }
 
-export function TasksTable({ data, projectMap, projects, onStart, onComplete, onDelete, onEdit, onBulkAction }: TasksTableProps) {
+export function TasksTable({ data, projectMap, projects, onStart, onComplete, onDelete, onEdit, onBulkAction, onNewTask }: TasksTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = React.useState("");
@@ -454,15 +457,20 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
   return (
     <>
       <div className="space-y-4">
-        {/* Filters */}
+        {/* Toolbar — single row */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px] max-w-sm">
+          {onNewTask && (
+            <Button size="sm" className="h-9" onClick={onNewTask} title="Press n">
+              <PlusIcon className="size-4" /> New Task
+            </Button>
+          )}
+          <div className="relative flex-1 min-w-[180px] max-w-xs">
             <SearchIcon className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-            <Input ref={searchRef} placeholder="Search tasks... (press /)" value={globalFilter}
+            <Input ref={searchRef} placeholder="Search... (/)" value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)} className="pl-8 h-9" />
           </div>
           <Select value={projectFilter} onValueChange={setProjectFilter}>
-            <SelectTrigger className="w-[160px] h-9">
+            <SelectTrigger className="w-[140px] h-9">
               <SelectValue placeholder="All Projects" />
             </SelectTrigger>
             <SelectContent>
@@ -472,7 +480,7 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
             </SelectContent>
           </Select>
           <Select value={statusFilter} onValueChange={(v) => table.getColumn("status")?.setFilterValue(v === "all" ? undefined : v)}>
-            <SelectTrigger className="w-[160px] h-9">
+            <SelectTrigger className="w-[140px] h-9">
               <SelectValue placeholder="All Statuses" />
             </SelectTrigger>
             <SelectContent>
@@ -483,7 +491,18 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
               })}
             </SelectContent>
           </Select>
-          <div className="ml-auto flex items-center border rounded-md">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" className="size-9 shrink-0" title="Export">
+                <DownloadIcon className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => window.open("/api/tasks/export?format=csv", "_blank")}>Export CSV</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => window.open("/api/tasks/export?format=json", "_blank")}>Export JSON</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="flex items-center border rounded-md">
             <Button variant={viewMode === "table" ? "secondary" : "ghost"} size="icon" className="size-8 rounded-r-none"
               onClick={() => setViewMode("table")} title="Table view">
               <LayoutListIcon className="size-4" />

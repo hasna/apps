@@ -1,8 +1,6 @@
 import * as React from "react";
 import {
   RefreshCwIcon,
-  PlusIcon,
-  DownloadIcon,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DashboardPage } from "@/components/dashboard-page";
@@ -141,25 +139,13 @@ export function App() {
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-6">
         {page === "dashboard" && <DashboardPage stats={stats} />}
         {page === "tasks" && (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" onClick={() => setCreateOpen(true)} title="Press n">
-                <PlusIcon className="size-4" /> New Task
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => window.open("/api/tasks/export?format=csv", "_blank")}>
-                <DownloadIcon className="size-4" /> Export CSV
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => window.open("/api/tasks/export?format=json", "_blank")}>
-                <DownloadIcon className="size-4" /> Export JSON
-              </Button>
-            </div>
-            <TasksTable
-              data={tasks} projectMap={projectMap} projects={projects}
-              onStart={handleStart} onComplete={handleComplete} onDelete={handleDelete}
-              onEdit={(task) => { setEditTask(task); setEditOpen(true); }}
-              onBulkAction={handleBulkAction}
-            />
-          </>
+          <TasksTable
+            data={tasks} projectMap={projectMap} projects={projects}
+            onStart={handleStart} onComplete={handleComplete} onDelete={handleDelete}
+            onEdit={(task) => { setEditTask(task); setEditOpen(true); }}
+            onBulkAction={handleBulkAction}
+            onNewTask={() => setCreateOpen(true)}
+          />
         )}
         {page === "projects" && <ProjectsPage />}
         {page === "agents" && <AgentsPage />}
