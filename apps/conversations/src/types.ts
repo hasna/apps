@@ -17,6 +17,22 @@ export interface Message {
   edited_at: string | null;
   pinned_at: string | null;
   blocking: boolean;
+  attachments: Attachment[] | null;
+}
+
+export interface Reaction {
+  id: number;
+  message_id: number;
+  agent: string;
+  emoji: string;
+  created_at: string;
+}
+
+export interface Attachment {
+  name: string;
+  path: string;
+  size: number;
+  mime_type: string;
 }
 
 export interface Session {
@@ -79,6 +95,7 @@ export interface SendMessageOptions {
   branch?: string;
   metadata?: Record<string, unknown>;
   blocking?: boolean;
+  attachments?: { name: string; source_path: string }[];
 }
 
 export interface ReadMessagesOptions {

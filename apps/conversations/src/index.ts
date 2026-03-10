@@ -73,6 +73,13 @@ export {
 } from "./lib/identity.js";
 
 export {
+  addReaction,
+  removeReaction,
+  getReactions,
+  getReactionSummary,
+} from "./lib/reactions.js";
+
+export {
   heartbeat,
   getPresence,
   listAgents,
@@ -93,4 +100,6 @@ export type {
   ReadMessagesOptions,
   SearchMessagesOptions,
   AgentPresence,
+  Reaction,
+  Attachment,
 } from "./types.js";

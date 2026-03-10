@@ -100,6 +100,19 @@ export function getDb(): Database {
     )
   `);
 
+  // Reactions table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      agent TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      UNIQUE(message_id, agent, emoji)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id)");
+
   // ---- Migrations for existing databases ----
 
   const existingTables = db.prepare(
@@ -172,6 +185,9 @@ export function getDb(): Database {
   if (!colNames2.includes("blocking")) {
     db.exec("ALTER TABLE messages ADD COLUMN blocking INTEGER NOT NULL DEFAULT 0");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_blocking ON messages(blocking)");
+  }
+  if (!colNames2.includes("attachments")) {
+    db.exec("ALTER TABLE messages ADD COLUMN attachments TEXT");
   }
 
   return db;
