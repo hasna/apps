@@ -4,7 +4,7 @@ Guidance for AI agents working with this repository.
 
 ## Overview
 
-This is `@hasna/connectors`, an open-source monorepo of TypeScript API connectors providing CLI installation and programmatic access to 80+ API integrations.
+This is `@hasna/connectors`, an open-source monorepo of TypeScript API connectors providing CLI installation and programmatic access to 62 API connectors.
 
 ## Quick Commands
 

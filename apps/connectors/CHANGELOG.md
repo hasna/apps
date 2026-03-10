@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-03-10
+
+### Added
+
+- Auto-detect available port when default port is in use (server gracefully falls back)
+- `configure_auth` MCP tool — AI agents can now save API keys programmatically
+- `list_categories` MCP tool — list all connector categories with counts
+- 38 new tests (350 total across 9 test files)
+- Server route tests: install, uninstall, update, activity, profiles, export/import
+- Auth unit tests: listProfiles, switchProfile, deleteProfile
+- MCP connector_auth_status tool tests
+
+### Fixed
+
+- Installer test assertion checking wrong directory name (.connectors vs .connect)
+- MCP server version synced with package version (was 0.1.0, now 0.2.4)
+
 ## [0.2.2] - 2026-02-15
 
 ### Added

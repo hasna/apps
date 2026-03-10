@@ -47,6 +47,8 @@ connectors list --category "AI & ML"     # Filter by category
 connectors search payment                # Search connectors
 connectors info stripe                   # Connector details
 connectors docs gmail                    # Auth, env vars, CLI docs
+connectors status                        # Auth status of installed connectors
+connectors doctor                        # Health check and troubleshooting
 ```
 
 ### Dashboard
@@ -85,7 +87,7 @@ Add to your MCP config:
 }
 ```
 
-Tools: `search_connectors`, `list_connectors`, `connector_docs`, `connector_info`, `install_connector`, `remove_connector`, `list_installed`, `connector_auth_status`
+Tools: `search_connectors`, `list_connectors`, `list_categories`, `connector_docs`, `connector_info`, `install_connector`, `remove_connector`, `list_installed`, `connector_auth_status`, `configure_auth`
 
 ### JSON Output (for scripts & agents)
 
