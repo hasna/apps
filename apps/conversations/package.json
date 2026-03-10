@@ -70,5 +70,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/conversations.git"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/hasna/conversations/issues"
+  },
+  "homepage": "https://github.com/hasna/conversations#readme"
 }
