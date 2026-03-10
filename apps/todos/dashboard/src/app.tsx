@@ -5,6 +5,7 @@ import { DashboardPage } from "@/components/dashboard-page";
 import { TasksTable } from "@/components/tasks-table";
 import { ProjectsPage } from "@/components/projects-page";
 import { AgentsPage } from "@/components/agents-page";
+import { PlansPage } from "@/components/plans-page";
 import { HelpPage } from "@/components/help-page";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { EditTaskDialog } from "@/components/edit-task-dialog";
@@ -18,7 +19,7 @@ import {
 } from "@/components/ui/navigation-menu";
 import type { TaskSummary, DashboardStats, ProjectSummary } from "@/types";
 
-type Page = "dashboard" | "tasks" | "projects" | "agents" | "help";
+type Page = "dashboard" | "tasks" | "projects" | "plans" | "agents" | "help";
 
 export function App() {
   const [page, setPage] = React.useState<Page>("dashboard");
@@ -65,8 +66,9 @@ export function App() {
       if (e.key === "0") setPage("dashboard");
       if (e.key === "1") setPage("tasks");
       if (e.key === "2") setPage("projects");
-      if (e.key === "3") setPage("agents");
-      if (e.key === "?" || e.key === "4") setPage("help");
+      if (e.key === "3") setPage("plans");
+      if (e.key === "4") setPage("agents");
+      if (e.key === "?" || e.key === "5") setPage("help");
       if (e.key === "r" && !e.ctrlKey && !e.metaKey) loadData();
     }
     document.addEventListener("keydown", handleKeyDown);
@@ -111,6 +113,7 @@ export function App() {
     { key: "dashboard", label: "Dashboard" },
     { key: "tasks", label: "Tasks" },
     { key: "projects", label: "Projects" },
+    { key: "plans", label: "Plans" },
     { key: "agents", label: "Agents" },
   ];
 
@@ -170,6 +173,7 @@ export function App() {
           />
         )}
         {page === "projects" && <ProjectsPage />}
+        {page === "plans" && <PlansPage />}
         {page === "agents" && <AgentsPage />}
         {page === "help" && <HelpPage />}
       </main>
