@@ -492,4 +492,156 @@ describe("CLI", () => {
       expect(exitCode).toBe(0);
     });
   });
+
+  // ── --brief flag ──
+
+  describe("list --brief", () => {
+    test("outputs only names as JSON array", async () => {
+      const { stdout, exitCode } = await run("list --brief --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(50);
+      expect(typeof data[0]).toBe("string");
+      expect(data).toContain("stripe");
+    });
+
+    test("outputs names one per line without --json", async () => {
+      const { stdout, exitCode } = await run("list --brief");
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n");
+      expect(lines.length).toBeGreaterThan(50);
+      expect(lines).toContain("stripe");
+      expect(lines).toContain("anthropic");
+    });
+
+    test("works with --category filter", async () => {
+      const { stdout, exitCode } = await run(["list", "--brief", "--json", "--category", "AI & ML"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toContain("anthropic");
+      expect(data).toContain("openai");
+      expect(data).not.toContain("stripe");
+    });
+
+    test("works with --installed", async () => {
+      const { stdout, exitCode } = await run("list --brief --installed --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+    });
+  });
+
+  // ── install --category ──
+
+  describe("install --category", () => {
+    test("installs all connectors in a category", async () => {
+      const { stdout, exitCode } = await run(["install", "--category", "Patents & IP", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      expect(data[0].success).toBe(true);
+      expect(data[0].connector).toBe("uspto");
+    });
+
+    test("errors for unknown category", async () => {
+      const { stdout, exitCode } = await run(["install", "--category", "Nonexistent", "--json"]);
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("Unknown category");
+    });
+  });
+
+  // ── export ──
+
+  describe("export", () => {
+    test("outputs valid JSON with connectors and exportedAt", async () => {
+      const { stdout, exitCode } = await run("export");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("connectors");
+      expect(data).toHaveProperty("exportedAt");
+      expect(typeof data.connectors).toBe("object");
+    });
+  });
+
+  // ── import ──
+
+  describe("import", () => {
+    test("errors for non-existent file", async () => {
+      const { exitCode } = await run("import nonexistent.json");
+      expect(exitCode).toBe(1);
+    });
+
+    test("imports valid backup file", async () => {
+      const { writeFileSync } = await import("fs");
+      const backupFile = join(TEST_DIR, "backup.json");
+      writeFileSync(backupFile, JSON.stringify({
+        connectors: {
+          [`zzztest${process.pid}imp`]: {
+            profiles: { default: { apiKey: "test-key" } },
+          },
+        },
+      }));
+
+      const { stdout, exitCode } = await run(["import", backupFile, "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.success).toBe(true);
+      expect(data.imported).toBe(1);
+
+      // Cleanup
+      const { homedir } = await import("os");
+      const dir = join(homedir(), ".connectors", `connect-zzztest${process.pid}imp`);
+      if (existsSync(dir)) rmSync(dir, { recursive: true });
+    });
+  });
+
+  // ── upgrade ──
+
+  describe("upgrade", () => {
+    test("--check --json returns version info", async () => {
+      const { stdout, exitCode } = await run("upgrade --check --json");
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("current");
+      expect(data).toHaveProperty("latest");
+      expect(data).toHaveProperty("upToDate");
+      expect(typeof data.current).toBe("string");
+      expect(typeof data.latest).toBe("string");
+      // exitCode 0 if up to date, 1 if not
+      expect([0, 1]).toContain(exitCode);
+    });
+  });
+
+  // ── completions ──
+
+  describe("completions", () => {
+    test("outputs zsh completions", async () => {
+      const { stdout, exitCode } = await run("completions zsh");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("#compdef connectors");
+      expect(stdout).toContain("stripe");
+      expect(stdout).toContain("install");
+    });
+
+    test("outputs bash completions", async () => {
+      const { stdout, exitCode } = await run("completions bash");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("complete -F _connectors connectors");
+      expect(stdout).toContain("stripe");
+    });
+
+    test("outputs fish completions", async () => {
+      const { stdout, exitCode } = await run("completions fish");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("complete -c connectors");
+      expect(stdout).toContain("stripe");
+    });
+
+    test("errors for unknown shell", async () => {
+      const { exitCode } = await run("completions powershell");
+      expect(exitCode).toBe(1);
+    });
+  });
 });

@@ -21,7 +21,8 @@ import {
   removeConnector,
   getConnectorDocs,
 } from "../lib/installer.js";
-import { readdirSync, existsSync, statSync } from "fs";
+import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
 import { join, relative } from "path";
 import { getAuthStatus, getAuthType, saveApiKey, getOAuthStartUrl, getEnvVars } from "../server/auth.js";
 import { createInterface } from "readline";
@@ -36,7 +37,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.2.4");
+  .version("0.2.5");
 
 // Interactive mode (default)
 program
@@ -81,9 +82,27 @@ program
   .argument("[connectors...]", "Connectors to install")
   .option("-o, --overwrite", "Overwrite existing connectors", false)
   .option("-d, --dry-run", "Preview what would be installed without making changes", false)
+  .option("-c, --category <category>", "Install all connectors in a category")
   .option("--json", "Output results as JSON", false)
   .description("Install one or more connectors")
   .action((connectors: string[], options) => {
+    // Resolve --category to connector names
+    if (options.category) {
+      const category = CATEGORIES.find(c => c.toLowerCase() === options.category.toLowerCase());
+      if (!category) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: `Unknown category: ${options.category}. Available: ${CATEGORIES.join(", ")}` }));
+        } else {
+          console.log(chalk.red(`Unknown category: ${options.category}`));
+          console.log(chalk.dim(`Available: ${CATEGORIES.join(", ")}`));
+        }
+        process.exit(1);
+        return;
+      }
+      const categoryConnectors = getConnectorsByCategory(category).map(c => c.name);
+      connectors.push(...categoryConnectors);
+    }
+
     if (connectors.length === 0) {
       if (!isTTY) {
         console.error("Error: specify connectors to install. Example: connectors install figma stripe");
@@ -246,9 +265,31 @@ program
   .option("-c, --category <category>", "Filter by category")
   .option("-a, --all", "Show all available connectors", false)
   .option("-i, --installed", "Show only installed connectors", false)
+  .option("-b, --brief", "Output only connector names", false)
   .option("--json", "Output as JSON", false)
   .description("List available or installed connectors")
   .action((options) => {
+    // --brief: output only connector names
+    if (options.brief) {
+      if (options.installed) {
+        const installed = getInstalledConnectors();
+        if (options.json) {
+          console.log(JSON.stringify(installed));
+        } else {
+          for (const name of installed) console.log(name);
+        }
+      } else if (options.category) {
+        const category = CATEGORIES.find(c => c.toLowerCase() === options.category.toLowerCase());
+        if (!category) { console.error(`Unknown category: ${options.category}`); process.exit(1); return; }
+        const names = getConnectorsByCategory(category).map(c => c.name);
+        if (options.json) { console.log(JSON.stringify(names)); } else { for (const n of names) console.log(n); }
+      } else {
+        const names = CONNECTORS.map(c => c.name);
+        if (options.json) { console.log(JSON.stringify(names)); } else { for (const n of names) console.log(n); }
+      }
+      return;
+    }
+
     if (options.installed) {
       const installed = getInstalledConnectors();
 
@@ -1041,13 +1082,10 @@ program
           connector,
           authType,
           configured: statusAfter.configured,
-          field: options.field || null,
+          field: options.field || "apiKey",
         }));
       } else {
-        console.log(chalk.green(`✓ API key saved for ${meta.displayName}`));
-        if (options.field) {
-          console.log(chalk.dim(`  Field: ${options.field}`));
-        }
+        console.log(chalk.green(`✓ Saved ${options.field || "apiKey"} for ${meta.displayName}`));
       }
       process.exit(0);
       return;
@@ -1307,6 +1345,248 @@ program
     console.log();
 
     process.exit(results.every((r) => r.success) ? 0 : 1);
+  });
+
+// Export command — backup all connector credentials
+program
+  .command("export")
+  .option("-o, --output <file>", "Write to file instead of stdout")
+  .description("Export all connector credentials as JSON backup")
+  .action((options: { output?: string }) => {
+    const connectDir = join(homedir(), ".connectors");
+    const result: Record<string, { profiles: Record<string, unknown> }> = {};
+
+    if (existsSync(connectDir)) {
+      for (const entry of readdirSync(connectDir)) {
+        const entryPath = join(connectDir, entry);
+        if (!statSync(entryPath).isDirectory() || !entry.startsWith("connect-")) continue;
+        const connectorName = entry.replace(/^connect-/, "");
+        const profilesDir = join(entryPath, "profiles");
+        if (!existsSync(profilesDir)) continue;
+
+        const profiles: Record<string, unknown> = {};
+        for (const pEntry of readdirSync(profilesDir)) {
+          const pPath = join(profilesDir, pEntry);
+          if (statSync(pPath).isFile() && pEntry.endsWith(".json")) {
+            try { profiles[pEntry.replace(/\.json$/, "")] = JSON.parse(readFileSync(pPath, "utf-8")); } catch {}
+          } else if (statSync(pPath).isDirectory()) {
+            const configPath = join(pPath, "config.json");
+            if (existsSync(configPath)) {
+              try { profiles[pEntry] = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+            }
+          }
+        }
+        if (Object.keys(profiles).length > 0) result[connectorName] = { profiles };
+      }
+    }
+
+    const exportData = JSON.stringify({ connectors: result, exportedAt: new Date().toISOString() }, null, 2);
+
+    if (options.output) {
+      writeFileSync(options.output, exportData);
+      console.log(chalk.green(`✓ Exported to ${options.output}`));
+    } else {
+      console.log(exportData);
+    }
+  });
+
+// Import command — restore connector credentials from backup
+program
+  .command("import")
+  .argument("<file>", "JSON backup file to import (use - for stdin)")
+  .option("--json", "Output as JSON", false)
+  .description("Import connector credentials from a JSON backup")
+  .action(async (file: string, options: { json: boolean }) => {
+    let raw: string;
+    if (file === "-") {
+      // Read from stdin
+      const chunks: string[] = [];
+      for await (const chunk of process.stdin) chunks.push(chunk.toString());
+      raw = chunks.join("");
+    } else {
+      if (!existsSync(file)) {
+        if (options.json) { console.log(JSON.stringify({ error: `File not found: ${file}` })); }
+        else { console.log(chalk.red(`File not found: ${file}`)); }
+        process.exit(1);
+        return;
+      }
+      raw = readFileSync(file, "utf-8");
+    }
+
+    let data: { connectors: Record<string, { profiles: Record<string, unknown> }> };
+    try { data = JSON.parse(raw); } catch {
+      if (options.json) { console.log(JSON.stringify({ error: "Invalid JSON" })); }
+      else { console.log(chalk.red("Invalid JSON in import file")); }
+      process.exit(1);
+      return;
+    }
+
+    if (!data.connectors || typeof data.connectors !== "object") {
+      if (options.json) { console.log(JSON.stringify({ error: "Invalid format: missing 'connectors' object" })); }
+      else { console.log(chalk.red("Invalid format: missing 'connectors' object")); }
+      process.exit(1);
+      return;
+    }
+
+    const connectDir = join(homedir(), ".connectors");
+    let imported = 0;
+
+    for (const [connectorName, connData] of Object.entries(data.connectors)) {
+      if (!/^[a-z0-9-]+$/.test(connectorName)) continue;
+      if (!connData.profiles || typeof connData.profiles !== "object") continue;
+
+      const profilesDir = join(connectDir, `connect-${connectorName}`, "profiles");
+      for (const [profileName, config] of Object.entries(connData.profiles)) {
+        if (!config || typeof config !== "object") continue;
+        mkdirSync(profilesDir, { recursive: true });
+        writeFileSync(join(profilesDir, `${profileName}.json`), JSON.stringify(config, null, 2));
+        imported++;
+      }
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ success: true, imported }));
+    } else {
+      console.log(chalk.green(`✓ Imported ${imported} profile(s)`));
+    }
+  });
+
+// Upgrade command — check for and install latest version
+program
+  .command("upgrade")
+  .alias("self-update")
+  .option("--check", "Only check for updates, don't install", false)
+  .option("--json", "Output as JSON", false)
+  .description("Check for updates and upgrade to the latest version")
+  .action(async (options: { check: boolean; json: boolean }) => {
+    const currentVersion = "0.2.5";
+
+    try {
+      const res = await fetch("https://registry.npmjs.org/@hasna/connectors/latest");
+      if (!res.ok) throw new Error(`npm registry returned ${res.status}`);
+      const data = await res.json() as { version: string };
+      const latestVersion = data.version;
+      const isUpToDate = currentVersion === latestVersion;
+
+      if (options.json) {
+        console.log(JSON.stringify({ current: currentVersion, latest: latestVersion, upToDate: isUpToDate }));
+        if (options.check) { process.exit(isUpToDate ? 0 : 1); return; }
+      } else {
+        console.log(`\n  Current: ${chalk.cyan(currentVersion)}`);
+        console.log(`  Latest:  ${chalk.cyan(latestVersion)}`);
+        if (isUpToDate) {
+          console.log(chalk.green("\n  Already up to date!\n"));
+          process.exit(0);
+          return;
+        }
+        console.log(chalk.yellow(`\n  Update available: ${currentVersion} → ${latestVersion}`));
+      }
+
+      if (options.check) {
+        if (!options.json) console.log(chalk.dim(`\n  Run 'connectors upgrade' to install.\n`));
+        process.exit(isUpToDate ? 0 : 1);
+        return;
+      }
+
+      // Detect package manager and run upgrade
+      if (!options.json) console.log(chalk.dim(`\n  Upgrading...`));
+      const { execSync } = await import("child_process");
+      try {
+        execSync(`bun install -g @hasna/connectors@${latestVersion}`, { stdio: options.json ? "pipe" : "inherit" });
+      } catch {
+        try {
+          execSync(`npm install -g @hasna/connectors@${latestVersion}`, { stdio: options.json ? "pipe" : "inherit" });
+        } catch (e) {
+          if (options.json) {
+            console.log(JSON.stringify({ error: "Failed to upgrade. Try manually: bun install -g @hasna/connectors@latest" }));
+          } else {
+            console.log(chalk.red(`\n  Failed to upgrade. Try manually:`));
+            console.log(chalk.dim(`  bun install -g @hasna/connectors@latest\n`));
+          }
+          process.exit(1);
+          return;
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ upgraded: true, from: currentVersion, to: latestVersion }));
+      } else {
+        console.log(chalk.green(`\n  Upgraded to ${latestVersion}!\n`));
+      }
+    } catch (e) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: e instanceof Error ? e.message : "Failed to check for updates" }));
+      } else {
+        console.log(chalk.red(`\n  Failed to check for updates: ${e instanceof Error ? e.message : e}\n`));
+      }
+      process.exit(1);
+    }
+  });
+
+// Completions command — output shell completion scripts
+program
+  .command("completions")
+  .argument("<shell>", "Shell type: bash, zsh, or fish")
+  .description("Output shell completion script")
+  .action((shell: string) => {
+    const commands = ["interactive", "install", "list", "search", "info", "docs", "remove", "categories", "serve", "update", "status", "doctor", "auth", "init", "export", "import", "upgrade", "completions"];
+    const connectorNames = CONNECTORS.map(c => c.name);
+    const categoryNames = CATEGORIES.map(c => `"${c}"`);
+
+    if (shell === "zsh") {
+      console.log(`#compdef connectors
+_connectors() {
+  local -a commands connectors categories
+  commands=(${commands.join(" ")})
+  connectors=(${connectorNames.join(" ")})
+  categories=(${categoryNames.map(c => c.replace(/"/g, '\\"')).join(" ")})
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+  elif (( CURRENT == 3 )); then
+    case "\${words[2]}" in
+      install|add|info|docs|remove|rm|auth)
+        _describe 'connector' connectors ;;
+      search) _message 'search query' ;;
+      list|ls) _arguments '--category[Filter by category]:category:(${CATEGORIES.join(" ").replace(/&/g, "\\&")})' '--installed' '--json' '--brief' ;;
+      *) ;;
+    esac
+  fi
+}
+compdef _connectors connectors`);
+    } else if (shell === "bash") {
+      console.log(`_connectors() {
+  local cur prev commands connectors
+  COMPREPLY=()
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  prev="\${COMP_WORDS[COMP_CWORD-1]}"
+  commands="${commands.join(" ")}"
+  connectors="${connectorNames.join(" ")}"
+
+  if [[ \${COMP_CWORD} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") )
+  elif [[ \${COMP_CWORD} -eq 2 ]]; then
+    case "\${prev}" in
+      install|add|info|docs|remove|rm|auth)
+        COMPREPLY=( $(compgen -W "\${connectors}" -- "\${cur}") ) ;;
+    esac
+  fi
+}
+complete -F _connectors connectors`);
+    } else if (shell === "fish") {
+      let script = `# Fish completions for connectors\n`;
+      for (const cmd of commands) {
+        script += `complete -c connectors -n "__fish_use_subcommand" -a "${cmd}"\n`;
+      }
+      script += `# Connector names for install/info/docs/remove/auth\n`;
+      for (const name of connectorNames) {
+        script += `complete -c connectors -n "__fish_seen_subcommand_from install add info docs remove rm auth" -a "${name}"\n`;
+      }
+      console.log(script);
+    } else {
+      console.error(`Unknown shell: ${shell}. Supported: bash, zsh, fish`);
+      process.exit(1);
+    }
   });
 
 program.parse();
