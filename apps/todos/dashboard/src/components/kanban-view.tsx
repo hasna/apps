@@ -8,9 +8,6 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ArrowUpDownIcon,
-  GripVerticalIcon,
-  LayoutListIcon,
-  ListIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -530,16 +527,10 @@ function KanbanToolbar({
         Cancelled
       </Button>
 
-      <div className="ml-auto flex items-center border rounded-md">
-        <Button variant={!compact ? "secondary" : "ghost"} size="icon" className="size-7 rounded-r-none"
-          onClick={() => onCompactChange(false)} title="Detailed cards">
-          <LayoutListIcon className="size-3.5" />
-        </Button>
-        <Button variant={compact ? "secondary" : "ghost"} size="icon" className="size-7 rounded-l-none"
-          onClick={() => onCompactChange(true)} title="Compact cards">
-          <ListIcon className="size-3.5" />
-        </Button>
-      </div>
+      <Button variant={compact ? "secondary" : "outline"} size="sm" className="h-8 text-sm ml-auto"
+        onClick={() => onCompactChange(!compact)}>
+        {compact ? "Detailed" : "Compact"}
+      </Button>
     </div>
   );
 }
