@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 bun install                       # Install dependencies
-bun test                          # Run all 172 tests
+bun test                          # Run all 295 tests
 bun test src/db/tasks.test.ts     # Run a single test file
 bun run typecheck                 # TypeScript type checking (tsc --noEmit)
 bun run build                     # Build all three entry points to dist/
@@ -97,9 +97,9 @@ bun:sqlite with WAL mode, foreign keys enabled, 5-second busy timeout.
 
 ## Testing
 
-172 tests across 11 files. Tests use `TODOS_DB_PATH=:memory:` with `resetDatabase()` + `getDatabase()` in `beforeEach` and `closeDatabase()` in `afterEach` for full isolation. CLI integration tests spawn subprocesses with temp DB files created via `mkdtemp`.
+295 tests across 14 files. Tests use `TODOS_DB_PATH=:memory:` with `resetDatabase()` + `getDatabase()` in `beforeEach` and `closeDatabase()` in `afterEach` for full isolation. CLI integration tests spawn subprocesses with temp DB files created via `mkdtemp`.
 
-Test files: `tasks.test.ts` (49), `projects.test.ts` (17), `agents.test.ts` (12), `task-lists.test.ts` (16), `plans.test.ts` (16), `comments.test.ts` (12), `sessions.test.ts` (13), `database.test.ts` (14), `search.test.ts` (9), `mcp.test.ts` (11), `cli.test.ts` (4).
+Test files: `tasks.test.ts` (49), `projects.test.ts` (17), `agents.test.ts` (12), `task-lists.test.ts` (16), `plans.test.ts` (16), `comments.test.ts` (12), `sessions.test.ts` (13), `database.test.ts` (14), `search.test.ts` (9), `mcp.test.ts` (11), `cli.test.ts` (4), `completion-guard.test.ts`, `cli-qol.test.ts`, `serve.test.ts`.
 
 ## MCP Tools (29)
 

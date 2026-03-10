@@ -1,5 +1,9 @@
 # @hasna/todos
 
+[![npm version](https://img.shields.io/npm/v/@hasna/todos)](https://www.npmjs.com/package/@hasna/todos)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-295%20passing-brightgreen)]()
+
 Universal task management for AI coding agents. CLI + MCP server + library, all sharing a single SQLite database.
 
 ## Features
@@ -183,6 +187,50 @@ todos-mcp
 | `todos://agents` | All registered agents |
 | `todos://task-lists` | All task lists |
 
+## Web Dashboard
+
+Start the web dashboard to manage tasks visually:
+
+```bash
+todos serve
+# or
+todos-serve --port 19427
+```
+
+Features:
+- **Dashboard** — stats cards, completion rate, recent activity
+- **Tasks** — data table with search, filters, sorting, pagination, kanban board view
+- **Projects** — project management with task breakdown
+- **Agents** — agent monitoring with completion rates, online status, role management
+- **Help** — keyboard shortcuts, CLI reference, MCP configuration
+
+The dashboard auto-refreshes every 30 seconds, supports dark mode, and includes keyboard shortcuts (`/` search, `n` new task, `0-4` navigate pages).
+
+## REST API
+
+When running `todos serve`, the following REST API is available:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/stats` | Dashboard statistics |
+| GET | `/api/tasks` | List tasks (supports `?status=`, `?project_id=`, `?limit=`) |
+| POST | `/api/tasks` | Create a task |
+| GET | `/api/tasks/:id` | Get task details |
+| PATCH | `/api/tasks/:id` | Update a task |
+| DELETE | `/api/tasks/:id` | Delete a task |
+| POST | `/api/tasks/:id/start` | Start a task |
+| POST | `/api/tasks/:id/complete` | Complete a task |
+| POST | `/api/tasks/bulk` | Bulk operations (start, complete, delete) |
+| GET | `/api/tasks/export?format=csv` | Export tasks as CSV |
+| GET | `/api/tasks/export?format=json` | Export tasks as JSON |
+| GET | `/api/projects` | List projects |
+| POST | `/api/projects` | Create a project |
+| DELETE | `/api/projects/:id` | Delete a project |
+| GET | `/api/agents` | List agents |
+| POST | `/api/agents` | Register an agent |
+| PATCH | `/api/agents/:id` | Update an agent |
+| DELETE | `/api/agents/:id` | Delete an agent |
+
 ## Sync
 
 Bidirectional sync with agent-specific task lists.
@@ -338,8 +386,8 @@ SQLite with automatic location detection:
 ## Development
 
 ```bash
-git clone https://github.com/hasna/todos.git
-cd todos
+git clone https://github.com/hasna/open-todos.git
+cd open-todos
 bun install
 bun test                    # Run 172 tests
 bun run typecheck           # TypeScript checking

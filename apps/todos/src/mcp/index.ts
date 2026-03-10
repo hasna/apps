@@ -47,7 +47,7 @@ import type { Task } from "../types/index.js";
 
 const server = new McpServer({
   name: "todos",
-  version: "0.1.0",
+  version: "0.9.15",
 });
 
 function formatError(error: unknown): string {

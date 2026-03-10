@@ -9,3 +9,5 @@ dist/
 *.tgz
 *.png
 .playwright-mcp/
+.secrets/
+coverage/
