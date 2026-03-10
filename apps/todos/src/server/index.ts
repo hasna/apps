@@ -2,6 +2,8 @@
 /**
  * Standalone entry point for the todos dashboard server.
  * Usage: todos-serve [--port 19427]
+ *
+ * If the default port is in use, automatically finds the next free port.
  */
 
 import { startServer } from "./serve.js";
@@ -20,4 +22,26 @@ function parsePort(): number {
   return DEFAULT_PORT;
 }
 
-startServer(parsePort());
+async function findFreePort(start: number): Promise<number> {
+  for (let port = start; port < start + 100; port++) {
+    try {
+      const server = Bun.serve({ port, fetch: () => new Response("") });
+      server.stop(true);
+      return port;
+    } catch {
+      // Port in use, try next
+    }
+  }
+  return start; // fallback
+}
+
+async function main() {
+  const requestedPort = parsePort();
+  const port = await findFreePort(requestedPort);
+  if (port !== requestedPort) {
+    console.log(`Port ${requestedPort} in use, using ${port}`);
+  }
+  startServer(port);
+}
+
+main();

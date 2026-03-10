@@ -1524,7 +1524,21 @@ program
   .option("--no-open", "Don't open browser automatically")
   .action(async (opts) => {
     const { startServer } = await import("../server/serve.js");
-    await startServer(parseInt(opts.port, 10), { open: opts.open !== false });
+    const requestedPort = parseInt(opts.port, 10);
+    let port = requestedPort;
+    // Auto-find free port if default is in use
+    for (let p = requestedPort; p < requestedPort + 100; p++) {
+      try {
+        const s = Bun.serve({ port: p, fetch: () => new Response("") });
+        s.stop(true);
+        port = p;
+        break;
+      } catch { /* port in use */ }
+    }
+    if (port !== requestedPort) {
+      console.log(`Port ${requestedPort} in use, using ${port}`);
+    }
+    await startServer(port, { open: opts.open !== false });
   });
 
 // watch
