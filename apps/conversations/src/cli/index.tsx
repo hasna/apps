@@ -1257,8 +1257,8 @@ program
       if (process.platform === "darwin") {
         try {
           const { execSync } = require("child_process");
-          const t = title.replace(/"/g, '\\"');
-          const b = body.replace(/"/g, '\\"').replace(/\n/g, " ").slice(0, 200);
+          const t = title.replace(/['"\\]/g, " ");
+          const b = body.replace(/['"\\]/g, " ").replace(/\n/g, " ").slice(0, 200);
           execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { timeout: 3000 });
         } catch {}
       }
