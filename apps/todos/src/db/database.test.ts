@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, isLockExpired, lockExpiryCutoff, now, uuid } from "./database.js";
-import { createTask } from "./tasks.js";
+import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, isLockExpired, lockExpiryCutoff, clearExpiredLocks, now, uuid } from "./database.js";
+import { createTask, getTask } from "./tasks.js";
 import type { Database } from "bun:sqlite";
 
 let db: Database;
@@ -137,5 +137,75 @@ describe("uuid", () => {
     expect(id1).not.toBe(id2);
     expect(id2).not.toBe(id3);
     expect(id1).not.toBe(id3);
+  });
+});
+
+describe("isLockExpired - additional", () => {
+  it("should return false for recent lock (just now)", () => {
+    expect(isLockExpired(new Date().toISOString())).toBe(false);
+  });
+
+  it("should return false for lock exactly at 29 minutes", () => {
+    const recent = new Date(Date.now() - 29 * 60 * 1000).toISOString();
+    expect(isLockExpired(recent)).toBe(false);
+  });
+});
+
+describe("lockExpiryCutoff - additional", () => {
+  it("should return ISO string 30 minutes in the past", () => {
+    const cutoff = lockExpiryCutoff();
+    const cutoffTime = new Date(cutoff).getTime();
+    const expected = Date.now() - 30 * 60 * 1000;
+    expect(Math.abs(cutoffTime - expected)).toBeLessThan(1000);
+  });
+
+  it("should accept custom now timestamp", () => {
+    const customNow = Date.now() - 60 * 60 * 1000; // 1 hour ago
+    const cutoff = lockExpiryCutoff(customNow);
+    const cutoffTime = new Date(cutoff).getTime();
+    const expected = customNow - 30 * 60 * 1000;
+    expect(Math.abs(cutoffTime - expected)).toBeLessThan(1000);
+  });
+});
+
+describe("clearExpiredLocks", () => {
+  it("should clear locks older than 30 minutes", () => {
+    const task = createTask({ title: "Locked task" }, db);
+    const oldTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET locked_by = 'agent1', locked_at = ? WHERE id = ?", [oldTime, task.id]);
+
+    clearExpiredLocks(db);
+
+    const updated = getTask(task.id, db)!;
+    expect(updated.locked_by).toBeNull();
+    expect(updated.locked_at).toBeNull();
+  });
+
+  it("should not clear recent locks", () => {
+    const task = createTask({ title: "Recent lock" }, db);
+    const recentTime = new Date().toISOString();
+    db.run("UPDATE tasks SET locked_by = 'agent1', locked_at = ? WHERE id = ?", [recentTime, task.id]);
+
+    clearExpiredLocks(db);
+
+    const updated = getTask(task.id, db)!;
+    expect(updated.locked_by).toBe("agent1");
+  });
+});
+
+describe("resolvePartialId - additional", () => {
+  it("should return null for ambiguous partial match", () => {
+    createTask({ title: "Task 1" }, db);
+    createTask({ title: "Task 2" }, db);
+    // Empty string with LIKE prefix would match all rows — should return null (ambiguous)
+    const resolved = resolvePartialId(db, "tasks", "");
+    expect(resolved).toBeNull();
+  });
+
+  it("should work with projects table", () => {
+    const { createProject } = require("../db/projects.js");
+    const project = createProject({ name: "Test", path: "/test/resolve-" + Date.now() }, db);
+    const resolved = resolvePartialId(db, "projects", project.id.slice(0, 8));
+    expect(resolved).toBe(project.id);
   });
 });

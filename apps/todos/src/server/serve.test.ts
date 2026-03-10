@@ -416,6 +416,103 @@ describe("Unknown routes", () => {
   });
 });
 
+// ── API: Agent CRUD ─────────────────────────────────────────────────────────
+
+describe("API - Agent CRUD", () => {
+  it("POST /api/agents should register agent", async () => {
+    const res = await api("POST", "/api/agents", { name: "test-agent-" + Date.now() });
+    expect(res.status).toBe(201);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect((data.name as string)).toContain("test-agent");
+  });
+
+  it("POST /api/agents should reject missing name", async () => {
+    const res = await api("POST", "/api/agents", {});
+    expect(res.status).toBe(400);
+  });
+
+  it("PATCH /api/agents/:id should update agent", async () => {
+    const createRes = await api("POST", "/api/agents", { name: "patch-test-" + Date.now() });
+    const agent = (await createRes.json()) as Record<string, unknown>;
+
+    const res = await api("PATCH", `/api/agents/${agent.id}`, { description: "Updated via API", role: "admin" });
+    expect(res.status).toBe(200);
+    const updated = (await res.json()) as Record<string, unknown>;
+    expect(updated.description).toBe("Updated via API");
+    expect(updated.role).toBe("admin");
+  });
+
+  it("DELETE /api/agents/:id should delete agent", async () => {
+    const createRes = await api("POST", "/api/agents", { name: "delete-test-" + Date.now() });
+    const agent = (await createRes.json()) as Record<string, unknown>;
+
+    const res = await api("DELETE", `/api/agents/${agent.id}`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── API: Project CRUD ───────────────────────────────────────────────────────
+
+describe("API - Project CRUD", () => {
+  it("POST /api/projects should create project", async () => {
+    const res = await api("POST", "/api/projects", { name: "Test Project", path: "/tmp/test-" + Date.now() });
+    expect(res.status).toBe(201);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.name).toBe("Test Project");
+  });
+
+  it("POST /api/projects should reject missing fields", async () => {
+    const res = await api("POST", "/api/projects", { name: "No Path" });
+    expect(res.status).toBe(400);
+  });
+
+  it("DELETE /api/projects/:id should delete project", async () => {
+    const createRes = await api("POST", "/api/projects", { name: "Del Project", path: "/tmp/del-" + Date.now() });
+    const project = (await createRes.json()) as Record<string, unknown>;
+
+    const res = await api("DELETE", `/api/projects/${project.id}`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── API: Export ─────────────────────────────────────────────────────────────
+
+describe("API - Export", () => {
+  it("GET /api/tasks/export?format=json should return JSON", async () => {
+    const res = await fetch(url("/api/tasks/export?format=json"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+  });
+
+  it("GET /api/tasks/export?format=csv should return CSV", async () => {
+    const res = await fetch(url("/api/tasks/export?format=csv"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+  });
+});
+
+// ── API: Bulk operations ────────────────────────────────────────────────────
+
+describe("API - Bulk operations", () => {
+  it("POST /api/tasks/bulk should handle bulk complete", async () => {
+    const task = await createTaskViaApi({ title: "Bulk test" });
+    const id = task.id as string;
+
+    // Start it first
+    await api("POST", `/api/tasks/${id}/start`);
+
+    const res = await api("POST", "/api/tasks/bulk", { ids: [id], action: "complete" });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.succeeded).toBe(1);
+  });
+
+  it("POST /api/tasks/bulk should reject missing ids", async () => {
+    const res = await api("POST", "/api/tasks/bulk", { action: "delete" });
+    expect(res.status).toBe(400);
+  });
+});
+
 // ── Response headers ────────────────────────────────────────────────────────
 
 describe("Response headers", () => {

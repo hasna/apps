@@ -177,4 +177,25 @@ describe("ensureTaskList", () => {
     const second = ensureTaskList("Backlog", "backlog");
     expect(second.id).toBe(first.id);
   });
+
+  it("should create with unique slug and return it", () => {
+    const slug = "ensure-test-" + Date.now();
+    const list = ensureTaskList("Ensure Test", slug);
+    expect(list.slug).toBe(slug);
+    expect(list.name).toBe("Ensure Test");
+  });
+
+  it("should return existing task list if slug matches (idempotent)", () => {
+    const slug = "ensure-idem-" + Date.now();
+    const first = ensureTaskList("First", slug);
+    const second = ensureTaskList("Second", slug);
+    expect(second.id).toBe(first.id);
+  });
+});
+
+describe("getTaskListBySlug - additional", () => {
+  it("should return null for non-existent slug", () => {
+    const found = getTaskListBySlug("nonexistent-slug-xyz");
+    expect(found).toBeNull();
+  });
 });

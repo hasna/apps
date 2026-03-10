@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { registerAgent, getAgent, getAgentByName, listAgents, updateAgentActivity, deleteAgent } from "./agents.js";
+import { registerAgent, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent } from "./agents.js";
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -97,6 +97,38 @@ describe("updateAgentActivity", () => {
     const updated = getAgent(agent.id)!;
     expect(updated.last_seen_at).toBeDefined();
     expect(typeof updated.last_seen_at).toBe("string");
+  });
+});
+
+describe("updateAgent", () => {
+  it("should update agent name", () => {
+    const agent = registerAgent({ name: "old-name-" + Date.now() });
+    const newName = "new-name-" + Date.now();
+    const updated = updateAgent(agent.id, { name: newName });
+    expect(updated.name).toBe(newName);
+  });
+
+  it("should update agent description", () => {
+    const agent = registerAgent({ name: "desc-test-" + Date.now() });
+    const updated = updateAgent(agent.id, { description: "New description" });
+    expect(updated.description).toBe("New description");
+  });
+
+  it("should update agent role", () => {
+    const agent = registerAgent({ name: "role-test-" + Date.now() });
+    const updated = updateAgent(agent.id, { role: "admin" });
+    expect(updated.role).toBe("admin");
+  });
+
+  it("should throw for non-existent agent", () => {
+    expect(() => updateAgent("nonexistent", { name: "test" })).toThrow();
+  });
+
+  it("should update multiple fields at once", () => {
+    const agent = registerAgent({ name: "multi-" + Date.now() });
+    const updated = updateAgent(agent.id, { name: "renamed-" + Date.now(), description: "Updated", role: "observer" });
+    expect(updated.description).toBe("Updated");
+    expect(updated.role).toBe("observer");
   });
 });
 
