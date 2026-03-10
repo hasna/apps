@@ -1201,46 +1201,114 @@ program
     heartbeat(agent);
 
     const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
+    const cols = Math.min(process.stdout.columns || 80, 100);
 
-    console.log(chalk.cyan(`Watching as ${chalk.bold(agent)}...`));
-    console.log(chalk.dim(`Poll interval: ${interval}ms. Press Ctrl+C to stop.\n`));
+    console.log("");
+    console.log(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${chalk.cyan(agent)}`));
+    console.log(chalk.dim(`  ${opts.space ? `Space: #${opts.space}` : "All DMs"} · Poll: ${interval}ms · Ctrl+C to stop`));
+    console.log(chalk.dim("  " + "─".repeat(cols - 4)));
+    console.log("");
 
     const { startPolling } = require("../lib/poll.js");
 
-    const notify = (title: string, body: string) => {
-      // Print to console
-      const time = new Date().toLocaleTimeString();
-      console.log(`${chalk.dim(time)} ${chalk.cyan(title)}: ${body}`);
+    // Render markdown-ish content for terminal
+    const renderContent = (content: string): string => {
+      const lines = content.split("\n");
+      const rendered: string[] = [];
 
-      // Desktop notification (macOS)
+      for (const line of lines) {
+        let l = line;
+        // Headings
+        const h = l.match(/^(#{1,3})\s+(.+)/);
+        if (h) { rendered.push(chalk.bold(h[2])); continue; }
+        // Unordered list
+        if (/^\s*[-*+]\s/.test(l)) {
+          rendered.push("  " + chalk.dim("•") + " " + renderInline(l.replace(/^\s*[-*+]\s/, "")));
+          continue;
+        }
+        // Ordered list
+        const ol = l.match(/^\s*(\d+)[.)]\s(.*)/);
+        if (ol) { rendered.push("  " + chalk.dim(ol[1] + ".") + " " + renderInline(ol[2])); continue; }
+        // Blockquote
+        if (l.startsWith(">")) {
+          rendered.push(chalk.dim("  │ ") + chalk.italic(renderInline(l.replace(/^>\s?/, ""))));
+          continue;
+        }
+        // Code block markers
+        if (l.trimStart().startsWith("```")) continue;
+        // Empty line
+        if (l.trim() === "") { rendered.push(""); continue; }
+        // Regular text
+        rendered.push(renderInline(l));
+      }
+      return rendered.join("\n");
+    };
+
+    const renderInline = (text: string): string => {
+      return text
+        .replace(/`([^`]+)`/g, (_, code) => chalk.bgGray.white(` ${code} `))
+        .replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => chalk.bold.italic(t))
+        .replace(/\*\*(.+?)\*\*/g, (_, t) => chalk.bold(t))
+        .replace(/\*(.+?)\*/g, (_, t) => chalk.italic(t))
+        .replace(/~~(.+?)~~/g, (_, t) => chalk.strikethrough(t));
+    };
+
+    const desktopNotify = (title: string, body: string) => {
       if (process.platform === "darwin") {
         try {
           const { execSync } = require("child_process");
-          const safeTitle = title.replace(/"/g, '\\"');
-          const safeBody = body.replace(/"/g, '\\"').slice(0, 200);
-          execSync(`osascript -e 'display notification "${safeBody}" with title "${safeTitle}"'`, { timeout: 3000 });
+          const t = title.replace(/"/g, '\\"');
+          const b = body.replace(/"/g, '\\"').replace(/\n/g, " ").slice(0, 200);
+          execSync(`osascript -e 'display notification "${b}" with title "${t}"'`, { timeout: 3000 });
         } catch {}
       }
     };
 
-    // Watch DMs to this agent
+    const renderMessage = (msg: import("../types.js").Message) => {
+      const time = chalk.dim(msg.created_at.slice(11, 19));
+      const where = msg.space
+        ? chalk.magenta(`#${msg.space}`)
+        : chalk.yellow("DM");
+      const priority = msg.priority !== "normal"
+        ? (msg.priority === "urgent" ? chalk.red.bold(` [${msg.priority}]`) :
+           msg.priority === "high" ? chalk.yellow(` [${msg.priority}]`) :
+           chalk.dim(` [${msg.priority}]`))
+        : "";
+      const blocking = msg.blocking ? chalk.red.bold(" ⚠ BLOCKER") : "";
+      const sender = chalk.cyan.bold(msg.from_agent);
+
+      // Header line
+      console.log(`  ${sender}  ${where}  ${time}${priority}${blocking}`);
+
+      // Content with indent
+      const content = renderContent(msg.content);
+      const indented = content.split("\n").map(l => "    " + l).join("\n");
+      console.log(indented);
+
+      // Separator
+      console.log(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
+      console.log("");
+    };
+
     startPolling({
       to_agent: opts.space ? undefined : agent,
       space: opts.space,
       interval_ms: interval,
       on_messages: (messages: import("../types.js").Message[]) => {
         for (const msg of messages) {
-          if (msg.from_agent === agent) continue; // skip own messages
+          if (msg.from_agent === agent) continue;
+          renderMessage(msg);
+
+          // Desktop notification (short preview)
           const where = msg.space ? `#${msg.space}` : "DM";
-          const preview = msg.content.length > 100 ? msg.content.slice(0, 100) + "..." : msg.content;
-          notify(`${msg.from_agent} (${where})`, preview);
+          const preview = msg.content.replace(/[*#`~_>\-]/g, "").slice(0, 150);
+          desktopNotify(`${msg.from_agent} (${where})`, preview);
         }
       },
     });
 
-    // Keep process alive
     process.on("SIGINT", () => {
-      console.log(chalk.dim("\nStopped watching."));
+      console.log(chalk.dim("\n  Stopped watching."));
       closeDb();
       process.exit(0);
     });
