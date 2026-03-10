@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-03-10
+
+### Added
+
+- `connectors list --brief` flag for concise output (just names, ideal for AI agents)
+- `connectors install --category "AI & ML"` to install all connectors in a category
+- `connectors export` / `connectors import` CLI commands for credential backup/restore
+- `connectors upgrade` command to check for and install latest version
+- `connectors completions bash|zsh|fish` for shell tab completion
+- Conditional postinstall: skips dashboard install if `SKIP_DASHBOARD=1` or already installed
+- 14 new CLI tests (368 total)
+
+### Changed
+
+- `connectors auth --key` now always echoes which field was saved
+- postinstall no longer re-installs dashboard deps unnecessarily
+
 ## [0.2.4] - 2026-03-10
 
 ### Added
