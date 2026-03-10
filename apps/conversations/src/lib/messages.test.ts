@@ -576,3 +576,88 @@ describe("blocking messages", () => {
     expect(blockers).toHaveLength(0);
   });
 });
+
+describe("attachments", () => {
+  const { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } = require("fs");
+
+  const TEMP_DIR = join(tmpdir(), `conversations-att-test-${Date.now()}`);
+  const ATTACHMENTS_DIR = join(TEMP_DIR, "attachments");
+
+  beforeEach(() => {
+    mkdirSync(TEMP_DIR, { recursive: true });
+    process.env.CONVERSATIONS_ATTACHMENTS_DIR = ATTACHMENTS_DIR;
+  });
+
+  afterEach(() => {
+    delete process.env.CONVERSATIONS_ATTACHMENTS_DIR;
+    try { rmSync(TEMP_DIR, { recursive: true, force: true }); } catch {}
+  });
+
+  test("sends message with attachment and copies file", () => {
+    const srcFile = join(TEMP_DIR, "test.txt");
+    writeFileSync(srcFile, "hello attachment");
+
+    const msg = sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "see attached",
+      attachments: [{ name: "test.txt", source_path: srcFile }],
+    });
+
+    expect(msg.attachments).toBeTruthy();
+    expect(msg.attachments!.length).toBe(1);
+    expect(msg.attachments![0].name).toBe("test.txt");
+    expect(msg.attachments![0].size).toBe(16);
+    expect(msg.attachments![0].mime_type).toBe("text/plain");
+
+    // Verify file was copied
+    const destPath = msg.attachments![0].path;
+    expect(existsSync(destPath)).toBe(true);
+    expect(readFileSync(destPath, "utf-8")).toBe("hello attachment");
+  });
+
+  test("attachment is persisted and readable from DB", () => {
+    const srcFile = join(TEMP_DIR, "data.json");
+    writeFileSync(srcFile, '{"key":"value"}');
+
+    const msg = sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "json file",
+      attachments: [{ name: "data.json", source_path: srcFile }],
+    });
+
+    const retrieved = getMessageById(msg.id);
+    expect(retrieved).toBeTruthy();
+    expect(retrieved!.attachments).toBeTruthy();
+    expect(retrieved!.attachments!.length).toBe(1);
+    expect(retrieved!.attachments![0].name).toBe("data.json");
+    expect(retrieved!.attachments![0].mime_type).toBe("application/json");
+  });
+
+  test("multiple attachments on one message", () => {
+    const src1 = join(TEMP_DIR, "a.txt");
+    const src2 = join(TEMP_DIR, "b.png");
+    writeFileSync(src1, "file a");
+    writeFileSync(src2, "fake png");
+
+    const msg = sendMessage({
+      from: "alice",
+      to: "bob",
+      content: "two files",
+      attachments: [
+        { name: "a.txt", source_path: src1 },
+        { name: "b.png", source_path: src2 },
+      ],
+    });
+
+    expect(msg.attachments!.length).toBe(2);
+    expect(msg.attachments![0].mime_type).toBe("text/plain");
+    expect(msg.attachments![1].mime_type).toBe("image/png");
+  });
+
+  test("message without attachments has null attachments field", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "no files" });
+    expect(msg.attachments).toBeNull();
+  });
+});

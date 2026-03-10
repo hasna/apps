@@ -1,6 +1,9 @@
 import { getDb } from "./db.js";
-import type { Message, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions } from "../types.js";
+import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions } from "../types.js";
 import { randomUUID } from "crypto";
+import { mkdirSync, copyFileSync, statSync } from "fs";
+import { join, basename } from "path";
+import { homedir } from "os";
 
 function parseMessage(row: Record<string, unknown>): Message {
   let metadata: Record<string, unknown> | null = null;
@@ -12,11 +15,40 @@ function parseMessage(row: Record<string, unknown>): Message {
     }
   }
 
+  let attachments: Attachment[] | null = null;
+  if (row.attachments) {
+    try {
+      attachments = JSON.parse(row.attachments as string);
+    } catch {
+      attachments = null;
+    }
+  }
+
   return {
     ...row,
     metadata,
+    attachments,
     blocking: !!(row.blocking as number),
   } as Message;
+}
+
+function getAttachmentsDir(): string {
+  if (process.env.CONVERSATIONS_ATTACHMENTS_DIR) return process.env.CONVERSATIONS_ATTACHMENTS_DIR;
+  return join(homedir(), ".conversations", "attachments");
+}
+
+function guessMimeType(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase();
+  const mimeMap: Record<string, string> = {
+    txt: "text/plain", md: "text/markdown", json: "application/json",
+    js: "text/javascript", ts: "text/typescript", py: "text/x-python",
+    html: "text/html", css: "text/css", xml: "application/xml",
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    svg: "image/svg+xml", webp: "image/webp",
+    pdf: "application/pdf", zip: "application/zip", gz: "application/gzip",
+    csv: "text/csv", yaml: "text/yaml", yml: "text/yaml",
+  };
+  return mimeMap[ext || ""] || "application/octet-stream";
 }
 
 export function sendMessage(opts: SendMessageOptions): Message {
@@ -51,7 +83,32 @@ export function sendMessage(opts: SendMessageOptions): Message {
     blocking
   ) as Record<string, unknown>;
 
-  return parseMessage(row);
+  const message = parseMessage(row);
+
+  // Handle file attachments
+  if (opts.attachments && opts.attachments.length > 0) {
+    const attachmentsDir = join(getAttachmentsDir(), String(message.id));
+    mkdirSync(attachmentsDir, { recursive: true });
+
+    const attachmentInfos: Attachment[] = [];
+    for (const att of opts.attachments) {
+      const destPath = join(attachmentsDir, att.name);
+      copyFileSync(att.source_path, destPath);
+      const stat = statSync(destPath);
+      attachmentInfos.push({
+        name: att.name,
+        path: destPath,
+        size: stat.size,
+        mime_type: guessMimeType(att.name),
+      });
+    }
+
+    const attachmentsJson = JSON.stringify(attachmentInfos);
+    db.prepare("UPDATE messages SET attachments = ? WHERE id = ?").run(attachmentsJson, message.id);
+    message.attachments = attachmentInfos;
+  }
+
+  return message;
 }
 
 export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
