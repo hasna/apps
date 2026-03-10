@@ -9,7 +9,7 @@ import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, get
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { getDb, getDbPath, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
-import { heartbeat, listAgents, removePresence, renameAgent } from "../lib/presence.js";
+import { heartbeat, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { App } from "./components/App.js";
 import pkg from "../../package.json";
 
@@ -1161,6 +1161,47 @@ agents
     closeDb();
   });
 
+// ---- whoami ----
+program
+  .command("whoami")
+  .description("Show current agent identity and online status")
+  .option("--from <agent>", "Explicit agent identity")
+  .action((opts) => {
+    const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
+    const agent = resolveIdentity(opts.from);
+
+    let source: string;
+    if (opts.from) {
+      source = "explicit (--from flag)";
+    } else if (envValue) {
+      source = "env var (CONVERSATIONS_AGENT_ID)";
+    } else {
+      const { join } = require("path");
+      const { homedir } = require("os");
+      const agentIdFile = join(homedir(), ".conversations", "agent-id");
+      source = `auto-generated (${agentIdFile})`;
+    }
+
+    const presence = getPresence(agent);
+    let onlineStatus: string;
+    if (presence && presence.online) {
+      const lastSeenMs = new Date(presence.last_seen_at + "Z").getTime();
+      const agoMs = Date.now() - lastSeenMs;
+      const agoSec = Math.floor(agoMs / 1000);
+      const agoStr = agoSec < 60 ? `${agoSec}s ago` : `${Math.floor(agoSec / 60)}m ago`;
+      onlineStatus = chalk.green(`yes`) + chalk.dim(` (last seen ${agoStr})`);
+    } else if (presence) {
+      onlineStatus = chalk.red("no") + chalk.dim(` (last seen ${presence.last_seen_at})`);
+    } else {
+      onlineStatus = chalk.red("no") + chalk.dim(" (no presence record)");
+    }
+
+    console.log(`  ${chalk.bold("Agent:")}  ${chalk.cyan(agent)}`);
+    console.log(`  ${chalk.bold("Source:")} ${source}`);
+    console.log(`  ${chalk.bold("Online:")} ${onlineStatus}`);
+    closeDb();
+  });
+
 // ---- blockers ----
 program
   .command("blockers")
@@ -1195,6 +1236,7 @@ program
   .description("Watch for new messages with desktop notifications")
   .option("--from <agent>", "Your agent identity")
   .option("--space <name>", "Watch a specific space")
+  .option("--all", "Watch DMs and all subscribed spaces")
   .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
   .action((opts) => {
     const agent = resolveIdentity(opts.from);
@@ -1203,9 +1245,21 @@ program
     const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
     const cols = Math.min(process.stdout.columns || 80, 100);
 
+    // Resolve the agent's subscribed spaces when --all is used
+    let agentSpaces: string[] = [];
+    if (opts.all) {
+      const db = getDb();
+      const rows = db.prepare("SELECT space FROM space_members WHERE agent = ?").all(agent) as { space: string }[];
+      agentSpaces = rows.map(r => r.space);
+    }
+
+    const modeLabel = opts.all
+      ? `DMs + ${agentSpaces.length} space(s)`
+      : opts.space ? `Space: #${opts.space}` : "All DMs";
+
     console.log("");
     console.log(chalk.bold(`  Conversations`) + chalk.dim(` — watching as ${chalk.cyan(agent)}`));
-    console.log(chalk.dim(`  ${opts.space ? `Space: #${opts.space}` : "All DMs"} · Poll: ${interval}ms · Ctrl+C to stop`));
+    console.log(chalk.dim(`  ${modeLabel} · Poll: ${interval}ms · Ctrl+C to stop`));
     console.log(chalk.dim("  " + "─".repeat(cols - 4)));
     console.log("");
 
@@ -1291,36 +1345,62 @@ program
     };
 
     // Show recent messages first
-    const recent = readMessages({
-      to: opts.space ? undefined : agent,
-      space: opts.space,
-      limit: 20,
-      order: "asc",
-    });
-    if (recent.length > 0) {
-      console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
-      for (const msg of recent) {
-        renderMessage(msg);
+    if (opts.all) {
+      // Combine DMs and all space messages
+      const dmRecent = readMessages({ to: agent, limit: 20, order: "asc" });
+      const spaceRecent: import("../types.js").Message[] = [];
+      for (const sp of agentSpaces) {
+        spaceRecent.push(...readMessages({ space: sp, limit: 10, order: "asc" }));
       }
-      console.log(chalk.dim(`  ── Live ──\n`));
+      const recent = [...dmRecent, ...spaceRecent]
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .slice(-20);
+      if (recent.length > 0) {
+        console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
+        for (const msg of recent) { renderMessage(msg); }
+        console.log(chalk.dim(`  ── Live ──\n`));
+      }
+    } else {
+      const recent = readMessages({
+        to: opts.space ? undefined : agent,
+        space: opts.space,
+        limit: 20,
+        order: "asc",
+      });
+      if (recent.length > 0) {
+        console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
+        for (const msg of recent) { renderMessage(msg); }
+        console.log(chalk.dim(`  ── Live ──\n`));
+      }
     }
 
-    startPolling({
-      to_agent: opts.space ? undefined : agent,
-      space: opts.space,
-      interval_ms: interval,
-      on_messages: (messages: import("../types.js").Message[]) => {
-        for (const msg of messages) {
-          if (msg.from_agent === agent) continue;
-          renderMessage(msg);
+    const onNewMessages = (messages: import("../types.js").Message[]) => {
+      for (const msg of messages) {
+        if (msg.from_agent === agent) continue;
+        renderMessage(msg);
 
-          // Desktop notification (short preview)
-          const where = msg.space ? `#${msg.space}` : "DM";
-          const preview = msg.content.replace(/[*#`~_>\-]/g, "").slice(0, 150);
-          desktopNotify(`${msg.from_agent} (${where})`, preview);
-        }
-      },
-    });
+        // Desktop notification (short preview)
+        const where = msg.space ? `#${msg.space}` : "DM";
+        const preview = msg.content.replace(/[*#`~_>\-]/g, "").slice(0, 150);
+        desktopNotify(`${msg.from_agent} (${where})`, preview);
+      }
+    };
+
+    if (opts.all) {
+      // Start a poller for DMs
+      startPolling({ to_agent: agent, interval_ms: interval, on_messages: onNewMessages });
+      // Start a poller for each subscribed space
+      for (const sp of agentSpaces) {
+        startPolling({ space: sp, interval_ms: interval, on_messages: onNewMessages });
+      }
+    } else {
+      startPolling({
+        to_agent: opts.space ? undefined : agent,
+        space: opts.space,
+        interval_ms: interval,
+        on_messages: onNewMessages,
+      });
+    }
 
     process.on("SIGINT", () => {
       console.log(chalk.dim("\n  Stopped watching."));
@@ -1344,12 +1424,17 @@ program
   .description("Start web dashboard")
   .option("--port <port>", "Port to listen on", parseInt)
   .option("--host <host>", "Host to bind (default: 127.0.0.1)")
+  .option("--open", "Auto-open dashboard in browser")
   .action(async (opts) => {
     const { startDashboardServer } = await import("../server/serve.js");
     const port = Number.isFinite(opts.port) && opts.port >= 0 && opts.port <= 65535
       ? opts.port
       : 0;
-    startDashboardServer(port, opts.host);
+    const server = startDashboardServer(port, opts.host);
+    if (opts.open) {
+      const { exec } = require("child_process");
+      exec(`open http://localhost:${server.port}`);
+    }
   });
 
 // ---- default: TUI ----
