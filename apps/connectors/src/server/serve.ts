@@ -173,7 +173,20 @@ export interface ServeOptions {
   open?: boolean;
 }
 
-export async function startServer(port: number, options?: { open?: boolean }): Promise<void> {
+async function findAvailablePort(preferred: number): Promise<number> {
+  for (let port = preferred; port < preferred + 100; port++) {
+    try {
+      const server = Bun.serve({ port, fetch() { return new Response(); } });
+      server.stop(true);
+      return port;
+    } catch {
+      // Port in use, try next
+    }
+  }
+  throw new Error(`No available port found in range ${preferred}-${preferred + 99}`);
+}
+
+export async function startServer(requestedPort: number, options?: { open?: boolean }): Promise<void> {
   const shouldOpen = options?.open ?? true;
   loadConnectorVersions();
 
@@ -186,6 +199,11 @@ export async function startServer(port: number, options?: { open?: boolean }): P
     console.error(`  cd dashboard && bun install && bun run build\n`);
     console.error(`Or from the project root:\n`);
     console.error(`  bun run build:dashboard\n`);
+  }
+
+  const port = await findAvailablePort(requestedPort);
+  if (port !== requestedPort) {
+    console.log(`Port ${requestedPort} is in use, using port ${port} instead`);
   }
 
   const server = Bun.serve({
