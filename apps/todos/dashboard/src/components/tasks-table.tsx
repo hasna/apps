@@ -505,6 +505,26 @@ export function TasksTable({ data, projectMap, projects, onStart, onComplete, on
             onDelete={confirmDelete}
             onEdit={onEdit}
             onSelect={setSelectedTask}
+            onStatusChange={async (taskId, newStatus) => {
+              try {
+                const task = data.find(t => t.id === taskId);
+                if (!task) return;
+                if (newStatus === "in_progress" && task.status === "pending") {
+                  onStart(taskId);
+                } else if (newStatus === "completed" && task.status === "in_progress") {
+                  onComplete(taskId);
+                } else {
+                  // For other transitions, use PATCH
+                  await fetch(`/api/tasks/${taskId}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ status: newStatus }),
+                  });
+                  // Trigger reload via parent
+                  onStart("__reload__");
+                }
+              } catch { /* handled by parent */ }
+            }}
           />
         )}
 
