@@ -46,6 +46,8 @@ export interface CreateProjectInput {
 export interface Plan {
   id: string;
   project_id: string | null;
+  task_list_id: string | null;
+  agent_id: string | null;
   name: string;
   description: string | null;
   status: PlanStatus;
@@ -56,6 +58,8 @@ export interface Plan {
 export interface CreatePlanInput {
   name: string;
   project_id?: string;
+  task_list_id?: string;
+  agent_id?: string;
   description?: string;
   status?: PlanStatus;
 }
@@ -64,6 +68,8 @@ export interface UpdatePlanInput {
   name?: string;
   description?: string;
   status?: PlanStatus;
+  task_list_id?: string;
+  agent_id?: string;
 }
 
 // Agent

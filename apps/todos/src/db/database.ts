@@ -227,6 +227,14 @@ const MIGRATIONS = [
   ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'agent';
   INSERT OR IGNORE INTO _migrations (id) VALUES (8);
   `,
+  // Migration 9: Add task_list_id and agent_id to plans
+  `
+  ALTER TABLE plans ADD COLUMN task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL;
+  ALTER TABLE plans ADD COLUMN agent_id TEXT;
+  CREATE INDEX IF NOT EXISTS idx_plans_task_list ON plans(task_list_id);
+  CREATE INDEX IF NOT EXISTS idx_plans_agent ON plans(agent_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (9);
+  `,
 ];
 
 let _db: Database | null = null;

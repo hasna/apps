@@ -18,6 +18,7 @@ import {
 } from "../db/tasks.js";
 import { listProjects } from "../db/projects.js";
 import { listAgents } from "../db/agents.js";
+import { createPlan, getPlan, listPlans, updatePlan, deletePlan } from "../db/plans.js";
 import { getDatabase } from "../db/database.js";
 import type { Task } from "../types/index.js";
 
@@ -406,6 +407,74 @@ export async function startServer(port: number, options?: { open?: boolean }): P
           return json({ succeeded, failed: body.ids.length - succeeded }, 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // ── API: List plans ──
+      if (path === "/api/plans" && method === "GET") {
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const plans = listPlans(projectId);
+        return json(plans, 200, port);
+      }
+
+      // ── API: Create plan ──
+      if (path === "/api/plans" && method === "POST") {
+        try {
+          const body = await req.json() as { name: string; description?: string; project_id?: string; task_list_id?: string; agent_id?: string; status?: string };
+          if (!body.name) return json({ error: "Missing 'name'" }, 400, port);
+          const plan = createPlan({
+            name: body.name,
+            description: body.description,
+            project_id: body.project_id,
+            task_list_id: body.task_list_id,
+            agent_id: body.agent_id,
+            status: body.status as any,
+          });
+          return json(plan, 201, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to create plan" }, 500, port);
+        }
+      }
+
+      // ── API: Bulk delete plans ──
+      if (path === "/api/plans/bulk" && method === "POST") {
+        try {
+          const body = await req.json() as { ids: string[]; action: "delete" };
+          if (!body.ids?.length || body.action !== "delete") return json({ error: "Missing ids or invalid action" }, 400, port);
+          let succeeded = 0;
+          for (const id of body.ids) { if (deletePlan(id)) succeeded++; }
+          return json({ succeeded, failed: body.ids.length - succeeded }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // ── API: Single plan operations ──
+      const planMatch = path.match(/^\/api\/plans\/([^/]+)$/);
+      if (planMatch) {
+        const id = planMatch[1]!;
+
+        if (method === "GET") {
+          const plan = getPlan(id);
+          if (!plan) return json({ error: "Plan not found" }, 404, port);
+          const tasks = listTasks({ plan_id: id });
+          return json({ ...plan, tasks: tasks.map(taskToSummary) }, 200, port);
+        }
+
+        if (method === "PATCH") {
+          try {
+            const body = await req.json() as Record<string, unknown>;
+            const plan = updatePlan(id, body as any);
+            return json(plan, 200, port);
+          } catch (e) {
+            return json({ error: e instanceof Error ? e.message : "Failed to update plan" }, 500, port);
+          }
+        }
+
+        if (method === "DELETE") {
+          const deleted = deletePlan(id);
+          if (!deleted) return json({ error: "Plan not found" }, 404, port);
+          return json({ success: true }, 200, port);
         }
       }
 

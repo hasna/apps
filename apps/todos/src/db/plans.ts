@@ -9,11 +9,13 @@ export function createPlan(input: CreatePlanInput, db?: Database): Plan {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO plans (id, project_id, name, description, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (id, project_id, task_list_id, agent_id, name, description, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.project_id || null,
+      input.task_list_id || null,
+      input.agent_id || null,
       input.name,
       input.description || null,
       input.status || "active",
@@ -66,6 +68,14 @@ export function updatePlan(
   if (input.status !== undefined) {
     sets.push("status = ?");
     params.push(input.status);
+  }
+  if (input.task_list_id !== undefined) {
+    sets.push("task_list_id = ?");
+    params.push(input.task_list_id);
+  }
+  if (input.agent_id !== undefined) {
+    sets.push("agent_id = ?");
+    params.push(input.agent_id);
   }
 
   params.push(id);
