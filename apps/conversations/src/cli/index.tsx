@@ -1189,6 +1189,63 @@ program
     closeDb();
   });
 
+// ---- watch ----
+program
+  .command("watch")
+  .description("Watch for new messages with desktop notifications")
+  .option("--from <agent>", "Your agent identity")
+  .option("--space <name>", "Watch a specific space")
+  .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
+  .action((opts) => {
+    const agent = resolveIdentity(opts.from);
+    heartbeat(agent);
+
+    const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
+
+    console.log(chalk.cyan(`Watching as ${chalk.bold(agent)}...`));
+    console.log(chalk.dim(`Poll interval: ${interval}ms. Press Ctrl+C to stop.\n`));
+
+    const { startPolling } = require("../lib/poll.js");
+
+    const notify = (title: string, body: string) => {
+      // Print to console
+      const time = new Date().toLocaleTimeString();
+      console.log(`${chalk.dim(time)} ${chalk.cyan(title)}: ${body}`);
+
+      // Desktop notification (macOS)
+      if (process.platform === "darwin") {
+        try {
+          const { execSync } = require("child_process");
+          const safeTitle = title.replace(/"/g, '\\"');
+          const safeBody = body.replace(/"/g, '\\"').slice(0, 200);
+          execSync(`osascript -e 'display notification "${safeBody}" with title "${safeTitle}"'`, { timeout: 3000 });
+        } catch {}
+      }
+    };
+
+    // Watch DMs to this agent
+    startPolling({
+      to_agent: opts.space ? undefined : agent,
+      space: opts.space,
+      interval_ms: interval,
+      on_messages: (messages: import("../types.js").Message[]) => {
+        for (const msg of messages) {
+          if (msg.from_agent === agent) continue; // skip own messages
+          const where = msg.space ? `#${msg.space}` : "DM";
+          const preview = msg.content.length > 100 ? msg.content.slice(0, 100) + "..." : msg.content;
+          notify(`${msg.from_agent} (${where})`, preview);
+        }
+      },
+    });
+
+    // Keep process alive
+    process.on("SIGINT", () => {
+      console.log(chalk.dim("\nStopped watching."));
+      closeDb();
+      process.exit(0);
+    });
+  });
+
 // ---- mcp ----
 program
   .command("mcp")
