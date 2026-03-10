@@ -312,58 +312,152 @@ function runMigrations(db: Database): void {
     const currentLevel = result?.max_id ?? 0;
 
     for (let i = currentLevel; i < MIGRATIONS.length; i++) {
-      db.exec(MIGRATIONS[i]!);
+      try {
+        db.exec(MIGRATIONS[i]!);
+      } catch {
+        // Migration partially failed (e.g. ALTER TABLE on existing column).
+        // ensureSchema below will fix any missing pieces.
+      }
     }
   } catch {
     // _migrations table doesn't exist yet, run all migrations
     for (const migration of MIGRATIONS) {
-      db.exec(migration);
+      try {
+        db.exec(migration);
+      } catch {
+        // Same — partial failure handled by ensureSchema
+      }
     }
   }
 
-  // Run table-existence-based migrations for DBs that may have
-  // old SaaS migration IDs (5,6,7) but lack the new open-source tables
-  ensureTableMigrations(db);
+  // Ensure ALL schema elements exist regardless of migration history.
+  // This is the safety net: if any migration partially failed, or if the
+  // user upgraded from a very old version, this fills in all gaps.
+  // It's idempotent — safe to run on every startup.
+  ensureSchema(db);
 }
 
-function ensureTableMigrations(db: Database): void {
-  // Migration 5 (agents + task_lists) may be skipped on DBs that had
-  // old SaaS migration IDs (5,6,7). Check by table existence.
-  try {
-    const hasAgents = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agents'").get();
-    if (!hasAgents) {
-      db.exec(MIGRATIONS[4]!); // Migration 5 is at index 4
-    }
-  } catch {
-    // ignore
-  }
-
-  // Migration 6 (task_prefix, short_id) — check by column existence
-  try {
-    db.query("SELECT task_prefix FROM projects LIMIT 0").get();
-  } catch {
-    try {
-      db.exec(MIGRATIONS[5]!); // Migration 6 is at index 5
-    } catch {
-      // ignore if already partially applied
-    }
-  }
-
-  // Migration 10 ALTER TABLE columns — ensure each exists individually
-  // (SQLite stops at first error in multi-statement exec)
+function ensureSchema(db: Database): void {
+  // Helper: add a column if it doesn't exist (no-op if it does)
   const ensureColumn = (table: string, column: string, type: string) => {
     try { db.query(`SELECT ${column} FROM ${table} LIMIT 0`).get(); }
     catch { try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); } catch {} }
   };
+
+  // Helper: create a table if it doesn't exist
+  const ensureTable = (name: string, sql: string) => {
+    try {
+      const exists = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+      if (!exists) db.exec(sql);
+    } catch {}
+  };
+
+  // Helper: create an index if it doesn't exist
+  const ensureIndex = (sql: string) => {
+    try { db.exec(sql); } catch {}
+  };
+
+  // ── Tables ──
+  ensureTable("agents", `
+    CREATE TABLE agents (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT,
+      role TEXT DEFAULT 'agent', permissions TEXT DEFAULT '["*"]',
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("task_lists", `
+    CREATE TABLE task_lists (
+      id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, slug)
+    )`);
+
+  ensureTable("plans", `
+    CREATE TABLE plans (
+      id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      task_list_id TEXT, agent_id TEXT,
+      name TEXT NOT NULL, description TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'archived')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("task_tags", `
+    CREATE TABLE task_tags (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      tag TEXT NOT NULL, PRIMARY KEY (task_id, tag)
+    )`);
+
+  ensureTable("task_history", `
+    CREATE TABLE task_history (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      action TEXT NOT NULL, field TEXT, old_value TEXT, new_value TEXT, agent_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("webhooks", `
+    CREATE TABLE webhooks (
+      id TEXT PRIMARY KEY, url TEXT NOT NULL, events TEXT NOT NULL DEFAULT '[]',
+      secret TEXT, active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  ensureTable("task_templates", `
+    CREATE TABLE task_templates (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, title_pattern TEXT NOT NULL,
+      description TEXT, priority TEXT DEFAULT 'medium', tags TEXT DEFAULT '[]',
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
+  // ── Columns (ALTER TABLE is not idempotent in SQLite, so check first) ──
+
+  // Projects
+  ensureColumn("projects", "task_list_id", "TEXT");
+  ensureColumn("projects", "task_prefix", "TEXT");
+  ensureColumn("projects", "task_counter", "INTEGER NOT NULL DEFAULT 0");
+
+  // Tasks
+  ensureColumn("tasks", "plan_id", "TEXT REFERENCES plans(id) ON DELETE SET NULL");
+  ensureColumn("tasks", "task_list_id", "TEXT REFERENCES task_lists(id) ON DELETE SET NULL");
+  ensureColumn("tasks", "short_id", "TEXT");
   ensureColumn("tasks", "due_at", "TEXT");
   ensureColumn("tasks", "estimated_minutes", "INTEGER");
   ensureColumn("tasks", "requires_approval", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("tasks", "approved_by", "TEXT");
   ensureColumn("tasks", "approved_at", "TEXT");
+
+  // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
   ensureColumn("agents", "permissions", 'TEXT DEFAULT \'["*"]\'');
+
+  // Plans
   ensureColumn("plans", "task_list_id", "TEXT");
   ensureColumn("plans", "agent_id", "TEXT");
+
+  // ── Indexes ──
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_task_list ON tasks(task_list_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at)");
+  ensureIndex("CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_short_id ON tasks(short_id) WHERE short_id IS NOT NULL");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_lists_project ON task_lists(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_lists_slug ON task_lists(slug)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_tags_tag ON task_tags(tag)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_tags_task ON task_tags(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_task_list ON plans(task_list_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_agent ON plans(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_history_agent ON task_history(agent_id)");
 }
 
 function backfillTaskTags(db: Database): void {
