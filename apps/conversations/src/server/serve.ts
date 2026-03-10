@@ -85,8 +85,8 @@ function isSameOrigin(req: Request): boolean {
   return origin === new URL(req.url).origin;
 }
 
-export function startDashboardServer(port = 3456, host?: string) {
-  const resolvedPort = normalizePort(port, 3456);
+export function startDashboardServer(port = 0, host?: string) {
+  const resolvedPort = normalizePort(port, 0);
   const resolvedHost = normalizeHost(host ?? process.env.CONVERSATIONS_DASHBOARD_HOST);
   // Resolve dashboard dist directory
   const dashboardDist = join(import.meta.dir, "../../dashboard/dist");
@@ -519,6 +519,6 @@ const isDirectRun = import.meta.url === `file://${process.argv[1]}` ||
   process.argv[1]?.endsWith("serve.js");
 
 if (isDirectRun) {
-  const port = normalizePort(process.env.PORT, 3456);
+  const port = normalizePort(process.env.PORT, 0);
   startDashboardServer(port);
 }

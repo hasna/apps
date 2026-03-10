@@ -1208,7 +1208,7 @@ program
     const { startDashboardServer } = await import("../server/serve.js");
     const port = Number.isFinite(opts.port) && opts.port >= 0 && opts.port <= 65535
       ? opts.port
-      : 3456;
+      : 0;
     startDashboardServer(port, opts.host);
   });
 
