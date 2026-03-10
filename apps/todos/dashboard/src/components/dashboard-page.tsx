@@ -1,13 +1,18 @@
 import * as React from "react";
 import {
   ListTodoIcon, ClockIcon, PlayIcon, CheckCircleIcon,
-  XCircleIcon, BanIcon, FolderIcon, BotIcon, TrendingUpIcon, ActivityIcon,
+  XCircleIcon, BanIcon, FolderIcon, BotIcon, TrendingUpIcon, ActivityIcon, HistoryIcon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { DashboardStats } from "@/types";
 
 interface RecentTask {
   id: string; short_id: string | null; title: string; status: string; updated_at: string;
+}
+
+interface AuditEntry {
+  id: string; task_id: string; action: string; field: string | null;
+  old_value: string | null; new_value: string | null; agent_id: string | null; created_at: string;
 }
 
 function timeAgo(dateStr: string): string {
@@ -27,8 +32,10 @@ function statusDot(status: string) {
 
 export function DashboardPage({ stats }: { stats: DashboardStats }) {
   const [recent, setRecent] = React.useState<RecentTask[]>([]);
+  const [audit, setAudit] = React.useState<AuditEntry[]>([]);
   React.useEffect(() => {
     fetch("/api/tasks?limit=8").then(r => r.json()).then(setRecent);
+    fetch("/api/activity?limit=10").then(r => r.json()).then(setAudit).catch(() => {});
   }, []);
 
   const rate = stats.total_tasks > 0 ? Math.round((stats.completed / stats.total_tasks) * 100) : 0;
@@ -99,6 +106,33 @@ export function DashboardPage({ stats }: { stats: DashboardStats }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Audit Log */}
+      {audit.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <HistoryIcon className="size-4 text-purple-500" /> Audit Log
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1.5">
+              {audit.map((a) => (
+                <div key={a.id} className="flex items-center gap-2 text-sm">
+                  <code className="text-muted-foreground shrink-0">{a.task_id.slice(0, 8)}</code>
+                  <span className="font-medium">{a.action}</span>
+                  {a.field && <span className="text-muted-foreground">{a.field}</span>}
+                  {a.old_value && a.new_value && (
+                    <span className="text-muted-foreground">{a.old_value} → {a.new_value}</span>
+                  )}
+                  {a.agent_id && <span className="text-muted-foreground">by {a.agent_id}</span>}
+                  <span className="text-muted-foreground ml-auto shrink-0">{timeAgo(a.created_at)}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

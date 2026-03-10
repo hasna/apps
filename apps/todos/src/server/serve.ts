@@ -410,6 +410,65 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         }
       }
 
+      // ── API: Activity feed (audit log) ──
+      if (path === "/api/activity" && method === "GET") {
+        const limit = parseInt(url.searchParams.get("limit") || "50", 10);
+        const { getRecentActivity } = await import("../db/audit.js");
+        return json(getRecentActivity(limit), 200, port);
+      }
+
+      // ── API: Task history ──
+      const historyMatch = path.match(/^\/api\/tasks\/([^/]+)\/history$/);
+      if (historyMatch && method === "GET") {
+        const id = historyMatch[1]!;
+        const { getTaskHistory } = await import("../db/audit.js");
+        return json(getTaskHistory(id), 200, port);
+      }
+
+      // ── API: Webhooks ──
+      if (path === "/api/webhooks" && method === "GET") {
+        const { listWebhooks } = await import("../db/webhooks.js");
+        return json(listWebhooks(), 200, port);
+      }
+      if (path === "/api/webhooks" && method === "POST") {
+        try {
+          const body = await req.json() as { url: string; events?: string[]; secret?: string };
+          if (!body.url) return json({ error: "Missing url" }, 400, port);
+          const { createWebhook } = await import("../db/webhooks.js");
+          return json(createWebhook(body), 201, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+      const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/);
+      if (webhookMatch && method === "DELETE") {
+        const { deleteWebhook } = await import("../db/webhooks.js");
+        const deleted = deleteWebhook(webhookMatch[1]!);
+        return json(deleted ? { success: true } : { error: "Not found" }, deleted ? 200 : 404, port);
+      }
+
+      // ── API: Templates ──
+      if (path === "/api/templates" && method === "GET") {
+        const { listTemplates } = await import("../db/templates.js");
+        return json(listTemplates(), 200, port);
+      }
+      if (path === "/api/templates" && method === "POST") {
+        try {
+          const body = await req.json() as { name: string; title_pattern: string; description?: string; priority?: string; tags?: string[] };
+          if (!body.name || !body.title_pattern) return json({ error: "Missing name or title_pattern" }, 400, port);
+          const { createTemplate } = await import("../db/templates.js");
+          return json(createTemplate(body as any), 201, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+      const templateMatch = path.match(/^\/api\/templates\/([^/]+)$/);
+      if (templateMatch && method === "DELETE") {
+        const { deleteTemplate } = await import("../db/templates.js");
+        const deleted = deleteTemplate(templateMatch[1]!);
+        return json(deleted ? { success: true } : { error: "Not found" }, deleted ? 200 : 404, port);
+      }
+
       // ── API: List plans ──
       if (path === "/api/plans" && method === "GET") {
         const projectId = url.searchParams.get("project_id") || undefined;
