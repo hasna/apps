@@ -17,14 +17,14 @@ import {
   removeConnector,
   getConnectorDocs,
 } from "../lib/installer.js";
-import { getAuthStatus } from "../server/auth.js";
+import { getAuthStatus, saveApiKey } from "../server/auth.js";
 
 // Load versions at startup
 loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.1.0",
+  version: "0.2.4",
 });
 
 // --- Tool: search_connectors ---
@@ -349,6 +349,83 @@ server.registerTool(
               displayName: meta.displayName,
               ...status,
             },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// --- Tool: configure_auth ---
+server.registerTool(
+  "configure_auth",
+  {
+    title: "Configure Auth",
+    description:
+      "Save an API key or bearer token for a connector. " +
+      "Stores credentials in ~/.connectors/connect-{name}/profiles/. " +
+      "Use connector_docs to find required env vars and field names first.",
+    inputSchema: {
+      name: z.string().describe("Connector name (e.g. 'stripe', 'anthropic', 'openai')"),
+      key: z.string().describe("The API key or bearer token value"),
+      field: z
+        .string()
+        .optional()
+        .describe("Key field name (defaults to the connector's primary key field, usually 'apiKey')"),
+    },
+  },
+  async ({ name, key, field }) => {
+    try {
+      saveApiKey(name, key, field);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { success: true, connector: name, field: field || "apiKey" },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to save key for '${name}': ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Tool: list_categories ---
+server.registerTool(
+  "list_categories",
+  {
+    title: "List Categories",
+    description:
+      "List all connector categories with the number of connectors in each.",
+    inputSchema: {},
+  },
+  async () => {
+    const categoryCounts = CATEGORIES.map((category) => ({
+      category,
+      count: getConnectorsByCategory(category).length,
+    }));
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            { categories: categoryCounts, total: CONNECTORS.length },
             null,
             2
           ),

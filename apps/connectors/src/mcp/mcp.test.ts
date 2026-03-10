@@ -367,4 +367,56 @@ describe("MCP Server", () => {
       expect(data.envVars[0]).toHaveProperty("description");
     });
   });
+
+  describe("configure_auth", () => {
+    const authName1 = `zzztest${process.pid}mcpauth1`;
+    const authName2 = `zzztest${process.pid}mcpauth2`;
+
+    afterEach(async () => {
+      const { rmSync, existsSync } = await import("fs");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+      for (const n of [authName1, authName2]) {
+        const dir = join(homedir(), ".connectors", `connect-${n}`);
+        if (existsSync(dir)) rmSync(dir, { recursive: true });
+      }
+    });
+
+    test("saves API key for a connector", async () => {
+      const res = await callMcp("configure_auth", { name: authName1, key: "sk_test_key_mcp" });
+      const data = parseContent(res);
+      expect(data.success).toBe(true);
+      expect(data.connector).toBe(authName1);
+    });
+
+    test("saves API key with custom field", async () => {
+      const res = await callMcp("configure_auth", { name: authName2, key: "my-token", field: "bearerToken" });
+      const data = parseContent(res);
+      expect(data.success).toBe(true);
+      expect(data.field).toBe("bearerToken");
+    });
+  });
+
+  describe("list_categories", () => {
+    test("returns all categories with counts", async () => {
+      const res = await callMcp("list_categories", {});
+      const data = parseContent(res);
+      expect(Array.isArray(data.categories)).toBe(true);
+      expect(data.categories.length).toBeGreaterThan(10);
+      expect(data.total).toBe(62);
+
+      const aiCategory = data.categories.find((c: any) => c.category === "AI & ML");
+      expect(aiCategory).toBeDefined();
+      expect(aiCategory.count).toBeGreaterThan(0);
+    });
+
+    test("each category has category name and count", async () => {
+      const res = await callMcp("list_categories", {});
+      const data = parseContent(res);
+      for (const cat of data.categories) {
+        expect(typeof cat.category).toBe("string");
+        expect(typeof cat.count).toBe("number");
+      }
+    });
+  });
 });
