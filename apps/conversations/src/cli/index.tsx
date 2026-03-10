@@ -1290,6 +1290,21 @@ program
       console.log("");
     };
 
+    // Show recent messages first
+    const recent = readMessages({
+      to: opts.space ? undefined : agent,
+      space: opts.space,
+      limit: 20,
+      order: "asc",
+    });
+    if (recent.length > 0) {
+      console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
+      for (const msg of recent) {
+        renderMessage(msg);
+      }
+      console.log(chalk.dim(`  ── Live ──\n`));
+    }
+
     startPolling({
       to_agent: opts.space ? undefined : agent,
       space: opts.space,
