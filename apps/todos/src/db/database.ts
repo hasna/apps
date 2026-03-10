@@ -222,6 +222,11 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (7);
   `,
+  // Migration 8: Add role column to agents
+  `
+  ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'agent';
+  INSERT OR IGNORE INTO _migrations (id) VALUES (8);
+  `,
 ];
 
 let _db: Database | null = null;

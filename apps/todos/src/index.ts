@@ -55,6 +55,7 @@ export {
   getAgent,
   getAgentByName,
   listAgents,
+  updateAgent,
   updateAgentActivity,
   deleteAgent,
 } from "./db/agents.js";

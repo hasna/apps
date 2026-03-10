@@ -71,6 +71,7 @@ export interface Agent {
   id: string; // 8-char short UUID
   name: string;
   description: string | null;
+  role: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
@@ -80,6 +81,7 @@ export interface AgentRow {
   id: string;
   name: string;
   description: string | null;
+  role: string | null;
   metadata: string | null;
   created_at: string;
   last_seen_at: string;
@@ -88,6 +90,7 @@ export interface AgentRow {
 export interface RegisterAgentInput {
   name: string;
   description?: string;
+  role?: string;
   metadata?: Record<string, unknown>;
 }
 

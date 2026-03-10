@@ -30,9 +30,9 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, metadata, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, input.name, input.description || null, JSON.stringify(input.metadata || {}), timestamp, timestamp],
+    `INSERT INTO agents (id, name, description, role, metadata, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.name, input.description || null, input.role || "agent", JSON.stringify(input.metadata || {}), timestamp, timestamp],
   );
 
   return getAgent(id, d)!;
@@ -58,6 +58,40 @@ export function listAgents(db?: Database): Agent[] {
 export function updateAgentActivity(id: string, db?: Database): void {
   const d = db || getDatabase();
   d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), id]);
+}
+
+export function updateAgent(
+  id: string,
+  input: { name?: string; description?: string; role?: string; metadata?: Record<string, unknown> },
+  db?: Database,
+): Agent {
+  const d = db || getDatabase();
+  const agent = getAgent(id, d);
+  if (!agent) throw new Error(`Agent not found: ${id}`);
+
+  const sets: string[] = ["last_seen_at = ?"];
+  const params: (string | null)[] = [now()];
+
+  if (input.name !== undefined) {
+    sets.push("name = ?");
+    params.push(input.name);
+  }
+  if (input.description !== undefined) {
+    sets.push("description = ?");
+    params.push(input.description);
+  }
+  if (input.role !== undefined) {
+    sets.push("role = ?");
+    params.push(input.role);
+  }
+  if (input.metadata !== undefined) {
+    sets.push("metadata = ?");
+    params.push(JSON.stringify(input.metadata));
+  }
+
+  params.push(id);
+  d.run(`UPDATE agents SET ${sets.join(", ")} WHERE id = ?`, params);
+  return getAgent(id, d)!;
 }
 
 export function deleteAgent(id: string, db?: Database): boolean {

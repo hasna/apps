@@ -360,10 +360,21 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         }
       }
 
-      // ── API: Delete agent ──
-      const agentDeleteMatch = path.match(/^\/api\/agents\/([^/]+)$/);
-      if (agentDeleteMatch && method === "DELETE") {
-        const id = agentDeleteMatch[1]!;
+      // ── API: Update/Delete agent ──
+      const agentMatch = path.match(/^\/api\/agents\/([^/]+)$/);
+      if (agentMatch && method === "PATCH") {
+        const id = agentMatch[1]!;
+        try {
+          const body = await req.json() as { name?: string; description?: string; role?: string };
+          const { updateAgent } = await import("../db/agents.js");
+          const agent = updateAgent(id, body);
+          return json(agent, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to update agent" }, 500, port);
+        }
+      }
+      if (agentMatch && method === "DELETE") {
+        const id = agentMatch[1]!;
         const { deleteAgent } = await import("../db/agents.js");
         const deleted = deleteAgent(id);
         if (!deleted) return json({ error: "Agent not found" }, 404, port);
