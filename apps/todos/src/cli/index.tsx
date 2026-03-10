@@ -163,6 +163,8 @@ program
   .option("--status <status>", "Initial status")
   .option("--list <id>", "Task list ID")
   .option("--task-list <id>", "Task list ID (alias for --list)")
+  .option("--estimated <minutes>", "Estimated time in minutes")
+  .option("--approval", "Require approval before completion")
   .action((title: string, opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
@@ -199,6 +201,8 @@ program
       session_id: globalOpts.session,
       project_id: projectId,
       working_dir: process.cwd(),
+      estimated_minutes: opts.estimated ? parseInt(opts.estimated, 10) : undefined,
+      requires_approval: opts.approval || false,
     });
 
     if (globalOpts.json) {
@@ -349,6 +353,11 @@ program
     if (task.agent_id) console.log(`  ${chalk.dim("Agent:")}    ${task.agent_id}`);
     if (task.session_id) console.log(`  ${chalk.dim("Session:")}  ${task.session_id}`);
     if (task.locked_by) console.log(`  ${chalk.dim("Locked:")}   ${task.locked_by} (at ${task.locked_at})`);
+    if (task.requires_approval) {
+      const approvalStatus = task.approved_by ? chalk.green(`approved by ${task.approved_by}`) : chalk.yellow("pending approval");
+      console.log(`  ${chalk.dim("Approval:")} ${approvalStatus}`);
+    }
+    if (task.estimated_minutes) console.log(`  ${chalk.dim("Estimate:")} ${task.estimated_minutes} minutes`);
     if (task.project_id) console.log(`  ${chalk.dim("Project:")}  ${task.project_id}`);
     if (task.plan_id) console.log(`  ${chalk.dim("Plan:")}     ${task.plan_id}`);
     if (task.working_dir) console.log(`  ${chalk.dim("WorkDir:")}  ${task.working_dir}`);
@@ -388,6 +397,35 @@ program
     }
   });
 
+// history
+program
+  .command("history <id>")
+  .description("Show change history for a task (audit log)")
+  .action((id: string) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const { getTaskHistory } = require("../db/audit.js");
+    const history = getTaskHistory(resolvedId);
+
+    if (globalOpts.json) {
+      output(history, true);
+      return;
+    }
+
+    if (history.length === 0) {
+      console.log(chalk.dim("No history for this task."));
+      return;
+    }
+
+    console.log(chalk.bold(`${history.length} change(s):\n`));
+    for (const h of history) {
+      const agent = h.agent_id ? chalk.cyan(` by ${h.agent_id}`) : "";
+      const field = h.field ? chalk.yellow(` ${h.field}`) : "";
+      const change = h.old_value && h.new_value ? ` ${chalk.red(h.old_value)} → ${chalk.green(h.new_value)}` : h.new_value ? ` → ${chalk.green(h.new_value)}` : "";
+      console.log(`  ${chalk.dim(h.created_at)} ${chalk.bold(h.action)}${field}${change}${agent}`);
+    }
+  });
+
 // update
 program
   .command("update <id>")
@@ -401,6 +439,8 @@ program
   .option("--tag <tags>", "New tags (alias for --tags)")
   .option("--list <id>", "Move to a task list")
   .option("--task-list <id>", "Move to a task list (alias for --list)")
+  .option("--estimated <minutes>", "Estimated time in minutes")
+  .option("--approval", "Require approval before completion")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
     opts.tags = opts.tags || opts.tag;
@@ -433,6 +473,8 @@ program
         assigned_to: opts.assign,
         tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
         task_list_id: taskListId,
+        estimated_minutes: opts.estimated !== undefined ? parseInt(opts.estimated, 10) : undefined,
+        requires_approval: opts.approval !== undefined ? true : undefined,
       });
     } catch (e) {
       handleError(e);
@@ -465,6 +507,38 @@ program
     } else {
       console.log(chalk.green("Task completed:"));
       console.log(formatTaskLine(task));
+    }
+  });
+
+// approve
+program
+  .command("approve <id>")
+  .description("Approve a task that requires approval")
+  .action((id: string) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const task = getTask(resolvedId);
+    if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+
+    if (!task.requires_approval) {
+      console.log(chalk.yellow("This task does not require approval."));
+      return;
+    }
+    if (task.approved_by) {
+      console.log(chalk.yellow(`Already approved by ${task.approved_by}.`));
+      return;
+    }
+
+    try {
+      const updated = updateTask(resolvedId, { approved_by: globalOpts.agent || "cli", version: task.version });
+      if (globalOpts.json) {
+        output(updated, true);
+      } else {
+        console.log(chalk.green(`Task approved by ${globalOpts.agent || "cli"}:`));
+        console.log(formatTaskLine(updated));
+      }
+    } catch (e) {
+      handleError(e);
     }
   });
 
@@ -719,6 +793,69 @@ program
     for (const p of plans) {
       const desc = p.description ? chalk.dim(` - ${p.description}`) : "";
       console.log(`${chalk.dim(p.id.slice(0, 8))} ${chalk.bold(p.name)} ${chalk.cyan(`[${p.status}]`)}${desc}`);
+    }
+  });
+
+// templates
+program
+  .command("templates")
+  .description("List and manage task templates")
+  .option("--add <name>", "Create a template")
+  .option("--title <pattern>", "Title pattern (with --add)")
+  .option("-d, --description <text>", "Default description")
+  .option("-p, --priority <level>", "Default priority")
+  .option("-t, --tags <tags>", "Default tags (comma-separated)")
+  .option("--delete <id>", "Delete a template")
+  .option("--use <id>", "Create a task from a template")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const { createTemplate, listTemplates, deleteTemplate, taskFromTemplate } = require("../db/templates.js");
+
+    if (opts.add) {
+      if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
+      const projectId = autoProject(globalOpts);
+      const template = createTemplate({
+        name: opts.add,
+        title_pattern: opts.title,
+        description: opts.description,
+        priority: opts.priority || "medium",
+        tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : [],
+        project_id: projectId,
+      });
+      if (globalOpts.json) { output(template, true); }
+      else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+      return;
+    }
+
+    if (opts.delete) {
+      const deleted = deleteTemplate(opts.delete);
+      if (globalOpts.json) { output({ deleted }, true); }
+      else if (deleted) { console.log(chalk.green("Template deleted.")); }
+      else { console.error(chalk.red("Template not found.")); process.exit(1); }
+      return;
+    }
+
+    if (opts.use) {
+      try {
+        const input = taskFromTemplate(opts.use, {
+          title: opts.title,
+          description: opts.description,
+          priority: opts.priority,
+        });
+        const task = createTask({ ...input, project_id: input.project_id || autoProject(globalOpts) });
+        if (globalOpts.json) { output(task, true); }
+        else { console.log(chalk.green("Task created from template:")); console.log(formatTaskLine(task)); }
+      } catch (e) { handleError(e); }
+      return;
+    }
+
+    // List templates
+    const templates = listTemplates();
+    if (globalOpts.json) { output(templates, true); return; }
+    if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
+    console.log(chalk.bold(`${templates.length} template(s):\n`));
+    for (const t of templates) {
+      console.log(`  ${chalk.dim(t.id.slice(0, 8))} ${chalk.bold(t.name)} ${chalk.cyan(`"${t.title_pattern}"`)} ${chalk.yellow(t.priority)}`);
     }
   });
 
