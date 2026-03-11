@@ -88,7 +88,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'get_cost_summary': {
         const period = (a['period'] as Period | undefined) ?? 'today'
         const summary = querySummary(db, period)
-        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] }
+        const fmtUsd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const fmtTok = (n: number) => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}k` : String(n)
+        const result = { ...summary, summary: `You've spent ${fmtUsd(summary.total_usd)} ${period === 'all' ? 'total' : period} across ${summary.sessions} sessions (${summary.requests.toLocaleString()} requests, ${fmtTok(summary.tokens)} tokens)` }
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
       }
       case 'get_sessions': {
         const sessions = querySessions(db, {
