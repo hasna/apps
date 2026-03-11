@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# Claude Code session files
+<db>:heartbeat_state:*
+.claude/
+
 # Build outputs
 dist/
 bin/
