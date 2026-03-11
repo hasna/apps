@@ -39,11 +39,12 @@ function agentColor(name: string): string {
 
 export function SpaceFeed({ spaceName, onBack }: SpaceFeedProps) {
   const [messages, setMessages] = React.useState<Message[]>([]);
+  const [limit, setLimit] = React.useState(50);
 
   React.useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`/api/messages?space=${encodeURIComponent(spaceName)}&limit=100`);
+        const res = await fetch(`/api/messages?space=${encodeURIComponent(spaceName)}&limit=${limit}`);
         const data = (await res.json()) as Message[];
         // API returns newest first — keep that order for feed (newest on top)
         setMessages(data);
@@ -54,7 +55,7 @@ export function SpaceFeed({ spaceName, onBack }: SpaceFeedProps) {
     load();
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
-  }, [spaceName]);
+  }, [spaceName, limit]);
 
   return (
     <div>
@@ -99,6 +100,13 @@ export function SpaceFeed({ spaceName, onBack }: SpaceFeedProps) {
               </div>
             </article>
           ))}
+          {messages.length >= limit && (
+            <div className="flex justify-center pt-2">
+              <Button variant="outline" size="sm" onClick={() => setLimit((prev) => prev + 50)}>
+                Load more
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

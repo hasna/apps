@@ -5,6 +5,7 @@ import type { Space } from "@/types";
 interface SpacesTreeProps {
   spaces: Space[];
   onSelectSpace: (name: string) => void;
+  unreadCounts?: Record<string, number>;
 }
 
 interface TreeNode {
@@ -31,10 +32,11 @@ function buildTree(spaces: Space[]): TreeNode[] {
   return roots;
 }
 
-function SpaceNode({ node, depth, onSelect }: { node: TreeNode; depth: number; onSelect: (name: string) => void }) {
+function SpaceNode({ node, depth, onSelect, unreadCounts }: { node: TreeNode; depth: number; onSelect: (name: string) => void; unreadCounts?: Record<string, number> }) {
   const [expanded, setExpanded] = React.useState(true);
   const hasChildren = node.children.length > 0;
   const s = node.space;
+  const unread = unreadCounts?.[s.name] ?? 0;
 
   return (
     <div>
@@ -58,6 +60,12 @@ function SpaceNode({ node, depth, onSelect }: { node: TreeNode; depth: number; o
 
         <span className="font-medium text-sm flex-1 truncate">{s.name}</span>
 
+        {unread > 0 && (
+          <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-bold shrink-0">
+            {unread}
+          </span>
+        )}
+
         <div className="flex items-center gap-3 text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
           <span className="flex items-center gap-1">
             <MessageSquareIcon className="size-3" />
@@ -79,7 +87,7 @@ function SpaceNode({ node, depth, onSelect }: { node: TreeNode; depth: number; o
       {hasChildren && expanded && (
         <div>
           {node.children.map((child) => (
-            <SpaceNode key={child.space.name} node={child} depth={depth + 1} onSelect={onSelect} />
+            <SpaceNode key={child.space.name} node={child} depth={depth + 1} onSelect={onSelect} unreadCounts={unreadCounts} />
           ))}
         </div>
       )}
@@ -87,7 +95,7 @@ function SpaceNode({ node, depth, onSelect }: { node: TreeNode; depth: number; o
   );
 }
 
-export function SpacesTree({ spaces, onSelectSpace }: SpacesTreeProps) {
+export function SpacesTree({ spaces, onSelectSpace, unreadCounts }: SpacesTreeProps) {
   const tree = React.useMemo(() => buildTree(spaces), [spaces]);
 
   if (spaces.length === 0) {
@@ -104,7 +112,7 @@ export function SpacesTree({ spaces, onSelectSpace }: SpacesTreeProps) {
       <h2 className="text-lg font-semibold mb-4">Spaces</h2>
       <div className="rounded-xl border divide-y">
         {tree.map((node) => (
-          <SpaceNode key={node.space.name} node={node} depth={0} onSelect={onSelectSpace} />
+          <SpaceNode key={node.space.name} node={node} depth={0} onSelect={onSelectSpace} unreadCounts={unreadCounts} />
         ))}
       </div>
     </div>

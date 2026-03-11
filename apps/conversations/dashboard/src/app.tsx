@@ -9,10 +9,11 @@ import { ChatPanel } from "@/components/chat-panel";
 import { SpaceFeed } from "@/components/space-feed";
 import { SendDialog } from "@/components/send-dialog";
 import { HelpPage } from "@/components/help-page";
+import { AgentsPage } from "@/components/agents-page";
 import { Button } from "@/components/ui/button";
 import type { Message, Space, Project, DashboardStatus } from "@/types";
 
-type Page = "dashboard" | "messages" | "spaces" | "projects" | "help";
+type Page = "dashboard" | "messages" | "spaces" | "projects" | "agents" | "help";
 
 export function App() {
   const [status, setStatus] = React.useState<DashboardStatus | null>(null);
@@ -28,8 +29,10 @@ export function App() {
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchResults, setSearchResults] = React.useState<Message[] | null>(null);
   const [selectedSpace, setSelectedSpace] = React.useState<string | null>(null);
+  const [messageLimit, setMessageLimit] = React.useState(50);
   const [toast, setToast] = React.useState<{ message: string; type: "success" | "error" } | null>(null);
 
+  const [spaceUnreadCounts, setSpaceUnreadCounts] = React.useState<Record<string, number>>({});
   const loadInFlight = React.useRef(false);
 
   const showToast = React.useCallback((message: string, type: "success" | "error") => {
@@ -53,24 +56,33 @@ export function App() {
     if (loadInFlight.current) return;
     loadInFlight.current = true;
     try {
-      const [statusRes, messagesRes, spacesRes, projectsRes] = await Promise.all([
+      const [statusRes, messagesRes, spacesRes, projectsRes, allMsgsRes] = await Promise.all([
         fetchJson<DashboardStatus>("/api/status"),
-        fetchJson<Message[]>("/api/messages?limit=50"),
+        fetchJson<Message[]>(`/api/messages?limit=${messageLimit}`),
         fetchJson<Space[]>("/api/spaces"),
         fetchJson<Project[]>("/api/projects"),
+        fetchJson<Message[]>("/api/messages?limit=500"),
       ]);
       setStatus(statusRes);
       // Filter to DMs only for the messages page
       setMessages(messagesRes.filter((m) => !m.space));
       setSpaces(spacesRes);
       setProjects(projectsRes);
+      // Compute unread counts per space
+      const counts: Record<string, number> = {};
+      for (const m of allMsgsRes) {
+        if (m.space && !m.read_at) {
+          counts[m.space] = (counts[m.space] || 0) + 1;
+        }
+      }
+      setSpaceUnreadCounts(counts);
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Failed to load data", "error");
     } finally {
       loadInFlight.current = false;
       setLoading(false);
     }
-  }, [fetchJson, showToast]);
+  }, [fetchJson, showToast, messageLimit]);
 
   const handleSearch = React.useCallback(async (query: string) => {
     setSearchQuery(query);
@@ -102,7 +114,8 @@ export function App() {
       if (e.key === "1") setPage("messages");
       if (e.key === "2") { setPage("spaces"); setSelectedSpace(null); }
       if (e.key === "3") setPage("projects");
-      if (e.key === "4") setPage("help");
+      if (e.key === "4") setPage("agents");
+      if (e.key === "5") setPage("help");
       if (e.key === "n" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setSendOpen(true); }
       if (e.key === "r" && !e.ctrlKey && !e.metaKey) loadData();
     }
@@ -115,6 +128,7 @@ export function App() {
     { key: "messages", label: "Messages" },
     { key: "spaces", label: "Spaces" },
     { key: "projects", label: "Projects" },
+    { key: "agents", label: "Agents" },
     { key: "help", label: "Help" },
   ];
 
@@ -177,6 +191,13 @@ export function App() {
               messages={searchResults ?? messages}
               onSelectMessage={(msg) => openChat({ sessionId: msg.session_id, title: `${msg.from_agent} ↔ ${msg.to_agent}` })}
             />
+            {!searchResults && messages.length >= messageLimit && (
+              <div className="flex justify-center pt-2">
+                <Button variant="outline" size="sm" onClick={() => setMessageLimit((prev) => prev + 50)}>
+                  Load more
+                </Button>
+              </div>
+            )}
           </>
         )}
 
@@ -184,11 +205,13 @@ export function App() {
           selectedSpace ? (
             <SpaceFeed spaceName={selectedSpace} onBack={() => setSelectedSpace(null)} />
           ) : (
-            <SpacesTree spaces={spaces} onSelectSpace={(name) => setSelectedSpace(name)} />
+            <SpacesTree spaces={spaces} onSelectSpace={(name) => setSelectedSpace(name)} unreadCounts={spaceUnreadCounts} />
           )
         )}
 
         {page === "projects" && <ProjectsList projects={projects} />}
+
+        {page === "agents" && <AgentsPage />}
 
         {page === "help" && <HelpPage />}
       </main>
