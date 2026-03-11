@@ -89,8 +89,8 @@ function serveStaticFile(filePath: string): Response | null {
   });
 }
 
-function taskToSummary(task: Task) {
-  return {
+function taskToSummary(task: Task, fields?: string[]) {
+  const full = {
     id: task.id,
     short_id: task.short_id,
     title: task.title,
@@ -110,6 +110,8 @@ function taskToSummary(task: Task) {
     completed_at: task.completed_at,
     due_at: task.due_at,
   };
+  if (!fields || fields.length === 0) return full;
+  return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
 export async function startServer(port: number, options?: { open?: boolean }): Promise<void> {
@@ -199,12 +201,14 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         const status = url.searchParams.get("status") || undefined;
         const projectId = url.searchParams.get("project_id") || undefined;
         const limitParam = url.searchParams.get("limit");
+        const fieldsParam = url.searchParams.get("fields");
+        const fields = fieldsParam ? fieldsParam.split(",").map(f => f.trim()).filter(Boolean) : undefined;
         const tasks = listTasks({
           status: status as Task["status"] | undefined,
           project_id: projectId,
           limit: limitParam ? parseInt(limitParam, 10) : undefined,
         });
-        return json(tasks.map(taskToSummary), 200, port);
+        return json(tasks.map(t => taskToSummary(t, fields)), 200, port);
       }
 
       // ── API: Create task ──
@@ -231,7 +235,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         const status = url.searchParams.get("status") || undefined;
         const projectId = url.searchParams.get("project_id") || undefined;
         const tasks = listTasks({ status: status as any, project_id: projectId, limit: 10000 });
-        const summaries = tasks.map(taskToSummary);
+        const summaries = tasks.map(t => taskToSummary(t));
 
         if (format === "csv") {
           const headers = ["id","short_id","title","status","priority","project_id","assigned_to","agent_id","created_at","updated_at","completed_at","due_at"];
@@ -369,8 +373,8 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         const completed = allTasks.filter(t => t.status === "completed");
         return json({
           agent,
-          pending_tasks: pending.map(taskToSummary),
-          in_progress_tasks: inProgress.map(taskToSummary),
+          pending_tasks: pending.map(t => taskToSummary(t)),
+          in_progress_tasks: inProgress.map(t => taskToSummary(t)),
           stats: {
             total: allTasks.length,
             pending: pending.length,
@@ -393,7 +397,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         // Sort: critical > high > medium > low, then by created_at
         const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
         queue.sort((a, b) => (order[a.priority] ?? 4) - (order[b.priority] ?? 4) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-        return json(queue.map(taskToSummary), 200, port);
+        return json(queue.map(t => taskToSummary(t)), 200, port);
       }
 
       // ── API: Claim next task ──
@@ -623,7 +627,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
           const plan = getPlan(id);
           if (!plan) return json({ error: "Plan not found" }, 404, port);
           const tasks = listTasks({ plan_id: id });
-          return json({ ...plan, tasks: tasks.map(taskToSummary) }, 200, port);
+          return json({ ...plan, tasks: tasks.map(t => taskToSummary(t)) }, 200, port);
         }
 
         if (method === "PATCH") {
