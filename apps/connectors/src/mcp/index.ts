@@ -24,7 +24,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.2.8",
+  version: "0.2.9",
 });
 
 // --- Tool: search_connectors ---
@@ -65,12 +65,13 @@ server.registerTool(
   "list_connectors",
   {
     title: "List Connectors",
-    description: "List connectors, optionally filtered by category.",
+    description: "List connectors, optionally filtered by category. Use compact=true for names only.",
     inputSchema: {
       category: z.string().optional().describe("Filter by category (e.g. 'AI & ML', 'Developer Tools')"),
+      compact: z.boolean().optional().describe("Return names only (default: false)"),
     },
   },
-  async ({ category }) => {
+  async ({ category, compact }) => {
     let connectors = CONNECTORS;
 
     if (category) {
@@ -91,23 +92,18 @@ server.registerTool(
       connectors = getConnectorsByCategory(matched);
     }
 
+    const data = compact
+      ? connectors.map((c) => c.name)
+      : connectors.map((c) => ({
+          name: c.name,
+          displayName: c.displayName,
+          version: c.version,
+          category: c.category,
+          description: c.description,
+        }));
+
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            connectors.map((c) => ({
-              name: c.name,
-              displayName: c.displayName,
-              version: c.version,
-              category: c.category,
-              description: c.description,
-            })),
-            null,
-            2
-          ),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     };
   }
 );
@@ -117,12 +113,13 @@ server.registerTool(
   "connector_docs",
   {
     title: "Connector Documentation",
-    description: "Get auth, env vars, CLI commands, and API docs for a connector.",
+    description: "Get connector docs. Use essential=true for auth+envVars only (faster).",
     inputSchema: {
       name: z.string().describe("Connector name"),
+      essential: z.boolean().optional().describe("Return auth+envVars only (default: false)"),
     },
   },
-  async ({ name }) => {
+  async ({ name, essential }) => {
     const meta = getConnector(name);
     if (!meta) {
       return {
@@ -139,28 +136,23 @@ server.registerTool(
       };
     }
 
+    const data = essential
+      ? { name: meta.name, auth: docs.auth, envVars: docs.envVars }
+      : {
+          name: meta.name,
+          displayName: meta.displayName,
+          version: meta.version,
+          category: meta.category,
+          description: meta.description,
+          overview: docs.overview,
+          auth: docs.auth,
+          envVars: docs.envVars,
+          cliCommands: docs.cliCommands,
+          dataStorage: docs.dataStorage,
+        };
+
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              name: meta.name,
-              displayName: meta.displayName,
-              version: meta.version,
-              category: meta.category,
-              description: meta.description,
-              overview: docs.overview,
-              auth: docs.auth,
-              envVars: docs.envVars,
-              cliCommands: docs.cliCommands,
-              dataStorage: docs.dataStorage,
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     };
   }
 );
@@ -170,7 +162,7 @@ server.registerTool(
   "install_connector",
   {
     title: "Install Connector",
-    description: "Install connectors into .connectors/ with auto-generated index.ts.",
+    description: "Install connectors into .connectors/ directory.",
     inputSchema: {
       names: z.array(z.string()).describe("Connector names to install"),
       overwrite: z.boolean().optional().describe("Overwrite if already installed"),
@@ -262,7 +254,7 @@ server.registerTool(
   "connector_info",
   {
     title: "Connector Info",
-    description: "Get connector metadata: version, category, tags, installed status.",
+    description: "Get connector metadata and installed status.",
     inputSchema: {
       name: z.string().describe("Connector name"),
     },
@@ -299,7 +291,7 @@ server.registerTool(
   "connector_auth_status",
   {
     title: "Connector Auth Status",
-    description: "Check auth status: type (oauth/apikey/bearer), configured, token expiry, env vars.",
+    description: "Check connector auth status, token expiry, and env vars.",
     inputSchema: {
       name: z.string().describe("Connector name"),
     },
@@ -400,6 +392,56 @@ server.registerTool(
         },
       ],
     };
+  }
+);
+
+// --- Tool: search_tools ---
+server.registerTool(
+  "search_tools",
+  {
+    title: "Search Tools",
+    description: "List tool names, optionally filtered by keyword.",
+    inputSchema: {
+      query: z.string().optional().describe("Keyword filter"),
+    },
+  },
+  async ({ query }) => {
+    const all = [
+      "search_connectors", "list_connectors", "connector_docs",
+      "install_connector", "remove_connector", "list_installed",
+      "connector_info", "connector_auth_status", "configure_auth",
+      "list_categories", "search_tools", "describe_tools",
+    ];
+    const matches = query ? all.filter((n) => n.includes(query.toLowerCase())) : all;
+    return { content: [{ type: "text" as const, text: matches.join(", ") }] };
+  }
+);
+
+// --- Tool: describe_tools ---
+server.registerTool(
+  "describe_tools",
+  {
+    title: "Describe Tools",
+    description: "Get descriptions for specific tools by name.",
+    inputSchema: {
+      names: z.array(z.string()).describe("Tool names"),
+    },
+  },
+  async ({ names }) => {
+    const descriptions: Record<string, string> = {
+      search_connectors: "Search connectors by name/keyword. Params: query",
+      list_connectors: "List connectors by category. Params: category, compact",
+      connector_docs: "Get auth, env vars, CLI docs. Params: name, essential?",
+      install_connector: "Install connector. Params: names, overwrite?",
+      remove_connector: "Remove installed connector. Params: name",
+      list_installed: "List installed connectors.",
+      connector_info: "Get metadata and install status. Params: name",
+      connector_auth_status: "Check auth status and env vars. Params: name",
+      configure_auth: "Save API key or token. Params: name, key, field?",
+      list_categories: "List connector categories with counts.",
+    };
+    const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
+    return { content: [{ type: "text" as const, text: result }] };
   }
 );
 
