@@ -644,4 +644,138 @@ describe("CLI", () => {
       expect(exitCode).toBe(1);
     });
   });
+
+  // ── env ──
+
+  describe("env", () => {
+    test("outputs env vars as JSON when connectors installed", async () => {
+      // Install a connector first
+      await run("install anthropic");
+      const { stdout, exitCode } = await run("env --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("vars");
+      expect(data).toHaveProperty("connectors");
+      expect(Array.isArray(data.vars)).toBe(true);
+      expect(data.vars.some((v: any) => v.variable === "ANTHROPIC_API_KEY")).toBe(true);
+    });
+
+    test("outputs .env format to stdout", async () => {
+      await run("install anthropic");
+      const { stdout, exitCode } = await run("env");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("ANTHROPIC_API_KEY=");
+      expect(stdout).toContain("# anthropic");
+    });
+
+    test("writes to file with -o flag", async () => {
+      await run("install anthropic");
+      const outFile = join(TEST_DIR, ".env.example");
+      const { exitCode } = await run(["env", "-o", outFile]);
+      expect(exitCode).toBe(0);
+      expect(existsSync(outFile)).toBe(true);
+      const { readFileSync: readFile } = await import("fs");
+      const content = readFile(outFile, "utf-8");
+      expect(content).toContain("ANTHROPIC_API_KEY=");
+    });
+  });
+
+  // ── presets ──
+
+  describe("presets", () => {
+    test("lists all presets as JSON", async () => {
+      const { stdout, exitCode } = await run("presets --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThanOrEqual(6);
+      const ai = data.find((p: any) => p.name === "ai");
+      expect(ai).toBeDefined();
+      expect(ai.connectors).toContain("anthropic");
+      expect(ai.connectors).toContain("openai");
+    });
+
+    test("lists presets in human format", async () => {
+      const { stdout, exitCode } = await run("presets");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("fullstack");
+      expect(stdout).toContain("ai");
+      expect(stdout).toContain("google");
+      expect(stdout).toContain("social");
+    });
+  });
+
+  // ── install --preset ──
+
+  describe("install --preset", () => {
+    test("installs preset connectors", async () => {
+      const { stdout, exitCode } = await run(["install", "--preset", "commerce", "--json"]);
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThanOrEqual(4);
+      expect(data.every((r: any) => r.success)).toBe(true);
+    });
+
+    test("errors for unknown preset", async () => {
+      const { stdout, exitCode } = await run(["install", "--preset", "nonexistent", "--json"]);
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("Unknown preset");
+    });
+  });
+
+  // ── whoami ──
+
+  describe("whoami", () => {
+    test("returns setup summary as JSON", async () => {
+      const { stdout, exitCode } = await run("whoami --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toHaveProperty("version");
+      expect(data).toHaveProperty("configDir");
+      expect(data).toHaveProperty("installed");
+      expect(data).toHaveProperty("configured");
+      expect(data).toHaveProperty("unconfigured");
+      expect(typeof data.version).toBe("string");
+      expect(typeof data.installed).toBe("number");
+    });
+
+    test("shows human-readable output", async () => {
+      const { stdout, exitCode } = await run("whoami");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Connectors Setup");
+      expect(stdout).toContain("Version");
+      expect(stdout).toContain("Config");
+    });
+  });
+
+  // ── test command ──
+
+  describe("test", () => {
+    test("returns JSON with results for non-existent connector", async () => {
+      const { stdout, exitCode } = await run("test nonexistent-xyz --json");
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("not found");
+    });
+
+    test("returns empty results when nothing installed", async () => {
+      const { stdout, exitCode } = await run("test --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.results).toEqual([]);
+      expect(data.tested).toBe(0);
+    });
+
+    test("skips connectors without test endpoints", async () => {
+      await run("install shopify");
+      const { stdout, exitCode } = await run("test --json");
+      const data = JSON.parse(stdout);
+      const shopify = data.results.find((r: any) => r.name === "shopify");
+      if (shopify) {
+        expect(["skip", "no-key"]).toContain(shopify.status);
+      }
+    });
+  });
 });
