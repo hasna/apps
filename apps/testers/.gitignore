@@ -1,0 +1,14 @@
+node_modules/
+dist/
+bin/
+.testers/
+screenshots/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+.env
+.secrets/
+dashboard/dist/
+dashboard/node_modules/
+bun.lock
