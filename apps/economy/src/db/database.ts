@@ -244,14 +244,14 @@ export function queryModelBreakdown(db: Database): ModelBreakdown[] {
 
 export function queryProjectBreakdown(db: Database): ProjectBreakdown[] {
   return db.prepare(`
-    SELECT s.project_path, s.project_name,
-           COUNT(DISTINCT s.id) as sessions,
-           COALESCE(SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens), 0) as total_tokens,
-           COUNT(r.id) as requests,
-           COALESCE(SUM(s.total_cost_usd), 0) as cost_usd,
-           MAX(s.started_at) as last_active
-    FROM sessions s LEFT JOIN requests r ON r.session_id = s.id
-    GROUP BY s.project_path ORDER BY cost_usd DESC
+    SELECT project_path, project_name,
+           COUNT(*) as sessions,
+           COALESCE(SUM(total_tokens), 0) as total_tokens,
+           COALESCE(SUM(request_count), 0) as requests,
+           COALESCE(SUM(total_cost_usd), 0) as cost_usd,
+           MAX(started_at) as last_active
+    FROM sessions
+    GROUP BY project_path ORDER BY cost_usd DESC
   `).all() as ProjectBreakdown[]
 }
 
