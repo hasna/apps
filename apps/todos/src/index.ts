@@ -17,6 +17,7 @@ export {
   removeDependency,
   getTaskDependencies,
   getTaskDependents,
+  getBlockingDeps,
 } from "./db/tasks.js";
 
 // Projects

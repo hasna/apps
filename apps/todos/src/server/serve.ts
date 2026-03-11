@@ -118,6 +118,17 @@ export async function startServer(port: number, options?: { open?: boolean }): P
   // Initialize database
   getDatabase();
 
+  // SSE event stream — clients subscribe to /api/events
+  const sseClients = new Set<ReadableStreamDefaultController>();
+
+  function broadcastEvent(event: { type: string; task_id?: string; action: string; agent_id?: string | null }) {
+    const data = JSON.stringify({ ...event, timestamp: new Date().toISOString() });
+    for (const controller of sseClients) {
+      try { controller.enqueue(`data: ${data}\n\n`); }
+      catch { sseClients.delete(controller); }
+    }
+  }
+
   const dashboardDir = resolveDashboardDir();
   const dashboardExists = existsSync(dashboardDir);
 
@@ -141,6 +152,27 @@ export async function startServer(port: number, options?: { open?: boolean }): P
             "Access-Control-Allow-Origin": `http://localhost:${port}`,
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
+          },
+        });
+      }
+
+      // ── SSE Event Stream ──
+      if (path === "/api/events" && method === "GET") {
+        const stream = new ReadableStream({
+          start(controller) {
+            sseClients.add(controller);
+            controller.enqueue(`data: ${JSON.stringify({ type: "connected", timestamp: new Date().toISOString() })}\n\n`);
+          },
+          cancel(controller) {
+            sseClients.delete(controller);
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": `http://localhost:${port}`,
           },
         });
       }
@@ -186,6 +218,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
             priority: body.priority as Task["priority"] | undefined,
             project_id: body.project_id,
           });
+          broadcastEvent({ type: "task", task_id: task.id, action: "created", agent_id: task.agent_id });
           return json(taskToSummary(task), 201, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to create task" }, 500, port);
@@ -297,6 +330,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         const id = startMatch[1]!;
         try {
           const task = startTask(id, "dashboard");
+          broadcastEvent({ type: "task", task_id: task.id, action: "started", agent_id: "dashboard" });
           return json(taskToSummary(task), 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to start task" }, 500, port);
@@ -309,6 +343,7 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         const id = completeMatch[1]!;
         try {
           const task = completeTask(id, "dashboard");
+          broadcastEvent({ type: "task", task_id: task.id, action: "completed", agent_id: "dashboard" });
           return json(taskToSummary(task), 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to complete task" }, 500, port);
@@ -318,6 +353,77 @@ export async function startServer(port: number, options?: { open?: boolean }): P
       // ── API: Projects ──
       if (path === "/api/projects" && method === "GET") {
         return json(listProjects(), 200, port);
+      }
+
+      // ── API: Agent discovery ──
+      if (path === "/api/agents/me" && method === "GET") {
+        const name = url.searchParams.get("name");
+        if (!name) return json({ error: "Missing name param" }, 400, port);
+        const { registerAgent } = await import("../db/agents.js");
+        const agent = registerAgent({ name });
+        const tasks = listTasks({ assigned_to: name });
+        const agentIdTasks = listTasks({ agent_id: agent.id });
+        const allTasks = [...tasks, ...agentIdTasks.filter(t => !tasks.some(tt => tt.id === t.id))];
+        const pending = allTasks.filter(t => t.status === "pending");
+        const inProgress = allTasks.filter(t => t.status === "in_progress");
+        const completed = allTasks.filter(t => t.status === "completed");
+        return json({
+          agent,
+          pending_tasks: pending.map(taskToSummary),
+          in_progress_tasks: inProgress.map(taskToSummary),
+          stats: {
+            total: allTasks.length,
+            pending: pending.length,
+            in_progress: inProgress.length,
+            completed: completed.length,
+            completion_rate: allTasks.length > 0 ? Math.round((completed.length / allTasks.length) * 100) : 0,
+          },
+        }, 200, port);
+      }
+
+      // ── API: Agent task queue ──
+      const queueMatch = path.match(/^\/api\/agents\/([^/]+)\/queue$/);
+      if (queueMatch && method === "GET") {
+        const agentId = decodeURIComponent(queueMatch[1]!);
+        const pending = listTasks({ status: "pending" as any });
+        // Tasks assigned to this agent or unassigned
+        const queue = pending.filter(t =>
+          t.assigned_to === agentId || t.agent_id === agentId || (!t.assigned_to && !t.locked_by)
+        );
+        // Sort: critical > high > medium > low, then by created_at
+        const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+        queue.sort((a, b) => (order[a.priority] ?? 4) - (order[b.priority] ?? 4) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        return json(queue.map(taskToSummary), 200, port);
+      }
+
+      // ── API: Claim next task ──
+      if (path === "/api/tasks/claim" && method === "POST") {
+        try {
+          const body = await req.json() as { agent_id?: string; project_id?: string; priority?: string; tags?: string[] };
+          const agentId = body.agent_id || "anonymous";
+          const pending = listTasks({ status: "pending" as any, project_id: body.project_id });
+          const available = pending.filter(t => !t.locked_by);
+          if (available.length === 0) return json({ task: null }, 200, port);
+          // Pick highest priority
+          const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+          available.sort((a, b) => (order[a.priority] ?? 4) - (order[b.priority] ?? 4));
+          const target = available[0]!;
+          try {
+            const claimed = startTask(target.id, agentId);
+            return json({ task: taskToSummary(claimed) }, 200, port);
+          } catch (e) {
+            // Lock conflict — suggest next
+            const next = available[1] || null;
+            return json({
+              task: null,
+              locked_by: target.locked_by,
+              locked_since: target.locked_at,
+              suggested_task: next ? taskToSummary(next) : null,
+            }, 200, port);
+          }
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to claim" }, 500, port);
+        }
       }
 
       // ── API: Agents ──

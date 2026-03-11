@@ -367,12 +367,32 @@ export function deleteTask(id: string, db?: Database): boolean {
   return result.changes > 0;
 }
 
+export function getBlockingDeps(id: string, db?: Database): Task[] {
+  const d = db || getDatabase();
+  const deps = getTaskDependencies(id, d);
+  if (deps.length === 0) return [];
+  const blocking: Task[] = [];
+  for (const dep of deps) {
+    const task = getTask(dep.depends_on, d);
+    if (task && task.status !== "completed") blocking.push(task);
+  }
+  return blocking;
+}
+
 export function startTask(
   id: string,
   agentId: string,
   db?: Database,
 ): Task {
   const d = db || getDatabase();
+
+  // Check blocking dependencies
+  const blocking = getBlockingDeps(id, d);
+  if (blocking.length > 0) {
+    const blockerIds = blocking.map(b => b.id.slice(0, 8)).join(", ");
+    throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
+  }
+
   const cutoff = lockExpiryCutoff();
   const timestamp = now();
   const result = d.run(
@@ -397,6 +417,7 @@ export function completeTask(
   id: string,
   agentId?: string,
   db?: Database,
+  evidence?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string },
 ): Task {
   const d = db || getDatabase();
   const task = getTask(id, d);
@@ -414,6 +435,12 @@ export function completeTask(
 
   // Completion guard: rate limit, min work time, cooldown
   checkCompletionGuard(task, agentId || null, d);
+
+  // Store evidence in metadata if provided
+  if (evidence) {
+    const meta = { ...task.metadata, _evidence: evidence };
+    d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [JSON.stringify(meta), id]);
+  }
 
   const timestamp = now();
   d.run(

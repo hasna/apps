@@ -1113,6 +1113,39 @@ server.tool(
   },
 );
 
+// get_my_tasks — agent discovery
+server.tool(
+  "get_my_tasks",
+  "Get your assigned tasks and stats. Auto-registers if needed.",
+  {
+    agent_name: z.string().describe("Your agent name"),
+  },
+  async ({ agent_name }) => {
+    try {
+      const agent = registerAgent({ name: agent_name });
+      const tasks = listTasks({});
+      const myTasks = tasks.filter(t => t.assigned_to === agent_name || t.assigned_to === agent.id || t.agent_id === agent.id || t.agent_id === agent_name);
+      const pending = myTasks.filter(t => t.status === "pending");
+      const inProgress = myTasks.filter(t => t.status === "in_progress");
+      const completed = myTasks.filter(t => t.status === "completed");
+      const rate = myTasks.length > 0 ? Math.round((completed.length / myTasks.length) * 100) : 0;
+      const lines = [
+        `Agent: ${agent.name} (${agent.id})`,
+        `Tasks: ${myTasks.length} total, ${pending.length} pending, ${inProgress.length} active, ${completed.length} done (${rate}%)`,
+      ];
+      if (pending.length > 0) {
+        lines.push(`\nPending:`);
+        for (const t of pending.slice(0, 10)) lines.push(`  [${t.priority}] ${t.id.slice(0, 8)} | ${t.title}`);
+      }
+      if (inProgress.length > 0) {
+        lines.push(`\nIn Progress:`);
+        for (const t of inProgress) lines.push(`  ${t.id.slice(0, 8)} | ${t.title}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
 // === RESOURCES ===
 
 // todos://tasks - All active tasks
