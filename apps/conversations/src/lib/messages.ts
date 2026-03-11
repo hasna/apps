@@ -6,6 +6,18 @@ import { join, basename } from "path";
 import { homedir } from "os";
 import { fireWebhooks } from "./webhooks.js";
 
+/** Strip null/undefined fields from a message for compact output. */
+export function compactMessage(msg: Message): Partial<Message> {
+  const result: Partial<Message> = {};
+  for (const key of Object.keys(msg) as (keyof Message)[]) {
+    const val = msg[key];
+    if (val !== null && val !== undefined) {
+      (result as Record<string, unknown>)[key] = val;
+    }
+  }
+  return result;
+}
+
 function parseMessage(row: Record<string, unknown>): Message {
   let metadata: Record<string, unknown> | null = null;
   if (row.metadata) {
@@ -153,16 +165,18 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
-    ? `LIMIT ${Math.floor(opts.limit as number)}`
-    : "";
+  const resolvedLimit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
+    ? Math.floor(opts.limit as number)
+    : 20;
   const order = opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC";
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} ${limit}`
+    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${resolvedLimit}`
   ).all(...params) as Record<string, unknown>[];
 
-  return rows.map(parseMessage);
+  const messages = rows.map(parseMessage);
+  if (opts.compact) return messages.map(compactMessage) as Message[];
+  return messages;
 }
 
 export function markRead(ids: number[], reader: string): number {
@@ -371,7 +385,7 @@ export function searchMessages(opts: SearchMessagesOptions): Message[] {
 
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
     ? Math.floor(opts.limit as number)
-    : 50;
+    : 20;
 
   // Try FTS5 first for proper full-text search (handles non-adjacent words)
   try {

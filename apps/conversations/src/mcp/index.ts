@@ -29,9 +29,9 @@ export const server = new McpServer({
 
 server.registerTool("send_message", {
   title: "Send Message",
-  description: "Send a direct message to another agent. Pass 'from' to identify yourself, or it falls back to CONVERSATIONS_AGENT_ID env var.",
+  description: "Send a direct message to another agent.",
   inputSchema: {
-    from: z.string().optional().describe("Your agent ID (e.g. 'claude-1', 'assistant'). Falls back to CONVERSATIONS_AGENT_ID env var."),
+    from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     to: z.string().describe("Recipient agent ID"),
     content: z.string().describe("Message content"),
     session_id: z.string().optional().describe("Session ID (auto-generated if omitted)"),
@@ -40,7 +40,7 @@ server.registerTool("send_message", {
     repository: z.string().optional().describe("Repository context"),
     branch: z.string().optional().describe("Branch context"),
     metadata: z.string().optional().describe("JSON metadata string"),
-    blocking: z.boolean().optional().describe("Send as a blocking message. Recipients must acknowledge before continuing."),
+    blocking: z.boolean().optional().describe("Blocking message — recipients must acknowledge before continuing"),
   },
 }, async ({ from: fromParam, to, content, session_id, priority, working_dir, repository, branch, metadata, blocking }) => {
   const from = resolveIdentity(fromParam);
@@ -50,7 +50,7 @@ server.registerTool("send_message", {
       parsedMetadata = JSON.parse(metadata);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid metadata JSON." }],
+        content: [{ type: "text", text: "invalid JSON" }],
         isError: true,
       };
     }
@@ -79,12 +79,12 @@ server.registerTool("read_messages", {
   description: "Read messages with optional filters. Returns messages sorted by time.",
   inputSchema: {
     session_id: z.string().optional().describe("Filter by session ID"),
-    from: z.string().optional().describe("Filter by sender agent ID"),
-    to: z.string().optional().describe("Filter by recipient agent ID"),
+    from: z.string().optional().describe("Filter by sender"),
+    to: z.string().optional().describe("Filter by recipient"),
     space: z.string().optional().describe("Filter by space name"),
-    since: z.string().optional().describe("Messages after this ISO timestamp"),
-    limit: z.number().optional().describe("Max messages to return"),
-    unread_only: z.boolean().optional().describe("Only return unread messages"),
+    since: z.string().optional().describe("ISO timestamp lower bound"),
+    limit: z.number().optional().describe("Max messages to return (default 20)"),
+    unread_only: z.boolean().optional().describe("Only unread messages"),
   },
 }, async (opts) => {
   const messages = readMessages(opts);
@@ -110,7 +110,7 @@ server.registerTool("list_sessions", {
 
 server.registerTool("reply", {
   title: "Reply to Message",
-  description: "Reply to a message by its ID. Automatically uses the same session and sends to the original sender.",
+  description: "Reply to a message by ID. Uses the same session and sends to the original sender.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     message_id: z.number().describe("ID of the message to reply to"),
@@ -149,7 +149,7 @@ server.registerTool("reply", {
 
 server.registerTool("mark_read", {
   title: "Mark Read",
-  description: "Mark message IDs as read for the current agent. Set 'all' to true to mark all unread messages as read.",
+  description: "Mark messages as read. Provide IDs or set 'all' to true.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     ids: z.array(z.number()).optional().describe("Message IDs to mark as read"),
@@ -165,7 +165,7 @@ server.registerTool("mark_read", {
     count = markRead(ids, agent);
   } else {
     return {
-      content: [{ type: "text", text: "Provide message IDs or set 'all' to true." }],
+      content: [{ type: "text", text: "provide ids or set all=true" }],
       isError: true,
     };
   }
@@ -177,13 +177,13 @@ server.registerTool("mark_read", {
 
 server.registerTool("search_messages", {
   title: "Search Messages",
-  description: "Full-text search across message content. Returns matching messages ordered by newest first.",
+  description: "Full-text search across message content, newest first.",
   inputSchema: {
-    query: z.string().describe("Search query string"),
-    space: z.string().optional().describe("Filter by space name"),
-    from: z.string().optional().describe("Filter by sender agent ID"),
-    to: z.string().optional().describe("Filter by recipient agent ID"),
-    limit: z.number().optional().describe("Max results to return (default 50)"),
+    query: z.string().describe("Search query"),
+    space: z.string().optional().describe("Filter by space"),
+    from: z.string().optional().describe("Filter by sender"),
+    to: z.string().optional().describe("Filter by recipient"),
+    limit: z.number().optional().describe("Max results (default 20)"),
   },
 }, async ({ query, space, from, to, limit }) => {
   const messages = searchMessages({ query, space, from, to, limit });
@@ -197,11 +197,11 @@ server.registerTool("export_messages", {
   title: "Export Messages",
   description: "Export messages as JSON or CSV with optional filters.",
   inputSchema: {
-    space: z.string().optional().describe("Filter by space name"),
+    space: z.string().optional().describe("Filter by space"),
     session_id: z.string().optional().describe("Filter by session ID"),
-    from: z.string().optional().describe("Filter by sender agent ID"),
-    since: z.string().optional().describe("Messages after this ISO date"),
-    until: z.string().optional().describe("Messages before this ISO date"),
+    from: z.string().optional().describe("Filter by sender"),
+    since: z.string().optional().describe("ISO date lower bound"),
+    until: z.string().optional().describe("ISO date upper bound"),
     format: z.enum(["json", "csv"]).optional().describe("Output format (default: json)"),
   },
 }, async ({ space, session_id, from, since, until, format }) => {
@@ -216,13 +216,13 @@ server.registerTool("export_messages", {
 
 server.registerTool("create_space", {
   title: "Create Space",
-  description: "Create a new space. The creator is auto-joined. Spaces can be nested (max 3 levels) and associated with a project.",
+  description: "Create a new space. Creator is auto-joined. Supports nesting (max 3 levels) and project association.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
-    name: z.string().describe("Space name (e.g. 'deployments', 'code-review')"),
+    name: z.string().describe("Space name"),
     description: z.string().optional().describe("Space description"),
-    parent_id: z.string().optional().describe("Parent space name for nesting (max 3 levels deep)"),
-    project_id: z.string().optional().describe("Project ID to associate this space with"),
+    parent_id: z.string().optional().describe("Parent space name (max 3 levels deep)"),
+    project_id: z.string().optional().describe("Project ID to associate with"),
   },
 }, async ({ from: fromParam, name, description, parent_id, project_id }) => {
   const agent = resolveIdentity(fromParam);
@@ -234,7 +234,7 @@ server.registerTool("create_space", {
   } catch (e: any) {
     if (e.message?.includes("UNIQUE constraint")) {
       return {
-        content: [{ type: "text", text: `Space #${name} already exists` }],
+        content: [{ type: "text", text: `space "${name}" already exists` }],
         isError: true,
       };
     }
@@ -247,11 +247,11 @@ server.registerTool("create_space", {
 
 server.registerTool("list_spaces", {
   title: "List Spaces",
-  description: "List all available spaces with member and message counts. Can filter by project or parent. Archived spaces are excluded by default.",
+  description: "List spaces with member/message counts. Archived spaces excluded by default.",
   inputSchema: {
     project_id: z.string().optional().describe("Filter by project ID"),
-    parent_id: z.string().optional().describe("Filter by parent space name. Use 'null' for top-level only."),
-    include_archived: z.boolean().optional().describe("Include archived spaces (default: false)"),
+    parent_id: z.string().optional().describe("Filter by parent space. Use 'null' for top-level only."),
+    include_archived: z.boolean().optional().describe("Include archived spaces"),
   },
 }, async ({ project_id, parent_id, include_archived }) => {
   const opts: { project_id?: string; parent_id?: string | null; include_archived?: boolean } = {};
@@ -278,7 +278,7 @@ server.registerTool("send_to_space", {
     space: z.string().describe("Space name"),
     content: z.string().describe("Message content"),
     priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Message priority"),
-    blocking: z.boolean().optional().describe("Send as a blocking message. All space members must acknowledge."),
+    blocking: z.boolean().optional().describe("Blocking message — all space members must acknowledge"),
   },
 }, async ({ from: fromParam, space, content, priority, blocking }) => {
   const from = resolveIdentity(fromParam);
@@ -286,7 +286,7 @@ server.registerTool("send_to_space", {
   const sp = getSpace(space);
   if (!sp) {
     return {
-      content: [{ type: "text", text: `Space #${space} not found` }],
+      content: [{ type: "text", text: `space "${space}" not found` }],
       isError: true,
     };
   }
@@ -311,7 +311,7 @@ server.registerTool("read_space", {
   description: "Read messages from a space.",
   inputSchema: {
     space: z.string().describe("Space name"),
-    since: z.string().optional().describe("Messages after this ISO timestamp"),
+    since: z.string().optional().describe("ISO timestamp lower bound"),
     limit: z.number().optional().describe("Max messages to return"),
   },
 }, async ({ space, since, limit }) => {
@@ -335,7 +335,7 @@ server.registerTool("join_space", {
 
   if (!ok) {
     return {
-      content: [{ type: "text", text: `Space #${space} not found` }],
+      content: [{ type: "text", text: `space "${space}" not found` }],
       isError: true,
     };
   }
@@ -363,12 +363,12 @@ server.registerTool("leave_space", {
 
 server.registerTool("update_space", {
   title: "Update Space",
-  description: "Update a space's description, parent, or project association.",
+  description: "Update a space's description, parent, or project.",
   inputSchema: {
-    name: z.string().describe("Space name to update"),
+    name: z.string().describe("Space name"),
     description: z.string().optional().describe("New description"),
-    parent_id: z.string().optional().describe("New parent space name (use 'null' to remove parent)"),
-    project_id: z.string().optional().describe("New project ID (use 'null' to remove project)"),
+    parent_id: z.string().optional().describe("New parent space (use 'null' to remove)"),
+    project_id: z.string().optional().describe("New project ID (use 'null' to remove)"),
   },
 }, async ({ name, description, parent_id, project_id }) => {
   const updates: { description?: string; parent_id?: string | null; project_id?: string | null } = {};
@@ -391,7 +391,7 @@ server.registerTool("update_space", {
 
 server.registerTool("archive_space", {
   title: "Archive Space",
-  description: "Archive a space. Archived spaces are hidden from list by default.",
+  description: "Archive a space. Hidden from list by default.",
   inputSchema: {
     name: z.string().describe("Space name to archive"),
   },
@@ -433,16 +433,16 @@ server.registerTool("unarchive_space", {
 
 server.registerTool("create_project", {
   title: "Create Project",
-  description: "Create a new project. Projects organize spaces and provide context for agent collaboration.",
+  description: "Create a new project to organize spaces and agent collaboration.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     name: z.string().describe("Project name (unique)"),
     description: z.string().optional().describe("Project description"),
-    path: z.string().optional().describe("Absolute path to project on disk"),
+    path: z.string().optional().describe("Absolute path on disk"),
     repository: z.string().optional().describe("Repository URL"),
-    tags: z.string().optional().describe("JSON array of tags (e.g. '[\"backend\", \"api\"]')"),
-    metadata: z.string().optional().describe("JSON metadata string"),
-    settings: z.string().optional().describe("JSON settings string"),
+    tags: z.string().optional().describe("JSON array of tags"),
+    metadata: z.string().optional().describe("JSON metadata"),
+    settings: z.string().optional().describe("JSON settings"),
   },
 }, async ({ from: fromParam, name, description, path, repository, tags, metadata, settings }) => {
   const agent = resolveIdentity(fromParam);
@@ -453,7 +453,7 @@ server.registerTool("create_project", {
       parsedTags = JSON.parse(tags);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid tags JSON. Expected array of strings." }],
+        content: [{ type: "text", text: "invalid tags JSON (expected array)" }],
         isError: true,
       };
     }
@@ -465,7 +465,7 @@ server.registerTool("create_project", {
       parsedMetadata = JSON.parse(metadata);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid metadata JSON." }],
+        content: [{ type: "text", text: "invalid JSON" }],
         isError: true,
       };
     }
@@ -477,7 +477,7 @@ server.registerTool("create_project", {
       parsedSettings = JSON.parse(settings);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid settings JSON." }],
+        content: [{ type: "text", text: "invalid JSON" }],
         isError: true,
       };
     }
@@ -501,7 +501,7 @@ server.registerTool("create_project", {
   } catch (e: any) {
     if (e.message?.includes("UNIQUE constraint")) {
       return {
-        content: [{ type: "text", text: `Project "${name}" already exists` }],
+        content: [{ type: "text", text: `project "${name}" already exists` }],
         isError: true,
       };
     }
@@ -516,7 +516,7 @@ server.registerTool("list_projects", {
   title: "List Projects",
   description: "List all registered projects.",
   inputSchema: {
-    status: z.enum(["active", "archived"]).optional().describe("Filter by project status"),
+    status: z.enum(["active", "archived"]).optional().describe("Filter by status"),
   },
 }, async ({ status }) => {
   const projects = listProjects(status ? { status } : undefined);
@@ -541,7 +541,7 @@ server.registerTool("get_project", {
 
   if (!project) {
     return {
-      content: [{ type: "text", text: `Project "${id}" not found` }],
+      content: [{ type: "text", text: `project "${id}" not found` }],
       isError: true,
     };
   }
@@ -556,14 +556,14 @@ server.registerTool("update_project", {
   description: "Update a project's fields.",
   inputSchema: {
     id: z.string().describe("Project ID (UUID)"),
-    name: z.string().optional().describe("New project name"),
+    name: z.string().optional().describe("New name"),
     description: z.string().optional().describe("New description"),
     path: z.string().optional().describe("New path"),
     status: z.enum(["active", "archived"]).optional().describe("New status"),
     repository: z.string().optional().describe("New repository URL"),
     tags: z.string().optional().describe("JSON array of tags"),
-    metadata: z.string().optional().describe("JSON metadata string"),
-    settings: z.string().optional().describe("JSON settings string"),
+    metadata: z.string().optional().describe("JSON metadata"),
+    settings: z.string().optional().describe("JSON settings"),
   },
 }, async ({ id, name, description, path, status, repository, tags, metadata, settings }) => {
   const updates: Record<string, unknown> = {};
@@ -578,7 +578,7 @@ server.registerTool("update_project", {
       updates.tags = JSON.parse(tags);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid tags JSON." }],
+        content: [{ type: "text", text: "invalid tags JSON" }],
         isError: true,
       };
     }
@@ -588,7 +588,7 @@ server.registerTool("update_project", {
       updates.metadata = JSON.parse(metadata);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid metadata JSON." }],
+        content: [{ type: "text", text: "invalid JSON" }],
         isError: true,
       };
     }
@@ -598,7 +598,7 @@ server.registerTool("update_project", {
       updates.settings = JSON.parse(settings);
     } catch {
       return {
-        content: [{ type: "text", text: "Invalid settings JSON." }],
+        content: [{ type: "text", text: "invalid JSON" }],
         isError: true,
       };
     }
@@ -619,7 +619,7 @@ server.registerTool("update_project", {
 
 server.registerTool("delete_project", {
   title: "Delete Project",
-  description: "Delete a project permanently. Fails if spaces still reference it.",
+  description: "Delete a project permanently. Fails if spaces reference it.",
   inputSchema: {
     id: z.string().describe("Project ID (UUID)"),
   },
@@ -628,7 +628,7 @@ server.registerTool("delete_project", {
     const deleted = deleteProject(id);
     if (!deleted) {
       return {
-        content: [{ type: "text", text: `Project "${id}" not found` }],
+        content: [{ type: "text", text: `project "${id}" not found` }],
         isError: true,
       };
     }
@@ -658,7 +658,7 @@ server.registerTool("delete_message", {
 
   if (!deleted) {
     return {
-      content: [{ type: "text", text: `Message #${id} not found or not your message` }],
+      content: [{ type: "text", text: `not found or forbidden` }],
       isError: true,
     };
   }
@@ -682,7 +682,7 @@ server.registerTool("edit_message", {
 
   if (!msg) {
     return {
-      content: [{ type: "text", text: `Message #${id} not found or not your message` }],
+      content: [{ type: "text", text: `not found or forbidden` }],
       isError: true,
     };
   }
@@ -694,7 +694,7 @@ server.registerTool("edit_message", {
 
 server.registerTool("pin_message", {
   title: "Pin Message",
-  description: "Pin a message. Pinned messages can be retrieved with get_pinned_messages.",
+  description: "Pin a message. Retrieve pinned messages with get_pinned_messages.",
   inputSchema: {
     id: z.number().describe("Message ID to pin"),
   },
@@ -703,7 +703,7 @@ server.registerTool("pin_message", {
 
   if (!msg) {
     return {
-      content: [{ type: "text", text: `Message #${id} not found` }],
+      content: [{ type: "text", text: `message #${id} not found` }],
       isError: true,
     };
   }
@@ -724,7 +724,7 @@ server.registerTool("unpin_message", {
 
   if (!msg) {
     return {
-      content: [{ type: "text", text: `Message #${id} not found` }],
+      content: [{ type: "text", text: `message #${id} not found` }],
       isError: true,
     };
   }
@@ -738,7 +738,7 @@ server.registerTool("get_pinned_messages", {
   title: "Get Pinned Messages",
   description: "Retrieve pinned messages, optionally filtered by space or session.",
   inputSchema: {
-    space: z.string().optional().describe("Filter by space name"),
+    space: z.string().optional().describe("Filter by space"),
     session_id: z.string().optional().describe("Filter by session ID"),
     limit: z.number().optional().describe("Max messages to return"),
   },
@@ -770,9 +770,9 @@ server.registerTool("heartbeat", {
 
 server.registerTool("list_agents", {
   title: "List Agents",
-  description: "List all agents with their presence status. Returns agent name, status, last seen time, and whether they are online.",
+  description: "List agents with presence status (name, status, last_seen, online).",
   inputSchema: {
-    online_only: z.boolean().optional().describe("Only return agents that are currently online (seen within last 60 seconds)"),
+    online_only: z.boolean().optional().describe("Only return agents online within last 60s"),
   },
 }, async ({ online_only }) => {
   const agents = listAgents({ online_only });
@@ -784,7 +784,7 @@ server.registerTool("list_agents", {
 
 server.registerTool("get_blockers", {
   title: "Get Blockers",
-  description: "Check for unread blocking messages targeting you. Returns messages that must be acknowledged before continuing.",
+  description: "Check for unread blocking messages targeting you. Must acknowledge before continuing.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
   },
@@ -799,7 +799,7 @@ server.registerTool("get_blockers", {
 
 server.registerTool("remove_agent", {
   title: "Remove Agent",
-  description: "Remove an agent from the presence list. Only the agent itself should remove its own presence.",
+  description: "Remove an agent from the presence list.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     agent: z.string().optional().describe("Agent to remove (defaults to yourself)"),
@@ -811,7 +811,7 @@ server.registerTool("remove_agent", {
   const removed = removePresence(agent);
   if (!removed) {
     return {
-      content: [{ type: "text", text: `Agent "${agent}" not found` }],
+      content: [{ type: "text", text: `agent "${agent}" not found` }],
       isError: true,
     };
   }
@@ -823,7 +823,7 @@ server.registerTool("remove_agent", {
 
 server.registerTool("rename_agent", {
   title: "Rename Agent",
-  description: "Rename an agent in the presence list. By default renames yourself.",
+  description: "Rename an agent in the presence list. Defaults to renaming yourself.",
   inputSchema: {
     from: z.string().optional().describe("Your current agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     new_name: z.string().describe("The new name for the agent"),
@@ -834,7 +834,7 @@ server.registerTool("rename_agent", {
 
   if (!newName) {
     return {
-      content: [{ type: "text", text: "New name cannot be empty" }],
+      content: [{ type: "text", text: "new name cannot be empty" }],
       isError: true,
     };
   }
@@ -843,7 +843,7 @@ server.registerTool("rename_agent", {
     const renamed = renameAgent(oldName, newName);
     if (!renamed) {
       return {
-        content: [{ type: "text", text: `Agent "${oldName}" not found in presence list` }],
+        content: [{ type: "text", text: `agent "${oldName}" not found` }],
         isError: true,
       };
     }

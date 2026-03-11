@@ -110,6 +110,7 @@ export interface ReadMessagesOptions {
   limit?: number;
   unread_only?: boolean;
   order?: "asc" | "desc";
+  compact?: boolean;
 }
 
 export interface SearchMessagesOptions {

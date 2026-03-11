@@ -504,12 +504,12 @@ describe("searchMessages", () => {
     expect(results).toHaveLength(2);
   });
 
-  test("defaults to limit 50", () => {
-    for (let i = 0; i < 55; i++) {
+  test("defaults to limit 20", () => {
+    for (let i = 0; i < 25; i++) {
       sendMessage({ from: "a", to: "b", content: `item ${i}` });
     }
     const results = searchMessages({ query: "item" });
-    expect(results).toHaveLength(50);
+    expect(results).toHaveLength(20);
   });
 
   test("combines multiple filters", () => {
