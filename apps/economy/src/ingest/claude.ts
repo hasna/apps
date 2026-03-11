@@ -1,141 +1,176 @@
-import { readdirSync, readFileSync, existsSync } from 'fs'
+import { readdirSync, readFileSync, existsSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { Database } from 'bun:sqlite'
 import { randomUUID } from 'crypto'
 import {
   upsertRequest, upsertSession, rollupSession,
   getIngestState, setIngestState,
 } from '../db/database.js'
+import { computeCostFromDb } from '../lib/pricing.js'
 import type { EconomySession } from '../types/index.js'
 
-const TELEMETRY_DIR = join(homedir(), '.claude', 'telemetry')
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 
-interface TelemetryEvent {
-  event_data?: {
-    event_name?: string
-    client_timestamp?: string
+interface MessageUsage {
+  input_tokens?: number
+  output_tokens?: number
+  cache_creation_input_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number
+    ephemeral_1h_input_tokens?: number
+  }
+}
+
+interface SessionLine {
+  type?: string
+  message?: {
+    role?: string
     model?: string
-    session_id?: string
-    additional_metadata?: {
-      model?: string
-      costUSD?: number
-      inputTokens?: number
-      outputTokens?: number
-      cachedInputTokens?: number
-      uncachedInputTokens?: number
-      durationMs?: number
-      requestId?: string
-    }
+    usage?: MessageUsage
   }
+  sessionId?: string
+  timestamp?: string
+  cwd?: string
+  gitBranch?: string
 }
 
-// Resolve project path from ~/.claude/projects/ directory structure
-// Dirs are named like: -Users-hasna-Workspace-foo  (path with / replaced by -)
-function resolveProjectPath(sessionId: string): { projectPath: string; projectName: string } {
-  if (!existsSync(PROJECTS_DIR)) return { projectPath: '', projectName: 'unknown' }
-  try {
-    const projectDirs = readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-    for (const dir of projectDirs) {
-      const sessionFile = join(PROJECTS_DIR, dir.name, `${sessionId}.jsonl`)
-      if (existsSync(sessionFile)) {
-        // Convert dir name back to path: -Users-hasna-Workspace-foo → /Users/hasna/Workspace/foo
-        const projectPath = dir.name.replace(/^-/, '/').replace(/-/g, '/')
-        return { projectPath, projectName: basename(projectPath) }
+// Derive project path from the projects dir entry name:
+// -Users-hasna-Workspace-foo → /Users/hasna/Workspace/foo
+function dirNameToPath(dirName: string): string {
+  return dirName.replace(/^-/, '/').replace(/-/g, '/').replace(/\/\//g, '/-')
+}
+
+// Collect all JSONL session files recursively (main sessions + subagent sessions)
+function collectJsonlFiles(projectDir: string): string[] {
+  const files: string[] = []
+  function walk(dir: string) {
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(join(dir, entry.name))
+        else if (entry.name.endsWith('.jsonl')) files.push(join(dir, entry.name))
       }
-    }
-  } catch {
-    // ignore
+    } catch { /* ignore permission errors */ }
   }
-  return { projectPath: '', projectName: 'unknown' }
+  walk(projectDir)
+  return files
 }
 
-export async function ingestClaude(db: Database, verbose = false, telemetryDir = TELEMETRY_DIR): Promise<{ files: number; requests: number; sessions: number }> {
-  if (!existsSync(telemetryDir)) {
-    if (verbose) console.log('Claude telemetry dir not found:', telemetryDir)
+export async function ingestClaude(
+  db: Database,
+  verbose = false,
+  _telemetryDir?: string, // kept for test compat, unused
+): Promise<{ files: number; requests: number; sessions: number }> {
+  if (!existsSync(PROJECTS_DIR)) {
+    if (verbose) console.log('Claude projects dir not found:', PROJECTS_DIR)
     return { files: 0, requests: 0, sessions: 0 }
   }
 
-  const files = readdirSync(telemetryDir).filter(f => f.endsWith('.json'))
+  let totalFiles = 0
   let totalRequests = 0
-  let processedFiles = 0
   const touchedSessions = new Set<string>()
 
-  for (const filename of files) {
-    const stateKey = filename
-    const processed = getIngestState(db, 'claude', stateKey)
-    if (processed === 'done') continue
+  const projectDirs = readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory())
 
-    const filePath = join(telemetryDir, filename)
-    let events: TelemetryEvent[]
-    try {
-      const raw = readFileSync(filePath, 'utf-8')
-      events = JSON.parse(raw) as TelemetryEvent[]
-      if (!Array.isArray(events)) events = [events]
-    } catch {
-      if (verbose) console.log('Skip unreadable:', filename)
-      continue
-    }
+  for (const projectDirEntry of projectDirs) {
+    const projectDirPath = join(PROJECTS_DIR, projectDirEntry.name)
+    const projectPath = dirNameToPath(projectDirEntry.name)
+    const projectName = basename(projectPath)
 
-    for (const event of events) {
-      const ed = event.event_data
-      if (!ed || ed.event_name !== 'tengu_api_success') continue
-      const meta = ed.additional_metadata
-      if (!meta) continue
+    const jsonlFiles = collectJsonlFiles(projectDirPath)
 
-      const sessionId = ed.session_id ?? randomUUID()
-      const timestamp = ed.client_timestamp ?? new Date().toISOString()
-      const model = meta.model ?? ed.model ?? 'unknown'
-      const costUsd = meta.costUSD ?? 0
-      const inputTokens = meta.inputTokens ?? (meta.uncachedInputTokens ?? 0)
-      const outputTokens = meta.outputTokens ?? 0
-      const cacheReadTokens = meta.cachedInputTokens ?? 0
-      const requestId = meta.requestId ?? randomUUID()
+    for (const filePath of jsonlFiles) {
+      // Use file path as state key, also check mtime to reprocess updated files
+      const stateKey = filePath.replace(PROJECTS_DIR, '')
+      let fileMtime = '0'
+      try { fileMtime = statSync(filePath).mtimeMs.toString() } catch { continue }
 
-      upsertRequest(db, {
-        id: `claude-${requestId}`,
-        agent: 'claude',
-        session_id: sessionId,
-        model,
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cache_read_tokens: cacheReadTokens,
-        cache_create_tokens: 0,
-        cost_usd: costUsd,
-        duration_ms: meta.durationMs ?? 0,
-        timestamp,
-        source_request_id: requestId,
-      })
+      const processed = getIngestState(db, 'claude', stateKey)
+      if (processed === fileMtime) continue // already processed at this mtime
 
-      // Ensure session row exists before rollup
-      if (!touchedSessions.has(sessionId)) {
-        const { projectPath, projectName } = resolveProjectPath(sessionId)
-        const existing = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId)
-        if (!existing) {
-          const session: EconomySession = {
-            id: sessionId,
-            agent: 'claude',
-            project_path: projectPath,
-            project_name: projectName,
-            started_at: timestamp,
-            ended_at: null,
-            total_cost_usd: 0,
-            total_tokens: 0,
-            request_count: 0,
+      let lines: string[]
+      try {
+        lines = readFileSync(filePath, 'utf-8').split('\n').filter(l => l.trim())
+      } catch { continue }
+
+      // Determine session ID from the filename (for main sessions) or parent dir
+      // Main session files: <sessionId>.jsonl or <sessionId>/<subdir>.jsonl
+      const fileBasename = basename(filePath, '.jsonl')
+      const isUuid = /^[0-9a-f-]{36}$/.test(fileBasename)
+      let sessionId = isUuid ? fileBasename : fileBasename.replace(/^agent-/, '')
+
+      let sessionCwd = projectPath
+
+      for (const line of lines) {
+        let entry: SessionLine
+        try { entry = JSON.parse(line) } catch { continue }
+
+        // Pick up session ID and cwd from the first user message
+        if (entry.sessionId) sessionId = entry.sessionId
+        if (entry.cwd) sessionCwd = entry.cwd
+
+        // Only process assistant messages with usage data
+        if (entry.message?.role !== 'assistant') continue
+        const usage = entry.message.usage
+        if (!usage) continue
+        const model = entry.message.model
+        if (!model) continue
+
+        const inputTokens = usage.input_tokens ?? 0
+        const outputTokens = usage.output_tokens ?? 0
+        const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0
+        const cacheReadTokens = usage.cache_read_input_tokens ?? 0
+        const timestamp = entry.timestamp ?? new Date().toISOString()
+
+        // Skip entries with zero tokens (no actual LLM call)
+        if (inputTokens + outputTokens + cacheWriteTokens === 0) continue
+
+        const costUsd = computeCostFromDb(db, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)
+        const reqId = `claude-${sessionId}-${timestamp}`
+
+        upsertRequest(db, {
+          id: reqId,
+          agent: 'claude',
+          session_id: sessionId,
+          model,
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          cache_read_tokens: cacheReadTokens,
+          cache_create_tokens: cacheWriteTokens,
+          cost_usd: costUsd,
+          duration_ms: 0,
+          timestamp,
+          source_request_id: reqId,
+        })
+
+        // Ensure session exists
+        if (!touchedSessions.has(sessionId)) {
+          const existing = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId)
+          if (!existing) {
+            const session: EconomySession = {
+              id: sessionId,
+              agent: 'claude',
+              project_path: sessionCwd || projectPath,
+              project_name: basename(sessionCwd || projectPath),
+              started_at: timestamp,
+              ended_at: null,
+              total_cost_usd: 0,
+              total_tokens: 0,
+              request_count: 0,
+            }
+            upsertSession(db, session)
           }
-          upsertSession(db, session)
+          touchedSessions.add(sessionId)
         }
-        touchedSessions.add(sessionId)
+
+        totalRequests++
       }
 
-      totalRequests++
+      setIngestState(db, 'claude', stateKey, fileMtime)
+      totalFiles++
     }
-
-    setIngestState(db, 'claude', stateKey, 'done')
-    processedFiles++
-    if (verbose) console.log(`Processed ${filename}: found ${events.length} events`)
   }
 
   // Rollup all touched sessions
@@ -143,5 +178,5 @@ export async function ingestClaude(db: Database, verbose = false, telemetryDir =
     rollupSession(db, sessionId)
   }
 
-  return { files: processedFiles, requests: totalRequests, sessions: touchedSessions.size }
+  return { files: totalFiles, requests: totalRequests, sessions: touchedSessions.size }
 }
