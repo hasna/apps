@@ -80,10 +80,16 @@ function updateTrayTitle(todayCost: number): void {
 }
 
 function createTrayIcon(): Electron.NativeImage {
-  // Create a small transparent icon (16x16) — the title string is the visual
-  const size = 16
-  const buf = Buffer.alloc(size * size * 4, 0)
-  return nativeImage.createFromBuffer(buf, { width: size, height: size, scaleFactor: 1 })
+  // 16x16 PNG with a white dollar-sign circle, suitable for macOS dark/light menu bar
+  // Generated as a base64-encoded 1x1 white pixel PNG scaled by Electron
+  const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+    <circle cx="8" cy="8" r="7" fill="white" opacity="0.9"/>
+    <text x="8" y="12" font-family="Helvetica" font-size="10" font-weight="bold" text-anchor="middle" fill="black">$</text>
+  </svg>`
+  const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svgIcon).toString('base64')}`
+  const img = nativeImage.createFromDataURL(dataUrl)
+  img.setTemplateImage(true)
+  return img
 }
 
 function getPopupPosition(tray: Tray, win: BrowserWindow): { x: number; y: number } {

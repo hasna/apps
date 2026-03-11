@@ -200,14 +200,34 @@ export function queryTopSessions(db: Database, n = 10, agent?: string): EconomyS
 export function querySummary(db: Database, period: Period): CostSummary {
   const rWhere = periodWhere(period)
   const sWhere = sessionPeriodWhere(period)
+
+  // Cost + tokens from individual requests (Claude Code)
   const r = db.prepare(`
     SELECT COALESCE(SUM(cost_usd), 0) as total_usd,
            COUNT(*) as requests,
            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as tokens
     FROM requests WHERE ${rWhere}
   `).get() as { total_usd: number; requests: number; tokens: number }
-  const s = db.prepare(`SELECT COUNT(*) as sessions FROM sessions WHERE ${sWhere}`).get() as { sessions: number }
-  return { total_usd: r.total_usd, requests: r.requests, tokens: r.tokens, sessions: s.sessions, period }
+
+  // Sessions with no request-level tracking (e.g. Codex) — add their cost separately
+  const codexTotals = db.prepare(`
+    SELECT COALESCE(SUM(total_cost_usd), 0) as cost_usd,
+           COALESCE(SUM(total_tokens), 0) as tokens,
+           COUNT(*) as sessions
+    FROM sessions
+    WHERE ${sWhere}
+    AND id NOT IN (SELECT DISTINCT session_id FROM requests)
+  `).get() as { cost_usd: number; tokens: number; sessions: number }
+
+  const sessionCount = db.prepare(`SELECT COUNT(*) as sessions FROM sessions WHERE ${sWhere}`).get() as { sessions: number }
+
+  return {
+    total_usd: r.total_usd + codexTotals.cost_usd,
+    requests: r.requests,
+    tokens: r.tokens + codexTotals.tokens,
+    sessions: sessionCount.sessions,
+    period,
+  }
 }
 
 export function queryModelBreakdown(db: Database): ModelBreakdown[] {
