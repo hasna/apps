@@ -1,0 +1,50 @@
+{
+  "name": "@hasna/economy",
+  "version": "0.1.0",
+  "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, and Gemini",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "economy": "dist/cli/index.js",
+    "economy-mcp": "dist/mcp/index.js",
+    "economy-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "LICENSE"],
+  "scripts": {
+    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external",
+    "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external",
+    "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external",
+    "build:lib": "bun build src/index.ts --outdir dist --target bun --packages external",
+    "build:dashboard": "cd dashboard && bun run build",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/server/index.ts"
+  },
+  "keywords": ["economy", "cost", "ai", "claude", "codex", "gemini", "mcp", "cli", "budget", "tracking"],
+  "author": "hasna",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "bun-types": "latest",
+    "typescript": "^5.7.2"
+  }
+}
