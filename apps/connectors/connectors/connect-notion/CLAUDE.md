@@ -56,6 +56,36 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Version (2026) — BREAKING CHANGES
+
+### Current Version: `2026-03-11`
+Set header: `Notion-Version: 2026-03-11`
+SDK: upgrade to `@notionhq/client` v5.12.0+
+
+### Breaking Changes in `2026-03-11`
+
+| Change | Old (`2025-09-03`) | New (`2026-03-11`) |
+|--------|-------------------|-------------------|
+| Block positioning | `after: "block-id"` string | `position: { type: "after_block", after_block: { id: "..." } }` |
+| Trash status | `archived: true/false` | `in_trash: true/false` |
+| Block type | `transcription` | `meeting_notes` |
+
+#### 1. Replace `after` → `position` (Append Block Children)
+```json
+// NEW: PATCH /v1/blocks/{id}/children
+{ "position": { "type": "after_block", "after_block": { "id": "b5d8fd79-..." } }, "children": [...] }
+// position types: "after_block", "start", "end"
+```
+
+#### 2. Replace `archived` → `in_trash`
+```json
+// NEW: PATCH /v1/pages/{id}
+{ "in_trash": true }
+```
+Applies to pages, databases, blocks, and data sources in both requests AND responses.
+
+#### 3. Replace `transcription` → `meeting_notes` block type
+
 ## Authentication
 
 Two authentication methods supported:

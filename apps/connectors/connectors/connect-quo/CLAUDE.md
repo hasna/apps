@@ -47,6 +47,11 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Quo business quoting and invoicing API. Check https://quo.app/docs for latest API reference.
+Auth: API key via Authorization header.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

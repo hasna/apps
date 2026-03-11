@@ -47,6 +47,14 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Current version: **API 3.0** (One Call API 3.0) — requires subscription.
+- Free tier: `https://api.openweathermap.org/data/2.5/` (weather, forecast)
+- API 3.0: `https://api.openweathermap.org/data/3.0/onecall` (includes minutely, hourly, daily, alerts)
+- Air Pollution: `https://api.openweathermap.org/data/2.5/air_pollution`
+- Auth: `?appid={API_KEY}` query parameter
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

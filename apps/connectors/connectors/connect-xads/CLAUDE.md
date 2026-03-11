@@ -47,6 +47,16 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+X Ads API (Twitter Ads API) — separate from X API v2.
+Base URL: `https://ads-api.x.com/12/` (version 12 as of 2026)
+Auth: OAuth 1.0a (consumer key/secret + user token/secret)
+
+Key resources: campaigns, line_items, creatives, targeting_criteria, stats/analytics.
+
+Note: X Ads API pricing/access is separate from X API v2 pay-as-you-go model. Contact X for Ads API access.
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

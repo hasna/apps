@@ -47,6 +47,14 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+USPTO (US Patent and Trademark Office) open data APIs — mostly free/no auth required.
+- Patent Center API: `https://patentcenter.uspto.gov/retrieval/public/v1/`
+- Patent Search API (PatentsView): `https://search.patentsview.org/api/v1/`
+- Trademark API: `https://tsdrapi.uspto.gov/ts/cd/casestatus/`
+Auth: Optional API key for higher rate limits.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

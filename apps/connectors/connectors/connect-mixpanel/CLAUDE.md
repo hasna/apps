@@ -47,6 +47,17 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Base URLs:
+- Ingestion: `https://api.mixpanel.com/`
+- Query (EU): `https://eu.mixpanel.com/api/query/`
+
+Auth: Service Account credentials (username:password as HTTP Basic Auth) for Query API. Project token for Ingestion API.
+
+Key endpoints: `/track` (events), `/engage` (user profiles), `/groups` (group analytics), `/import` (batch import).
+Query API: `/segmentation`, `/funnel`, `/retention`, `/events`.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

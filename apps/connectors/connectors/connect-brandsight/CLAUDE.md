@@ -47,6 +47,11 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Brandsight provides brand monitoring and analytics APIs. Check https://brandsight.com/docs for current API reference.
+Auth: API key via header or query parameter.
+
 ## Authentication
 
 SSO Key authentication. Credentials can be set via:

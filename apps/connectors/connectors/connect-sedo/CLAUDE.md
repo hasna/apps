@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Sedo Domain Marketplace API: `https://api.sedo.com/api/v2/`
+Key endpoints: domain search, listings, pricing, transfers, parking statistics.
+Auth: API key + partner ID.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

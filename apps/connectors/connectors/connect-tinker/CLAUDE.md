@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Tinker LLM fine-tuning and training API. Check https://tinker.ai/docs for latest API reference.
+Key operations: upload training data, create fine-tuning jobs, deploy models.
+Auth: Bearer token.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:
