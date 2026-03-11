@@ -28,9 +28,9 @@ export function ModelsTab() {
   return (
     <div
       style={{
-        background: '#1a1a1a',
-        border: '1px solid #2a2a2a',
-        borderRadius: 10,
+        background: 'var(--card)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
         overflow: 'auto',
       }}
     >
@@ -47,7 +47,7 @@ export function ModelsTab() {
         <tbody>
           {models.length === 0 ? (
             <tr>
-              <td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: '32px 0' }}>
+              <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
                 No model data
               </td>
             </tr>
@@ -58,9 +58,9 @@ export function ModelsTab() {
                 <td>
                   <span style={agentBadge(m.agent)}>{m.agent}</span>
                 </td>
-                <td style={{ color: '#9ca3af' }}>{(m.requests ?? 0).toLocaleString()}</td>
-                <td style={{ color: '#9ca3af' }}>{(m.total_tokens ?? 0).toLocaleString()}</td>
-                <td style={{ color: '#f9fafb', fontWeight: 600 }}>{formatUsd(m.cost_usd)}</td>
+                <td style={{ color: 'var(--muted-foreground)' }}>{(m.requests ?? 0).toLocaleString()}</td>
+                <td style={{ color: 'var(--muted-foreground)' }}>{(m.total_tokens ?? 0).toLocaleString()}</td>
+                <td style={{ color: 'var(--foreground)', fontWeight: 600 }}>{formatUsd(m.cost_usd)}</td>
               </tr>
             ))
           )}
@@ -75,7 +75,7 @@ function agentBadge(agent: string): React.CSSProperties {
     claude: { bg: '#1e3a5f', color: '#60a5fa' },
     codex: { bg: '#431407', color: '#fb923c' },
   }
-  const c = colors[agent] ?? { bg: '#1a1a1a', color: '#9ca3af' }
+  const c = colors[agent] ?? { bg: 'var(--secondary)', color: 'var(--secondary-foreground)' }
   return {
     background: c.bg,
     color: c.color,

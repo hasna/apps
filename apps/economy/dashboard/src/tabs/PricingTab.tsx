@@ -73,9 +73,9 @@ export function PricingTab() {
       {/* Pricing table */}
       <div
         style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: 10,
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
           overflow: 'auto',
         }}
       >
@@ -100,7 +100,7 @@ export function PricingTab() {
             <tbody>
               {pricing.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', color: '#6b7280', padding: '32px 0' }}>
+                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
                     No pricing data
                   </td>
                 </tr>
@@ -108,26 +108,29 @@ export function PricingTab() {
                 pricing.map((p) => (
                   <tr key={p.model}>
                     <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{p.model}</td>
-                    <td style={{ color: '#9ca3af' }}>${p.input_per_1m?.toFixed(4)}</td>
-                    <td style={{ color: '#9ca3af' }}>${p.output_per_1m?.toFixed(4)}</td>
-                    <td style={{ color: '#9ca3af' }}>
+                    <td style={{ color: 'var(--muted-foreground)' }}>${p.input_per_1m?.toFixed(4)}</td>
+                    <td style={{ color: 'var(--muted-foreground)' }}>${p.output_per_1m?.toFixed(4)}</td>
+                    <td style={{ color: 'var(--muted-foreground)' }}>
                       {p.cache_read_per_1m != null ? `$${p.cache_read_per_1m.toFixed(4)}` : '—'}
                     </td>
-                    <td style={{ color: '#9ca3af' }}>
+                    <td style={{ color: 'var(--muted-foreground)' }}>
                       {p.cache_write_per_1m != null ? `$${p.cache_write_per_1m.toFixed(4)}` : '—'}
                     </td>
                     <td>
                       <button
                         onClick={() => handleDelete(p.model)}
                         style={{
-                          background: '#2d1414',
-                          border: '1px solid #7f1d1d',
-                          borderRadius: 6,
-                          color: '#fca5a5',
+                          background: 'transparent',
+                          border: '1px solid var(--border)',
+                          borderRadius: 'calc(var(--radius) - 2px)',
+                          color: '#ef4444',
                           padding: '4px 10px',
                           fontSize: 12,
                           cursor: 'pointer',
+                          transition: 'background 0.15s',
                         }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--accent)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                       >
                         Delete
                       </button>
@@ -143,13 +146,13 @@ export function PricingTab() {
       {/* Edit pricing form */}
       <div
         style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: 10,
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
           padding: '20px',
         }}
       >
-        <div style={{ fontWeight: 600, color: '#e5e7eb', marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, color: 'var(--foreground)', marginBottom: 16 }}>
           Add / Update Pricing
         </div>
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -220,15 +223,16 @@ export function PricingTab() {
               type="submit"
               disabled={saving}
               style={{
-                background: saving ? '#1e3a5f' : '#1d4ed8',
-                color: '#fff',
+                background: saving ? 'var(--secondary)' : 'var(--primary)',
+                color: saving ? 'var(--secondary-foreground)' : 'var(--primary-foreground)',
                 border: 'none',
-                borderRadius: 8,
+                borderRadius: 'calc(var(--radius) - 2px)',
                 padding: '10px 24px',
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: saving ? 'default' : 'pointer',
                 opacity: saving ? 0.7 : 1,
+                transition: 'opacity 0.15s',
               }}
             >
               {saving ? 'Saving...' : 'Save Pricing'}
@@ -243,18 +247,18 @@ export function PricingTab() {
 const labelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 12,
-  color: '#9ca3af',
+  color: 'var(--muted-foreground)',
   marginBottom: 6,
   fontWeight: 500,
 }
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  background: '#111',
-  border: '1px solid #2a2a2a',
-  borderRadius: 8,
+  background: 'var(--background)',
+  border: '1px solid var(--border)',
+  borderRadius: 'calc(var(--radius) - 2px)',
   padding: '8px 12px',
-  color: '#e5e7eb',
+  color: 'var(--foreground)',
   fontSize: 14,
   outline: 'none',
 }

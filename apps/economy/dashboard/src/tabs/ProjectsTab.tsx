@@ -44,9 +44,9 @@ export function ProjectsTab() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div
         style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: 10,
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
           overflow: 'auto',
         }}
       >
@@ -63,30 +63,30 @@ export function ProjectsTab() {
           <tbody>
             {projects.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: '32px 0' }}>
+                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
                   No projects found
                 </td>
               </tr>
             ) : (
               projects.map((p, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 500, color: '#f9fafb' }}>
+                  <td style={{ fontWeight: 500, color: 'var(--foreground)' }}>
                     {p.project_name || '—'}
                   </td>
                   <td
                     style={{
                       fontFamily: 'monospace',
                       fontSize: 12,
-                      color: '#6b7280',
+                      color: 'var(--muted-foreground)',
                       maxWidth: 280,
                     }}
                     title={p.project_path}
                   >
                     {truncate(p.project_path, 40)}
                   </td>
-                  <td style={{ color: '#9ca3af' }}>{p.sessions}</td>
-                  <td style={{ color: '#f9fafb', fontWeight: 600 }}>{formatUsd(p.cost_usd)}</td>
-                  <td style={{ color: '#6b7280', fontSize: 13 }}>{formatDate(p.last_active)}</td>
+                  <td style={{ color: 'var(--muted-foreground)' }}>{p.sessions}</td>
+                  <td style={{ color: 'var(--foreground)', fontWeight: 600 }}>{formatUsd(p.cost_usd)}</td>
+                  <td style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>{formatDate(p.last_active)}</td>
                 </tr>
               ))
             )}

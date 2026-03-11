@@ -1,107 +1,119 @@
-import { useState } from 'react'
-import { OverviewTab } from './tabs/OverviewTab'
-import { SessionsTab } from './tabs/SessionsTab'
-import { ModelsTab } from './tabs/ModelsTab'
-import { ProjectsTab } from './tabs/ProjectsTab'
-import { BudgetsTab } from './tabs/BudgetsTab'
-import { PricingTab } from './tabs/PricingTab'
+import * as React from "react";
+import { RefreshCwIcon } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { ThemeProvider } from "@/components/theme-provider";
+import { OverviewTab } from "@/tabs/OverviewTab";
+import { SessionsTab } from "@/tabs/SessionsTab";
+import { ModelsTab } from "@/tabs/ModelsTab";
+import { ProjectsTab } from "@/tabs/ProjectsTab";
+import { BudgetsTab } from "@/tabs/BudgetsTab";
+import { PricingTab } from "@/tabs/PricingTab";
+import { Button } from "@/components/ui/button";
+import {
+  NavigationMenu,
+  NavigationMenuList,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  navigationMenuTriggerStyle,
+} from "@/components/ui/navigation-menu";
 
-type Tab = 'overview' | 'sessions' | 'models' | 'projects' | 'budgets' | 'pricing'
+type Tab = "overview" | "sessions" | "models" | "projects" | "budgets" | "pricing";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'sessions', label: 'Sessions' },
-  { id: 'models', label: 'Models' },
-  { id: 'projects', label: 'Projects' },
-  { id: 'budgets', label: 'Budgets' },
-  { id: 'pricing', label: 'Pricing' },
-]
+const navItems: { key: Tab; label: string }[] = [
+  { key: "overview", label: "Overview" },
+  { key: "sessions", label: "Sessions" },
+  { key: "models", label: "Models" },
+  { key: "projects", label: "Projects" },
+  { key: "budgets", label: "Budgets" },
+  { key: "pricing", label: "Pricing" },
+];
 
-function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('overview')
+function AppInner() {
+  const [tab, setTab] = React.useState<Tab>("overview");
+  const [loading, setLoading] = React.useState(false);
+  const [reloadKey, setReloadKey] = React.useState(0);
+
+  function reload() {
+    setLoading(true);
+    setReloadKey((k) => k + 1);
+    setTimeout(() => setLoading(false), 500);
+  }
+
+  React.useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "r" && !e.ctrlKey && !e.metaKey) reload();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: '#0f0f0f',
-        color: '#e5e7eb',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      {/* Top nav */}
-      <header
-        style={{
-          background: '#111',
-          borderBottom: '1px solid #1e1e1e',
-          padding: '0 24px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 32,
-          height: 56,
-          position: 'sticky',
-          top: 0,
-          zIndex: 100,
-        }}
-      >
-        <div
-          style={{
-            fontWeight: 700,
-            fontSize: 16,
-            color: '#f9fafb',
-            letterSpacing: '-0.02em',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}
-        >
-          <span style={{ color: '#3b82f6' }}>◈</span>
-          Open Economy
-        </div>
-
-        <nav style={{ display: 'flex', gap: 4 }}>
-          {TABS.map((t) => (
+    <div className="min-h-screen">
+      <header className="border-b">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
+          <div className="flex items-center gap-4">
             <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              style={{
-                background: activeTab === t.id ? '#1a1a1a' : 'transparent',
-                border: activeTab === t.id ? '1px solid #2a2a2a' : '1px solid transparent',
-                borderRadius: 8,
-                color: activeTab === t.id ? '#f9fafb' : '#9ca3af',
-                padding: '6px 14px',
-                fontSize: 14,
-                fontWeight: activeTab === t.id ? 600 : 400,
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+              onClick={() => setTab("overview")}
             >
-              {t.label}
+              <img src="/logo.jpg" alt="Hasna" className="h-7 w-auto rounded" />
+              <h1 className="text-base font-semibold">
+                Open <span className="font-normal text-muted-foreground">Economy</span>
+              </h1>
             </button>
-          ))}
-        </nav>
+            <NavigationMenu>
+              <NavigationMenuList>
+                {navItems.map((item) => (
+                  <NavigationMenuItem key={item.key}>
+                    <NavigationMenuLink
+                      className={navigationMenuTriggerStyle()}
+                      data-active={tab === item.key ? "" : undefined}
+                      onClick={() => setTab(item.key)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {item.label}
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                ))}
+              </NavigationMenuList>
+            </NavigationMenu>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-8"
+              onClick={reload}
+              disabled={loading}
+              title="Reload (r)"
+            >
+              <RefreshCwIcon className={`size-4 ${loading ? "animate-spin" : ""}`} />
+            </Button>
+            <ThemeToggle />
+          </div>
+        </div>
       </header>
 
-      {/* Main content */}
-      <main
-        style={{
-          flex: 1,
-          padding: '28px 24px',
-          maxWidth: 1400,
-          width: '100%',
-          margin: '0 auto',
-        }}
-      >
-        {activeTab === 'overview' && <OverviewTab />}
-        {activeTab === 'sessions' && <SessionsTab />}
-        {activeTab === 'models' && <ModelsTab />}
-        {activeTab === 'projects' && <ProjectsTab />}
-        {activeTab === 'budgets' && <BudgetsTab />}
-        {activeTab === 'pricing' && <PricingTab />}
+      <main className="mx-auto max-w-6xl space-y-6 px-6 py-6">
+        {tab === "overview" && <OverviewTab key={reloadKey} />}
+        {tab === "sessions" && <SessionsTab key={reloadKey} />}
+        {tab === "models" && <ModelsTab key={reloadKey} />}
+        {tab === "projects" && <ProjectsTab key={reloadKey} />}
+        {tab === "budgets" && <BudgetsTab key={reloadKey} />}
+        {tab === "pricing" && <PricingTab key={reloadKey} />}
       </main>
     </div>
-  )
+  );
 }
 
-export default App
+export function App() {
+  return (
+    <ThemeProvider defaultTheme="system" storageKey="economy-dashboard-theme">
+      <AppInner />
+    </ThemeProvider>
+  );
+}
+
+export default App;

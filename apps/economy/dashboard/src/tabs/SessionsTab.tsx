@@ -75,7 +75,7 @@ export function SessionsTab() {
         <select
           value={agentFilter}
           onChange={(e) => handleAgent(e.target.value)}
-          style={{ ...inputStyle, width: 160 }}
+          style={{ ...inputStyle, flex: 'none', width: 160 }}
         >
           <option value="">All agents</option>
           <option value="claude">Claude</option>
@@ -105,24 +105,24 @@ export function SessionsTab() {
             <tbody>
               {sessions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', color: '#6b7280', padding: '32px 0' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
                     No sessions found
                   </td>
                 </tr>
               ) : (
                 sessions.map((s) => (
                   <tr key={s.session_id}>
-                    <td style={{ fontFamily: 'monospace', fontSize: 12, color: '#9ca3af' }}>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--muted-foreground)' }}>
                       {truncate(s.session_id, 16)}
                     </td>
                     <td>
                       <span style={agentBadge(s.agent)}>{s.agent}</span>
                     </td>
                     <td style={{ maxWidth: 200 }}>{truncate(s.project || s.project_path || '', 30)}</td>
-                    <td style={{ color: '#f9fafb', fontWeight: 500 }}>{formatUsd(s.cost_usd)}</td>
-                    <td style={{ color: '#9ca3af' }}>{(s.total_tokens ?? 0).toLocaleString()}</td>
-                    <td style={{ color: '#9ca3af' }}>{s.requests}</td>
-                    <td style={{ color: '#6b7280', fontSize: 12 }}>{formatDate(s.started_at)}</td>
+                    <td style={{ color: 'var(--foreground)', fontWeight: 500 }}>{formatUsd(s.cost_usd)}</td>
+                    <td style={{ color: 'var(--muted-foreground)' }}>{(s.total_tokens ?? 0).toLocaleString()}</td>
+                    <td style={{ color: 'var(--muted-foreground)' }}>{s.requests}</td>
+                    <td style={{ color: 'var(--muted-foreground)', fontSize: 12 }}>{formatDate(s.started_at)}</td>
                   </tr>
                 ))
               )}
@@ -140,7 +140,7 @@ export function SessionsTab() {
         >
           ← Prev
         </button>
-        <span style={{ color: '#6b7280', fontSize: 13 }}>Page {page + 1}</span>
+        <span style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>Page {page + 1}</span>
         <button
           onClick={() => setPage((p) => p + 1)}
           disabled={sessions.length < PAGE_SIZE}
@@ -154,20 +154,20 @@ export function SessionsTab() {
 }
 
 const inputStyle: React.CSSProperties = {
-  background: '#1a1a1a',
-  border: '1px solid #2a2a2a',
-  borderRadius: 8,
+  background: 'var(--card)',
+  border: '1px solid var(--border)',
+  borderRadius: 'calc(var(--radius) - 2px)',
   padding: '8px 12px',
-  color: '#e5e7eb',
+  color: 'var(--foreground)',
   fontSize: 14,
   outline: 'none',
   flex: 1,
 }
 
 const tableContainer: React.CSSProperties = {
-  background: '#1a1a1a',
-  border: '1px solid #2a2a2a',
-  borderRadius: 10,
+  background: 'var(--card)',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius)',
   overflow: 'auto',
 }
 
@@ -176,7 +176,7 @@ function agentBadge(agent: string): React.CSSProperties {
     claude: { bg: '#1e3a5f', color: '#60a5fa' },
     codex: { bg: '#431407', color: '#fb923c' },
   }
-  const c = colors[agent] ?? { bg: '#1a1a1a', color: '#9ca3af' }
+  const c = colors[agent] ?? { bg: 'var(--secondary)', color: 'var(--secondary-foreground)' }
   return {
     background: c.bg,
     color: c.color,
@@ -189,12 +189,13 @@ function agentBadge(agent: string): React.CSSProperties {
 
 function paginationBtn(disabled: boolean): React.CSSProperties {
   return {
-    background: disabled ? '#141414' : '#1a1a1a',
-    border: '1px solid #2a2a2a',
-    borderRadius: 8,
+    background: disabled ? 'var(--muted)' : 'var(--card)',
+    border: '1px solid var(--border)',
+    borderRadius: 'calc(var(--radius) - 2px)',
     padding: '8px 16px',
-    color: disabled ? '#4b5563' : '#e5e7eb',
+    color: disabled ? 'var(--muted-foreground)' : 'var(--foreground)',
     cursor: disabled ? 'default' : 'pointer',
     fontSize: 14,
+    opacity: disabled ? 0.5 : 1,
   }
 }

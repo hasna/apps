@@ -123,16 +123,17 @@ export function OverviewTab() {
             onClick={handleSync}
             disabled={syncing}
             style={{
-              background: syncing ? '#1e3a5f' : '#1d4ed8',
-              color: '#fff',
+              background: syncing ? 'var(--secondary)' : 'var(--primary)',
+              color: syncing ? 'var(--secondary-foreground)' : 'var(--primary-foreground)',
               border: 'none',
-              borderRadius: 8,
+              borderRadius: 'calc(var(--radius) - 2px)',
               padding: '10px 20px',
               fontSize: 14,
               fontWeight: 600,
               cursor: syncing ? 'default' : 'pointer',
               whiteSpace: 'nowrap',
               opacity: syncing ? 0.7 : 1,
+              transition: 'opacity 0.15s',
             }}
           >
             {syncing ? 'Syncing...' : 'Sync Now'}
@@ -146,31 +147,31 @@ export function OverviewTab() {
       {/* Daily chart */}
       <div
         style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: 10,
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
           padding: '24px',
         }}
       >
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 20, color: '#e5e7eb' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 20, color: 'var(--foreground)' }}>
           Daily Cost — Last 30 Days
         </div>
         {chartData.length === 0 ? (
-          <div style={{ color: '#6b7280', textAlign: 'center', padding: '32px 0' }}>
+          <div style={{ color: 'var(--muted-foreground)', textAlign: 'center', padding: '32px 0' }}>
             No data available
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis
                 dataKey="date"
-                tick={{ fill: '#6b7280', fontSize: 11 }}
-                axisLine={{ stroke: '#2a2a2a' }}
+                tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
+                axisLine={{ stroke: 'var(--border)' }}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(v) => `$${Number(v).toFixed(3)}`}
@@ -178,16 +179,17 @@ export function OverviewTab() {
               />
               <Tooltip
                 contentStyle={{
-                  background: '#1e1e1e',
-                  border: '1px solid #333',
+                  background: 'var(--card)',
+                  border: '1px solid var(--border)',
                   borderRadius: 6,
                   fontSize: 13,
+                  color: 'var(--foreground)',
                 }}
-                labelStyle={{ color: '#9ca3af' }}
+                labelStyle={{ color: 'var(--muted-foreground)' }}
                 formatter={(val) => [`$${Number(val).toFixed(4)}`, undefined]}
               />
               <Legend
-                wrapperStyle={{ fontSize: 13, color: '#9ca3af', paddingTop: 12 }}
+                wrapperStyle={{ fontSize: 13, color: 'var(--muted-foreground)', paddingTop: 12 }}
               />
               <Line
                 type="monotone"

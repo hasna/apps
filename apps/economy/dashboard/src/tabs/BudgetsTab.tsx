@@ -13,7 +13,7 @@ function ProgressBar({ percent, isOver }: { percent: number; isOver: boolean }) 
         style={{
           flex: 1,
           height: 8,
-          background: '#2a2a2a',
+          background: 'var(--border)',
           borderRadius: 4,
           overflow: 'hidden',
         }}
@@ -99,14 +99,14 @@ export function BudgetsTab() {
       {/* Budget list */}
       <div
         style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: 10,
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
           overflow: 'hidden',
         }}
       >
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #2a2a2a' }}>
-          <span style={{ fontWeight: 600, color: '#e5e7eb' }}>Active Budgets</span>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+          <span style={{ fontWeight: 600, color: 'var(--foreground)' }}>Active Budgets</span>
         </div>
         {loading ? (
           <LoadingSpinner />
@@ -115,7 +115,7 @@ export function BudgetsTab() {
             <ErrorMessage message={error} />
           </div>
         ) : budgets.length === 0 ? (
-          <div style={{ padding: '32px', textAlign: 'center', color: '#6b7280' }}>
+          <div style={{ padding: '32px', textAlign: 'center', color: 'var(--muted-foreground)' }}>
             No budgets configured
           </div>
         ) : (
@@ -125,7 +125,7 @@ export function BudgetsTab() {
                 key={b.id}
                 style={{
                   padding: '16px 20px',
-                  borderBottom: '1px solid #222',
+                  borderBottom: '1px solid var(--border)',
                   display: 'flex',
                   gap: 16,
                   alignItems: 'center',
@@ -133,7 +133,7 @@ export function BudgetsTab() {
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', marginBottom: 8 }}>
-                    <span style={{ fontWeight: 500, color: '#f9fafb' }}>
+                    <span style={{ fontWeight: 500, color: 'var(--foreground)' }}>
                       {b.project_path || 'Global'}
                     </span>
                     <span
@@ -151,22 +151,25 @@ export function BudgetsTab() {
                     </span>
                   </div>
                   <ProgressBar percent={b.percent_used} isOver={b.is_over_alert} />
-                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 6 }}>
+                  <div style={{ color: 'var(--muted-foreground)', fontSize: 12, marginTop: 6 }}>
                     ${b.current_spend_usd.toFixed(4)} / ${b.limit_usd.toFixed(2)} limit
                   </div>
                 </div>
                 <button
                   onClick={() => handleDelete(b.id)}
                   style={{
-                    background: '#2d1414',
-                    border: '1px solid #7f1d1d',
-                    borderRadius: 6,
-                    color: '#fca5a5',
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'calc(var(--radius) - 2px)',
+                    color: '#ef4444',
                     padding: '6px 12px',
                     fontSize: 13,
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
+                    transition: 'background 0.15s',
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--accent)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
                   Delete
                 </button>
@@ -179,13 +182,13 @@ export function BudgetsTab() {
       {/* Add budget form */}
       <div
         style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: 10,
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
           padding: '20px',
         }}
       >
-        <div style={{ fontWeight: 600, color: '#e5e7eb', marginBottom: 16 }}>Add Budget</div>
+        <div style={{ fontWeight: 600, color: 'var(--foreground)', marginBottom: 16 }}>Add Budget</div>
         <form onSubmit={handleAdd} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <div style={{ flex: 2, minWidth: 200 }}>
@@ -242,15 +245,16 @@ export function BudgetsTab() {
               type="submit"
               disabled={saving}
               style={{
-                background: saving ? '#1e3a5f' : '#1d4ed8',
-                color: '#fff',
+                background: saving ? 'var(--secondary)' : 'var(--primary)',
+                color: saving ? 'var(--secondary-foreground)' : 'var(--primary-foreground)',
                 border: 'none',
-                borderRadius: 8,
+                borderRadius: 'calc(var(--radius) - 2px)',
                 padding: '10px 24px',
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: saving ? 'default' : 'pointer',
                 opacity: saving ? 0.7 : 1,
+                transition: 'opacity 0.15s',
               }}
             >
               {saving ? 'Adding...' : 'Add Budget'}
@@ -265,18 +269,18 @@ export function BudgetsTab() {
 const labelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 12,
-  color: '#9ca3af',
+  color: 'var(--muted-foreground)',
   marginBottom: 6,
   fontWeight: 500,
 }
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  background: '#111',
-  border: '1px solid #2a2a2a',
-  borderRadius: 8,
+  background: 'var(--background)',
+  border: '1px solid var(--border)',
+  borderRadius: 'calc(var(--radius) - 2px)',
   padding: '8px 12px',
-  color: '#e5e7eb',
+  color: 'var(--foreground)',
   fontSize: 14,
   outline: 'none',
 }
