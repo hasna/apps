@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, and Gemini",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "LICENSE"],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external",
@@ -30,7 +33,18 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts"
   },
-  "keywords": ["economy", "cost", "ai", "claude", "codex", "gemini", "mcp", "cli", "budget", "tracking"],
+  "keywords": [
+    "economy",
+    "cost",
+    "ai",
+    "claude",
+    "codex",
+    "gemini",
+    "mcp",
+    "cli",
+    "budget",
+    "tracking"
+  ],
   "author": "hasna",
   "license": "Apache-2.0",
   "publishConfig": {

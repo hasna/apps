@@ -6,9 +6,9 @@ describe('ingestCodex (unit)', () => {
   it('computeCost with gpt-5.3-codex returns non-zero', () => {
     const cost = computeCost('gpt-5.3-codex', 100_000, 40_000)
     expect(cost).toBeGreaterThan(0)
-    // $30/1M input + $120/1M output
-    // = 100k * 30/1M + 40k * 120/1M = 3.0 + 4.8 = 7.8
-    expect(cost).toBeCloseTo(7.8)
+    // $1.75/1M input + $14/1M output
+    // = 100k * 1.75/1M + 40k * 14/1M = 0.175 + 0.56 = 0.735
+    expect(cost).toBeCloseTo(0.735)
   })
 
   it('60/40 token split estimate produces expected cost', () => {
