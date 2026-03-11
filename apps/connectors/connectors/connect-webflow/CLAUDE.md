@@ -47,6 +47,25 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### CMS Improvements
+- **Live CMS item management**: Endpoints for managing items live on site vs staged
+- **CMS item filtering and sorting**: Server-side filtering/sorting
+- **Bulk CMS authoring**: Bulk create/update/delete CMS items via Data API v2
+- **Localization support**: Multi-locale content management
+
+### Breaking Changes (Dec 2024 / Jul 2025)
+- **Dec 2024**: Breaking changes in JavaScript SDK — check changelog
+- **Jul 2025**: CMS item publishing updated — how items publish, draft, and remove from live sites
+- **Internal API deprecation (late 2026)**: Internal DOM sync endpoints (`/sites/{name}/dom`, `/pages/{id}/dom`) require version numbers in write requests since Sep 15, 2025. Will be removed late 2026.
+
+### New Features
+- **301 Redirects API**: Manage redirects programmatically
+- **Comments API**: Manage design comments via API
+- **Workspace Audit Logs**: Audit log endpoints
+- **Official MCP Server**: Webflow MCP server now supports the Designer (for AI agents)
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

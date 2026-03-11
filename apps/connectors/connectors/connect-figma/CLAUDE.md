@@ -47,6 +47,40 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Variables API — Extended Collections (Nov 2025)
+Extended collections allow variants of existing variable collections with overrides while maintaining a single source of truth.
+
+New fields on `VariableCollection`:
+- `isExtension: boolean`
+- `parentVariableCollectionId: string` — only when isExtension is true
+- `rootVariableCollectionId: string`
+- `inheritedVariableIds: string[]`
+- `localVariableIds: string[]`
+- `variableOverrides: Record<variableId, Record<modeId, value>>`
+
+New `POST /v1/files/:key/variables` param: `initialModeIdToParentModeIdMapping`
+
+### Node Properties (Jan 2026)
+New node properties:
+- `transformModifiers` on TRANSFORM_GROUP nodes
+- `textPathStartData` on TEXT_PATH nodes
+- `variableWidthPoints` — variable width stroke profiles
+- `complexStrokeProperties` — brush and dynamic strokes
+
+### Rate Limits (Nov 2025)
+Published rate limits now enforced. Check [rate limits docs](https://developers.figma.com/docs/rest-api/rate-limits) for current values.
+
+### Figma MCP Server (beta, Sep 2025)
+Figma now has an official MCP Server in beta for AI agent access to design files.
+
+### OAuth App Publishing (Nov 2025)
+All OAuth apps must complete the new publishing flow via the Apps page. PAT generation via docs is temporarily removed — use the Postman workspace for testing.
+
+### Discovery API (Jan 2026)
+For Enterprise plans with Governance+: can now retrieve text of user-submitted AI prompts from Figma AI tools.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

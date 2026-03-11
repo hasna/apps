@@ -47,6 +47,26 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### New APIs (Feb-Mar 2026)
+- **Disputes APIs** (Mar 2026) — manage payment disputes: Dispute History Records, Dispute Evidence Documents, Disputes API
+- **Site Authentication API** (Mar 2026) — manage site member authentication
+- **Wix AI APIs** (Feb 2026) — interact with multiple AI providers via Wix (handles auth + billing). REST + SDK.
+- **Intake Form Submissions API** (Feb 2026)
+- **Dashboard SDK update** (Mar 2026) — action required: update `@wix/dashboard-react >= 1.0.27` and `@wix/dashboard >= 1.3.43`
+
+### Headless CMS Updates (Feb 2026)
+- New article: Upload images to CMS collections requiring elevation
+- Multilingual support guide for headless projects
+- Wix-Managed Headless: `403` error handling guide
+
+### CLI Updates (Mar 2026)
+- New commands: `wix translation push` and `wix translation pull`
+
+### Deprecated (Aug 2026)
+Bookings Pricing API: `pricePerParticipant`, `numberOfParticipants`, `choices` fields deprecated — use `serviceChoices` object instead.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

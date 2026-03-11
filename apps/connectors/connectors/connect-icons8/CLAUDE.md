@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Icons8 API: `https://api.icons8.com/api/iconsets/v5/`
+Key endpoints: `/search`, `/icon`, `/categories`, `/styles`
+Auth: `token` query parameter
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:
