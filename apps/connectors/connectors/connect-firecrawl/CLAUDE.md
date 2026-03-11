@@ -47,6 +47,33 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Endpoints (v1)
+| Endpoint | Description |
+|----------|-------------|
+| `POST /v1/scrape` | Scrape a single URL |
+| `POST /v1/crawl` | Crawl a website |
+| `POST /v1/map` | Map a website's URLs |
+| `POST /v1/search` | Search the web and scrape results (Jun 2025) |
+| `POST /v1/extract` | Extract structured data (v2: pagination, search, FIRE-1) |
+| `POST /v1/agent` | Agentic data gathering (Dec 2025) |
+| `POST /v1/batch/scrape` | Parallel agent batch processing |
+
+### New in 2026
+- **Browser Sandbox** (Feb 2026) — Fully managed isolated browser for agents. Zero config, pre-loaded tools.
+- **PDF Parser v2** (Feb 2026) — 3x faster Rust-based parser. Three auto-adapting modes (clean text, scanned, complex).
+- **Parallel Agents** (Jan 2026) — Batch `/agent` queries in spreadsheet/JSON format with streaming.
+- **Branding Format v2** (Feb 2026) — Improved logo extraction for AI agents.
+- **Spark 1 Pro/Mini models** (Jan 2026) — Flexible model selection for `/agent`. Mini is 60% cheaper.
+- **Claude Code plugin** (Feb 2026) — Official Firecrawl skill for Claude Code.
+
+### /extract v2 (Apr 2025)
+Added: pagination, FIRE-1 intelligent interaction, built-in search integration.
+
+### FIRE-1 Agent (Apr 2025)
+New AI agent that intelligently navigates and interacts with web pages for complex scraping.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

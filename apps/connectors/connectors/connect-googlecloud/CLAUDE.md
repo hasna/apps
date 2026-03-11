@@ -47,6 +47,18 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Auth Notes (2026)
+
+### Recommended Auth Methods
+1. **Application Default Credentials (ADC)** — `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to service account JSON
+2. **Service Account Key** — JSON key file with email + private key
+3. **Workload Identity Federation** — keyless auth from AWS/Azure/on-prem (recommended for production)
+4. **OAuth 2.0 User Credentials** — for user-delegated access
+
+### Google AI / Gemini (separate from GCP)
+- Gemini API: `GEMINI_API_KEY` — simpler for Gemini models
+- Vertex AI: uses ADC or service account — more enterprise controls
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

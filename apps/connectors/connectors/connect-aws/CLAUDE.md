@@ -47,6 +47,22 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Auth Updates (2025-2026)
+
+### Amazon Bedrock API Keys (GA Jul 2025, GovCloud Jan 2026)
+Bedrock now supports direct API keys for authentication — no IAM principal setup required:
+- Short-term keys: valid for console session or up to 12 hours
+- Long-term keys: custom validity, managed from IAM console
+- Generate from Bedrock console or AWS SDK
+
+### IAM Role Creation in Service Workflows (Mar 2026)
+IAM roles can now be created and customized inline within service workflows (no tab-switching). Available for EC2, Lambda, EKS, ECS, Glue, CloudFormation, DMS, Systems Manager, Secrets Manager, RDS, IoT Core. US East (N. Virginia) region first.
+
+### Best Practice: Use IAM Roles, Not Access Keys
+- Prefer IAM roles with temporary credentials over long-term access keys
+- Use `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION` for programmatic access
+- Or use IAM Instance Roles / ECS Task Roles for zero-key auth in cloud environments
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

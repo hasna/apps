@@ -47,6 +47,27 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### New Workers REST API (Beta, Sep 2025)
+New resource-oriented REST API with cleaner separation:
+- `POST /workers/beta/workers` — create Worker (no code needed)
+- `POST /workers/beta/workers/{id}/versions` — upload code as version
+- `POST /scripts/{name}/deployments` — deploy a version
+
+Workers and Versions use new `/workers/` beta endpoints; Deployments remain on `/scripts/` endpoint.
+
+### Workers AI — New Capabilities (2026)
+- **Markdown Conversion** (`env.AI.toMarkdown()`): PDF, HTML, images with `conversionOptions` (CSS selectors, language)
+- **Real-time Transcription**: 10 languages via Deepgram Nova-3 on Workers AI in RealtimeKit
+- REST: `POST /accounts/{id}/ai/tomarkdown`
+
+### Browser Rendering — Rate Limit Increase (Mar 2026)
+Workers Paid plans: 3 req/s → **10 req/s** (600/min). Endpoints: `/links`, `/json`, `/scrape`, `/snapshot`, `/markdown`, `/pdf`, `/screenshot`, `/content`
+
+### Sandboxes — Real-time File Watching (Mar 2026)
+`sandbox.watch(path, options)` — SSE stream backed by inotify. Events: `create`, `modify`, `delete`, `move`.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

@@ -47,6 +47,27 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2024-2025)
+
+### SDKs
+- Python: `e2b` or `e2b-code-interpreter`
+- JavaScript/TypeScript: `@e2b/code-interpreter`
+
+### Sandbox Lifecycle
+- Start: ~150ms spin-up time
+- Pause/resume: data persistence across sessions
+- `download_url`/`downloadUrl` method on sandbox
+- Env vars configurable on `sandbox.create()`
+
+### Desktop Sandbox (Dec 2024)
+Virtual desktop for LLM computer use. Isolated VMs with full desktop environment.
+
+### Interactive Charts (Oct 2024)
+Automatic chart detection from Matplotlib code via `runCode()`/`run_code()`. Returns chart data to client for custom rendering.
+
+### Multi-language Support
+Python, JavaScript/TypeScript, and other languages via code interpreter.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

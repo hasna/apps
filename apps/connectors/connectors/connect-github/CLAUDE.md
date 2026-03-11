@@ -47,11 +47,41 @@ src/
 └── index.ts       # Library exports
 ```
 
-## Authentication
+## Authentication (2025+)
 
-Bearer Token authentication. Credentials can be set via:
+Bearer Token authentication. Use **fine-grained PATs** (GA since March 2025) for all new projects — they are now the recommended token type.
+
+Credentials can be set via:
 - Environment variable (see below)
 - Profile configuration: `connect-github config set-key <key>`
+
+### Token Types
+
+| Type | Recommendation |
+|------|---------------|
+| Fine-grained PAT | **Preferred** — GA since March 2025, granular permissions, audit-log `token_id` tracking |
+| Classic PAT | Legacy — still works, but over-permissioned |
+
+Fine-grained PAT gaps (not yet supported): Packages API, Checks API, internal repos outside target org, multi-org access.
+
+### Required Scopes (fine-grained PAT)
+
+- `contents:read/write` — repos, files
+- `issues:read/write` — issues, comments
+- `pull_requests:read/write` — PRs, reviews
+- `metadata:read` — required for all repo access
+- `models:read` — if using GitHub Models API (required since March 29 2025)
+
+### API Version
+
+Current: `X-GitHub-Api-Version: 2022-11-28` (unchanged)
+
+### GitHub MCP Server
+
+The Remote GitHub MCP Server is GA since September 2025. Add to your MCP config:
+```json
+{ "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] } } }
+```
 
 
 ## Key Patterns

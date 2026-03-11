@@ -47,6 +47,14 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Docker Hub REST API: `https://hub.docker.com/v2/`
+Docker Engine API: `https://unix:///var/run/docker.sock/v1.xx/` (local socket)
+Current Engine API version: v1.47+ (Docker Engine 27+)
+
+Auth: Docker Hub uses JWT tokens (POST /users/login). Docker Engine uses unix socket or TCP.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

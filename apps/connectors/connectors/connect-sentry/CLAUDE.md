@@ -47,6 +47,17 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Design (2025+)
+
+Sentry overhauled API guidelines (Apr 2025). Key design principles now enforced:
+- All endpoints designed as public API
+- `PATCH` not used — `PUT` for updates
+- Noun-based nesting in responses (`{project: {...}}` not flat)
+- Identifiers accept both human-readable and numeric forms
+- Common names used (`organization` not `organization_id`)
+
+New endpoint (Jul 2025): `POST /api/0/repositories/{repo}/token/regen/` — Regenerate repository upload token.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

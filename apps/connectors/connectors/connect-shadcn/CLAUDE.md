@@ -47,6 +47,48 @@ src/
 └── index.ts       # Library exports
 ```
 
+## CLI v4 (Mar 2026) — Major Update
+
+shadcn CLI v4 released March 2026. Key new features:
+
+### New Inspection Flags
+```bash
+npx shadcn@latest add button --dry-run   # preview without writing
+npx shadcn@latest add button --diff      # show diff vs local changes
+npx shadcn@latest add button --view      # inspect registry payload
+```
+
+### Presets — Design System Codes
+Pack entire design system (colors, theme, icons, fonts, radius) into a short code:
+```bash
+npx shadcn@latest init --preset a1Dg5eFl   # scaffold with preset
+```
+
+### shadcn/skills — Agent Context
+Gives AI coding agents context for working with components:
+```bash
+npx skills add shadcn/ui
+```
+
+### New shadcn info command
+```bash
+npx shadcn@latest info   # framework, version, installed components, docs links
+```
+
+### shadcn docs command
+```bash
+npx shadcn@latest docs combobox   # get docs, code, examples for any component
+```
+
+### shadcn init Templates (--template, --monorepo, --base)
+```bash
+npx shadcn@latest init -t next --monorepo   # next.js monorepo
+npx shadcn@latest init --base radix          # choose Radix or Base UI primitives
+```
+
+### registry:base and registry:font
+Registries can now distribute entire design systems and fonts as first-class types.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:
