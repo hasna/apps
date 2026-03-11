@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import type { FormEvent } from "react";
 import { getBudgets, createBudget, deleteBudget } from "../api";
 import type { Budget } from "../api";
-import { RefreshCwIcon, PlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { PlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

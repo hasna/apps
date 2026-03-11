@@ -28,16 +28,36 @@ const navItems: { key: Tab; label: string }[] = [
   { key: "pricing", label: "Pricing" },
 ];
 
+function useElapsedTime() {
+  const [now, setNow] = React.useState(Date.now());
+  const [lastReload, setLastReload] = React.useState(Date.now());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = Math.round((now - lastReload) / 1000);
+  const text = elapsed < 5 ? "just now" : `${elapsed}s ago`;
+  return { text, markReloaded: () => setLastReload(Date.now()) };
+}
+
 function AppInner() {
   const [tab, setTab] = React.useState<Tab>("overview");
   const [loading, setLoading] = React.useState(false);
   const [reloadKey, setReloadKey] = React.useState(0);
+  const { text: lastUpdatedText, markReloaded } = useElapsedTime();
 
   function reload() {
     setLoading(true);
     setReloadKey((k) => k + 1);
+    markReloaded();
     setTimeout(() => setLoading(false), 500);
   }
+
+  // Auto-mark as "reloaded" when tab data refreshes via its own 30s interval
+  React.useEffect(() => {
+    const id = setInterval(() => markReloaded(), 30000);
+    return () => clearInterval(id);
+  }, [markReloaded]);
 
   React.useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -81,6 +101,9 @@ function AppInner() {
             </NavigationMenu>
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground hidden sm:inline">
+              Updated {lastUpdatedText}
+            </span>
             <Button
               variant="outline"
               size="icon"
