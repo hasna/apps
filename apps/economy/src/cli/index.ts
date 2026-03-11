@@ -19,13 +19,24 @@ program
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(usd: number): string {
-  return chalk.green(`$${usd.toFixed(4)}`)
+  let formatted: string
+  if (usd >= 0.01) {
+    formatted = '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  } else {
+    formatted = '$' + usd.toFixed(6)
+  }
+  return chalk.green(formatted)
 }
 
 function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
+  return n.toLocaleString('en-US')
+}
+
+function fmtCount(n: number): string {
+  return n.toLocaleString('en-US')
 }
 
 function printTable(headers: string[], rows: string[][]): void {
@@ -56,8 +67,8 @@ function printSummary(label: string, period: Period): void {
     ['Metric', 'Value'],
     [
       ['Total cost', fmt(s.total_usd)],
-      ['Sessions', chalk.yellow(String(s.sessions))],
-      ['Requests', chalk.yellow(String(s.requests))],
+      ['Sessions', chalk.yellow(fmtCount(s.sessions))],
+      ['Requests', chalk.yellow(fmtCount(s.requests))],
       ['Tokens', chalk.yellow(fmtTokens(s.tokens))],
     ],
   )
@@ -124,7 +135,7 @@ program
         chalk.white(s.project_name || chalk.dim('unknown')),
         fmt(s.total_cost_usd),
         chalk.cyan(fmtTokens(s.total_tokens)),
-        String(s.request_count),
+        fmtCount(s.request_count),
         chalk.dim(s.started_at.substring(0, 16)),
       ]),
     )

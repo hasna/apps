@@ -22,10 +22,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 function formatUsd(val: number) {
-  if (val == null) return "$0.0000";
-  if (val >= 100) return `$${val.toFixed(2)}`;
-  if (val >= 1) return `$${val.toFixed(4)}`;
-  return `$${val.toFixed(6)}`;
+  if (val == null) return "$0.00";
+  if (val >= 0.01) {
+    return "$" + val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  return "$" + val.toFixed(6);
+}
+
+function formatTokens(n: number) {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toLocaleString("en-US");
+}
+
+function formatCount(n: number) {
+  return n.toLocaleString("en-US");
 }
 
 function formatDate(d: string) {
@@ -118,28 +130,28 @@ export function OverviewTab() {
     {
       label: "Today",
       value: formatUsd(todaySummary?.total_usd ?? 0),
-      sub: `${todaySummary?.sessions ?? 0} sessions`,
+      sub: `${formatCount(todaySummary?.sessions ?? 0)} sessions`,
       icon: CalendarIcon,
       color: "text-blue-500",
     },
     {
       label: "This Week",
       value: formatUsd(weekSummary?.total_usd ?? 0),
-      sub: `${weekSummary?.sessions ?? 0} sessions`,
+      sub: `${formatCount(weekSummary?.sessions ?? 0)} sessions`,
       icon: TrendingUpIcon,
       color: "text-green-500",
     },
     {
       label: "This Month",
       value: formatUsd(monthSummary?.total_usd ?? 0),
-      sub: `${monthSummary?.sessions ?? 0} sessions`,
+      sub: `${formatCount(monthSummary?.sessions ?? 0)} sessions`,
       icon: BarChart3Icon,
       color: "text-purple-500",
     },
     {
       label: "Monthly Requests",
-      value: String(monthSummary?.requests ?? 0),
-      sub: `${monthSummary?.tokens ?? 0} tokens`,
+      value: formatCount(monthSummary?.requests ?? 0),
+      sub: `${formatTokens(monthSummary?.tokens ?? 0)} tokens`,
       icon: DollarSignIcon,
       color: "text-orange-500",
     },
@@ -198,7 +210,7 @@ export function OverviewTab() {
                   tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(v) => `$${Number(v).toFixed(3)}`}
+                  tickFormatter={(v) => "$" + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}
                   width={60}
                 />
                 <Tooltip
@@ -209,7 +221,7 @@ export function OverviewTab() {
                     background: "var(--card)",
                     color: "var(--card-foreground)",
                   }}
-                  formatter={(val) => [`$${Number(val).toFixed(4)}`, undefined]}
+                  formatter={(val) => [formatUsd(Number(val)), undefined]}
                 />
                 <Legend wrapperStyle={{ fontSize: 13, paddingTop: 12 }} />
                 <Line
