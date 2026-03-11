@@ -89,7 +89,16 @@ function resolveTaskListId(agent: string, explicit?: string): string | null {
     || "default";
 }
 
+/** Compact single-line task summary for mutation responses (create/update/start/complete). */
 function formatTask(task: Task): string {
+  const id = task.short_id || task.id.slice(0, 8);
+  const assigned = task.assigned_to ? ` -> ${task.assigned_to}` : "";
+  const lock = task.locked_by ? ` [locked:${task.locked_by}]` : "";
+  return `${id} ${task.status.padEnd(11)} ${task.priority.padEnd(8)} ${task.title}${assigned}${lock}`;
+}
+
+/** Full multi-line task detail for get_task responses. */
+function formatTaskDetail(task: Task): string {
   const parts = [
     `ID: ${task.id}`,
     `Title: ${task.title}`,
@@ -142,7 +151,7 @@ server.tool(
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
       if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
       const task = createTask(resolved);
-      return { content: [{ type: "text" as const, text: `Task created:\n${formatTask(task)}` }] };
+      return { content: [{ type: "text" as const, text: `created: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -203,7 +212,7 @@ server.tool(
       const task = getTaskWithRelations(resolvedId);
       if (!task) return { content: [{ type: "text" as const, text: `Task not found: ${id}` }], isError: true };
 
-      const parts = [formatTask(task)];
+      const parts = [formatTaskDetail(task)];
 
       if (task.subtasks.length > 0) {
         parts.push(`\nSubtasks (${task.subtasks.length}):`);
@@ -262,7 +271,7 @@ server.tool(
     try {
       const resolvedId = resolveId(id);
       const task = updateTask(resolvedId, rest);
-      return { content: [{ type: "text" as const, text: `Task updated:\n${formatTask(task)}` }] };
+      return { content: [{ type: "text" as const, text: `updated: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -304,7 +313,7 @@ server.tool(
     try {
       const resolvedId = resolveId(id);
       const task = startTask(resolvedId, agent_id);
-      return { content: [{ type: "text" as const, text: `Task started:\n${formatTask(task)}` }] };
+      return { content: [{ type: "text" as const, text: `started: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -323,7 +332,7 @@ server.tool(
     try {
       const resolvedId = resolveId(id);
       const task = completeTask(resolvedId, agent_id);
-      return { content: [{ type: "text" as const, text: `Task completed:\n${formatTask(task)}` }] };
+      return { content: [{ type: "text" as const, text: `completed: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
