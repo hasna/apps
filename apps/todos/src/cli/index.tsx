@@ -228,6 +228,7 @@ program
   .option("--project-name <name>", "Filter by project name")
   .option("--agent-name <name>", "Filter by agent name/assigned")
   .option("--sort <field>", "Sort by: updated, created, priority, status")
+  .option("--format <fmt>", "Output format: table (default), compact, csv, json")
   .action((opts) => {
     const globalOpts = program.opts();
     opts.tags = opts.tags || opts.tag;
@@ -282,16 +283,39 @@ program
       });
     }
 
-    if (globalOpts.json) {
+    const fmt = opts.format || (globalOpts.json ? "json" : "table");
+
+    if (fmt === "json") {
       output(tasks, true);
       return;
     }
 
     if (tasks.length === 0) {
-      console.log(chalk.dim("No tasks found."));
+      if (fmt === "compact" || fmt === "csv") process.stdout.write("");
+      else console.log(chalk.dim("No tasks found."));
       return;
     }
 
+    if (fmt === "csv") {
+      const headers = "id,short_id,title,status,priority,assigned_to,updated_at";
+      const rows = tasks.map((t: Task) => [
+        t.id, t.short_id || "", t.title.replace(/,/g, ";"), t.status, t.priority, t.assigned_to || "", t.updated_at,
+      ].join(","));
+      console.log([headers, ...rows].join("\n"));
+      return;
+    }
+
+    if (fmt === "compact") {
+      // Ultra-minimal: one line per task, no labels, no color
+      for (const t of tasks) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const assigned = t.assigned_to ? ` ${t.assigned_to}` : "";
+        process.stdout.write(`${id} ${t.status} ${t.priority} ${t.title}${assigned}\n`);
+      }
+      return;
+    }
+
+    // Default: human-readable table
     console.log(chalk.bold(`${tasks.length} task(s):\n`));
     for (const t of tasks) {
       console.log(formatTaskLine(t));
