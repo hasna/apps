@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-03-11
+
+### Added
+
+- `list_connectors` MCP tool: `compact=true` returns names-only array (~70% smaller response)
+- `connector_docs` MCP tool: `essential=true` returns auth+envVars only (skips overview/CLI/storage)
+- `search_tools` MCP tool: list/filter tool names without loading all descriptions
+- `describe_tools` MCP tool: get descriptions for specific tools by name
+
 ## [0.2.8] - 2026-03-11
 
 ### Changed

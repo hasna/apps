@@ -47,7 +47,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.2.8");
+  .version("0.2.9");
 
 // Interactive mode (default)
 program
@@ -1486,7 +1486,7 @@ program
   .option("--json", "Output as JSON", false)
   .description("Check for updates and upgrade to the latest version")
   .action(async (options: { check: boolean; json: boolean }) => {
-    const currentVersion = "0.2.8";
+    const currentVersion = "0.2.9";
 
     try {
       const res = await fetch("https://registry.npmjs.org/@hasna/connectors/latest");
@@ -1709,7 +1709,7 @@ program
   .action((options: { json: boolean }) => {
     const configDir = join(homedir(), ".connectors");
     const installed = getInstalledConnectors();
-    const version = "0.2.8";
+    const version = "0.2.9";
 
     let configured = 0;
     let unconfigured = 0;
