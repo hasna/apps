@@ -14,25 +14,37 @@ export interface AnthropicConfig {
 // ============================================
 
 export type AnthropicModel =
+  // Claude 4.6 (latest, 2026)
+  | 'claude-opus-4-6'
+  | 'claude-sonnet-4-6'
+  // Claude 4 (2025)
   | 'claude-opus-4-20250514'
   | 'claude-sonnet-4-20250514'
+  // Claude 3.5
   | 'claude-3-5-haiku-20241022'
   | 'claude-3-5-sonnet-20241022'
+  // Claude 3 (legacy)
   | 'claude-3-opus-20240229'
   | 'claude-3-sonnet-20240229'
   | 'claude-3-haiku-20240307';
 
 export const ANTHROPIC_MODELS: AnthropicModel[] = [
+  // Claude 4.6 (latest, 2026)
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+  // Claude 4 (2025)
   'claude-opus-4-20250514',
   'claude-sonnet-4-20250514',
+  // Claude 3.5
   'claude-3-5-haiku-20241022',
   'claude-3-5-sonnet-20241022',
+  // Claude 3 (legacy)
   'claude-3-opus-20240229',
   'claude-3-sonnet-20240229',
   'claude-3-haiku-20240307',
 ];
 
-export const DEFAULT_MODEL: AnthropicModel = 'claude-sonnet-4-20250514';
+export const DEFAULT_MODEL: AnthropicModel = 'claude-sonnet-4-6';
 
 // ============================================
 // Messages API
@@ -71,6 +83,7 @@ export interface MessagesRequest {
   top_k?: number;
   stop_sequences?: string[];
   stream?: boolean;
+  thinking?: ThinkingConfig;
   metadata?: {
     user_id?: string;
   };
@@ -81,6 +94,16 @@ export interface TextBlock {
   text: string;
 }
 
+export interface ThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+}
+
+export interface RedactedThinkingBlock {
+  type: 'redacted_thinking';
+  data: string;
+}
+
 export interface ToolUseBlock {
   type: 'tool_use';
   id: string;
@@ -88,7 +111,27 @@ export interface ToolUseBlock {
   input: Record<string, unknown>;
 }
 
-export type ResponseContentBlock = TextBlock | ToolUseBlock;
+export type ResponseContentBlock = TextBlock | ThinkingBlock | RedactedThinkingBlock | ToolUseBlock;
+
+// ============================================
+// Thinking (Extended / Adaptive)
+// ============================================
+
+export type ThinkingEffort = 'low' | 'medium' | 'high';
+
+/** Adaptive thinking (recommended for claude-opus-4-6 and claude-sonnet-4-6) */
+export interface AdaptiveThinking {
+  type: 'adaptive';
+  effort?: ThinkingEffort;
+  budget_tokens?: number;
+}
+
+/** Disabled thinking */
+export interface DisabledThinking {
+  type: 'disabled';
+}
+
+export type ThinkingConfig = AdaptiveThinking | DisabledThinking;
 
 export interface MessagesResponse {
   id: string;
@@ -168,6 +211,7 @@ export interface ChatOptions {
   topK?: number;
   stopSequences?: string[];
   systemPrompt?: string;
+  thinking?: ThinkingConfig;
 }
 
 // ============================================

@@ -5,26 +5,61 @@ export interface MistralConfig {
   baseUrl?: string;
 }
 
-// Models
+// Models (2026)
 export type MistralModel =
-  | 'mistral-large-latest'
+  // Latest aliases (always point to newest)
+  | 'mistral-large-latest'     // → mistral-large-2512
+  | 'mistral-medium-latest'    // → mistral-medium-2508
   | 'mistral-small-latest'
-  | 'codestral-latest'
+  | 'codestral-latest'         // → codestral-2508
+  | 'magistral-medium-latest'  // → magistral-medium-2509
   | 'ministral-8b-latest'
   | 'ministral-3b-latest'
-  | 'open-mistral-nemo'
-  | 'pixtral-large-latest';
+  | 'pixtral-large-latest'
+  | 'devstral-latest'
+  // Pinned versions (2025-2026)
+  | 'mistral-large-2512'       // Mistral Large 3 (Dec 2025)
+  | 'mistral-medium-2508'      // Mistral Medium 3.1 (Aug 2025)
+  | 'mistral-medium-2505'      // Mistral Medium 3 (May 2025)
+  | 'magistral-medium-2509'    // Magistral Medium 1.2 (Sep 2025, reasoning)
+  | 'magistral-medium-2507'    // Magistral Medium 1.1
+  | 'magistral-medium-2506'    // Magistral Medium 1.0
+  | 'magistral-small-2509'     // Magistral Small 1.2
+  | 'codestral-2508'           // Codestral (Jul 2025, 256K context)
+  | 'codestral-2501'
+  | 'devstral-medium-2507'     // Devstral (coding agents)
+  | 'ministral-3b-2512'
+  | 'ministral-8b-2512'
+  | 'ministral-14b-2512'
+  | 'ministral-3b-2410'
+  | 'ministral-8b-2410'
+  | 'open-mistral-nemo';
 
 export type MistralEmbeddingModel = 'mistral-embed';
 
+export type MistralOCRModel = 'mistral-ocr-2512' | 'mistral-ocr-2505';
+
+export type MistralAudioModel = 'voxtral-mini-2602' | 'voxtral-mini-transcribe-realtime-2602' | 'voxtral-mini-2507';
+
 export const MISTRAL_MODELS: MistralModel[] = [
+  // Latest aliases
   'mistral-large-latest',
+  'mistral-medium-latest',
   'mistral-small-latest',
   'codestral-latest',
+  'magistral-medium-latest',
   'ministral-8b-latest',
   'ministral-3b-latest',
-  'open-mistral-nemo',
   'pixtral-large-latest',
+  'devstral-latest',
+  // Pinned versions
+  'mistral-large-2512',
+  'mistral-medium-2508',
+  'magistral-medium-2509',
+  'codestral-2508',
+  'devstral-medium-2507',
+  'ministral-14b-2512',
+  'open-mistral-nemo',
 ];
 
 // Chat Completions
@@ -156,7 +191,7 @@ export interface EmbeddingOptions {
   model?: MistralEmbeddingModel | string;
 }
 
-export const DEFAULT_CHAT_MODEL: MistralModel = 'mistral-small-latest';
+export const DEFAULT_CHAT_MODEL: MistralModel = 'mistral-medium-latest';
 export const DEFAULT_EMBEDDING_MODEL: MistralEmbeddingModel = 'mistral-embed';
 
 // Common types

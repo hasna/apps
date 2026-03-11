@@ -47,6 +47,29 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2026)
+
+| Model | Description |
+|-------|-------------|
+| `gpt-5.4` | Latest GPT-5, most capable |
+| `gpt-5.2` / `gpt-5.1` | GPT-5 variants |
+| `gpt-4.1` | High-capability, cost-effective |
+| `gpt-4.1-mini` | Fast and cheap — **recommended default** |
+| `gpt-4o` | Still supported in API (retired from ChatGPT Feb 2026) |
+| `o4-mini` | Reasoning model, fast |
+| `o3` | Advanced reasoning |
+| `gpt-image-1` | Native image generation (replaces DALL-E 3 for new projects) |
+
+Default: `gpt-4.1-mini`
+
+## Responses API (2025+)
+
+For agentic use cases, prefer the **Responses API** over Chat Completions:
+- Built-in tools: file search, code interpreter, image generation, MCP support
+- Stateful conversations
+- Endpoint: `POST /v1/responses`
+- Use Chat Completions for simple text generation; Responses API for agents
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

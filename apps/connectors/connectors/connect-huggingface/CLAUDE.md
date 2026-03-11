@@ -47,6 +47,26 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Serverless Inference API — Overhauled (2026)
+The Serverless Inference API is being completely overhauled. Key changes:
+
+New router endpoint pattern:
+```
+https://router.huggingface.co/hf-inference/models/{model}/v1/chat/completions
+```
+
+For chat completions (OpenAI-compatible):
+```bash
+curl -X POST https://router.huggingface.co/hf-inference/models/meta-llama/Llama-3.1-8B-Instruct/v1/chat/completions \
+  -H "Authorization: Bearer $HF_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "meta-llama/Llama-3.1-8B-Instruct", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+Note: Error responses may return HTML 503 during migration period — handle non-JSON responses gracefully.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

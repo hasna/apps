@@ -56,6 +56,18 @@ connect-anthropic -p personal <command>
 connect-anthropic profile list
 ```
 
+## Models (2026)
+
+| Model ID | Context | Description |
+|----------|---------|-------------|
+| `claude-opus-4-6` | 200K (1M beta) | Most intelligent, adaptive thinking |
+| `claude-sonnet-4-6` | 200K (1M beta) | Best speed/intelligence balance |
+| `claude-opus-4-20250514` | 200K | Claude 4 Opus |
+| `claude-sonnet-4-20250514` | 200K | Claude 4 Sonnet |
+| `claude-3-5-haiku-20241022` | 200K | Fast, cost-effective |
+
+Default: `claude-sonnet-4-6`
+
 ## Library Usage
 
 ```typescript
@@ -63,8 +75,15 @@ import { Anthropic } from '@hasna/connect-anthropic';
 
 const client = new Anthropic({ apiKey: 'YOUR_API_KEY' });
 
-// Use the client
-// See CLAUDE.md for detailed API documentation
+// Basic chat
+const response = await client.chat('Explain quantum computing');
+
+// With adaptive thinking (claude-opus-4-6 / claude-sonnet-4-6)
+const response = await client.chat('Solve this hard problem', {
+  model: 'claude-opus-4-6',
+  thinking: { type: 'adaptive' },
+  maxTokens: 16000,
+});
 ```
 
 ## Environment Variables
@@ -103,4 +122,4 @@ bun run typecheck
 
 ## License
 
-MIT
+Apache-2.0

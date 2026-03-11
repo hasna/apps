@@ -47,6 +47,13 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Status (2026) — Important
+
+No official public API. The official API is only available to Enterprise subscribers.
+- Official API: `https://api.midjourney.com/v2` with Bearer token (Enterprise only)
+- Current model: **v8** (2026) — text rendering, video gen (10s/60fps), 3D export, `--cref`
+- Unofficial third-party wrappers (Apiframe, TTAPI) available but may violate ToS
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

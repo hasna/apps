@@ -47,6 +47,26 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2026)
+
+| Model | Description |
+|-------|-------------|
+| `mistral-large-latest` | Large 3 (Dec 2025), top-tier |
+| `mistral-medium-latest` | Medium 3.1 (Aug 2025), multimodal — **recommended default** |
+| `magistral-medium-latest` | Magistral 1.2 (Sep 2025), reasoning + vision, 40K ctx |
+| `codestral-latest` | Codestral 2508, code specialist, 256K context |
+| `devstral-latest` | Devstral Medium, coding agents, multi-file editing |
+| `ministral-8b-latest` | Edge model, fast and cheap |
+| `ministral-3b-latest` | Fastest edge model |
+
+New capabilities (2025-2026):
+- **OCR / Document AI**: `mistral-ocr-2512` via `POST /v1/ocr`
+- **Audio transcription**: `voxtral-mini-2602` via `POST /v1/audio/transcriptions` (with diarize, context biasing)
+- **Reasoning**: Magistral series with extended thinking
+- **Coding agents**: Devstral for multi-file codebase exploration
+
+Default: `mistral-medium-latest`
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

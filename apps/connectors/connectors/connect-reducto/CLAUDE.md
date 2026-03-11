@@ -47,6 +47,22 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### New Endpoints
+- **`POST /edit`** — Write-back document editing. Fill PDF forms and modify DOCX files using natural language instructions. Supports vision-based field detection for PDFs without native form fields.
+- **Pipeline IDs** — Run Studio pipelines from code using stable pipeline identifiers. Tracks latest deployed config.
+
+### Edit Endpoint (2026)
+Input: `document_url`, `edit_instructions`, `edit_options` (provider preference: OpenAI/Anthropic/Google, highlight color, overflow behavior), optional `form_schema`.
+Output: `document_url` + metadata of changes applied.
+
+### Enterprise Features
+- HIPAA/SOC 2 compliance
+- On-prem/air-gapped deployment
+- Zero data retention option
+- BAA support for healthcare
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

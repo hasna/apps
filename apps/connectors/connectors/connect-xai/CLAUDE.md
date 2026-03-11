@@ -47,6 +47,21 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2026)
+
+| Model | Description |
+|-------|-------------|
+| `grok-4-0709` | Current flagship, 131K context — **recommended default** |
+| `grok-4` / `grok-4-fast` | Grok 4 variants |
+| `grok-4-1-fast-reasoning` | Grok 4.1 with reasoning |
+| `grok-4-1-fast-non-reasoning` | Grok 4.1 fast, no reasoning |
+| `grok-3` / `grok-3-mini` | Grok 3 series |
+| `grok-2-vision` | Vision tasks |
+| `grok-2-image` | Image generation |
+
+Base URL: `https://api.x.ai/v1` (OpenAI-compatible)
+Default: `grok-4-0709`
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

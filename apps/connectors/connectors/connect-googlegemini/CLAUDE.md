@@ -47,6 +47,24 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2026)
+
+| Model | Description |
+|-------|-------------|
+| `gemini-3.1-pro-preview` | Latest (Feb 2026), #1 on 13/16 benchmarks, 1M ctx — **use for complex tasks** |
+| `gemini-3.1-pro-preview-customtools` | Agent workflows with custom tools (bash, code, multi-step) |
+| `gemini-3.1-flash-lite` | Fast, budget-friendly (preview) |
+| `gemini-3-pro-preview` | Gemini 3 Pro |
+| `gemini-3-flash-preview` | Frontier performance at fraction of cost |
+| `gemini-2.5-pro` | GA, advanced reasoning (discontinues Jun 17 2026) |
+| `gemini-2.5-flash` | Best price-performance, GA |
+| `gemini-2.5-flash-lite` | Fastest, most budget-friendly |
+| `gemini-2.5-flash-live-preview` | Real-time audio/video Live API |
+
+For image gen (Nano Banana): `gemini-2.5-flash-preview-image-generation`
+For video gen (Veo): `veo-3.1-generate-preview`
+For TTS: `gemini-2.5-flash-preview-tts`, `gemini-2.5-pro-preview-tts`
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

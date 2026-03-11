@@ -47,6 +47,28 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2026)
+
+| Model ID | Description |
+|----------|-------------|
+| `claude-opus-4-6` | Most intelligent (default for complex tasks), 200K ctx, 128K output |
+| `claude-sonnet-4-6` | Best balance — **use this as default** |
+| `claude-opus-4-20250514` | Claude 4 Opus (2025) |
+| `claude-sonnet-4-20250514` | Claude 4 Sonnet (2025) |
+| `claude-3-5-haiku-20241022` | Fast, cheap |
+
+Default: `claude-sonnet-4-6`
+
+## Adaptive Thinking
+
+On `claude-opus-4-6` and `claude-sonnet-4-6`, use:
+```typescript
+thinking: { type: 'adaptive' }           // Claude decides when to think
+thinking: { type: 'adaptive', effort: 'low' }   // less thinking
+thinking: { type: 'adaptive', effort: 'high' }  // most thinking (default)
+```
+Deprecated on 4.6: `thinking: { type: 'enabled', budget_tokens: N }`
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

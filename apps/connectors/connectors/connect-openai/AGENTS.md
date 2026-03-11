@@ -6,6 +6,21 @@ This file provides guidance to AI coding agents when working with this repositor
 
 connect-openai is a TypeScript CLI and library for OpenAI's API. It provides chat completions, embeddings, and image generation with multi-profile support.
 
+## Models (2026)
+
+| Model | Description |
+|-------|-------------|
+| `gpt-5.4` | Latest, most capable |
+| `gpt-4.1-mini` | Fast, cheap — **use as default** |
+| `gpt-4.1` | High capability |
+| `o3` | Advanced reasoning |
+| `o4-mini` | Fast reasoning |
+| `gpt-image-1` | Image generation (preferred over DALL-E 3) |
+
+Default: `gpt-4.1-mini`
+
+Note: GPT-4o, GPT-4.1, o4-mini retired from **ChatGPT** Feb 2026 — still available in API.
+
 ## Build & Run Commands
 
 ```bash

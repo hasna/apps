@@ -47,6 +47,20 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Avatar IV Endpoint (Jan 2026)
+```
+POST /v2/video/av4/generate
+```
+Photorealistic full-body avatar videos. Speed/quality mode selection.
+
+### Template API Variables (Aug 2025)
+AI Studio templates now support API creation with variable customization: avatars, text, elements, scene scripts.
+
+### Digital Twin — Avatar IV (Aug 2025)
+Full-body digital twins with gestures and emotion.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

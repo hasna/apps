@@ -14,19 +14,35 @@ export interface XAIConfig {
 // ============================================
 
 export type XAIModel =
+  // Grok 4 series (2025-2026, latest)
+  | 'grok-4-0709'       // current flagship
+  | 'grok-4'
+  | 'grok-4-fast'
+  // Grok 4.1 (reasoning variants)
+  | 'grok-4-1-fast-reasoning'
+  | 'grok-4-1-fast-non-reasoning'
+  // Grok 3 series
   | 'grok-3'
   | 'grok-3-fast'
-  | 'grok-2'
-  | 'grok-2-vision';
+  | 'grok-3-mini'
+  // Grok 2 (legacy)
+  | 'grok-2-vision'
+  | 'grok-2-image';
 
 export const XAI_MODELS: XAIModel[] = [
+  'grok-4-0709',
+  'grok-4',
+  'grok-4-fast',
+  'grok-4-1-fast-reasoning',
+  'grok-4-1-fast-non-reasoning',
   'grok-3',
   'grok-3-fast',
-  'grok-2',
+  'grok-3-mini',
   'grok-2-vision',
+  'grok-2-image',
 ];
 
-export const DEFAULT_CHAT_MODEL: XAIModel = 'grok-2';
+export const DEFAULT_CHAT_MODEL: XAIModel = 'grok-4-0709';
 
 // ============================================
 // Chat Completions

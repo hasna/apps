@@ -6,39 +6,61 @@ export interface OpenAIConfig {
   organization?: string;
 }
 
-// Models
+// Models (2026)
 export type OpenAIModel =
+  // GPT-5 series (2025-2026, latest)
+  | 'gpt-5.4'
+  | 'gpt-5.2'
+  | 'gpt-5.1'
+  | 'gpt-5'
+  // GPT-4.1 series (2025)
+  | 'gpt-4.1'
+  | 'gpt-4.1-mini'
+  // GPT-4o (still supported in API)
   | 'gpt-4o'
   | 'gpt-4o-mini'
+  // o-series reasoning models
+  | 'o4-mini'
+  | 'o3'
+  | 'o3-mini'
+  | 'o1'
+  // Legacy
   | 'gpt-4-turbo'
   | 'gpt-4'
-  | 'gpt-3.5-turbo'
-  | 'o1'
-  | 'o1-mini'
-  | 'o1-preview'
-  | 'o3-mini';
+  | 'gpt-3.5-turbo';
 
 export type EmbeddingModel =
   | 'text-embedding-3-small'
   | 'text-embedding-3-large'
   | 'text-embedding-ada-002';
 
-export type ImageModel = 'dall-e-3' | 'dall-e-2';
+export type ImageModel = 'gpt-image-1' | 'dall-e-3' | 'dall-e-2';
 
-export type TTSModel = 'tts-1' | 'tts-1-hd';
+export type TTSModel = 'tts-1' | 'tts-1-hd' | 'gpt-4o-mini-tts';
 
-export type STTModel = 'whisper-1';
+export type STTModel = 'whisper-1' | 'gpt-4o-transcribe';
 
 export const OPENAI_MODELS: OpenAIModel[] = [
+  // GPT-5 series
+  'gpt-5.4',
+  'gpt-5.2',
+  'gpt-5.1',
+  'gpt-5',
+  // GPT-4.1
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  // GPT-4o
   'gpt-4o',
   'gpt-4o-mini',
+  // o-series
+  'o4-mini',
+  'o3',
+  'o3-mini',
+  'o1',
+  // Legacy
   'gpt-4-turbo',
   'gpt-4',
   'gpt-3.5-turbo',
-  'o1',
-  'o1-mini',
-  'o1-preview',
-  'o3-mini',
 ];
 
 // Chat Completions
@@ -213,7 +235,7 @@ export interface ImageOptions {
   n?: number;
 }
 
-export const DEFAULT_CHAT_MODEL: OpenAIModel = 'gpt-4o-mini';
+export const DEFAULT_CHAT_MODEL: OpenAIModel = 'gpt-4.1-mini';
 export const DEFAULT_EMBEDDING_MODEL: EmbeddingModel = 'text-embedding-3-small';
 export const DEFAULT_IMAGE_MODEL: ImageModel = 'dall-e-3';
 

@@ -47,6 +47,21 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API (Full Platform, Feb 2026)
+
+Full Hedra API launched Feb 2026. All models available programmatically.
+
+New API endpoints (unified):
+- `GET /models` — list models
+- `POST /assets/generate` — generate image/video/avatar
+- `GET /assets/{id}` — check status
+- `GET /credits` — credit balance
+
+Legacy Character-2 API: `POST /v1/characters` (still works)
+Auth: `X-API-Key` header
+
+Capabilities: image generation, video generation, avatar generation, Live Avatar (real-time).
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

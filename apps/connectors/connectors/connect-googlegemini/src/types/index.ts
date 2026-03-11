@@ -2,19 +2,26 @@
 
 // ============ Models ============
 export type GeminiModel =
-  // Text Generation Models
+  // Gemini 3.1 (Feb 2026, latest)
+  | 'gemini-3.1-pro-preview'            // Most advanced, tops 13/16 benchmarks
+  | 'gemini-3.1-pro-preview-customtools' // Agent/tool-use optimized variant
+  | 'gemini-3.1-flash-lite'             // Fast, cost-efficient (preview)
+  // Gemini 3 (2025-2026)
   | 'gemini-3-pro-preview'
   | 'gemini-3-flash-preview'
+  // Gemini 2.5 (GA)
   | 'gemini-2.5-pro'
   | 'gemini-2.5-flash'
   | 'gemini-2.5-flash-lite'
-  // Image Generation Models (Nano Banana)
+  // Image Generation (Nano Banana)
   | 'gemini-2.5-flash-preview-image-generation'
   | 'gemini-3-pro-image-preview'
   // TTS Models
   | 'gemini-2.5-flash-preview-tts'
   | 'gemini-2.5-pro-preview-tts'
-  // Embedding Model
+  // Live API (real-time audio/video)
+  | 'gemini-2.5-flash-live-preview'
+  // Embedding
   | 'gemini-embedding-001'
   // Legacy
   | 'gemini-2.0-flash'

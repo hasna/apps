@@ -47,6 +47,19 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2025-2026)
+
+| Model | Endpoint | Description |
+|-------|----------|-------------|
+| `sd3.5-large` | `/v2beta/stable-image/generate/sd3` | Highest quality |
+| `sd3.5-large-turbo` | `/v2beta/stable-image/generate/sd3` | Fast SD 3.5 |
+| `sd3.5-medium` | `/v2beta/stable-image/generate/sd3` | Balanced, MMDiT-X arch |
+| `stable-image-ultra` | `/v2beta/stable-image/generate/ultra` | Ultra quality |
+| `stable-image-core` | `/v2beta/stable-image/generate/core` | Fast and affordable |
+
+SD 3.5 Medium: Keep prompts under 256 T5 tokens. Use Skip Layer Guidance for better anatomy.
+License: Community License free for <$1M annual revenue; Enterprise required above.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

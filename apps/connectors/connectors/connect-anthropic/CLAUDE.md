@@ -47,6 +47,35 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Models (2026)
+
+| Model ID | Description |
+|----------|-------------|
+| `claude-opus-4-6` | Most intelligent, 200K context (1M beta), 128K max output, adaptive thinking |
+| `claude-sonnet-4-6` | Best speed/intelligence balance, 200K context (1M beta), 64K max output |
+| `claude-opus-4-20250514` | Claude 4 Opus (2025) |
+| `claude-sonnet-4-20250514` | Claude 4 Sonnet (2025) |
+| `claude-3-5-haiku-20241022` | Fast and cost-effective |
+| `claude-3-5-sonnet-20241022` | Claude 3.5 Sonnet |
+
+Default model: `claude-sonnet-4-6`
+
+## Adaptive Thinking (claude-opus-4-6 / claude-sonnet-4-6)
+
+Use adaptive thinking to let Claude decide when and how much to think:
+
+```typescript
+const response = await client.messages.create({
+  model: 'claude-opus-4-6',
+  max_tokens: 16000,
+  thinking: { type: 'adaptive' },           // default effort: high
+  thinking: { type: 'adaptive', effort: 'low' },  // less thinking for simple problems
+  messages: [{ role: 'user', content: '...' }],
+});
+```
+
+Note: `thinking: {type: "enabled", budget_tokens: N}` is deprecated on 4.6 models. Use adaptive thinking instead.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:
