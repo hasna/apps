@@ -60,7 +60,7 @@ function AppInner() {
             >
               <img src="/logo.jpg" alt="Hasna" className="h-7 w-auto rounded" />
               <h1 className="text-base font-semibold">
-                Open <span className="font-normal text-muted-foreground">Economy</span>
+                Economy
               </h1>
             </button>
             <NavigationMenu>
