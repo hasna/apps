@@ -21,6 +21,11 @@ export type {
   CreateRunInput,
   ScenarioFilter,
   RunFilter,
+  ScheduleRow,
+  Schedule,
+  CreateScheduleInput,
+  UpdateScheduleInput,
+  ScheduleFilter,
   AuthConfig,
   BrowserConfig,
   ScreenshotConfig,
@@ -35,6 +40,7 @@ export {
   runFromRow,
   resultFromRow,
   screenshotFromRow,
+  scheduleFromRow,
   ScenarioNotFoundError,
   RunNotFoundError,
   ResultNotFoundError,
@@ -44,6 +50,7 @@ export {
   TodosConnectionError,
   ProjectNotFoundError,
   AgentNotFoundError,
+  ScheduleNotFoundError,
 } from "./types/index.js";
 
 // ─── Database ────────────────────────────────────────────────────────────────
@@ -104,6 +111,16 @@ export {
   listAgents,
 } from "./db/agents.js";
 
+export {
+  createSchedule,
+  getSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+  getEnabledSchedules,
+  updateLastRun,
+} from "./db/schedules.js";
+
 // ─── Library ─────────────────────────────────────────────────────────────────
 export {
   loadConfig,
@@ -160,3 +177,12 @@ export {
   importFromTodos,
   markTodoDone,
 } from "./lib/todos-connector.js";
+
+export {
+  Scheduler,
+  parseCron,
+  parseCronField,
+  shouldRunAt,
+  getNextRunTime,
+} from "./lib/scheduler.js";
+export type { SchedulerEvent } from "./lib/scheduler.js";

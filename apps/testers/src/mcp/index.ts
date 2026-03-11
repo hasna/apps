@@ -13,6 +13,8 @@ import { registerAgent, listAgents } from "../db/agents.js";
 import { runByFilter } from "../lib/runner.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
+import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
+import { getNextRunTime } from "../lib/scheduler.js";
 import { getDatabase } from "../db/database.js";
 
 const server = new McpServer({
@@ -437,6 +439,97 @@ server.tool(
     } catch (error) {
       const e = error instanceof Error ? error : new Error(String(error));
       return { content: [{ type: "text" as const, text: `${e.name}: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+// ─── Schedule Tools ──────────────────────────────────────────────────────────
+
+server.tool(
+  "create_schedule",
+  {
+    name: z.string().describe("Schedule name"),
+    cronExpression: z.string().describe("Cron expression (5-field)"),
+    url: z.string().describe("Target URL to test"),
+    tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
+    priority: z.string().optional().describe("Filter scenarios by priority"),
+    model: z.string().optional().describe("AI model"),
+    headed: z.boolean().optional().describe("Run headed"),
+    parallel: z.number().optional().describe("Parallel count"),
+    projectId: z.string().optional().describe("Project ID"),
+  },
+  async (params) => {
+    try {
+      const schedule = createSchedule({
+        name: params.name,
+        cronExpression: params.cronExpression,
+        url: params.url,
+        scenarioFilter: { tags: params.tags, priority: params.priority as "low" | "medium" | "high" | "critical" | undefined },
+        model: params.model,
+        headed: params.headed,
+        parallel: params.parallel,
+        projectId: params.projectId,
+      });
+      const nextRun = getNextRunTime(schedule.cronExpression);
+      return { content: [{ type: "text" as const, text: `Schedule created: ${schedule.id.slice(0, 8)} | ${schedule.name} | cron: ${schedule.cronExpression} | next: ${nextRun.toISOString()}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "list_schedules",
+  {
+    projectId: z.string().optional(),
+    enabled: z.boolean().optional(),
+    limit: z.number().optional(),
+  },
+  async (params) => {
+    const schedules = listSchedules({ projectId: params.projectId, enabled: params.enabled, limit: params.limit });
+    if (schedules.length === 0) return { content: [{ type: "text" as const, text: "No schedules found." }] };
+    const lines = schedules.map((s) =>
+      `${s.id.slice(0, 8)} | ${s.name} | ${s.cronExpression} | ${s.url} | ${s.enabled ? "enabled" : "disabled"} | next: ${s.nextRunAt ?? "N/A"}`
+    );
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+  },
+);
+
+server.tool(
+  "enable_schedule",
+  { id: z.string().describe("Schedule ID") },
+  async (params) => {
+    try {
+      const schedule = updateSchedule(params.id, { enabled: true });
+      return { content: [{ type: "text" as const, text: `Schedule ${schedule.name} enabled.` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "disable_schedule",
+  { id: z.string().describe("Schedule ID") },
+  async (params) => {
+    try {
+      const schedule = updateSchedule(params.id, { enabled: false });
+      return { content: [{ type: "text" as const, text: `Schedule ${schedule.name} disabled.` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  "delete_schedule",
+  { id: z.string().describe("Schedule ID") },
+  async (params) => {
+    try {
+      const deleted = deleteSchedule(params.id);
+      return { content: [{ type: "text" as const, text: deleted ? "Schedule deleted." : "Schedule not found." }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
   },
 );

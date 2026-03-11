@@ -10,6 +10,8 @@ import { runByFilter } from "../lib/runner.js";
 import { loadConfig } from "../lib/config.js";
 import { VersionConflictError } from "../types/index.js";
 import { getDatabase } from "../db/database.js";
+import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
+import { getNextRunTime } from "../lib/scheduler.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -245,6 +247,59 @@ async function handleRequest(req: Request): Promise<Response> {
         "Access-Control-Allow-Origin": "*",
       },
     });
+  }
+
+  // ── Schedules ──────────────────────────────────────────────────────────
+
+  // GET /api/schedules
+  if (pathname === "/api/schedules" && method === "GET") {
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const enabled = searchParams.get("enabled");
+    const limit = searchParams.get("limit");
+    const schedules = listSchedules({
+      projectId,
+      enabled: enabled !== null ? enabled === "true" : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+    return jsonResponse(schedules);
+  }
+
+  // POST /api/schedules
+  if (pathname === "/api/schedules" && method === "POST") {
+    try {
+      const body = await req.json();
+      const schedule = createSchedule(body);
+      const nextRun = getNextRunTime(schedule.cronExpression);
+      return jsonResponse({ ...schedule, nextRunAt: nextRun.toISOString() }, 201);
+    } catch (e) {
+      return errorResponse(e instanceof Error ? e.message : String(e), 400);
+    }
+  }
+
+  // GET /api/schedules/:id
+  const scheduleMatch = pathname.match(/^\/api\/schedules\/([^/]+)$/);
+  if (scheduleMatch && method === "GET") {
+    const schedule = getSchedule(scheduleMatch[1]!);
+    if (!schedule) return errorResponse("Schedule not found", 404);
+    return jsonResponse(schedule);
+  }
+
+  // PUT /api/schedules/:id
+  if (scheduleMatch && method === "PUT") {
+    try {
+      const body = await req.json();
+      const schedule = updateSchedule(scheduleMatch[1]!, body);
+      return jsonResponse(schedule);
+    } catch (e) {
+      return errorResponse(e instanceof Error ? e.message : String(e), 400);
+    }
+  }
+
+  // DELETE /api/schedules/:id
+  if (scheduleMatch && method === "DELETE") {
+    const deleted = deleteSchedule(scheduleMatch[1]!);
+    if (!deleted) return errorResponse("Schedule not found", 404);
+    return jsonResponse({ deleted: true });
   }
 
   // ── Static file serving (dashboard SPA) ───────────────────────────────

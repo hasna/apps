@@ -185,6 +185,133 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "scroll",
+    description:
+      "Scroll the page up or down by a given amount of pixels.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        direction: {
+          type: "string",
+          enum: ["up", "down"],
+          description: "Direction to scroll.",
+        },
+        amount: {
+          type: "number",
+          description:
+            "Number of pixels to scroll (default: 500).",
+        },
+      },
+      required: ["direction"],
+    },
+  },
+  {
+    name: "get_page_html",
+    description:
+      "Get simplified HTML of the page body content, truncated to 8000 characters.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_elements",
+    description:
+      "List elements matching a CSS selector with their text, tag name, and key attributes (max 20 results).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector to match elements.",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "wait_for_navigation",
+    description:
+      "Wait for page navigation/load to complete (network idle).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        timeout: {
+          type: "number",
+          description:
+            "Maximum time to wait in milliseconds (default: 10000).",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_page_title",
+    description: "Get the document title of the current page.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "count_elements",
+    description: "Count the number of elements matching a CSS selector.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector to count matching elements.",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "hover",
+    description: "Hover over an element matching the given CSS selector.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector of the element to hover over.",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "check",
+    description: "Check a checkbox matching the given CSS selector.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector of the checkbox to check.",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "uncheck",
+    description: "Uncheck a checkbox matching the given CSS selector.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector of the checkbox to uncheck.",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
     name: "report_result",
     description:
       "Report the final test result. Call this when you have completed testing the scenario. This MUST be the last tool you call.",
@@ -361,6 +488,121 @@ export async function executeTool(
         }
       }
 
+      case "scroll": {
+        const direction = toolInput.direction as string;
+        const amount =
+          typeof toolInput.amount === "number" ? toolInput.amount : 500;
+        const scrollY = direction === "down" ? amount : -amount;
+        await page.evaluate((y: number) => window.scrollBy(0, y), scrollY);
+        const screenshot = await screenshotter.capture(page, {
+          runId: context.runId,
+          scenarioSlug: context.scenarioSlug,
+          stepNumber: context.stepNumber,
+          action: "scroll",
+        });
+        return {
+          result: `Scrolled ${direction} by ${amount}px`,
+          screenshot,
+        };
+      }
+
+      case "get_page_html": {
+        const html = await page.evaluate(() => document.body.innerHTML);
+        const truncated = html.length > 8000 ? html.slice(0, 8000) + "..." : html;
+        return {
+          result: truncated,
+        };
+      }
+
+      case "get_elements": {
+        const selector = toolInput.selector as string;
+        const allElements = await page.locator(selector).all();
+        const elements = allElements.slice(0, 20);
+        const results: string[] = [];
+        for (let i = 0; i < elements.length; i++) {
+          const el = elements[i]!;
+          const tagName = await el.evaluate((e: Element) => e.tagName.toLowerCase());
+          const textContent = (await el.textContent()) ?? "";
+          const trimmedText = textContent.trim().slice(0, 100);
+          const id = await el.getAttribute("id");
+          const className = await el.getAttribute("class");
+          const href = await el.getAttribute("href");
+          const type = await el.getAttribute("type");
+          const placeholder = await el.getAttribute("placeholder");
+          const ariaLabel = await el.getAttribute("aria-label");
+          const attrs: string[] = [];
+          if (id) attrs.push(`id="${id}"`);
+          if (className) attrs.push(`class="${className}"`);
+          if (href) attrs.push(`href="${href}"`);
+          if (type) attrs.push(`type="${type}"`);
+          if (placeholder) attrs.push(`placeholder="${placeholder}"`);
+          if (ariaLabel) attrs.push(`aria-label="${ariaLabel}"`);
+          results.push(
+            `[${i}] <${tagName}${attrs.length ? " " + attrs.join(" ") : ""}> ${trimmedText}`
+          );
+        }
+        return {
+          result: results.length > 0
+            ? results.join("\n")
+            : `No elements found matching "${selector}"`,
+        };
+      }
+
+      case "wait_for_navigation": {
+        const timeout =
+          typeof toolInput.timeout === "number" ? toolInput.timeout : 10_000;
+        await page.waitForLoadState("networkidle", { timeout });
+        return {
+          result: "Navigation/load completed",
+        };
+      }
+
+      case "get_page_title": {
+        const title = await page.title();
+        return {
+          result: title || "(no title)",
+        };
+      }
+
+      case "count_elements": {
+        const selector = toolInput.selector as string;
+        const count = await page.locator(selector).count();
+        return {
+          result: `${count} element(s) matching "${selector}"`,
+        };
+      }
+
+      case "hover": {
+        const selector = toolInput.selector as string;
+        await page.hover(selector);
+        const screenshot = await screenshotter.capture(page, {
+          runId: context.runId,
+          scenarioSlug: context.scenarioSlug,
+          stepNumber: context.stepNumber,
+          action: "hover",
+        });
+        return {
+          result: `Hovered over: ${selector}`,
+          screenshot,
+        };
+      }
+
+      case "check": {
+        const selector = toolInput.selector as string;
+        await page.check(selector);
+        return {
+          result: `Checked checkbox: ${selector}`,
+        };
+      }
+
+      case "uncheck": {
+        const selector = toolInput.selector as string;
+        await page.uncheck(selector);
+        return {
+          result: `Unchecked checkbox: ${selector}`,
+        };
+      }
+
       case "report_result": {
         const status = toolInput.status as string;
         const reasoning = toolInput.reasoning as string;
@@ -424,13 +666,25 @@ export async function runAgentLoop(
   } = options;
 
   const systemPrompt = [
-    "You are a QA testing agent. Test the following scenario by interacting with the browser.",
-    "Use the provided tools to navigate, click, fill forms, and verify results.",
-    "When done, call report_result with your findings.",
-    "Be methodical: navigate to the target page first, then follow the test steps.",
-    "If a step fails, try reasonable alternatives before reporting failure.",
-    "Always report a final result — never leave a test incomplete.",
-  ].join(" ");
+    "You are an expert QA testing agent. Your job is to thoroughly test web application scenarios.",
+    "You have browser tools to navigate, interact with, and inspect web pages.",
+    "",
+    "Strategy:",
+    "1. First navigate to the target page and take a screenshot to understand the layout",
+    "2. If you can't find an element, use get_elements or get_page_html to discover selectors",
+    "3. Use scroll to discover content below the fold",
+    "4. Use wait_for or wait_for_navigation after actions that trigger page loads",
+    "5. Take screenshots after every meaningful state change",
+    "6. Use assert_text and assert_visible to verify expected outcomes",
+    "7. When done testing, call report_result with detailed pass/fail reasoning",
+    "",
+    "Tips:",
+    "- Try multiple selector strategies: by text, by role, by class, by id",
+    "- If a click triggers navigation, use wait_for_navigation after",
+    "- For forms, fill all fields before submitting",
+    "- Check for error messages after form submissions",
+    "- Verify both positive and negative states",
+  ].join("\n");
 
   // Build the user message from the scenario
   const userParts: string[] = [

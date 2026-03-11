@@ -96,6 +96,25 @@ export interface ScreenshotRow {
   timestamp: string;
 }
 
+export interface ScheduleRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  cron_expression: string;
+  url: string;
+  scenario_filter: string; // JSON
+  model: string | null;
+  headed: number;
+  parallel: number;
+  timeout_ms: number | null;
+  enabled: number;
+  last_run_id: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Application Types (camelCase) ───────────────────────────────────────────
 
 export interface Project {
@@ -181,6 +200,25 @@ export interface Screenshot {
   timestamp: string;
 }
 
+export interface Schedule {
+  id: string;
+  projectId: string | null;
+  name: string;
+  cronExpression: string;
+  url: string;
+  scenarioFilter: { tags?: string[]; priority?: ScenarioPriority; scenarioIds?: string[] };
+  model: string | null;
+  headed: boolean;
+  parallel: number;
+  timeoutMs: number | null;
+  enabled: boolean;
+  lastRunId: string | null;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Input Types ─────────────────────────────────────────────────────────────
 
 export interface CreateScenarioInput {
@@ -236,6 +274,37 @@ export interface ScenarioFilter {
 export interface RunFilter {
   projectId?: string;
   status?: RunStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateScheduleInput {
+  name: string;
+  cronExpression: string;
+  url: string;
+  scenarioFilter?: { tags?: string[]; priority?: ScenarioPriority; scenarioIds?: string[] };
+  model?: string;
+  headed?: boolean;
+  parallel?: number;
+  timeoutMs?: number;
+  projectId?: string;
+}
+
+export interface UpdateScheduleInput {
+  name?: string;
+  cronExpression?: string;
+  url?: string;
+  scenarioFilter?: { tags?: string[]; priority?: ScenarioPriority; scenarioIds?: string[] };
+  model?: string;
+  headed?: boolean;
+  parallel?: number;
+  timeoutMs?: number;
+  enabled?: boolean;
+}
+
+export interface ScheduleFilter {
+  projectId?: string;
+  enabled?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -371,6 +440,27 @@ export function screenshotFromRow(row: ScreenshotRow): Screenshot {
   };
 }
 
+export function scheduleFromRow(row: ScheduleRow): Schedule {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    cronExpression: row.cron_expression,
+    url: row.url,
+    scenarioFilter: JSON.parse(row.scenario_filter),
+    model: row.model,
+    headed: row.headed === 1,
+    parallel: row.parallel,
+    timeoutMs: row.timeout_ms,
+    enabled: row.enabled === 1,
+    lastRunId: row.last_run_id,
+    lastRunAt: row.last_run_at,
+    nextRunAt: row.next_run_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 // ─── Error Classes ───────────────────────────────────────────────────────────
 
 export class ScenarioNotFoundError extends Error {
@@ -433,5 +523,12 @@ export class AgentNotFoundError extends Error {
   constructor(id: string) {
     super(`Agent not found: ${id}`);
     this.name = "AgentNotFoundError";
+  }
+}
+
+export class ScheduleNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Schedule not found: ${id}`);
+    this.name = "ScheduleNotFoundError";
   }
 }

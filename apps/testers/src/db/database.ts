@@ -135,6 +135,32 @@ const MIGRATIONS: string[] = [
   ALTER TABLE projects ADD COLUMN scenario_prefix TEXT DEFAULT 'TST';
   ALTER TABLE projects ADD COLUMN scenario_counter INTEGER DEFAULT 0;
   `,
+
+  // Migration 4: Schedules table for recurring test jobs
+  `
+  CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    cron_expression TEXT NOT NULL,
+    url TEXT NOT NULL,
+    scenario_filter TEXT NOT NULL DEFAULT '{}',
+    model TEXT,
+    headed INTEGER NOT NULL DEFAULT 0,
+    parallel INTEGER NOT NULL DEFAULT 1,
+    timeout_ms INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    last_run_at TEXT,
+    next_run_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(project_id);
+  CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled);
+  CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -193,6 +219,7 @@ export function resetDatabase(): void {
   const database = getDatabase();
   database.exec("DELETE FROM screenshots");
   database.exec("DELETE FROM results");
+  database.exec("DELETE FROM schedules");
   database.exec("DELETE FROM runs");
   database.exec("DELETE FROM scenarios");
   database.exec("DELETE FROM agents");

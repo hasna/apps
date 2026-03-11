@@ -14,7 +14,10 @@ import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
 
+import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
+import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
 import type { ScenarioPriority } from "../types/index.js";
+import { existsSync, mkdirSync } from "node:fs";
 
 const program = new Command();
 
@@ -22,6 +25,27 @@ program
   .name("testers")
   .version("0.0.1")
   .description("AI-powered browser testing CLI");
+
+// ─── Helper: active project ─────────────────────────────────────────────────
+
+const CONFIG_DIR = join(process.env["HOME"] ?? "~", ".testers");
+const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+
+function getActiveProject(): string | undefined {
+  try {
+    if (existsSync(CONFIG_PATH)) {
+      const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+      return raw.activeProject ?? undefined;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+function resolveProject(optProject?: string): string | undefined {
+  return optProject ?? getActiveProject();
+}
 
 // ─── testers add <name> ─────────────────────────────────────────────────────
 
@@ -36,8 +60,10 @@ program
   .option("--path <path>", "Target path on the URL")
   .option("--auth", "Requires authentication", false)
   .option("--timeout <ms>", "Timeout in milliseconds")
+  .option("--project <id>", "Project ID")
   .action((name: string, opts) => {
     try {
+      const projectId = resolveProject(opts.project);
       const scenario = createScenario({
         name,
         description: opts.description || name,
@@ -48,6 +74,7 @@ program
         targetPath: opts.path,
         requiresAuth: opts.auth,
         timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        projectId,
       });
       console.log(chalk.green(`Created scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
     } catch (error) {
@@ -206,13 +233,15 @@ program
   .option("--project <id>", "Project ID")
   .action(async (url: string, description: string | undefined, opts) => {
     try {
+      const projectId = resolveProject(opts.project);
+
       // If description provided, create an ad-hoc scenario and run it
       if (description) {
         const scenario = createScenario({
           name: description,
           description,
           tags: ["ad-hoc"],
-          projectId: opts.project,
+          projectId,
         });
         const { run, results } = await runByFilter({
           url,
@@ -221,7 +250,7 @@ program
           headed: opts.headed,
           parallel: parseInt(opts.parallel, 10),
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
-          projectId: opts.project,
+          projectId,
         });
 
         if (opts.json || opts.output) {
@@ -242,7 +271,7 @@ program
 
       // If --from-todos, import scenarios first
       if (opts.fromTodos) {
-        const result = importFromTodos({ projectId: opts.project });
+        const result = importFromTodos({ projectId });
         console.log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
       }
 
@@ -256,7 +285,7 @@ program
         headed: opts.headed,
         parallel: parseInt(opts.parallel, 10),
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
-        projectId: opts.project,
+        projectId,
       });
 
       if (opts.json || opts.output) {
@@ -487,6 +516,375 @@ program
       console.log(chalk.blue("Installing Playwright Chromium..."));
       await installBrowser();
       console.log(chalk.green("Browser installed successfully."));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers project ──────────────────────────────────────────────────────
+
+const projectCmd = program.command("project").description("Manage test projects");
+
+projectCmd
+  .command("create <name>")
+  .description("Create a new project")
+  .option("--path <path>", "Project path")
+  .option("-d, --description <text>", "Project description")
+  .option("--prefix <prefix>", "Scenario prefix", "TST")
+  .action((name: string, opts) => {
+    try {
+      const project = createProject({
+        name,
+        path: opts.path,
+        description: opts.description,
+      });
+      console.log(chalk.green(`Created project ${chalk.bold(project.name)} (${project.id})`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+projectCmd
+  .command("list")
+  .description("List all projects")
+  .action(() => {
+    try {
+      const projects = listProjects();
+      if (projects.length === 0) {
+        console.log(chalk.dim("No projects found."));
+        return;
+      }
+      console.log("");
+      console.log(chalk.bold("  Projects"));
+      console.log("");
+      console.log(`  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`);
+      console.log(`  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`);
+      for (const p of projects) {
+        console.log(`  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`);
+      }
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+projectCmd
+  .command("show <id>")
+  .description("Show project details")
+  .action((id: string) => {
+    try {
+      const project = getProject(id);
+      if (!project) {
+        console.error(chalk.red(`Project not found: ${id}`));
+        process.exit(1);
+      }
+      console.log("");
+      console.log(chalk.bold(`  Project: ${project.name}`));
+      console.log(`  ID:          ${project.id}`);
+      console.log(`  Path:        ${project.path ?? chalk.dim("none")}`);
+      console.log(`  Description: ${project.description ?? chalk.dim("none")}`);
+      console.log(`  Created:     ${project.createdAt}`);
+      console.log(`  Updated:     ${project.updatedAt}`);
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+projectCmd
+  .command("use <name>")
+  .description("Set active project (find or create)")
+  .action((name: string) => {
+    try {
+      const project = ensureProject(name, process.cwd());
+      if (!existsSync(CONFIG_DIR)) {
+        mkdirSync(CONFIG_DIR, { recursive: true });
+      }
+      let config: Record<string, unknown> = {};
+      if (existsSync(CONFIG_PATH)) {
+        try {
+          config = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+        } catch {
+          // ignore parse errors, overwrite
+        }
+      }
+      config.activeProject = project.id;
+      writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+      console.log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers schedule ─────────────────────────────────────────────────────
+
+const scheduleCmd = program.command("schedule").description("Manage recurring test schedules");
+
+scheduleCmd
+  .command("create <name>")
+  .description("Create a new schedule")
+  .requiredOption("--cron <expression>", "Cron expression")
+  .requiredOption("--url <url>", "Target URL")
+  .option("-t, --tag <tag>", "Tag filter (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("-p, --priority <level>", "Priority filter")
+  .option("-m, --model <model>", "AI model to use")
+  .option("--parallel <n>", "Parallel browsers", "1")
+  .option("--headed", "Run in headed mode", false)
+  .option("--timeout <ms>", "Timeout in milliseconds")
+  .option("--project <id>", "Project ID")
+  .action((name: string, opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      const schedule = createSchedule({
+        name,
+        cronExpression: opts.cron,
+        url: opts.url,
+        scenarioFilter: {
+          tags: opts.tag.length > 0 ? opts.tag : undefined,
+          priority: opts.priority as ScenarioPriority | undefined,
+        },
+        model: opts.model,
+        headed: opts.headed,
+        parallel: parseInt(opts.parallel, 10),
+        timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        projectId,
+      });
+      console.log(chalk.green(`Created schedule ${chalk.bold(schedule.name)} (${schedule.id})`));
+      if (schedule.nextRunAt) {
+        console.log(chalk.dim(`  Next run at: ${schedule.nextRunAt}`));
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+scheduleCmd
+  .command("list")
+  .description("List schedules")
+  .option("--project <id>", "Filter by project ID")
+  .option("--enabled", "Show only enabled schedules")
+  .action((opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      const schedules = listSchedules({
+        projectId,
+        enabled: opts.enabled ? true : undefined,
+      });
+      if (schedules.length === 0) {
+        console.log(chalk.dim("No schedules found."));
+        return;
+      }
+      console.log("");
+      console.log(chalk.bold("  Schedules"));
+      console.log("");
+      console.log(`  ${"Name".padEnd(20)} ${"Cron".padEnd(18)} ${"URL".padEnd(30)} ${"Enabled".padEnd(9)} ${"Next Run".padEnd(22)} Last Run`);
+      console.log(`  ${"─".repeat(20)} ${"─".repeat(18)} ${"─".repeat(30)} ${"─".repeat(9)} ${"─".repeat(22)} ${"─".repeat(22)}`);
+      for (const s of schedules) {
+        const enabled = s.enabled ? chalk.green("yes") : chalk.red("no");
+        const nextRun = s.nextRunAt ?? chalk.dim("—");
+        const lastRun = s.lastRunAt ?? chalk.dim("—");
+        console.log(`  ${s.name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${s.url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`);
+      }
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+scheduleCmd
+  .command("show <id>")
+  .description("Show schedule details")
+  .action((id: string) => {
+    try {
+      const schedule = getSchedule(id);
+      if (!schedule) {
+        console.error(chalk.red(`Schedule not found: ${id}`));
+        process.exit(1);
+      }
+      console.log("");
+      console.log(chalk.bold(`  Schedule: ${schedule.name}`));
+      console.log(`  ID:          ${schedule.id}`);
+      console.log(`  Cron:        ${schedule.cronExpression}`);
+      console.log(`  URL:         ${schedule.url}`);
+      console.log(`  Enabled:     ${schedule.enabled ? chalk.green("yes") : chalk.red("no")}`);
+      console.log(`  Model:       ${schedule.model ?? chalk.dim("default")}`);
+      console.log(`  Headed:      ${schedule.headed ? "yes" : "no"}`);
+      console.log(`  Parallel:    ${schedule.parallel}`);
+      console.log(`  Timeout:     ${schedule.timeoutMs ? `${schedule.timeoutMs}ms` : chalk.dim("default")}`);
+      console.log(`  Project:     ${schedule.projectId ?? chalk.dim("none")}`);
+      console.log(`  Filter:      ${JSON.stringify(schedule.scenarioFilter)}`);
+      console.log(`  Next run:    ${schedule.nextRunAt ?? chalk.dim("not scheduled")}`);
+      console.log(`  Last run:    ${schedule.lastRunAt ?? chalk.dim("never")}`);
+      console.log(`  Last run ID: ${schedule.lastRunId ?? chalk.dim("none")}`);
+      console.log(`  Created:     ${schedule.createdAt}`);
+      console.log(`  Updated:     ${schedule.updatedAt}`);
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+scheduleCmd
+  .command("enable <id>")
+  .description("Enable a schedule")
+  .action((id: string) => {
+    try {
+      const schedule = updateSchedule(id, { enabled: true });
+      console.log(chalk.green(`Enabled schedule ${chalk.bold(schedule.name)}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+scheduleCmd
+  .command("disable <id>")
+  .description("Disable a schedule")
+  .action((id: string) => {
+    try {
+      const schedule = updateSchedule(id, { enabled: false });
+      console.log(chalk.green(`Disabled schedule ${chalk.bold(schedule.name)}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+scheduleCmd
+  .command("delete <id>")
+  .description("Delete a schedule")
+  .action((id: string) => {
+    try {
+      const deleted = deleteSchedule(id);
+      if (deleted) {
+        console.log(chalk.green(`Deleted schedule: ${id}`));
+      } else {
+        console.error(chalk.red(`Schedule not found: ${id}`));
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+scheduleCmd
+  .command("run <id>")
+  .description("Manually trigger a schedule")
+  .option("--json", "Output results as JSON", false)
+  .action(async (id: string, opts) => {
+    try {
+      const schedule = getSchedule(id);
+      if (!schedule) {
+        console.error(chalk.red(`Schedule not found: ${id}`));
+        process.exit(1);
+        return;
+      }
+
+      console.log(chalk.blue(`Running schedule ${chalk.bold(schedule.name)} against ${schedule.url}...`));
+
+      const { run, results } = await runByFilter({
+        url: schedule.url,
+        tags: schedule.scenarioFilter.tags,
+        priority: schedule.scenarioFilter.priority,
+        scenarioIds: schedule.scenarioFilter.scenarioIds,
+        model: schedule.model ?? undefined,
+        headed: schedule.headed,
+        parallel: schedule.parallel,
+        timeout: schedule.timeoutMs ?? undefined,
+        projectId: schedule.projectId ?? undefined,
+      });
+
+      if (opts.json) {
+        console.log(formatJSON(run, results));
+      } else {
+        console.log(formatTerminal(run, results));
+      }
+
+      process.exit(getExitCode(run));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers daemon ───────────────────────────────────────────────────────
+
+program
+  .command("daemon")
+  .description("Start the scheduler daemon")
+  .option("--interval <seconds>", "Check interval in seconds", "60")
+  .action(async (opts) => {
+    try {
+      const intervalMs = parseInt(opts.interval, 10) * 1000;
+
+      console.log(chalk.blue("Scheduler daemon started. Press Ctrl+C to stop."));
+      console.log(chalk.dim(`  Check interval: ${opts.interval}s`));
+
+      let running = true;
+
+      const checkAndRun = async () => {
+        while (running) {
+          try {
+            const schedules = listSchedules({ enabled: true });
+            const now = new Date().toISOString();
+
+            for (const schedule of schedules) {
+              if (schedule.nextRunAt && schedule.nextRunAt <= now) {
+                console.log(chalk.blue(`[${new Date().toISOString()}] Triggering schedule: ${schedule.name}`));
+                try {
+                  const { run } = await runByFilter({
+                    url: schedule.url,
+                    tags: schedule.scenarioFilter.tags,
+                    priority: schedule.scenarioFilter.priority,
+                    scenarioIds: schedule.scenarioFilter.scenarioIds,
+                    model: schedule.model ?? undefined,
+                    headed: schedule.headed,
+                    parallel: schedule.parallel,
+                    timeout: schedule.timeoutMs ?? undefined,
+                    projectId: schedule.projectId ?? undefined,
+                  });
+
+                  const statusColor = run.status === "passed" ? chalk.green : chalk.red;
+                  console.log(`  ${statusColor(run.status)} — ${run.passed}/${run.total} passed`);
+
+                  // Update schedule with last run info
+                  updateSchedule(schedule.id, {});
+                } catch (err) {
+                  console.error(chalk.red(`  Error running schedule ${schedule.name}: ${err instanceof Error ? err.message : String(err)}`));
+                }
+              }
+            }
+          } catch (err) {
+            console.error(chalk.red(`Daemon error: ${err instanceof Error ? err.message : String(err)}`));
+          }
+
+          // Wait for next check
+          await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        }
+      };
+
+      process.on("SIGINT", () => {
+        console.log(chalk.yellow("\nShutting down scheduler daemon..."));
+        running = false;
+        process.exit(0);
+      });
+
+      process.on("SIGTERM", () => {
+        console.log(chalk.yellow("\nShutting down scheduler daemon..."));
+        running = false;
+        process.exit(0);
+      });
+
+      await checkAndRun();
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
