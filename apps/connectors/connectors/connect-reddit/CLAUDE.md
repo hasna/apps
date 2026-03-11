@@ -47,6 +47,26 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API & Pricing (2026)
+
+### Rate Limits
+- **Authenticated (OAuth)**: 60 requests/minute (10-minute rolling window, per OAuth client)
+- **Unauthenticated**: 10 requests/minute (IP-based)
+- Response headers: `X-Ratelimit-Used`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`
+
+### Pricing Tiers (2023+, still in effect 2026)
+| Tier | Rate | Cost |
+|------|------|------|
+| Free | 100 req/min | Free (non-commercial only) |
+| Premium | 100-1000 req/min | From $12,000/year |
+| Enterprise | Custom | Custom (>1000 req/min) |
+
+Note: Free tier is 60 req/min for OAuth apps, ~100 req/min for elevated access.
+
+### Auth
+OAuth 2.0 (client_credentials for scripts, authorization_code for user apps).
+Required User-Agent format: `platform:app_name:version (by /u/username)`
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

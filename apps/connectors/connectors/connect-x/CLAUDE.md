@@ -47,6 +47,21 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Pricing & Access (2026)
+
+### Pay-as-you-go Model (Feb 2026)
+X moved to **credit-based pay-as-you-go pricing** (Feb 6, 2026), replacing fixed $200/month Basic and $5,000/month Pro plans.
+
+- Purchase credits in advance; balance decreases per API call
+- Unit price varies by endpoint (check Developer Console for current prices)
+- Duplicate protection: same post/user fetched multiple times on same day is not double-charged (with exceptions)
+- Auto-recharge and spending limits available
+- **Public Utility apps** continue to receive free scaled access
+- Legacy free tier users receive a $10 one-time voucher when migrating
+- Existing Basic/Pro subscribers can opt-in to pay-as-you-go or keep their plan
+
+Pricing reference: https://docs.x.com/x-api/getting-started/pricing
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

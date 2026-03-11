@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Snapchat Marketing API (Ads API): `https://adsapi.snapchat.com/v1/`
+Auth: OAuth 2.0 (client credentials flow for server-to-server)
+Key resources: campaigns, ad_squads, ads, creatives, audiences, pixel, stats.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

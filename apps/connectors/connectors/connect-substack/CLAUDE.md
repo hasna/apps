@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Substack does not have a fully public REST API. Available endpoints are unofficial/undocumented.
+Common patterns: `https://{publication}.substack.com/api/v1/` for posts, subscribers, etc.
+Auth: Cookie-based session or `substack-api-key` header for some endpoints.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

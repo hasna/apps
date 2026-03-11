@@ -47,6 +47,34 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2024-2025)
+
+### Quota Changes (Dec 2025)
+Video upload quota cost reduced: **~~1,600 units~~ → ~100 units**. This massively reduces the cost of uploading videos against the 10,000 unit/day default quota.
+
+### mostPopular Chart Change (Jul 2025)
+`video.list` `mostPopular` chart now features videos from Trending Music, Movies, and Gaming charts (was Trending page, which is deprecated).
+
+### Shorts View Count (Mar 2025)
+Views now count when a Short starts playing or replaying — no minimum watch time required.
+
+### New `status.containsSyntheticMedia` (Oct 2024)
+Set this property on `videos.insert`/`videos.update` to flag AI-generated or altered content (required per YouTube policy).
+
+### Quota Overview
+| Operation | Cost (units) |
+|-----------|-------------|
+| Default daily quota | 10,000 |
+| Video upload | ~100 (was ~1,600) |
+| Search list | 100 |
+| Videos list | 1 |
+| Channels list | 1 |
+
+### Three API Components
+- **Data API v3** — metadata, playlists, channels, upload, search
+- **Analytics API** — engagement metrics, demographics
+- **Reporting API** — bulk historical data downloads
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

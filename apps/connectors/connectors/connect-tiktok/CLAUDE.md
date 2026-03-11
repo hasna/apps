@@ -47,6 +47,31 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Products (2026)
+
+| API | Function | Auth |
+|-----|----------|------|
+| Login Kit | User sign-in with TikTok | OAuth 2.0 |
+| Display API | Read-only public content/profile | OAuth 2.0 |
+| Content Publishing API | Upload/publish videos | OAuth 2.0 (video.upload, video.publish scopes) |
+| Research API | Anonymized academic data | Separate research access approval |
+
+### Content Publishing API (2026)
+- Direct Post: video goes live immediately
+- Upload to Inbox: queued as draft for creator review
+- Max video size: 10GB
+- Avg upload time: ~60s for 1080p
+- OAuth access token TTL: 24 hours; refresh token TTL: 365 days
+- Required scopes: `video.upload`, `video.publish`, `user.info.basic`
+
+### OAuth 2.0 PKCE Flow
+```
+Authorization URL → exchange code → access_token + refresh_token
+```
+
+### Rate Limits
+TikTok enforces per-app rate limits. Monitor `X-Ratelimit-*` response headers.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:
