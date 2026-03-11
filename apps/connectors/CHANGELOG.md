@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-03-11
+
+### Changed
+
+- Updated all 62 connector CLAUDE.md files with 2026 API changes:
+  - AI models: Claude 4.6, GPT-5.x, Grok-4, Gemini 3.1 Pro, Mistral Large 3, ElevenLabs v3
+  - Breaking changes: Notion 2026-03-11, Shopify REST→GraphQL, Meta Graph v24, Revolut DCR
+  - New endpoints: Mercury webhooks/SAFE, Webflow Comments/MCP, Resend list emails, Firecrawl /agent
+  - Auth changes: Reddit pay-as-you-go, X API credits model, Google Maps client ID deprecation
+  - Developer tools: Cloudflare Workers beta API, shadcn CLI v4, Figma MCP Server
+  - Anthropic connector: TypeScript types updated with claude-opus-4-6/sonnet-4-6, adaptive thinking
+
 ## [0.2.6] - 2026-03-11
 
 ### Added
