@@ -1,87 +1,108 @@
-import { useEffect, useState } from 'react'
-import { getModels } from '../api'
-import type { ModelStat } from '../api'
-import { LoadingSpinner, ErrorMessage } from '../components/LoadingSpinner'
+import { useEffect, useState } from "react";
+import { getModels } from "../api";
+import type { ModelStat } from "../api";
+import { RefreshCwIcon } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 function formatUsd(val: number) {
-  return `$${(val ?? 0).toFixed(4)}`
+  return `$${(val ?? 0).toFixed(4)}`;
+}
+
+function AgentBadge({ agent }: { agent: string }) {
+  const colors: Record<string, string> = {
+    claude: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    codex: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  };
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors[agent] ?? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"}`}
+    >
+      {agent}
+    </span>
+  );
 }
 
 export function ModelsTab() {
-  const [models, setModels] = useState<ModelStat[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [models, setModels] = useState<ModelStat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getModels()
       .then((r) => {
-        const sorted = [...r.data].sort((a, b) => b.cost_usd - a.cost_usd)
-        setModels(sorted)
+        const sorted = [...r.data].sort((a, b) => b.cost_usd - a.cost_usd);
+        setModels(sorted);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
-      .finally(() => setLoading(false))
-  }, [])
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }, []);
 
-  if (loading) return <LoadingSpinner />
-  if (error) return <ErrorMessage message={error} />
+  if (loading)
+    return (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCwIcon className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  if (error)
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        {error}
+      </div>
+    );
 
   return (
-    <div
-      style={{
-        background: 'var(--card)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        overflow: 'auto',
-      }}
-    >
-      <table>
-        <thead>
-          <tr>
-            <th>Model</th>
-            <th>Agent</th>
-            <th>Requests</th>
-            <th>Tokens</th>
-            <th>Cost</th>
-          </tr>
-        </thead>
-        <tbody>
-          {models.length === 0 ? (
-            <tr>
-              <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
-                No model data
-              </td>
-            </tr>
-          ) : (
-            models.map((m, i) => (
-              <tr key={`${m.model}-${m.agent}-${i}`}>
-                <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{m.model}</td>
-                <td>
-                  <span style={agentBadge(m.agent)}>{m.agent}</span>
-                </td>
-                <td style={{ color: 'var(--muted-foreground)' }}>{(m.requests ?? 0).toLocaleString()}</td>
-                <td style={{ color: 'var(--muted-foreground)' }}>{(m.total_tokens ?? 0).toLocaleString()}</td>
-                <td style={{ color: 'var(--foreground)', fontWeight: 600 }}>{formatUsd(m.cost_usd)}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function agentBadge(agent: string): React.CSSProperties {
-  const colors: Record<string, { bg: string; color: string }> = {
-    claude: { bg: '#1e3a5f', color: '#60a5fa' },
-    codex: { bg: '#431407', color: '#fb923c' },
-  }
-  const c = colors[agent] ?? { bg: 'var(--secondary)', color: 'var(--secondary-foreground)' }
-  return {
-    background: c.bg,
-    color: c.color,
-    borderRadius: 4,
-    padding: '2px 8px',
-    fontSize: 12,
-    fontWeight: 500,
-  }
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Model Breakdown</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Model</TableHead>
+              <TableHead>Agent</TableHead>
+              <TableHead>Requests</TableHead>
+              <TableHead>Tokens</TableHead>
+              <TableHead>Cost</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {models.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                  No model data.
+                </TableCell>
+              </TableRow>
+            ) : (
+              models.map((m, i) => (
+                <TableRow key={`${m.model}-${m.agent}-${i}`}>
+                  <TableCell>
+                    <code className="text-xs">{m.model}</code>
+                  </TableCell>
+                  <TableCell>
+                    <AgentBadge agent={m.agent} />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {(m.requests ?? 0).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {(m.total_tokens ?? 0).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="font-semibold">{formatUsd(m.cost_usd)}</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
 }

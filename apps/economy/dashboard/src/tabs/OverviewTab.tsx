@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from "react";
 import {
   LineChart,
   Line,
@@ -8,209 +8,231 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-} from 'recharts'
-import { getSummary, getDaily, syncSources } from '../api'
-import type { Summary, DailyEntry } from '../api'
-import { StatCard } from '../components/StatCard'
-import { LoadingSpinner, ErrorMessage } from '../components/LoadingSpinner'
+} from "recharts";
+import { getSummary, getDaily, syncSources } from "../api";
+import type { Summary, DailyEntry } from "../api";
+import {
+  DollarSignIcon,
+  CalendarIcon,
+  BarChart3Icon,
+  RefreshCwIcon,
+  TrendingUpIcon,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 function formatUsd(val: number) {
-  if (val == null) return '$0.0000'
-  if (val >= 100) return `$${val.toFixed(2)}`
-  if (val >= 1) return `$${val.toFixed(4)}`
-  return `$${val.toFixed(6)}`
+  if (val == null) return "$0.0000";
+  if (val >= 100) return `$${val.toFixed(2)}`;
+  if (val >= 1) return `$${val.toFixed(4)}`;
+  return `$${val.toFixed(6)}`;
 }
 
 function formatDate(d: string) {
-  return d.slice(5) // MM-DD
+  return d.slice(5);
 }
 
 interface ChartEntry {
-  date: string
-  claude: number
-  codex: number
+  date: string;
+  claude: number;
+  codex: number;
 }
 
 function buildChartData(entries: DailyEntry[]): ChartEntry[] {
-  const map = new Map<string, ChartEntry>()
+  const map = new Map<string, ChartEntry>();
   for (const e of entries) {
-    const key = e.date
-    if (!map.has(key)) map.set(key, { date: formatDate(key), claude: 0, codex: 0 })
-    const row = map.get(key)!
-    if (e.agent === 'claude') row.claude += e.cost_usd
-    else if (e.agent === 'codex') row.codex += e.cost_usd
-    else {
-      row.claude += e.cost_usd
-    }
+    const key = e.date;
+    if (!map.has(key)) map.set(key, { date: formatDate(key), claude: 0, codex: 0 });
+    const row = map.get(key)!;
+    if (e.agent === "claude") row.claude += e.cost_usd;
+    else if (e.agent === "codex") row.codex += e.cost_usd;
+    else row.claude += e.cost_usd;
   }
-  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
+  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function OverviewTab() {
-  const [todaySummary, setTodaySummary] = useState<Summary | null>(null)
-  const [weekSummary, setWeekSummary] = useState<Summary | null>(null)
-  const [monthSummary, setMonthSummary] = useState<Summary | null>(null)
-  const [chartData, setChartData] = useState<ChartEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [syncing, setSyncing] = useState(false)
-  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const [todaySummary, setTodaySummary] = useState<Summary | null>(null);
+  const [weekSummary, setWeekSummary] = useState<Summary | null>(null);
+  const [monthSummary, setMonthSummary] = useState<Summary | null>(null);
+  const [chartData, setChartData] = useState<ChartEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
       const [t, w, m, daily] = await Promise.all([
-        getSummary('today'),
-        getSummary('week'),
-        getSummary('month'),
+        getSummary("today"),
+        getSummary("week"),
+        getSummary("month"),
         getDaily(30),
-      ])
-      setTodaySummary(t.data)
-      setWeekSummary(w.data)
-      setMonthSummary(m.data)
-      setChartData(buildChartData(daily.data))
+      ]);
+      setTodaySummary(t.data);
+      setWeekSummary(w.data);
+      setMonthSummary(m.data);
+      setChartData(buildChartData(daily.data));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load data')
+      setError(e instanceof Error ? e.message : "Failed to load data");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    load()
-  }, [load])
+    load();
+  }, [load]);
 
   const handleSync = async () => {
-    setSyncing(true)
-    setSyncMsg(null)
+    setSyncing(true);
+    setSyncMsg(null);
     try {
-      await syncSources('all')
-      setSyncMsg('Sync complete')
-      load()
+      await syncSources("all");
+      setSyncMsg("Sync complete");
+      load();
     } catch (e) {
-      setSyncMsg(e instanceof Error ? e.message : 'Sync failed')
+      setSyncMsg(e instanceof Error ? e.message : "Sync failed");
     } finally {
-      setSyncing(false)
-      setTimeout(() => setSyncMsg(null), 3000)
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(null), 3000);
     }
-  }
+  };
 
-  if (loading) return <LoadingSpinner />
-  if (error) return <ErrorMessage message={error} />
+  if (loading)
+    return (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCwIcon className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  if (error)
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        {error}
+      </div>
+    );
+
+  const statCards = [
+    {
+      label: "Today",
+      value: formatUsd(todaySummary?.total_usd ?? 0),
+      sub: `${todaySummary?.sessions ?? 0} sessions`,
+      icon: CalendarIcon,
+      color: "text-blue-500",
+    },
+    {
+      label: "This Week",
+      value: formatUsd(weekSummary?.total_usd ?? 0),
+      sub: `${weekSummary?.sessions ?? 0} sessions`,
+      icon: TrendingUpIcon,
+      color: "text-green-500",
+    },
+    {
+      label: "This Month",
+      value: formatUsd(monthSummary?.total_usd ?? 0),
+      sub: `${monthSummary?.sessions ?? 0} sessions`,
+      icon: BarChart3Icon,
+      color: "text-purple-500",
+    },
+    {
+      label: "Monthly Requests",
+      value: String(monthSummary?.requests ?? 0),
+      sub: `${monthSummary?.tokens ?? 0} tokens`,
+      icon: DollarSignIcon,
+      color: "text-orange-500",
+    },
+  ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* Header row */}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-        <StatCard
-          label="Today"
-          value={formatUsd(todaySummary?.total_usd ?? 0)}
-          sub={`${todaySummary?.sessions ?? 0} sessions`}
-        />
-        <StatCard
-          label="This Week"
-          value={formatUsd(weekSummary?.total_usd ?? 0)}
-          sub={`${weekSummary?.sessions ?? 0} sessions`}
-        />
-        <StatCard
-          label="This Month"
-          value={formatUsd(monthSummary?.total_usd ?? 0)}
-          sub={`${monthSummary?.sessions ?? 0} sessions`}
-        />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, justifyContent: 'center' }}>
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            style={{
-              background: syncing ? 'var(--secondary)' : 'var(--primary)',
-              color: syncing ? 'var(--secondary-foreground)' : 'var(--primary-foreground)',
-              border: 'none',
-              borderRadius: 'calc(var(--radius) - 2px)',
-              padding: '10px 20px',
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: syncing ? 'default' : 'pointer',
-              whiteSpace: 'nowrap',
-              opacity: syncing ? 0.7 : 1,
-              transition: 'opacity 0.15s',
-            }}
-          >
-            {syncing ? 'Syncing...' : 'Sync Now'}
-          </button>
-          {syncMsg && (
-            <div style={{ fontSize: 12, color: '#22c55e', textAlign: 'center' }}>{syncMsg}</div>
-          )}
-        </div>
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {statCards.map((c) => (
+          <Card key={c.label}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 p-4">
+              <CardTitle className="text-sm font-medium text-muted-foreground">{c.label}</CardTitle>
+              <c.icon className={`size-4 ${c.color}`} />
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <div className="text-2xl font-bold">{c.value}</div>
+              <p className="text-xs text-muted-foreground mt-1">{c.sub}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      {/* Daily chart */}
-      <div
-        style={{
-          background: 'var(--card)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          padding: '24px',
-        }}
-      >
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 20, color: 'var(--foreground)' }}>
-          Daily Cost — Last 30 Days
-        </div>
-        {chartData.length === 0 ? (
-          <div style={{ color: 'var(--muted-foreground)', textAlign: 'center', padding: '32px 0' }}>
-            No data available
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <BarChart3Icon className="size-4 text-blue-500" />
+              Daily Cost — Last 30 Days
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {syncMsg && (
+                <span className="text-xs text-green-600 dark:text-green-400">{syncMsg}</span>
+              )}
+              <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
+                <RefreshCwIcon className={`size-3.5 ${syncing ? "animate-spin" : ""}`} />
+                {syncing ? "Syncing..." : "Sync Now"}
+              </Button>
+            </div>
           </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis
-                dataKey="date"
-                tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
-                axisLine={{ stroke: 'var(--border)' }}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(v) => `$${Number(v).toFixed(3)}`}
-                width={60}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: 'var(--card)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  fontSize: 13,
-                  color: 'var(--foreground)',
-                }}
-                labelStyle={{ color: 'var(--muted-foreground)' }}
-                formatter={(val) => [`$${Number(val).toFixed(4)}`, undefined]}
-              />
-              <Legend
-                wrapperStyle={{ fontSize: 13, color: 'var(--muted-foreground)', paddingTop: 12 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="claude"
-                stroke="#3b82f6"
-                strokeWidth={2}
-                dot={false}
-                name="Claude"
-              />
-              <Line
-                type="monotone"
-                dataKey="codex"
-                stroke="#f97316"
-                strokeWidth={2}
-                dot={false}
-                name="Codex"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </div>
+        </CardHeader>
+        <CardContent>
+          {chartData.length === 0 ? (
+            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+              No data available
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v) => `$${Number(v).toFixed(3)}`}
+                  width={60}
+                />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: "0.5rem",
+                    fontSize: 13,
+                    border: "1px solid var(--border)",
+                    background: "var(--card)",
+                    color: "var(--card-foreground)",
+                  }}
+                  formatter={(val) => [`$${Number(val).toFixed(4)}`, undefined]}
+                />
+                <Legend wrapperStyle={{ fontSize: 13, paddingTop: 12 }} />
+                <Line
+                  type="monotone"
+                  dataKey="claude"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Claude"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="codex"
+                  stroke="#f97316"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Codex"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
     </div>
-  )
+  );
 }

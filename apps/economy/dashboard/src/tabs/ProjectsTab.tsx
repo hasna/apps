@@ -1,98 +1,106 @@
-import { useEffect, useState } from 'react'
-import { getProjects } from '../api'
-import type { ProjectStat } from '../api'
-import { LoadingSpinner, ErrorMessage } from '../components/LoadingSpinner'
+import { useEffect, useState } from "react";
+import { getProjects } from "../api";
+import type { ProjectStat } from "../api";
+import { RefreshCwIcon } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 function truncate(s: string, n: number) {
-  if (!s) return ''
-  return s.length > n ? '…' + s.slice(-n) : s
+  if (!s) return "";
+  return s.length > n ? "…" + s.slice(-n) : s;
 }
 
 function formatUsd(val: number) {
-  return `$${(val ?? 0).toFixed(4)}`
+  return `$${(val ?? 0).toFixed(4)}`;
 }
 
 function formatDate(d: string) {
-  if (!d) return ''
-  return new Date(d).toLocaleDateString()
+  if (!d) return "";
+  return new Date(d).toLocaleDateString();
 }
 
 export function ProjectsTab() {
-  const [projects, setProjects] = useState<ProjectStat[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = () => {
-    setLoading(true)
-    getProjects()
-      .then((r) => {
-        const sorted = [...r.data].sort((a, b) => b.cost_usd - a.cost_usd)
-        setProjects(sorted)
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
-      .finally(() => setLoading(false))
-  }
+  const [projects, setProjects] = useState<ProjectStat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    load()
-  }, [])
+    setLoading(true);
+    getProjects()
+      .then((r) => {
+        const sorted = [...r.data].sort((a, b) => b.cost_usd - a.cost_usd);
+        setProjects(sorted);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }, []);
 
-  if (loading) return <LoadingSpinner />
-  if (error) return <ErrorMessage message={error} />
+  if (loading)
+    return (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCwIcon className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  if (error)
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        {error}
+      </div>
+    );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div
-        style={{
-          background: 'var(--card)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          overflow: 'auto',
-        }}
-      >
-        <table>
-          <thead>
-            <tr>
-              <th>Project Name</th>
-              <th>Path</th>
-              <th>Sessions</th>
-              <th>Cost</th>
-              <th>Last Active</th>
-            </tr>
-          </thead>
-          <tbody>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Projects</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Project Name</TableHead>
+              <TableHead>Path</TableHead>
+              <TableHead>Sessions</TableHead>
+              <TableHead>Cost</TableHead>
+              <TableHead>Last Active</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {projects.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
-                  No projects found
-                </td>
-              </tr>
+              <TableRow>
+                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                  No projects found.
+                </TableCell>
+              </TableRow>
             ) : (
               projects.map((p, i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 500, color: 'var(--foreground)' }}>
-                    {p.project_name || '—'}
-                  </td>
-                  <td
-                    style={{
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: 'var(--muted-foreground)',
-                      maxWidth: 280,
-                    }}
+                <TableRow key={i}>
+                  <TableCell className="font-medium">{p.project_name || "—"}</TableCell>
+                  <TableCell
+                    className="max-w-[280px]"
                     title={p.project_path}
                   >
-                    {truncate(p.project_path, 40)}
-                  </td>
-                  <td style={{ color: 'var(--muted-foreground)' }}>{p.sessions}</td>
-                  <td style={{ color: 'var(--foreground)', fontWeight: 600 }}>{formatUsd(p.cost_usd)}</td>
-                  <td style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>{formatDate(p.last_active)}</td>
-                </tr>
+                    <code className="text-xs text-muted-foreground">
+                      {truncate(p.project_path, 40)}
+                    </code>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{p.sessions}</TableCell>
+                  <TableCell className="font-semibold">{formatUsd(p.cost_usd)}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatDate(p.last_active)}
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
 }

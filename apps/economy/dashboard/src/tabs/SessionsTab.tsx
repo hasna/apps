@@ -1,81 +1,97 @@
-import { useEffect, useState, useCallback } from 'react'
-import { getSessions } from '../api'
-import type { Session } from '../api'
-import { LoadingSpinner, ErrorMessage } from '../components/LoadingSpinner'
+import { useEffect, useState, useCallback } from "react";
+import { getSessions } from "../api";
+import type { Session } from "../api";
+import { SearchIcon, ChevronLeftIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 50;
 
 function truncate(s: string, n: number) {
-  if (!s) return ''
-  return s.length > n ? s.slice(0, n) + '…' : s
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
 function formatUsd(val: number) {
-  if (val == null) return '$0.0000'
-  return `$${val.toFixed(4)}`
+  if (val == null) return "$0.0000";
+  return `$${val.toFixed(4)}`;
 }
 
 function formatDate(d: string) {
-  if (!d) return ''
-  return new Date(d).toLocaleString()
+  if (!d) return "";
+  return new Date(d).toLocaleString();
+}
+
+function AgentBadge({ agent }: { agent: string }) {
+  const colors: Record<string, string> = {
+    claude: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    codex: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  };
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors[agent] ?? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"}`}
+    >
+      {agent}
+    </span>
+  );
 }
 
 export function SessionsTab() {
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
-  const [agentFilter, setAgentFilter] = useState('')
-  const [page, setPage] = useState(0)
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [agentFilter, setAgentFilter] = useState("");
+  const [page, setPage] = useState(0);
 
   const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
       const res = await getSessions({
         agent: agentFilter || undefined,
         project: search || undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
-      })
-      setSessions(res.data)
+      });
+      setSessions(res.data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load sessions')
+      setError(e instanceof Error ? e.message : "Failed to load sessions");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [agentFilter, search, page])
+  }, [agentFilter, search, page]);
 
   useEffect(() => {
-    const t = setTimeout(() => load(), 300)
-    return () => clearTimeout(t)
-  }, [load])
-
-  const handleSearch = (v: string) => {
-    setSearch(v)
-    setPage(0)
-  }
-
-  const handleAgent = (v: string) => {
-    setAgentFilter(v)
-    setPage(0)
-  }
+    const t = setTimeout(() => load(), 300);
+    return () => clearTimeout(t);
+  }, [load]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 12 }}>
-        <input
-          type="text"
-          placeholder="Search by project..."
-          value={search}
-          onChange={(e) => handleSearch(e.target.value)}
-          style={inputStyle}
-        />
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[180px] max-w-xs">
+          <SearchIcon className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by project..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            className="pl-8 h-9"
+          />
+        </div>
         <select
           value={agentFilter}
-          onChange={(e) => handleAgent(e.target.value)}
-          style={{ ...inputStyle, flex: 'none', width: 160 }}
+          onChange={(e) => { setAgentFilter(e.target.value); setPage(0); }}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <option value="">All agents</option>
           <option value="claude">Claude</option>
@@ -83,119 +99,91 @@ export function SessionsTab() {
         </select>
       </div>
 
-      {/* Table */}
-      <div style={tableContainer}>
-        {loading ? (
-          <LoadingSpinner />
-        ) : error ? (
-          <ErrorMessage message={error} />
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Session ID</th>
-                <th>Agent</th>
-                <th>Project</th>
-                <th>Cost</th>
-                <th>Tokens</th>
-                <th>Requests</th>
-                <th>Started</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted-foreground)', padding: '32px 0' }}>
-                    No sessions found
-                  </td>
-                </tr>
-              ) : (
-                sessions.map((s) => (
-                  <tr key={s.session_id}>
-                    <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--muted-foreground)' }}>
-                      {truncate(s.session_id, 16)}
-                    </td>
-                    <td>
-                      <span style={agentBadge(s.agent)}>{s.agent}</span>
-                    </td>
-                    <td style={{ maxWidth: 200 }}>{truncate(s.project || s.project_path || '', 30)}</td>
-                    <td style={{ color: 'var(--foreground)', fontWeight: 500 }}>{formatUsd(s.cost_usd)}</td>
-                    <td style={{ color: 'var(--muted-foreground)' }}>{(s.total_tokens ?? 0).toLocaleString()}</td>
-                    <td style={{ color: 'var(--muted-foreground)' }}>{s.requests}</td>
-                    <td style={{ color: 'var(--muted-foreground)', fontSize: 12 }}>{formatDate(s.started_at)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Sessions</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <RefreshCwIcon className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : error ? (
+            <div className="p-4 rounded-lg border border-red-200 bg-red-50 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200 m-4">
+              {error}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Session ID</TableHead>
+                  <TableHead>Agent</TableHead>
+                  <TableHead>Project</TableHead>
+                  <TableHead>Cost</TableHead>
+                  <TableHead>Tokens</TableHead>
+                  <TableHead>Requests</TableHead>
+                  <TableHead>Started</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sessions.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                      No sessions found.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  sessions.map((s) => (
+                    <TableRow key={s.session_id}>
+                      <TableCell>
+                        <code className="text-xs text-muted-foreground">
+                          {truncate(s.session_id, 16)}
+                        </code>
+                      </TableCell>
+                      <TableCell>
+                        <AgentBadge agent={s.agent} />
+                      </TableCell>
+                      <TableCell className="max-w-[200px]">
+                        <span className="text-sm truncate block">
+                          {truncate(s.project || s.project_path || "", 30)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-medium">{formatUsd(s.cost_usd)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {(s.total_tokens ?? 0).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{s.requests}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatDate(s.started_at)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
-      {/* Pagination */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <button
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => setPage((p) => Math.max(0, p - 1))}
           disabled={page === 0}
-          style={paginationBtn(page === 0)}
         >
-          ← Prev
-        </button>
-        <span style={{ color: 'var(--muted-foreground)', fontSize: 13 }}>Page {page + 1}</span>
-        <button
+          <ChevronLeftIcon className="size-4" />
+        </Button>
+        <span className="text-sm text-muted-foreground">Page {page + 1}</span>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => setPage((p) => p + 1)}
           disabled={sessions.length < PAGE_SIZE}
-          style={paginationBtn(sessions.length < PAGE_SIZE)}
         >
-          Next →
-        </button>
+          <ChevronRightIcon className="size-4" />
+        </Button>
       </div>
     </div>
-  )
-}
-
-const inputStyle: React.CSSProperties = {
-  background: 'var(--card)',
-  border: '1px solid var(--border)',
-  borderRadius: 'calc(var(--radius) - 2px)',
-  padding: '8px 12px',
-  color: 'var(--foreground)',
-  fontSize: 14,
-  outline: 'none',
-  flex: 1,
-}
-
-const tableContainer: React.CSSProperties = {
-  background: 'var(--card)',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius)',
-  overflow: 'auto',
-}
-
-function agentBadge(agent: string): React.CSSProperties {
-  const colors: Record<string, { bg: string; color: string }> = {
-    claude: { bg: '#1e3a5f', color: '#60a5fa' },
-    codex: { bg: '#431407', color: '#fb923c' },
-  }
-  const c = colors[agent] ?? { bg: 'var(--secondary)', color: 'var(--secondary-foreground)' }
-  return {
-    background: c.bg,
-    color: c.color,
-    borderRadius: 4,
-    padding: '2px 8px',
-    fontSize: 12,
-    fontWeight: 500,
-  }
-}
-
-function paginationBtn(disabled: boolean): React.CSSProperties {
-  return {
-    background: disabled ? 'var(--muted)' : 'var(--card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'calc(var(--radius) - 2px)',
-    padding: '8px 16px',
-    color: disabled ? 'var(--muted-foreground)' : 'var(--foreground)',
-    cursor: disabled ? 'default' : 'pointer',
-    fontSize: 14,
-    opacity: disabled ? 0.5 : 1,
-  }
+  );
 }
