@@ -47,6 +47,24 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025)
+
+### New API Capabilities (Jun 2025)
+- **Update documents with images** via API
+- **Create templates from URLs** (no manual upload)
+- **SMS consent tracking** via API
+- **Editing session tokens** without adding users
+- **Programmatic API key creation** for workspace setup automation
+
+### Document Settings Changes (v7.14.0)
+- `expires_in` property added to `GET/PATCH /documents/{id}/settings` responses
+- `qualified_electronic_signature` removed from template settings
+
+### Integrations (Jun 2025)
+- PandaDoc CPQ for Pipedrive (two-way sync)
+- QuickBooks Online integration (estimates + invoices)
+- Recurring payments via Stripe from documents
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

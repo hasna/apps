@@ -47,6 +47,13 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Stripe Atlas uses the standard Stripe API (same auth, same versioning as connect-stripe).
+Current API version: `2026-02-25.clover`
+Atlas-specific resources: company formation, bank account setup via Stripe API.
+See connect-stripe for full Stripe API update notes.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

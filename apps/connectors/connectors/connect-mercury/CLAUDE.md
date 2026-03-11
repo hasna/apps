@@ -47,6 +47,20 @@ src/
 └── index.ts       # Library exports
 ```
 
+## New Endpoints (2025-2026)
+
+Mercury has been rapidly expanding their API. Recent additions:
+- **Webhooks** — real-time HTTP notifications for account events (transactions, etc.)
+- **Internal Transfers** — `POST /transfer` — move money between accounts (requires `SendMoney` write scope)
+- **Users API** — `GET /api/v1/users` — retrieve organization users
+- **Account Balance Events** — webhooks/events for balance change notifications
+- **SAFE API** — 3 new endpoints for reading SAFE (Simple Agreement for Future Equity) data
+- **Treasury API statements** — programmatic statement retrieval
+- **Attachment uploads** — upload attachments to transactions and recipients
+
+Auth: Basic auth (API token as username, empty password) or Bearer token.
+Token tiers: Read-only, Read-write (requires IP whitelist), Custom (scoped).
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

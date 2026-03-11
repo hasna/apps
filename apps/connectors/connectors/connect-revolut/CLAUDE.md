@@ -47,6 +47,23 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Open Banking API Breaking Changes (Mar 23, 2026)
+1. **OpenID issuer URL** changes from `https://oba.revolut.com` to `https://oba-auth.revolut.com`. Both will be accepted temporarily — update promptly.
+2. **AccountSubType for Credit Cards**: Changes from `Loan` → `CreditCard`
+3. **DCR scope parameter**: Unified to space-separated string (e.g., `"openid accounts payments"`) across all DCR endpoints. Was inconsistently array vs string.
+
+### New Endpoints (2025)
+- Merchant API: **Disputes endpoints** (Jun 2025) — retrieve, list, and now act on disputes directly
+- Merchant API: **Apple Pay unregistration endpoint** (Jun 2025)
+- **Pay by Bank** (May 2025) — new payment method for direct bank account payments
+
+### Auth Changes (Mar-Apr 2025)
+- FAPI 1.0 Advanced: API endpoint subdomain changed from `oba.revolut.com` to `oba-auth.revolut.com`
+- OAuth refresh token expiry updated (Apr 7, 2025)
+- Public API specs now available on GitHub (Jul 2025)
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

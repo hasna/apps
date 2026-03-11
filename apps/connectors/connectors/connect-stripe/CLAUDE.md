@@ -47,6 +47,25 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Version (2026)
+
+Current version: **`2026-02-25.clover`**
+
+Stripe uses versioned releases. The current major release is **Clover** (2026). Set `Stripe-Version` header to pin a version:
+```typescript
+'Stripe-Version': '2026-02-25.clover'
+```
+
+Notable Clover changes:
+- `adjustable_quantity` returned in LineItem objects (Checkout Sessions, Payment Links, Quotes)
+- Amount-off coupons with `duration=forever` re-enabled (was deprecated in Basil 2025-03-31)
+
+### Stripe Agent Toolkit (2025+)
+Stripe now has an official Agent Toolkit and MCP Server for AI integrations. See [docs.stripe.com/agent-toolkit](https://docs.stripe.com/agent-toolkit).
+
+### Workbench
+Use [Stripe Workbench](https://dashboard.stripe.com/workbench) to manage your API version and test API changes in-browser. Replaces the old API Explorer.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

@@ -47,6 +47,24 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Migration (2025-2026) — IMPORTANT
+
+### REST API is Legacy
+Shopify marked REST Admin API as **legacy as of October 1, 2024**.
+
+- **New public apps**: Must use GraphQL Admin API exclusively (since April 1, 2025)
+- **Custom apps**: Can still use REST but won't receive new features; can't increase product variants past 100
+- REST API for products/variants: Must migrate to GraphQL if supporting >100 variants
+- Current API version: **`2026-01`**
+
+### GraphQL Admin API
+All new development should use GraphQL:
+- Endpoint: `POST https://{shop}.myshopify.com/admin/api/2026-01/graphql.json`
+- Auth header: `X-Shopify-Access-Token: {access_token}`
+
+### Check Deprecated Calls
+Use `GET /admin/api/2026-01/deprecated_api_calls.json` to audit deprecated API usage in your custom app (last 30 days).
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:
