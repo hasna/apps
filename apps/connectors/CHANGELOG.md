@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-03-11
+
+### Added
+
+- `connectors env` — generate `.env.example` from installed connectors' required env vars
+- `connectors presets` — list preset bundles (ai, fullstack, google, social, devtools, commerce)
+- `connectors install --preset ai` — install all connectors in a preset bundle
+- `connectors whoami` — show setup summary (version, config dir, auth status per connector)
+- `connectors test [name]` — verify API credentials with real HTTP requests (16 endpoints)
+- Test endpoint definitions for 16 connectors (anthropic, openai, stripe, github, figma, etc.)
+- 12 new CLI tests (380 total)
+
 ## [0.2.5] - 2026-03-10
 
 ### Added

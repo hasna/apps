@@ -34,6 +34,8 @@ npx @hasna/connectors
 
 ```bash
 connectors install figma stripe github   # Install connectors
+connectors install --preset ai           # Install a preset bundle
+connectors install --category "AI & ML"  # Install entire category
 connectors install figma --overwrite     # Overwrite existing
 connectors remove figma                  # Remove a connector
 ```
@@ -49,6 +51,10 @@ connectors info stripe                   # Connector details
 connectors docs gmail                    # Auth, env vars, CLI docs
 connectors status                        # Auth status of installed connectors
 connectors doctor                        # Health check and troubleshooting
+connectors test                          # Verify API keys with real requests
+connectors whoami                        # Show setup summary
+connectors env                           # Generate .env.example
+connectors presets                       # List preset bundles
 ```
 
 ### Dashboard
