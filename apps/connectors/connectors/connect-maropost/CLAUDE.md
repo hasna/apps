@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Maropost Marketing Cloud API: `https://api.maropost.com/accounts/{account_id}/`
+Auth: `auth_token` query parameter or Bearer token header.
+Key resources: contacts, campaigns, tags, lists, journeys, reports.
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:

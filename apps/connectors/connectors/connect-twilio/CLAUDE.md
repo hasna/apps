@@ -47,6 +47,15 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Base URL: `https://api.twilio.com/2010-04-01/`
+Auth: HTTP Basic Auth with Account SID + Auth Token (or API Key SID + Secret)
+
+Key services: SMS, Voice, Messaging (WhatsApp, RCS), Verify (OTP), Video, Email (via SendGrid)
+
+Current stable API version: `2010-04-01` (unchanged — Twilio uses stable versioned URLs)
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

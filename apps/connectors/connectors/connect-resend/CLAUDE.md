@@ -47,6 +47,27 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### New Endpoints
+- **`GET /emails`** (Oct 2025) — List sent emails with cursor-based pagination (`before`, `after`, `limit` params; max 100 per page)
+- **Email suppression status** (Jan 2026) — New `suppressed` delivery status in email responses when Resend prevents delivery due to bounce/complaint history
+
+### Email Suppression (Jan 2026)
+New `last_event: "suppressed"` status in email objects. New `email.suppressed` webhook event. Webhooks include suppression type (`OnAccountSuppressionList`) and message.
+
+### Endpoints Overview
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/emails` | Send email |
+| GET | `/emails/{id}` | Get email |
+| GET | `/emails` | **New** List sent emails |
+| GET/POST/DELETE | `/domains` | Domain management |
+| GET/POST/DELETE | `/api-keys` | API key management |
+| GET/POST/DELETE | `/audiences` | Contact lists |
+| GET/POST/DELETE | `/contacts` | Contacts in audience |
+| GET/POST/DELETE | `/broadcasts` | Email broadcasts |
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

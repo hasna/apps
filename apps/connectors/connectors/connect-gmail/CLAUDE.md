@@ -47,6 +47,28 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### OAuth Enforcement (May 2025)
+Google fully enforced OAuth 2.0 for all Gmail access as of May 2025. Less Secure Apps / password-based auth is permanently disabled. All clients MUST use OAuth 2.0 token-based authentication.
+
+### Scope Classification (2026)
+| Scope | Classification | Notes |
+|-------|---------------|-------|
+| `https://mail.google.com/` | Restricted | Full access |
+| `https://www.googleapis.com/auth/gmail.modify` | Restricted | Read + modify |
+| `https://www.googleapis.com/auth/gmail.readonly` | Restricted | Read only |
+| `https://www.googleapis.com/auth/gmail.send` | Sensitive | Send only |
+| `https://www.googleapis.com/auth/gmail.metadata` | Non-sensitive | Headers only |
+
+Restricted scopes require Google's restricted scope verification process including a third-party security assessment. For send-only use cases, prefer `gmail.send` to avoid stricter compliance requirements.
+
+### Gmail Postmaster Tools API v2 (GA Feb 2026)
+New: `POST /v2/domains/{domain}:queryDomainStats` — flexible querying of domain stats including compliance status. Supports batch operations. The v2beta endpoint was available Dec 2025.
+
+### Deal Cards in Promotions Tab (Sep 2025)
+New annotation support for creating Deal Cards. See Gmail annotations documentation.
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

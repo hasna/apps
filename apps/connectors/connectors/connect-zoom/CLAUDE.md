@@ -47,6 +47,21 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Auth & API Updates (2025-2026)
+
+### Server-to-Server OAuth (recommended)
+Use Server-to-Server OAuth for headless/automated integrations. Replaces deprecated JWT auth.
+- Create app in Zoom Marketplace → Server-to-Server OAuth
+- Exchange credentials for access token: `POST https://zoom.us/oauth/token?grant_type=account_credentials&account_id={id}`
+- Token expires in 1 hour — refresh as needed
+
+### Recent API Updates (Jan 2026)
+- **Summaries endpoints**: New fields added to meeting/webinar summary endpoints
+- **Meetings and Webinars webhooks**: New webhook payload fields
+
+### Meeting SDK Auth Update
+Meeting SDK authorization has been updated. See Zoom Developer docs for latest OBF (Obfuscated Function) migration requirements.
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

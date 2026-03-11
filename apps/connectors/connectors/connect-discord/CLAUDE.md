@@ -47,6 +47,25 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Current API Version: v10 (unchanged)
+
+### New in Oct 2025 (Developer Newsletter)
+- **Bot profiles per server**: Bots can now set unique profiles per server
+- **New UI components**: Label and TextDisplay components in modals; all select menus now work in modals
+- **New Social SDK webhooks**: `LOBBY_MESSAGE_*` and `GAME_DIRECT_MESSAGE_*` events for moderation
+- **Server-side Provisional Account API**: New endpoint for creating provisional accounts in games
+- **Rate limit**: New rate limit when requesting all guild members via gateway
+
+### Deprecations (Oct 2025)
+- Non-E2EE voice calls being phased out
+- Deprecated voice and video transport modes — update implementations
+
+### Bug Fixes (Mar 2026)
+- Escaped mentions `\@everyone` no longer trigger mentions — backend now properly respects escape characters
+- Desktop app p50 TTI reduced by 11.8% via API payload ordering optimization
+
 ## Authentication
 
 Bearer Token authentication. Credentials can be set via:
