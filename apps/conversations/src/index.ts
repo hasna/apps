@@ -26,6 +26,7 @@ export {
   unpinMessage,
   getPinnedMessages,
   getUnreadBlockers,
+  getThreadReplies,
 } from "./lib/messages.js";
 
 export {
@@ -78,6 +79,10 @@ export {
   getReactions,
   getReactionSummary,
 } from "./lib/reactions.js";
+
+export {
+  fireWebhooks,
+} from "./lib/webhooks.js";
 
 export {
   heartbeat,

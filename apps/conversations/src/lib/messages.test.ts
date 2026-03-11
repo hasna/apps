@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers } from "./messages";
+import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies } from "./messages";
 import { createSpace, joinSpace } from "./spaces";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -574,6 +574,38 @@ describe("blocking messages", () => {
     sendMessage({ from: "alice", to: "bob", content: "for bob", blocking: true });
     const blockers = getUnreadBlockers("charlie");
     expect(blockers).toHaveLength(0);
+  });
+});
+
+describe("threaded replies", () => {
+  test("sendMessage with reply_to stores the reference", () => {
+    const parent = sendMessage({ from: "alice", to: "bob", content: "original" });
+    const reply = sendMessage({ from: "bob", to: "alice", content: "reply", reply_to: parent.id });
+    expect(reply.reply_to).toBe(parent.id);
+  });
+
+  test("sendMessage without reply_to defaults to null", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "no reply" });
+    expect(msg.reply_to).toBeNull();
+  });
+
+  test("getThreadReplies returns replies to a message", () => {
+    const parent = sendMessage({ from: "alice", to: "bob", content: "parent" });
+    sendMessage({ from: "bob", to: "alice", content: "reply 1", reply_to: parent.id });
+    sendMessage({ from: "charlie", to: "alice", content: "reply 2", reply_to: parent.id });
+    sendMessage({ from: "alice", to: "bob", content: "unrelated" });
+
+    const replies = getThreadReplies(parent.id);
+    expect(replies).toHaveLength(2);
+    expect(replies[0].content).toBe("reply 1");
+    expect(replies[1].content).toBe("reply 2");
+    expect(replies.every(r => r.reply_to === parent.id)).toBe(true);
+  });
+
+  test("getThreadReplies returns empty for no replies", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "lonely" });
+    const replies = getThreadReplies(msg.id);
+    expect(replies).toHaveLength(0);
   });
 });
 

@@ -18,6 +18,7 @@ export interface Message {
   pinned_at: string | null;
   blocking: boolean;
   attachments: Attachment[] | null;
+  reply_to: number | null;
 }
 
 export interface Reaction {
@@ -96,6 +97,7 @@ export interface SendMessageOptions {
   metadata?: Record<string, unknown>;
   blocking?: boolean;
   attachments?: { name: string; source_path: string }[];
+  reply_to?: number;
 }
 
 export interface ReadMessagesOptions {

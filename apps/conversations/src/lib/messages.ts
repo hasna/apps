@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync } from "fs";
 import { join, basename } from "path";
 import { homedir } from "os";
+import { fireWebhooks } from "./webhooks.js";
 
 function parseMessage(row: Record<string, unknown>): Message {
   let metadata: Record<string, unknown> | null = null;
@@ -29,6 +30,7 @@ function parseMessage(row: Record<string, unknown>): Message {
     metadata,
     attachments,
     blocking: !!(row.blocking as number),
+    reply_to: (row.reply_to as number) || null,
   } as Message;
 }
 
@@ -63,9 +65,11 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   const blocking = opts.blocking ? 1 : 0;
 
+  const replyTo = opts.reply_to || null;
+
   const stmt = db.prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, space, content, priority, working_dir, repository, branch, metadata, blocking)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (session_id, from_agent, to_agent, space, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
 
@@ -80,7 +84,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
     opts.repository || null,
     opts.branch || null,
     metadata,
-    blocking
+    blocking,
+    replyTo
   ) as Record<string, unknown>;
 
   const message = parseMessage(row);
@@ -107,6 +112,9 @@ export function sendMessage(opts: SendMessageOptions): Message {
     db.prepare("UPDATE messages SET attachments = ? WHERE id = ?").run(attachmentsJson, message.id);
     message.attachments = attachmentInfos;
   }
+
+  // Fire webhooks async (never blocks)
+  fireWebhooks(message);
 
   return message;
 }
@@ -347,6 +355,14 @@ export function getUnreadBlockers(agent: string): Message[] {
     )
     ORDER BY created_at ASC, id ASC
   `).all(agent, agent) as Record<string, unknown>[];
+  return rows.map(parseMessage);
+}
+
+export function getThreadReplies(messageId: number): Message[] {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT * FROM messages WHERE reply_to = ? ORDER BY created_at ASC, id ASC"
+  ).all(messageId) as Record<string, unknown>[];
   return rows.map(parseMessage);
 }
 

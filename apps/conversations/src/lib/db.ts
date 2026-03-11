@@ -189,6 +189,10 @@ export function getDb(): Database {
   if (!colNames2.includes("attachments")) {
     db.exec("ALTER TABLE messages ADD COLUMN attachments TEXT");
   }
+  if (!colNames2.includes("reply_to")) {
+    db.exec("ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages(id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)");
+  }
 
   return db;
 }
