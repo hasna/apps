@@ -194,6 +194,45 @@ export function getDb(): Database {
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)");
   }
 
+  // FTS5 virtual table for full-text search
+  const ftsExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+  ).get();
+  if (!ftsExists) {
+    db.exec(`
+      CREATE VIRTUAL TABLE messages_fts USING fts5(
+        content, from_agent, to_agent, space,
+        content_rowid='id', content='messages'
+      )
+    `);
+    // Populate from existing messages
+    db.exec(`
+      INSERT INTO messages_fts(rowid, content, from_agent, to_agent, space)
+      SELECT id, content, from_agent, to_agent, space FROM messages
+    `);
+    // Triggers to keep FTS in sync
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content, from_agent, to_agent, space)
+        VALUES (new.id, new.content, new.from_agent, new.to_agent, new.space);
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content, from_agent, to_agent, space)
+        VALUES ('delete', old.id, old.content, old.from_agent, old.to_agent, old.space);
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF content ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content, from_agent, to_agent, space)
+        VALUES ('delete', old.id, old.content, old.from_agent, old.to_agent, old.space);
+        INSERT INTO messages_fts(rowid, content, from_agent, to_agent, space)
+        VALUES (new.id, new.content, new.from_agent, new.to_agent, new.space);
+      END
+    `);
+  }
+
   return db;
 }
 

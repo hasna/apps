@@ -368,25 +368,47 @@ export function getThreadReplies(messageId: number): Message[] {
 
 export function searchMessages(opts: SearchMessagesOptions): Message[] {
   const db = getDb();
-  const conditions: string[] = ["content LIKE ?"];
-  const params: (string | number)[] = [`%${opts.query}%`];
-
-  if (opts.space) {
-    conditions.push("space = ?");
-    params.push(opts.space);
-  }
-  if (opts.from) {
-    conditions.push("from_agent = ?");
-    params.push(opts.from);
-  }
-  if (opts.to) {
-    conditions.push("to_agent = ?");
-    params.push(opts.to);
-  }
 
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
     ? Math.floor(opts.limit as number)
     : 50;
+
+  // Try FTS5 first for proper full-text search (handles non-adjacent words)
+  try {
+    const ftsConditions: string[] = [];
+    const ftsParams: (string | number)[] = [];
+
+    // Build FTS match expression — quote each word for prefix matching
+    const words = opts.query.trim().split(/\s+/).filter(Boolean);
+    const ftsQuery = words.map((w) => `"${w.replace(/"/g, '""')}"`).join(" ");
+
+    ftsConditions.push("messages_fts MATCH ?");
+    ftsParams.push(ftsQuery);
+
+    let extraWhere = "";
+    if (opts.space) { extraWhere += " AND m.space = ?"; ftsParams.push(opts.space); }
+    if (opts.from) { extraWhere += " AND m.from_agent = ?"; ftsParams.push(opts.from); }
+    if (opts.to) { extraWhere += " AND m.to_agent = ?"; ftsParams.push(opts.to); }
+
+    const rows = db.prepare(
+      `SELECT m.* FROM messages m
+       JOIN messages_fts ON messages_fts.rowid = m.id
+       WHERE ${ftsConditions.join(" AND ")}${extraWhere}
+       ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit}`
+    ).all(...ftsParams) as Record<string, unknown>[];
+
+    return rows.map(parseMessage);
+  } catch {
+    // Fallback to LIKE if FTS not available
+  }
+
+  // LIKE fallback
+  const conditions: string[] = ["content LIKE ?"];
+  const params: (string | number)[] = [`%${opts.query}%`];
+
+  if (opts.space) { conditions.push("space = ?"); params.push(opts.space); }
+  if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
+  if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
 
   const where = `WHERE ${conditions.join(" AND ")}`;
 
