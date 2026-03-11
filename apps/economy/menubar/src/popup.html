@@ -1,262 +1,149 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Economy</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
-      background: #1a1a1a;
-      color: #e8e8e8;
-      width: 300px;
-      min-height: 400px;
-      padding: 0;
-      overflow: hidden;
-      user-select: none;
-      -webkit-app-region: drag;
-    }
-
-    .header {
-      background: #111;
-      padding: 16px 20px 12px;
-      border-bottom: 1px solid #2a2a2a;
-    }
-
-    .header h1 {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #888;
-      margin-bottom: 8px;
-    }
-
-    .today-cost {
-      font-size: 36px;
-      font-weight: 700;
-      color: #fff;
-      letter-spacing: -0.02em;
-      line-height: 1;
-    }
-
-    .today-label {
-      font-size: 11px;
-      color: #555;
-      margin-top: 4px;
-    }
-
-    .stats {
-      padding: 12px 20px;
-      border-bottom: 1px solid #2a2a2a;
-      display: flex;
-      gap: 24px;
-    }
-
-    .stat {
-      flex: 1;
-    }
-
-    .stat-value {
-      font-size: 18px;
-      font-weight: 600;
-      color: #ddd;
-    }
-
-    .stat-label {
-      font-size: 10px;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin-top: 2px;
-    }
-
-    .sync-row {
-      padding: 10px 20px;
-      border-bottom: 1px solid #2a2a2a;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .sync-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #3a7;
-      flex-shrink: 0;
-    }
-
-    .sync-dot.syncing {
-      background: #a73;
-      animation: pulse 1s infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
-
-    .sync-text {
-      font-size: 11px;
-      color: #666;
-      flex: 1;
-    }
-
-    .actions {
-      padding: 12px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      -webkit-app-region: no-drag;
-    }
-
-    .btn {
-      display: block;
-      width: 100%;
-      padding: 9px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      text-align: center;
-      transition: opacity 0.15s, background 0.15s;
-    }
-
-    .btn:active { opacity: 0.7; }
-    .btn:disabled { opacity: 0.4; cursor: default; }
-
-    .btn-primary {
-      background: #2563eb;
-      color: #fff;
-    }
-
-    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
-
-    .btn-secondary {
-      background: #2a2a2a;
-      color: #ccc;
-    }
-
-    .btn-secondary:hover:not(:disabled) { background: #333; }
-
-    .btn-danger {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
       background: transparent;
-      color: #666;
-      font-size: 12px;
+      color: #1d1d1f;
+      -webkit-app-region: no-drag;
+      overflow: hidden;
     }
-
-    .btn-danger:hover { color: #e05; }
-
-    .loading {
-      color: #555;
-      font-size: 12px;
+    .container {
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
+      border: 0.5px solid rgba(255, 255, 255, 0.5);
+      border-radius: 14px;
+      margin: 6px;
       padding: 20px;
-      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 0 0 0.5px rgba(0,0,0,0.06);
     }
-
-    #error-msg {
-      padding: 8px 20px;
-      font-size: 11px;
-      color: #e55;
-      display: none;
+    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    .header h1 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #86868b; }
+    .sync-dot { width: 6px; height: 6px; border-radius: 50%; background: #34c759; display: inline-block; }
+    .sync-dot.stale { background: #ff9f0a; }
+    .today-cost { font-size: 42px; font-weight: 700; letter-spacing: -1.5px; color: #1d1d1f; margin: 2px 0 4px; }
+    .today-label { font-size: 12px; color: #86868b; font-weight: 500; margin-bottom: 16px; }
+    .stats-row { display: flex; gap: 12px; margin-bottom: 18px; }
+    .stat-box { flex: 1; background: rgba(0,0,0,0.03); border-radius: 10px; padding: 10px 12px; }
+    .stat-box .value { font-size: 18px; font-weight: 700; color: #1d1d1f; }
+    .stat-box .label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #86868b; margin-top: 2px; }
+    .section-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #86868b; margin-bottom: 8px; }
+    .projects-list { margin-bottom: 16px; }
+    .project-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 0.5px solid rgba(0,0,0,0.06); }
+    .project-row:last-child { border-bottom: none; }
+    .project-name { font-size: 13px; font-weight: 500; color: #1d1d1f; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-cost { font-size: 13px; font-weight: 600; color: #1d1d1f; font-variant-numeric: tabular-nums; }
+    .sync-info { font-size: 11px; color: #86868b; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+    .actions { display: flex; gap: 8px; }
+    .btn {
+      flex: 1; padding: 10px; border: none; border-radius: 10px; font-size: 13px; font-weight: 600;
+      cursor: pointer; font-family: inherit; transition: transform 0.1s;
     }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: #007aff; color: white; }
+    .btn-secondary { background: rgba(0,0,0,0.05); color: #1d1d1f; }
+    .btn-quit { width: 100%; padding: 8px; background: none; border: none; color: #86868b; font-size: 12px; cursor: pointer; margin-top: 10px; font-family: inherit; }
+    .btn-quit:hover { color: #ff3b30; }
+    .empty { font-size: 12px; color: #aeaeb2; font-style: italic; padding: 8px 0; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>Economy</h1>
-    <div class="today-cost" id="today-cost">$0.00</div>
+  <div class="container">
+    <div class="header">
+      <h1>Economy</h1>
+      <span class="sync-dot" id="syncDot"></span>
+    </div>
+    <div class="today-cost" id="todayCost">$0.00</div>
     <div class="today-label">today</div>
-  </div>
 
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-value" id="week-cost">$0.00</div>
-      <div class="stat-label">This Week</div>
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="value" id="weekCost">$0.00</div>
+        <div class="label">This Week</div>
+      </div>
+      <div class="stat-box">
+        <div class="value" id="monthCost">$0.00</div>
+        <div class="label">This Month</div>
+      </div>
     </div>
-    <div class="stat">
-      <div class="stat-value" id="month-cost">$0.00</div>
-      <div class="stat-label">This Month</div>
+
+    <div class="section-title">Top Projects</div>
+    <div class="projects-list" id="projectsList">
+      <div class="empty">Syncing...</div>
     </div>
-  </div>
 
-  <div class="sync-row">
-    <div class="sync-dot" id="sync-dot"></div>
-    <div class="sync-text" id="sync-text">Last sync: never</div>
-  </div>
+    <div class="sync-info">
+      <span class="sync-dot" id="syncDot2"></span>
+      <span id="syncTime">Syncing...</span>
+    </div>
 
-  <div id="error-msg"></div>
-
-  <div class="actions">
-    <button class="btn btn-primary" id="btn-sync">Sync Now</button>
-    <button class="btn btn-secondary" id="btn-dashboard">Open Dashboard</button>
-    <button class="btn btn-danger" id="btn-quit">Quit</button>
+    <div class="actions">
+      <button class="btn btn-primary" id="btnSync">Sync Now</button>
+      <button class="btn btn-secondary" id="btnDashboard">Dashboard</button>
+    </div>
+    <button class="btn-quit" id="btnQuit">Quit</button>
   </div>
 
   <script>
-    const api = window.economy
-
-    function fmt(usd) {
-      if (usd === undefined || usd === null) return '$—'
-      return '$' + Number(usd).toFixed(2)
+    function fmtUsd(n) {
+      if (n == null) return '$0.00';
+      if (n >= 0.01) return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return '$' + n.toFixed(4);
     }
 
-    function showError(msg) {
-      const el = document.getElementById('error-msg')
-      el.textContent = msg
-      el.style.display = 'block'
-      setTimeout(() => { el.style.display = 'none' }, 4000)
-    }
+    function updateUI(stats) {
+      document.getElementById('todayCost').textContent = fmtUsd(stats.today);
+      document.getElementById('weekCost').textContent = fmtUsd(stats.week);
+      document.getElementById('monthCost').textContent = fmtUsd(stats.month);
 
-    function updateStats(stats) {
-      if (stats.today != null) document.getElementById('today-cost').textContent = fmt(stats.today)
-      if (stats.week != null) document.getElementById('week-cost').textContent = fmt(stats.week)
-      if (stats.month != null) document.getElementById('month-cost').textContent = fmt(stats.month)
+      const syncDot = document.getElementById('syncDot');
+      const syncDot2 = document.getElementById('syncDot2');
+      const syncTime = document.getElementById('syncTime');
       if (stats.lastSync) {
-        const d = new Date(stats.lastSync)
-        const diff = Math.round((Date.now() - d.getTime()) / 1000)
-        let label
-        if (diff < 60) label = 'just now'
-        else if (diff < 3600) label = Math.round(diff / 60) + 'm ago'
-        else label = Math.round(diff / 3600) + 'h ago'
-        document.getElementById('sync-text').textContent = 'Last sync: ' + label
+        syncDot.className = 'sync-dot';
+        syncDot2.className = 'sync-dot';
+        syncTime.textContent = 'Last sync: ' + stats.lastSync;
+      } else {
+        syncDot.className = 'sync-dot stale';
+        syncDot2.className = 'sync-dot stale';
+        syncTime.textContent = 'Not synced yet';
+      }
+
+      const list = document.getElementById('projectsList');
+      if (stats.topProjects && stats.topProjects.length > 0) {
+        list.innerHTML = stats.topProjects.map(p =>
+          '<div class="project-row">' +
+            '<span class="project-name">' + (p.project_name || '\u2014') + '</span>' +
+            '<span class="project-cost">' + fmtUsd(p.cost_usd) + '</span>' +
+          '</div>'
+        ).join('');
+      } else {
+        list.innerHTML = '<div class="empty">No projects tracked yet</div>';
       }
     }
 
-    if (api) {
-      api.onStats((stats) => updateStats(stats))
-    }
+    window.economy.onStats((stats) => updateUI(stats));
 
-    document.getElementById('btn-sync').addEventListener('click', async () => {
-      const btn = document.getElementById('btn-sync')
-      const dot = document.getElementById('sync-dot')
-      btn.disabled = true
-      btn.textContent = 'Syncing…'
-      dot.classList.add('syncing')
-      document.getElementById('sync-text').textContent = 'Syncing…'
-      try {
-        await api.syncNow()
-        document.getElementById('sync-text').textContent = 'Sync complete'
-      } catch (e) {
-        showError('Sync failed: ' + e.message)
-      } finally {
-        btn.disabled = false
-        btn.textContent = 'Sync Now'
-        dot.classList.remove('syncing')
-      }
-    })
+    document.getElementById('btnSync').addEventListener('click', async () => {
+      document.getElementById('btnSync').textContent = 'Syncing...';
+      const stats = await window.economy.syncNow();
+      document.getElementById('btnSync').textContent = 'Sync Now';
+      if (stats) updateUI(stats);
+    });
 
-    document.getElementById('btn-dashboard').addEventListener('click', () => {
-      api.openDashboard()
-    })
+    document.getElementById('btnDashboard').addEventListener('click', () => {
+      window.economy.openDashboard();
+    });
 
-    document.getElementById('btn-quit').addEventListener('click', () => {
-      api.quit()
-    })
+    document.getElementById('btnQuit').addEventListener('click', () => {
+      window.economy.quit();
+    });
   </script>
 </body>
 </html>

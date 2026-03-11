@@ -5,22 +5,22 @@ import { getModelPricing, seedModelPricing } from '../db/database.js'
 // Default pricing seed data (USD per 1M tokens).
 // These are written to SQLite on first run and can be edited via `economy pricing set`.
 export const DEFAULT_PRICING: Record<string, ModelPricing> = {
-  // Claude 4.x
-  'claude-opus-4-6':    { inputPer1M: 15.00, outputPer1M: 75.00, cacheReadPer1M: 1.50,  cacheWritePer1M: 18.75 },
-  'claude-opus-4-5':    { inputPer1M: 15.00, outputPer1M: 75.00, cacheReadPer1M: 1.50,  cacheWritePer1M: 18.75 },
+  // Claude 4.x — March 2026 pricing (verified from Anthropic docs)
+  'claude-opus-4-6':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25  },
+  'claude-opus-4-5':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25  },
   'claude-sonnet-4-6':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
   'claude-sonnet-4-5':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
-  'claude-haiku-4-5':   { inputPer1M: 0.80,  outputPer1M: 4.00,  cacheReadPer1M: 0.08,  cacheWritePer1M: 1.00  },
+  'claude-haiku-4-5':   { inputPer1M: 1.00,  outputPer1M: 5.00,  cacheReadPer1M: 0.10,  cacheWritePer1M: 1.25  },
   // Claude 3.x
   'claude-3-5-sonnet':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
-  'claude-3-5-haiku':   { inputPer1M: 0.80,  outputPer1M: 4.00,  cacheReadPer1M: 0.08,  cacheWritePer1M: 1.00  },
+  'claude-3-5-haiku':   { inputPer1M: 1.00,  outputPer1M: 5.00,  cacheReadPer1M: 0.10,  cacheWritePer1M: 1.25  },
   'claude-3-opus':      { inputPer1M: 15.00, outputPer1M: 75.00, cacheReadPer1M: 1.50,  cacheWritePer1M: 18.75 },
   'claude-3-sonnet':    { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
   'claude-3-haiku':     { inputPer1M: 0.25,  outputPer1M: 1.25,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0.30  },
-  // OpenAI / Codex
-  'gpt-5.3-codex':      { inputPer1M: 30.00, outputPer1M: 120.00, cacheReadPer1M: 7.50, cacheWritePer1M: 0 },
-  'gpt-5.2-codex':      { inputPer1M: 30.00, outputPer1M: 120.00, cacheReadPer1M: 7.50, cacheWritePer1M: 0 },
-  'gpt-5-codex':        { inputPer1M: 30.00, outputPer1M: 120.00, cacheReadPer1M: 7.50, cacheWritePer1M: 0 },
+  // OpenAI / Codex — subscription-based but API pricing for reference
+  'gpt-5.3-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
+  'gpt-5.2-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
+  'gpt-5-codex':        { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-4o':             { inputPer1M: 2.50,  outputPer1M: 10.00, cacheReadPer1M: 1.25,  cacheWritePer1M: 0 },
   'gpt-4o-mini':        { inputPer1M: 0.15,  outputPer1M: 0.60,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'o1':                 { inputPer1M: 15.00, outputPer1M: 60.00, cacheReadPer1M: 7.50,  cacheWritePer1M: 0 },
