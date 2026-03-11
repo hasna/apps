@@ -426,9 +426,13 @@ program
       console.log(chalk.cyan(`→ Starting economy server on port ${port}...`))
       // Spawn server as detached background process
       const { spawn } = await import('child_process')
-      const child = spawn(process.execPath, [process.argv[1]!, 'serve', '--port', String(port)], {
+      const { resolve, dirname } = await import('path')
+      // Resolve serve script relative to this CLI binary
+      const serveScript = resolve(dirname(process.argv[1]!), '..', 'server', 'index.js')
+      const child = spawn(process.execPath, [serveScript], {
         detached: true,
         stdio: 'ignore',
+        env: { ...process.env, ECONOMY_PORT: String(port) },
       })
       child.unref()
       // Wait for it to start
