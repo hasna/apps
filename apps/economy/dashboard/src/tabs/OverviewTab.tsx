@@ -1,13 +1,12 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   LineChart,
   Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
 } from "recharts";
 import { getSummary, getDaily, syncSources } from "../api";
 import type { Summary, DailyEntry } from "../api";
@@ -20,6 +19,14 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  ChartLegend,
+  ChartLegendContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 
 function formatUsd(val: number) {
   if (val == null) return "$0.00";
@@ -63,6 +70,11 @@ function buildChartData(entries: DailyEntry[]): ChartEntry[] {
   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+const chartConfig: ChartConfig = {
+  claude: { label: "Claude", color: "hsl(var(--chart-1, 221 83% 53%))" },
+  codex: { label: "Codex", color: "hsl(var(--chart-2, 24 95% 53%))" },
+};
+
 export function OverviewTab() {
   const [todaySummary, setTodaySummary] = useState<Summary | null>(null);
   const [weekSummary, setWeekSummary] = useState<Summary | null>(null);
@@ -72,6 +84,9 @@ export function OverviewTab() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [chartType, setChartType] = useState<"line" | "bar">("line");
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,6 +102,7 @@ export function OverviewTab() {
       setWeekSummary(w.data);
       setMonthSummary(m.data);
       setChartData(buildChartData(daily.data));
+      setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
     } finally {
@@ -96,6 +112,10 @@ export function OverviewTab() {
 
   useEffect(() => {
     load();
+    intervalRef.current = setInterval(() => load(), 30000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, [load]);
 
   const handleSync = async () => {
@@ -157,8 +177,15 @@ export function OverviewTab() {
     },
   ];
 
+  const timeSince = Math.round((Date.now() - lastUpdated.getTime()) / 1000);
+  const lastUpdatedText = timeSince < 5 ? "just now" : `${timeSince}s ago`;
+
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-end">
+        <span className="text-xs text-muted-foreground">Last updated: {lastUpdatedText}</span>
+      </div>
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {statCards.map((c) => (
           <Card key={c.label}>
@@ -182,6 +209,20 @@ export function OverviewTab() {
               Daily Cost — Last 30 Days
             </CardTitle>
             <div className="flex items-center gap-2">
+              <div className="flex rounded-md border">
+                <button
+                  className={`px-2.5 py-1 text-xs font-medium rounded-l-md transition-colors ${chartType === "line" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  onClick={() => setChartType("line")}
+                >
+                  Line
+                </button>
+                <button
+                  className={`px-2.5 py-1 text-xs font-medium rounded-r-md transition-colors ${chartType === "bar" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  onClick={() => setChartType("bar")}
+                >
+                  Bar
+                </button>
+              </div>
               {syncMsg && (
                 <span className="text-xs text-green-600 dark:text-green-400">{syncMsg}</span>
               )}
@@ -198,50 +239,55 @@ export function OverviewTab() {
               No data available
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={(v) => "$" + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}
-                  width={60}
-                />
-                <Tooltip
-                  contentStyle={{
-                    borderRadius: "0.5rem",
-                    fontSize: 13,
-                    border: "1px solid var(--border)",
-                    background: "var(--card)",
-                    color: "var(--card-foreground)",
-                  }}
-                  formatter={(val) => [formatUsd(Number(val)), undefined]}
-                />
-                <Legend wrapperStyle={{ fontSize: 13, paddingTop: 12 }} />
-                <Line
-                  type="monotone"
-                  dataKey="claude"
-                  stroke="#3b82f6"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Claude"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="codex"
-                  stroke="#f97316"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Codex"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartContainer config={chartConfig} className="aspect-auto h-[280px] w-full">
+              {chartType === "line" ? (
+                <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="date" tickLine={false} axisLine={false} />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => "$" + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                    width={60}
+                  />
+                  <ChartTooltip
+                    content={<ChartTooltipContent formatter={(val: number) => formatUsd(val)} />}
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  <Line
+                    type="monotone"
+                    dataKey="claude"
+                    stroke="var(--color-claude)"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="codex"
+                    stroke="var(--color-codex)"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                </LineChart>
+              ) : (
+                <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="date" tickLine={false} axisLine={false} />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => "$" + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                    width={60}
+                  />
+                  <ChartTooltip
+                    content={<ChartTooltipContent formatter={(val: number) => formatUsd(val)} />}
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  <Bar dataKey="claude" fill="var(--color-claude)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="codex" fill="var(--color-codex)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              )}
+            </ChartContainer>
           )}
         </CardContent>
       </Card>

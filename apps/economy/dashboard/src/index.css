@@ -58,6 +58,11 @@
   --border: oklch(0.921 0 0);
   --input: oklch(0.921 0 0);
   --ring: oklch(0.708 0 0);
+  --chart-1: 221 83% 53%;
+  --chart-2: 24 95% 53%;
+  --chart-3: 142 76% 36%;
+  --chart-4: 262 83% 58%;
+  --chart-5: 0 84% 60%;
 }
 
 .dark {
@@ -79,6 +84,11 @@
   --border: oklch(0.269 0 0);
   --input: oklch(0.269 0 0);
   --ring: oklch(0.439 0 0);
+  --chart-1: 221 83% 53%;
+  --chart-2: 24 95% 53%;
+  --chart-3: 142 76% 36%;
+  --chart-4: 262 83% 58%;
+  --chart-5: 0 84% 60%;
 }
 
 @layer base {
