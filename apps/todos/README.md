@@ -163,20 +163,20 @@ Or start manually via stdio:
 todos-mcp
 ```
 
-### MCP Tools (29)
+### MCP Tools (40)
 
-| Category | Tools |
-|----------|-------|
-| **Tasks** | `create_task`, `list_tasks`, `get_task`, `update_task`, `delete_task`, `start_task`, `complete_task` |
-| **Locking** | `lock_task`, `unlock_task` |
-| **Dependencies** | `add_dependency`, `remove_dependency` |
-| **Comments** | `add_comment` |
-| **Projects** | `create_project`, `list_projects` |
-| **Plans** | `create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan` |
-| **Agents** | `register_agent`, `list_agents`, `get_agent` |
-| **Task Lists** | `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`, `delete_task_list` |
-| **Search** | `search_tasks` |
-| **Sync** | `sync` |
+**Tasks:** `create_task`, `list_tasks`, `get_task`, `update_task`, `delete_task`, `start_task`, `complete_task`, `lock_task`, `unlock_task`, `approve_task`
+**Dependencies:** `add_dependency`, `remove_dependency`
+**Comments:** `add_comment`
+**Projects:** `create_project`, `list_projects`
+**Plans:** `create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`
+**Agents:** `register_agent`, `list_agents`, `get_agent`
+**Task Lists:** `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`, `delete_task_list`
+**Search:** `search_tasks`
+**Sync:** `sync`
+**Audit:** `get_task_history`, `get_recent_activity`
+**Webhooks:** `create_webhook`, `list_webhooks`, `delete_webhook`
+**Templates:** `create_template`, `list_templates`, `create_task_from_template`, `delete_template`
 
 ### MCP Resources
 
@@ -208,28 +208,66 @@ The dashboard auto-refreshes every 30 seconds, supports dark mode, and includes 
 
 ## REST API
 
-When running `todos serve`, the following REST API is available:
+Start the server with `todos serve` or `todos-serve`. Default port: 19427.
+
+### Tasks
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/stats` | Dashboard statistics |
-| GET | `/api/tasks` | List tasks (supports `?status=`, `?project_id=`, `?limit=`) |
-| POST | `/api/tasks` | Create a task |
+| GET | `/api/tasks` | List tasks. Query: `?status=`, `?project_id=`, `?limit=` |
+| POST | `/api/tasks` | Create task. Body: `{ title, description?, priority?, project_id?, estimated_minutes?, requires_approval? }` |
 | GET | `/api/tasks/:id` | Get task details |
-| PATCH | `/api/tasks/:id` | Update a task |
-| DELETE | `/api/tasks/:id` | Delete a task |
-| POST | `/api/tasks/:id/start` | Start a task |
-| POST | `/api/tasks/:id/complete` | Complete a task |
-| POST | `/api/tasks/bulk` | Bulk operations (start, complete, delete) |
-| GET | `/api/tasks/export?format=csv` | Export tasks as CSV |
-| GET | `/api/tasks/export?format=json` | Export tasks as JSON |
-| GET | `/api/projects` | List projects |
-| POST | `/api/projects` | Create a project |
-| DELETE | `/api/projects/:id` | Delete a project |
-| GET | `/api/agents` | List agents |
-| POST | `/api/agents` | Register an agent |
-| PATCH | `/api/agents/:id` | Update an agent |
-| DELETE | `/api/agents/:id` | Delete an agent |
+| PATCH | `/api/tasks/:id` | Update task. Body: `{ title?, status?, priority?, description?, assigned_to?, tags?, due_at?, estimated_minutes?, requires_approval?, approved_by? }` |
+| DELETE | `/api/tasks/:id` | Delete task |
+| POST | `/api/tasks/:id/start` | Start task (sets in_progress, locks) |
+| POST | `/api/tasks/:id/complete` | Complete task |
+| GET | `/api/tasks/:id/history` | Get task audit log |
+| POST | `/api/tasks/bulk` | Bulk ops. Body: `{ ids: [...], action: "start" | "complete" | "delete" }` |
+| GET | `/api/tasks/export?format=csv` | Export as CSV |
+| GET | `/api/tasks/export?format=json` | Export as JSON |
+
+### Projects
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/projects` | List all projects |
+| POST | `/api/projects` | Create project. Body: `{ name, path, description? }` |
+| DELETE | `/api/projects/:id` | Delete project |
+| POST | `/api/projects/bulk` | Bulk delete. Body: `{ ids: [...], action: "delete" }` |
+
+### Plans
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/plans` | List plans. Query: `?project_id=` |
+| POST | `/api/plans` | Create plan. Body: `{ name, description?, project_id?, task_list_id?, agent_id?, status? }` |
+| GET | `/api/plans/:id` | Get plan with its tasks |
+| PATCH | `/api/plans/:id` | Update plan |
+| DELETE | `/api/plans/:id` | Delete plan |
+| POST | `/api/plans/bulk` | Bulk delete |
+
+### Agents
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/agents` | List all agents |
+| POST | `/api/agents` | Register agent. Body: `{ name, description?, role? }` |
+| PATCH | `/api/agents/:id` | Update agent. Body: `{ name?, description?, role? }` |
+| DELETE | `/api/agents/:id` | Delete agent |
+| POST | `/api/agents/bulk` | Bulk delete |
+
+### Webhooks, Templates, Activity
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/webhooks` | List webhooks |
+| POST | `/api/webhooks` | Create webhook. Body: `{ url, events?, secret? }` |
+| DELETE | `/api/webhooks/:id` | Delete webhook |
+| GET | `/api/templates` | List task templates |
+| POST | `/api/templates` | Create template. Body: `{ name, title_pattern, description?, priority?, tags? }` |
+| DELETE | `/api/templates/:id` | Delete template |
+| GET | `/api/activity` | Recent audit log. Query: `?limit=50` |
+| GET | `/api/stats` | Dashboard statistics |
 
 ## Sync
 
@@ -274,50 +312,48 @@ Claude uses native Claude Code task lists. Other agents use JSON files under `~/
 }
 ```
 
-## CLI Commands
+## CLI Reference
 
-### Task Operations
+```bash
+# Task management
+todos add "title" [-d desc] [-p priority] [--tags t1,t2] [--plan id] [--estimated 30] [--approval]
+todos list [-s status] [-p priority] [--assigned agent] [--project-name name] [--agent-name name] [--sort field] [-a]
+todos show <id>                    # Full task details with relations
+todos update <id> [--title t] [-s status] [-p priority] [--tags t1,t2] [--estimated 30]
+todos done <id>                    # Complete a task
+todos start <id>                   # Claim, lock, and start
+todos delete <id>
+todos approve <id>                 # Approve a task requiring approval
+todos history <id>                 # Show task audit log
+todos search <query>
+todos bulk <done|start|delete> <id1> <id2> ...
+todos comment <id> <text>
+todos deps <id> --add <dep_id>     # Manage dependencies
 
-| Command | Description |
-|---------|-------------|
-| `todos add <title>` | Create a task (`-p` priority, `--tags`, `--list`, `--plan`, `--assign`, `--parent`) |
-| `todos list` | List tasks (`-s` status, `-p` priority, `--list`, `--tags`, `-a` all) |
-| `todos show <id>` | Show full task details with relations |
-| `todos update <id>` | Update fields (`--title`, `-s`, `-p`, `--tags`, `--list`, `--assign`) |
-| `todos start <id>` | Claim task, lock it, set to in_progress |
-| `todos done <id>` | Mark task completed, release lock |
-| `todos delete <id>` | Delete permanently |
-| `todos lock <id>` | Acquire exclusive lock |
-| `todos unlock <id>` | Release lock |
+# Plans
+todos plans [--add name] [--show id] [--delete id] [--complete id]
 
-### Organization
+# Templates
+todos templates [--add name --title pattern] [--delete id] [--use id]
 
-| Command | Description |
-|---------|-------------|
-| `todos lists` | List task lists (`--add`, `--delete`, `--slug`, `-d`) |
-| `todos plans` | List plans (`--add`, `--show`, `--delete`, `--complete`) |
-| `todos projects` | List projects (`--add`, `--name`, `--task-list-id`) |
-| `todos deps <id>` | Manage dependencies (`--needs`, `--remove`) |
-| `todos comment <id> <text>` | Add a comment to a task |
-| `todos search <query>` | Full-text search across tasks |
+# Projects & Agents
+todos projects [--add name --path /path]
+todos agents
+todos init <name>                  # Register an agent
+todos lists                        # Manage task lists
 
-### Agent & System
+# Utilities
+todos count [--json]               # Quick stats
+todos watch [-s status] [-i 5]     # Live-updating task list
+todos config [--get key] [--set key=value]
+todos export [--format csv|json]
+todos sync [--task-list id]        # Sync with Claude Code
+todos serve [--port 19427]         # Start web dashboard
+todos interactive                  # Launch TUI
+todos upgrade                      # Update to latest version
+```
 
-| Command | Description |
-|---------|-------------|
-| `todos init <name>` | Register agent, get short UUID (`-d` description) |
-| `todos agents` | List registered agents |
-| `todos sync` | Sync with agent task lists |
-| `todos mcp` | MCP server (`--register`, `--unregister`) |
-| `todos hooks install` | Install Claude Code auto-sync hooks |
-| `todos export` | Export tasks (`-f json\|md`) |
-| `todos upgrade` | Self-update to latest version |
-
-### Global Options
-
-All commands support: `--project <path>`, `--json`, `--agent <name>`, `--session <id>`.
-
-Partial IDs work everywhere — use the first 8+ characters of any UUID.
+All output supports `--json` for machine-readable format.
 
 ## Library Usage
 
