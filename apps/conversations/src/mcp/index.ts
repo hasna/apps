@@ -76,7 +76,7 @@ server.registerTool("send_message", {
 
 server.registerTool("read_messages", {
   title: "Read Messages",
-  description: "Read messages with optional filters. Returns messages sorted by time.",
+  description: "Read messages with filters, newest first.",
   inputSchema: {
     session_id: z.string().optional().describe("Filter by session ID"),
     from: z.string().optional().describe("Filter by sender"),
@@ -96,7 +96,7 @@ server.registerTool("read_messages", {
 
 server.registerTool("list_sessions", {
   title: "List Sessions",
-  description: "List conversation sessions, optionally filtered to a specific agent.",
+  description: "List sessions, optionally filtered by agent.",
   inputSchema: {
     agent: z.string().optional().describe("Filter sessions involving this agent"),
   },
@@ -110,7 +110,7 @@ server.registerTool("list_sessions", {
 
 server.registerTool("reply", {
   title: "Reply to Message",
-  description: "Reply to a message by ID. Uses the same session and sends to the original sender.",
+  description: "Reply to a message (same session, original sender).",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     message_id: z.number().describe("ID of the message to reply to"),
@@ -216,7 +216,7 @@ server.registerTool("export_messages", {
 
 server.registerTool("create_space", {
   title: "Create Space",
-  description: "Create a new space. Creator is auto-joined. Supports nesting (max 3 levels) and project association.",
+  description: "Create a space. Auto-joined. Supports nesting and projects.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     name: z.string().describe("Space name"),
@@ -247,7 +247,7 @@ server.registerTool("create_space", {
 
 server.registerTool("list_spaces", {
   title: "List Spaces",
-  description: "List spaces with member/message counts. Archived spaces excluded by default.",
+  description: "List spaces with member/message counts.",
   inputSchema: {
     project_id: z.string().optional().describe("Filter by project ID"),
     parent_id: z.string().optional().describe("Filter by parent space. Use 'null' for top-level only."),
@@ -433,7 +433,7 @@ server.registerTool("unarchive_space", {
 
 server.registerTool("create_project", {
   title: "Create Project",
-  description: "Create a new project to organize spaces and agent collaboration.",
+  description: "Create a project for spaces and agent collaboration.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     name: z.string().describe("Project name (unique)"),
@@ -647,7 +647,7 @@ server.registerTool("delete_project", {
 
 server.registerTool("delete_message", {
   title: "Delete Message",
-  description: "Delete a message. Only the sender can delete their own messages.",
+  description: "Delete a message. Sender only.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     id: z.number().describe("Message ID to delete"),
@@ -670,7 +670,7 @@ server.registerTool("delete_message", {
 
 server.registerTool("edit_message", {
   title: "Edit Message",
-  description: "Edit a message's content. Only the sender can edit their own messages.",
+  description: "Edit a message's content. Sender only.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     id: z.number().describe("Message ID to edit"),
@@ -694,7 +694,7 @@ server.registerTool("edit_message", {
 
 server.registerTool("pin_message", {
   title: "Pin Message",
-  description: "Pin a message. Retrieve pinned messages with get_pinned_messages.",
+  description: "Pin a message in a space or session.",
   inputSchema: {
     id: z.number().describe("Message ID to pin"),
   },
@@ -736,7 +736,7 @@ server.registerTool("unpin_message", {
 
 server.registerTool("get_pinned_messages", {
   title: "Get Pinned Messages",
-  description: "Retrieve pinned messages, optionally filtered by space or session.",
+  description: "Get pinned messages, filtered by space or session.",
   inputSchema: {
     space: z.string().optional().describe("Filter by space"),
     session_id: z.string().optional().describe("Filter by session ID"),
@@ -754,7 +754,7 @@ server.registerTool("get_pinned_messages", {
 
 server.registerTool("heartbeat", {
   title: "Heartbeat",
-  description: "Send a heartbeat to indicate agent is alive. Optionally set a status.",
+  description: "Send heartbeat. Optionally set agent status.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     status: z.string().optional().describe("Agent status (e.g. 'online', 'busy', 'idle'). Defaults to 'online'."),
@@ -770,7 +770,7 @@ server.registerTool("heartbeat", {
 
 server.registerTool("list_agents", {
   title: "List Agents",
-  description: "List agents with presence status (name, status, last_seen, online).",
+  description: "List agents with presence status.",
   inputSchema: {
     online_only: z.boolean().optional().describe("Only return agents online within last 60s"),
   },
@@ -784,7 +784,7 @@ server.registerTool("list_agents", {
 
 server.registerTool("get_blockers", {
   title: "Get Blockers",
-  description: "Check for unread blocking messages targeting you. Must acknowledge before continuing.",
+  description: "Check for unread blocking messages. Must acknowledge.",
   inputSchema: {
     from: z.string().optional().describe("Your agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
   },
@@ -823,7 +823,7 @@ server.registerTool("remove_agent", {
 
 server.registerTool("rename_agent", {
   title: "Rename Agent",
-  description: "Rename an agent in the presence list. Defaults to renaming yourself.",
+  description: "Rename an agent in the presence list.",
   inputSchema: {
     from: z.string().optional().describe("Your current agent ID. Falls back to CONVERSATIONS_AGENT_ID env var."),
     new_name: z.string().describe("The new name for the agent"),
@@ -857,6 +857,56 @@ server.registerTool("rename_agent", {
       isError: true,
     };
   }
+});
+
+// ---- Meta Tools ----
+
+server.registerTool("search_tools", {
+  title: "Search Tools",
+  description: "List tool names, optionally filtered by keyword.",
+  inputSchema: {
+    query: z.string().optional().describe("Keyword filter"),
+  },
+}, async ({ query }) => {
+  const all = [
+    "send_message", "read_messages", "list_sessions", "reply",
+    "mark_read", "search_messages", "export_messages",
+    "create_space", "list_spaces", "send_to_space", "read_space",
+    "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
+    "create_project", "list_projects", "get_project", "update_project", "delete_project",
+    "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
+    "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
+    "search_tools", "describe_tools",
+  ];
+  const q = query?.toLowerCase();
+  const matches = q ? all.filter(n => n.includes(q)) : all;
+  return { content: [{ type: "text" as const, text: matches.join(", ") }] };
+});
+
+server.registerTool("describe_tools", {
+  title: "Describe Tools",
+  description: "Get descriptions for specific tools by name.",
+  inputSchema: {
+    names: z.array(z.string()).describe("Tool names from search_tools"),
+  },
+}, async ({ names }) => {
+  const descriptions: Record<string, string> = {
+    send_message: "Send DM to agent. Params: to, content, from?, priority?",
+    read_messages: "Read messages. Params: space?, from?, to?, unread_only?, limit?",
+    list_sessions: "List sessions. Params: agent?",
+    reply: "Reply to message. Params: id, content, from?",
+    send_to_space: "Send message to space. Params: space, content, from?",
+    read_space: "Read space messages. Params: space, limit?, since?",
+    join_space: "Join a space. Params: space, from?",
+    create_space: "Create space. Params: name, description?, parent_id?",
+    list_spaces: "List spaces with counts. No required params.",
+    heartbeat: "Send heartbeat. Params: from?, status?",
+    list_agents: "List agents with presence. No required params.",
+    get_blockers: "Check for blocking messages. Params: name?",
+    search_messages: "Search messages. Params: query, space?, limit?",
+  };
+  const result = names.map(n => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
+  return { content: [{ type: "text" as const, text: result }] };
 });
 
 // ---- Start server ----
