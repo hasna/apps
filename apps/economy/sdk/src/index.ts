@@ -17,3 +17,5 @@ export type {
 
 export { EconomyClient } from './client.js'
 export type { EconomyClientOptions } from './client.js'
+export { economyTools } from './schemas.js'
+export type { EconomyToolName } from './schemas.js'
