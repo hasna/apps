@@ -193,7 +193,7 @@ server.tool(
 // 3. get_task
 server.tool(
   "get_task",
-  "Get full task details including dependencies, subtasks, and comments",
+  "Get full task details with relations",
   {
     id: z.string().describe("Task ID (full or partial)"),
   },
@@ -244,7 +244,7 @@ server.tool(
 // 4. update_task
 server.tool(
   "update_task",
-  "Update task fields (requires version for optimistic locking)",
+  "Update task fields. Version required for optimistic locking.",
   {
     id: z.string().describe("Task ID (full or partial)"),
     version: z.number().describe("Current version (for optimistic locking)"),
@@ -295,7 +295,7 @@ server.tool(
 // 6. start_task
 server.tool(
   "start_task",
-  "Claim a task, lock it, and set status to in_progress",
+  "Claim, lock, and set task status to in_progress.",
   {
     id: z.string().describe("Task ID (full or partial)"),
     agent_id: z.string().describe("Agent claiming the task"),
@@ -314,7 +314,7 @@ server.tool(
 // 7. complete_task
 server.tool(
   "complete_task",
-  "Mark a task as completed and release lock",
+  "Mark task completed and release lock.",
   {
     id: z.string().describe("Task ID (full or partial)"),
     agent_id: z.string().optional().describe("Agent completing the task"),
@@ -374,7 +374,7 @@ server.tool(
 // 10. add_dependency
 server.tool(
   "add_dependency",
-  "Add a dependency between tasks (task_id depends on depends_on)",
+  "Add a dependency: task_id depends on depends_on.",
   {
     task_id: z.string().describe("Task that depends on another"),
     depends_on: z.string().describe("Task that must complete first"),
@@ -624,7 +624,7 @@ server.tool(
 // 15. search_tasks
 server.tool(
   "search_tasks",
-  "Full-text search across task titles, descriptions, and tags",
+  "Full-text search across task titles, descriptions, tags.",
   {
     query: z.string().describe("Search query"),
     project_id: z.string().optional().describe("Limit to project"),
@@ -651,7 +651,7 @@ server.tool(
 // 16. sync
 server.tool(
   "sync",
-  "Sync tasks with an agent task list (Claude uses native task list; others use JSON lists).",
+  "Sync tasks with an agent task list.",
   {
     task_list_id: z.string().optional().describe("Task list ID (required for Claude)"),
     agent: z.string().optional().describe("Agent/provider name (default: claude)"),
@@ -714,7 +714,7 @@ server.tool(
 // register_agent
 server.tool(
   "register_agent",
-  "Register an agent and get a short UUID. Idempotent: same name returns existing agent.",
+  "Register an agent (idempotent by name).",
   {
     name: z.string().describe("Agent name"),
     description: z.string().optional().describe("Agent description"),
@@ -900,7 +900,7 @@ server.tool(
 // delete_task_list
 server.tool(
   "delete_task_list",
-  "Delete a task list. Tasks in this list keep their data but lose their list association.",
+  "Delete a task list. Tasks lose association but keep data.",
   {
     id: z.string().describe("Task list ID (full or partial)"),
   },
@@ -925,7 +925,7 @@ server.tool(
 // get_task_history
 server.tool(
   "get_task_history",
-  "Get change history for a task (audit log)",
+  "Get audit log for a task.",
   {
     task_id: z.string().describe("Task ID (full or partial)"),
   },
@@ -944,7 +944,7 @@ server.tool(
 // get_recent_activity
 server.tool(
   "get_recent_activity",
-  "Get recent task changes across all tasks (audit log)",
+  "Get recent task changes across all tasks.",
   {
     limit: z.number().optional().describe("Max entries (default 50)"),
   },
@@ -964,7 +964,7 @@ server.tool(
 // create_webhook
 server.tool(
   "create_webhook",
-  "Register a webhook URL to receive task change notifications",
+  "Register a webhook to receive task change events.",
   {
     url: z.string().describe("Webhook URL"),
     events: z.array(z.string()).optional().describe("Event types to subscribe to (empty = all)"),
@@ -1016,7 +1016,7 @@ server.tool(
 // create_template
 server.tool(
   "create_template",
-  "Create a reusable task template",
+  "Create a reusable task template.",
   {
     name: z.string().describe("Template name"),
     title_pattern: z.string().describe("Title pattern for tasks created from this template"),
@@ -1054,7 +1054,7 @@ server.tool(
 // create_task_from_template
 server.tool(
   "create_task_from_template",
-  "Create a task from a template with optional overrides",
+  "Create a task from a template with optional overrides.",
   {
     template_id: z.string().describe("Template ID"),
     title: z.string().optional().describe("Override title"),
@@ -1095,7 +1095,7 @@ server.tool(
 // approve_task
 server.tool(
   "approve_task",
-  "Approve a task that requires approval before completion",
+  "Approve a task that requires approval.",
   {
     id: z.string().describe("Task ID (full or partial)"),
     agent_id: z.string().optional().describe("Agent approving the task"),
@@ -1116,7 +1116,7 @@ server.tool(
 // get_my_tasks — agent discovery
 server.tool(
   "get_my_tasks",
-  "Get your assigned tasks and stats. Auto-registers if needed.",
+  "Get assigned tasks and stats for an agent.",
   {
     agent_name: z.string().describe("Your agent name"),
   },
@@ -1143,6 +1143,64 @@ server.tool(
       }
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// === META TOOLS ===
+
+// search_tools
+server.tool(
+  "search_tools",
+  "List tool names matching a query.",
+  { query: z.string().optional().describe("Keyword to filter tools") },
+  async ({ query }) => {
+    const all = [
+      "create_task","list_tasks","get_task","update_task","delete_task",
+      "start_task","complete_task","lock_task","unlock_task","approve_task",
+      "add_dependency","remove_dependency","add_comment",
+      "create_project","list_projects",
+      "create_plan","list_plans","get_plan","update_plan","delete_plan",
+      "register_agent","list_agents","get_agent","get_my_tasks",
+      "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
+      "search_tasks","sync",
+      "get_task_history","get_recent_activity",
+      "create_webhook","list_webhooks","delete_webhook",
+      "create_template","list_templates","create_task_from_template","delete_template",
+      "search_tools","describe_tools",
+    ];
+    const q = query?.toLowerCase();
+    const matches = q ? all.filter(n => n.includes(q)) : all;
+    return { content: [{ type: "text" as const, text: matches.join(", ") }] };
+  },
+);
+
+// describe_tools
+server.tool(
+  "describe_tools",
+  "Get descriptions for specific tools by name.",
+  { names: z.array(z.string()).describe("Tool names from search_tools") },
+  async ({ names }) => {
+    const descriptions: Record<string, string> = {
+      create_task: "Create a task. Params: title(req), description, priority, project_id, plan_id, tags, assigned_to, estimated_minutes, requires_approval",
+      list_tasks: "List tasks. Params: status, priority, project_id, plan_id, assigned_to, tags, limit",
+      get_task: "Get full task details. Params: id",
+      update_task: "Update task fields. Params: id, version(req), title, description, status, priority, tags, assigned_to, due_at",
+      delete_task: "Delete a task. Params: id",
+      start_task: "Claim, lock, and start a task. Params: id",
+      complete_task: "Mark task completed. Params: id, agent_id",
+      approve_task: "Approve task requiring approval. Params: id, agent_id",
+      create_plan: "Create a plan. Params: name, description, project_id, task_list_id, agent_id, status",
+      list_plans: "List plans. Params: project_id",
+      get_plan: "Get plan with tasks. Params: id",
+      search_tasks: "Full-text search tasks. Params: query, project_id, task_list_id",
+      get_my_tasks: "Get your tasks and stats. Params: agent_name",
+      get_task_history: "Get task audit log. Params: task_id",
+      get_recent_activity: "Recent changes across all tasks. Params: limit",
+      create_template: "Create task template. Params: name, title_pattern, description, priority, tags",
+      create_task_from_template: "Create task from template. Params: template_id, title, priority, assigned_to",
+    };
+    const result = names.map(n => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
+    return { content: [{ type: "text" as const, text: result }] };
   },
 );
 
