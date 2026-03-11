@@ -1,0 +1,17 @@
+{
+  "name": "@hasna/economy-menubar",
+  "version": "0.1.0",
+  "description": "macOS menu bar app for @hasna/economy",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json && electron dist/main.js",
+    "start": "electron dist/main.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "electron": "^35.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "license": "Apache-2.0"
+}

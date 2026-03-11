@@ -52,13 +52,13 @@ function resolveProjectPath(sessionId: string): { projectPath: string; projectNa
   return { projectPath: '', projectName: 'unknown' }
 }
 
-export async function ingestClaude(db: Database, verbose = false): Promise<{ files: number; requests: number; sessions: number }> {
-  if (!existsSync(TELEMETRY_DIR)) {
-    if (verbose) console.log('Claude telemetry dir not found:', TELEMETRY_DIR)
+export async function ingestClaude(db: Database, verbose = false, telemetryDir = TELEMETRY_DIR): Promise<{ files: number; requests: number; sessions: number }> {
+  if (!existsSync(telemetryDir)) {
+    if (verbose) console.log('Claude telemetry dir not found:', telemetryDir)
     return { files: 0, requests: 0, sessions: 0 }
   }
 
-  const files = readdirSync(TELEMETRY_DIR).filter(f => f.endsWith('.json'))
+  const files = readdirSync(telemetryDir).filter(f => f.endsWith('.json'))
   let totalRequests = 0
   let processedFiles = 0
   const touchedSessions = new Set<string>()
@@ -68,7 +68,7 @@ export async function ingestClaude(db: Database, verbose = false): Promise<{ fil
     const processed = getIngestState(db, 'claude', stateKey)
     if (processed === 'done') continue
 
-    const filePath = join(TELEMETRY_DIR, filename)
+    const filePath = join(telemetryDir, filename)
     let events: TelemetryEvent[]
     try {
       const raw = readFileSync(filePath, 'utf-8')

@@ -45,8 +45,7 @@ const originalEnv = process.env['ECONOMY_DB']
 
 describe('ingestClaude', () => {
   it('returns zeros when telemetry dir is missing', async () => {
-    const result = await ingestClaude(db, false)
-    // No telemetry dir → skips gracefully
+    const result = await ingestClaude(db, false, '/tmp/nonexistent-telemetry-dir-xyz')
     expect(result.files).toBe(0)
     expect(result.requests).toBe(0)
   })
