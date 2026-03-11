@@ -52,10 +52,10 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
       const processed = getIngestState(db, 'codex', stateKey)
       if (processed === 'done') continue
 
-      // Estimate cost: 60% input, 40% output (typical ratio)
-      const inputTokens = Math.floor(thread.tokens_used * 0.6)
-      const outputTokens = thread.tokens_used - inputTokens
-      const costUsd = computeCost(model, inputTokens, outputTokens)
+      // Codex CLI is subscription-based (not pay-per-token), so cost_usd = 0.
+      // Token counts are still tracked for usage awareness.
+      // Users can set a monthly subscription cost via `economy pricing set codex-subscription`.
+      const costUsd = 0
 
       const projectPath = thread.cwd ?? ''
       const projectName = projectPath ? basename(projectPath) : 'unknown'

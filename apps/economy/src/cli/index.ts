@@ -409,15 +409,50 @@ program
 
 program
   .command('dashboard')
-  .description('Open the web dashboard in browser')
+  .description('Open the web dashboard (auto-starts server if not running)')
   .option('-p, --port <port>', 'Server port', '3456')
-  .action((opts: { port?: string }) => {
-    const port = opts.port ?? '3456'
-    console.log(chalk.cyan(`Opening dashboard at http://localhost:${port}`))
+  .action(async (opts: { port?: string }) => {
+    const port = Number(opts.port ?? 3456)
+    const url = `http://localhost:${port}`
+
+    // Check if server is already running
+    let serverRunning = false
     try {
-      execSync(`open http://localhost:${port}`)
+      const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(500) })
+      serverRunning = res.ok
+    } catch { /* not running */ }
+
+    if (!serverRunning) {
+      console.log(chalk.cyan(`→ Starting economy server on port ${port}...`))
+      // Spawn server as detached background process
+      const { spawn } = await import('child_process')
+      const child = spawn(process.execPath, [process.argv[1]!, 'serve', '--port', String(port)], {
+        detached: true,
+        stdio: 'ignore',
+      })
+      child.unref()
+      // Wait for it to start
+      let attempts = 0
+      while (attempts < 20) {
+        await new Promise(r => setTimeout(r, 250))
+        try {
+          const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(300) })
+          if (res.ok) { serverRunning = true; break }
+        } catch { /* wait */ }
+        attempts++
+      }
+      if (serverRunning) {
+        console.log(chalk.green(`✓ Server started`))
+      } else {
+        console.log(chalk.yellow(`⚠ Server didn't respond — open ${url} manually after running \`economy serve\``))
+      }
+    }
+
+    console.log(chalk.cyan(`Opening ${url}`))
+    try {
+      execSync(`open ${url}`)
     } catch {
-      console.log(chalk.yellow(`Run \`economy serve\` first, then open http://localhost:${port}`))
+      console.log(chalk.yellow(`Open your browser at ${url}`))
     }
   })
 

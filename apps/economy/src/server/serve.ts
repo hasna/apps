@@ -179,7 +179,40 @@ export function createHandler(db: Database) {
 export function startServer(port = 3456): void {
   const db = openDatabase()
   ensurePricingSeeded(db)
-  const handler = createHandler(db)
-  Bun.serve({ port, fetch: handler })
+  const apiHandler = createHandler(db)
+
+  // Also serve the built dashboard from dist/dashboard/ if it exists
+  const dashboardDir = new URL('../../dashboard/dist', import.meta.url).pathname
+
+  Bun.serve({
+    port,
+    async fetch(req) {
+      const url = new URL(req.url)
+
+      // API routes
+      if (url.pathname.startsWith('/api') || url.pathname === '/health') {
+        return apiHandler(req)
+      }
+
+      // Serve dashboard static files
+      try {
+        const { existsSync } = await import('fs')
+        if (existsSync(dashboardDir)) {
+          let filePath = url.pathname === '/' ? '/index.html' : url.pathname
+          const fullPath = dashboardDir + filePath
+          if (existsSync(fullPath)) {
+            return new Response(Bun.file(fullPath))
+          }
+          // SPA fallback — return index.html for any unmatched path
+          const indexPath = dashboardDir + '/index.html'
+          if (existsSync(indexPath)) {
+            return new Response(Bun.file(indexPath))
+          }
+        }
+      } catch { /* ignore */ }
+
+      return apiHandler(req)
+    },
+  })
   console.log(`economy-serve listening on http://localhost:${port}`)
 }
