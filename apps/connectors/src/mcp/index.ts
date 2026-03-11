@@ -24,7 +24,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.2.7",
+  version: "0.2.8",
 });
 
 // --- Tool: search_connectors ---
@@ -32,11 +32,9 @@ server.registerTool(
   "search_connectors",
   {
     title: "Search Connectors",
-    description:
-      "Search the connector library by name, description, or keyword. " +
-      "Use this to discover available API connectors (e.g. 'payment', 'ai', 'email').",
+    description: "Search connectors by name, keyword, or description.",
     inputSchema: {
-      query: z.string().describe("Search query (name, keyword, or description)"),
+      query: z.string().describe("Search query"),
     },
   },
   async ({ query }) => {
@@ -67,16 +65,9 @@ server.registerTool(
   "list_connectors",
   {
     title: "List Connectors",
-    description:
-      "List all available connectors, optionally filtered by category. " +
-      "Returns name, version, category, and description for each connector.",
+    description: "List connectors, optionally filtered by category.",
     inputSchema: {
-      category: z
-        .string()
-        .optional()
-        .describe(
-          "Filter by category. Available: " + CATEGORIES.join(", ")
-        ),
+      category: z.string().optional().describe("Filter by category (e.g. 'AI & ML', 'Developer Tools')"),
     },
   },
   async ({ category }) => {
@@ -126,12 +117,9 @@ server.registerTool(
   "connector_docs",
   {
     title: "Connector Documentation",
-    description:
-      "Get detailed documentation for a connector including auth method, " +
-      "required environment variables, CLI commands, and API capabilities. " +
-      "Use this BEFORE installing a connector to understand how to use it.",
+    description: "Get auth, env vars, CLI commands, and API docs for a connector.",
     inputSchema: {
-      name: z.string().describe("Connector name (e.g. 'stripe', 'anthropic', 'gmail')"),
+      name: z.string().describe("Connector name"),
     },
   },
   async ({ name }) => {
@@ -182,17 +170,10 @@ server.registerTool(
   "install_connector",
   {
     title: "Install Connector",
-    description:
-      "Install one or more API connectors into the current project. " +
-      "Connectors are copied to .connectors/ with an auto-generated index.ts for imports.",
+    description: "Install connectors into .connectors/ with auto-generated index.ts.",
     inputSchema: {
-      names: z
-        .array(z.string())
-        .describe("Connector names to install (e.g. ['stripe', 'figma'])"),
-      overwrite: z
-        .boolean()
-        .optional()
-        .describe("Overwrite if already installed (default: false)"),
+      names: z.array(z.string()).describe("Connector names to install"),
+      overwrite: z.boolean().optional().describe("Overwrite if already installed"),
     },
   },
   async ({ names, overwrite }) => {
@@ -260,8 +241,7 @@ server.registerTool(
   "list_installed",
   {
     title: "List Installed Connectors",
-    description:
-      "List connectors currently installed in the project's .connectors/ directory.",
+    description: "List connectors installed in .connectors/.",
     inputSchema: {},
   },
   async () => {
@@ -282,9 +262,7 @@ server.registerTool(
   "connector_info",
   {
     title: "Connector Info",
-    description:
-      "Get metadata about a specific connector including version, category, " +
-      "tags, and whether it's currently installed.",
+    description: "Get connector metadata: version, category, tags, installed status.",
     inputSchema: {
       name: z.string().describe("Connector name"),
     },
@@ -321,12 +299,9 @@ server.registerTool(
   "connector_auth_status",
   {
     title: "Connector Auth Status",
-    description:
-      "Check the authentication status of an installed connector. " +
-      "Returns auth type (oauth/apikey/bearer), whether it's configured, " +
-      "token expiry for OAuth connectors, and environment variable status.",
+    description: "Check auth status: type (oauth/apikey/bearer), configured, token expiry, env vars.",
     inputSchema: {
-      name: z.string().describe("Connector name (e.g. 'gmail', 'stripe', 'anthropic')"),
+      name: z.string().describe("Connector name"),
     },
   },
   async ({ name }) => {
@@ -363,17 +338,11 @@ server.registerTool(
   "configure_auth",
   {
     title: "Configure Auth",
-    description:
-      "Save an API key or bearer token for a connector. " +
-      "Stores credentials in ~/.connectors/connect-{name}/profiles/. " +
-      "Use connector_docs to find required env vars and field names first.",
+    description: "Save an API key or bearer token for a connector.",
     inputSchema: {
-      name: z.string().describe("Connector name (e.g. 'stripe', 'anthropic', 'openai')"),
-      key: z.string().describe("The API key or bearer token value"),
-      field: z
-        .string()
-        .optional()
-        .describe("Key field name (defaults to the connector's primary key field, usually 'apiKey')"),
+      name: z.string().describe("Connector name"),
+      key: z.string().describe("API key or bearer token"),
+      field: z.string().optional().describe("Field name (default: 'apiKey')"),
     },
   },
   async ({ name, key, field }) => {
@@ -410,8 +379,7 @@ server.registerTool(
   "list_categories",
   {
     title: "List Categories",
-    description:
-      "List all connector categories with the number of connectors in each.",
+    description: "List connector categories with counts.",
     inputSchema: {},
   },
   async () => {
