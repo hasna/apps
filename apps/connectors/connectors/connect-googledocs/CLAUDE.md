@@ -47,6 +47,13 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2026)
+
+### Gemini Features (Feb 2026)
+Audio summaries now available in Google Docs — Gemini-powered feature that generates audio overviews of documents.
+
+No breaking API changes to the Docs API v1 (stable).
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

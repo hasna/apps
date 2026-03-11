@@ -47,6 +47,15 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2026)
+
+### Google Meet Conference Guidance (Feb 2026)
+Do NOT reuse Google Meet codes across different calendar events — causes access issues and exposes meeting details to unintended users.
+Always generate a new conference using the `createRequest` field for every new event:
+```json
+"conferenceData": { "createRequest": { "requestId": "unique-id", "conferenceSolutionKey": { "type": "hangoutsMeet" } } }
+```
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

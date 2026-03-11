@@ -47,6 +47,13 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Use **Google People API** (not deprecated Contacts API v3).
+Base URL: `https://people.googleapis.com/v1/`
+Key endpoints: `/people/me`, `/people:listDirectoryPeople`, `/people:batchGet`
+Scopes: `contacts`, `contacts.readonly`, `directory.readonly`, `user.addresses.read`, `user.emails.read`
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

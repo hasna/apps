@@ -47,6 +47,16 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025)
+
+### Tables API (Apr 2025)
+Create, modify, and take basic actions on Tables in Google Sheets:
+- `addTable` request in `batchUpdate`
+- `Table` object in Sheets API
+
+### Smart Chips (Jun 2025)
+Create, update, and read Google Drive and People chips via the Sheets API.
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:

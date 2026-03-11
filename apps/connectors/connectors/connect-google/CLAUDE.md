@@ -47,6 +47,17 @@ src/
 └── index.ts       # Library exports
 ```
 
+## Auth Notes (2026)
+
+Google OAuth 2.0 — use Application Default Credentials or service account JSON.
+
+### Maps Platform Client IDs Deprecated (May 2025+)
+Maps platform client IDs deprecated May 26, 2025, cannot be used after May 31, 2026.
+- In Apps Script: `setAuthentication(clientId, signingKey)` → deprecated Jun 2026
+- Use `setAuthenticationByKey(apiKey)` or `setAuthenticationByKey(apiKey, signingKey)` instead
+
+OAuth scopes are unchanged. userinfo endpoint: `https://www.googleapis.com/oauth2/v3/userinfo`
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

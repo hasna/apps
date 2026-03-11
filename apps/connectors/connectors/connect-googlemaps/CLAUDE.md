@@ -47,6 +47,21 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2025-2026)
+
+### Places API v2 (New)
+New Places API (v2) is preferred over legacy Places API (v1). Use `https://places.googleapis.com/v1/places` endpoints.
+
+### Client IDs Deprecated (May 2025 → May 2026)
+Maps Platform client IDs deprecated May 26, 2025. Cannot be used after May 31, 2026.
+Use API key authentication exclusively.
+
+### Current APIs
+- Places API (New): `https://places.googleapis.com/v1/`
+- Routes API: `https://routes.googleapis.com/`
+- Geocoding API: `https://maps.googleapis.com/maps/api/geocode/json`
+- Maps JavaScript API, Street View, Distance Matrix, etc.
+
 ## Authentication
 
 API Key authentication. Credentials can be set via:

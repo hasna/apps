@@ -47,6 +47,11 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Updates (2026)
+
+### Deprecation (Feb 2026)
+`enforceExpansiveAccess` query parameter is now deprecated for all methods in the permissions resource (v2 and v3). To restrict item access, use **folders with limited access** setting instead.
+
 ## Authentication
 
 OAuth authentication (Google OAuth2). Credentials can be set via:

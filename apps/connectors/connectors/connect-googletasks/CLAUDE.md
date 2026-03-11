@@ -47,6 +47,12 @@ src/
 └── index.ts       # Library exports
 ```
 
+## API Notes (2026)
+
+Google Tasks API v1 is stable. Base URL: `https://tasks.googleapis.com/tasks/v1/`
+Key endpoints: `/lists`, `/lists/{list}/tasks`, `/users/@me/lists`
+Required scope: `https://www.googleapis.com/auth/tasks`
+
 ## Authentication
 
 OAuth authentication. Credentials can be set via:
