@@ -167,18 +167,36 @@ export function ensureConfigDir(): void {
 export function loadProfile(profile?: string): ProfileConfig {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  const profileDir = join(getProfilesDir(), profileName);
-  const configFile = join(profileDir, 'config.json');
 
-  if (!existsSync(configFile)) {
-    return {};
+  let config: ProfileConfig = {};
+
+  // Pattern 1: profiles/<name>.json (flat file)
+  const flatPath = join(getProfilesDir(), `${profileName}.json`);
+  if (existsSync(flatPath)) {
+    try { config = JSON.parse(readFileSync(flatPath, 'utf-8')); } catch {}
   }
 
-  try {
-    return JSON.parse(readFileSync(configFile, 'utf-8'));
-  } catch {
-    return {};
+  // Pattern 2: profiles/<name>/config.json (directory)
+  const dirConfigPath = join(getProfilesDir(), profileName, 'config.json');
+  if (existsSync(dirConfigPath)) {
+    try {
+      const dirConfig = JSON.parse(readFileSync(dirConfigPath, 'utf-8'));
+      config = { ...config, ...dirConfig };
+    } catch {}
   }
+
+  // Pattern 3: profiles/<name>/tokens.json (OAuth tokens)
+  const tokensPath = join(getProfilesDir(), profileName, 'tokens.json');
+  if (existsSync(tokensPath)) {
+    try {
+      const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'));
+      if (tokens.accessToken && !config.accessToken) config.accessToken = tokens.accessToken;
+      if (tokens.refreshToken && !config.refreshToken) config.refreshToken = tokens.refreshToken;
+      if (tokens.expiresAt && !config.tokenExpiry) config.tokenExpiry = tokens.expiresAt;
+    } catch {}
+  }
+
+  return config;
 }
 
 export function saveProfile(config: ProfileConfig, profile?: string): void {

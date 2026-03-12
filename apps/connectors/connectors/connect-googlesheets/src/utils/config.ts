@@ -150,22 +150,41 @@ export function deleteProfile(profile: string): boolean {
 }
 
 /**
- * Load profile config
+ * Load profile config — checks both flat and directory patterns, merges tokens.json
  */
 export function loadProfile(profile?: string): ProfileConfig {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  const profilePath = getProfilePath(profileName);
 
-  if (!existsSync(profilePath)) {
-    return {};
+  let config: ProfileConfig = {};
+
+  // Pattern 1: profiles/<name>.json (flat file)
+  const flatPath = getProfilePath(profileName);
+  if (existsSync(flatPath)) {
+    try { config = JSON.parse(readFileSync(flatPath, 'utf-8')); } catch {}
   }
 
-  try {
-    return JSON.parse(readFileSync(profilePath, 'utf-8'));
-  } catch {
-    return {};
+  // Pattern 2: profiles/<name>/config.json (directory)
+  const dirConfigPath = join(PROFILES_DIR, profileName, 'config.json');
+  if (existsSync(dirConfigPath)) {
+    try {
+      const dirConfig = JSON.parse(readFileSync(dirConfigPath, 'utf-8'));
+      config = { ...config, ...dirConfig };
+    } catch {}
   }
+
+  // Pattern 3: profiles/<name>/tokens.json (OAuth tokens)
+  const tokensPath = join(PROFILES_DIR, profileName, 'tokens.json');
+  if (existsSync(tokensPath)) {
+    try {
+      const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'));
+      if (tokens.accessToken && !config.accessToken) config.accessToken = tokens.accessToken;
+      if (tokens.refreshToken && !config.refreshToken) config.refreshToken = tokens.refreshToken;
+      if (tokens.expiresAt && !config.expiresAt) config.expiresAt = tokens.expiresAt;
+    } catch {}
+  }
+
+  return config;
 }
 
 /**
