@@ -77,10 +77,10 @@ export function setCurrentProfile(profile: string): void {
 }
 
 /**
- * Check if a profile exists
+ * Check if a profile exists (flat file or directory pattern)
  */
 export function profileExists(profile: string): boolean {
-  return existsSync(getProfilePath(profile));
+  return existsSync(getProfilePath(profile)) || existsSync(join(PROFILES_DIR, profile));
 }
 
 /**
@@ -93,10 +93,16 @@ export function listProfiles(): string[] {
     return [];
   }
 
-  return readdirSync(PROFILES_DIR)
-    .filter(f => f.endsWith('.json'))
-    .map(f => f.replace('.json', ''))
-    .sort();
+  const seen = new Set<string>();
+  const entries = readdirSync(PROFILES_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      seen.add(entry.name);
+    } else if (entry.name.endsWith('.json')) {
+      seen.add(entry.name.replace('.json', ''));
+    }
+  }
+  return Array.from(seen).sort();
 }
 
 /**
@@ -135,27 +141,53 @@ export function deleteProfile(profile: string): boolean {
     setCurrentProfile(DEFAULT_PROFILE);
   }
 
-  rmSync(getProfilePath(profile));
+  // Remove flat file pattern
+  const flatPath = getProfilePath(profile);
+  if (existsSync(flatPath)) {
+    rmSync(flatPath);
+  }
+
+  // Remove directory pattern
+  const dirPath = join(PROFILES_DIR, profile);
+  if (existsSync(dirPath)) {
+    rmSync(dirPath, { recursive: true });
+  }
+
   return true;
 }
 
 /**
- * Load profile config
+ * Load profile config.
+ * Checks both flat (profiles/<name>.json) and directory (profiles/<name>/config.json)
+ * patterns. Flat pattern takes precedence when both exist.
  */
 export function loadProfile(profile?: string): ProfileConfig {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
+
+  let config: ProfileConfig = {};
+
+  // Pattern 2: profiles/<name>/config.json (directory pattern, used by dashboard)
+  const dirConfigPath = join(PROFILES_DIR, profileName, 'config.json');
+  if (existsSync(dirConfigPath)) {
+    try {
+      config = JSON.parse(readFileSync(dirConfigPath, 'utf-8'));
+    } catch {
+      // ignore
+    }
+  }
+
+  // Pattern 1: profiles/<name>.json (flat pattern, used by CLI)
   const profilePath = getProfilePath(profileName);
-
-  if (!existsSync(profilePath)) {
-    return {};
+  if (existsSync(profilePath)) {
+    try {
+      config = { ...config, ...JSON.parse(readFileSync(profilePath, 'utf-8')) };
+    } catch {
+      // ignore
+    }
   }
 
-  try {
-    return JSON.parse(readFileSync(profilePath, 'utf-8'));
-  } catch {
-    return {};
-  }
+  return config;
 }
 
 /**

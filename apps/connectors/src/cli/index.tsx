@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.13")
+  .version("0.3.14")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1421,29 +1421,48 @@ program
   .description("Export all connector credentials as JSON backup")
   .action((options: { output?: string; includeSecrets?: boolean }) => {
     const connectDir = join(homedir(), ".connectors");
-    const result: Record<string, { profiles: Record<string, unknown> }> = {};
+    const result: Record<string, { credentials?: unknown; profiles: Record<string, unknown> }> = {};
 
     if (existsSync(connectDir)) {
       for (const entry of readdirSync(connectDir)) {
         const entryPath = join(connectDir, entry);
         if (!statSync(entryPath).isDirectory() || !entry.startsWith("connect-")) continue;
         const connectorName = entry.replace(/^connect-/, "");
+
+        // Read root-level credentials.json (OAuth client credentials shared across profiles)
+        let credentials: unknown = undefined;
+        const credentialsPath = join(entryPath, "credentials.json");
+        if (existsSync(credentialsPath)) {
+          try { credentials = JSON.parse(readFileSync(credentialsPath, "utf-8")); } catch {}
+        }
+
         const profilesDir = join(entryPath, "profiles");
-        if (!existsSync(profilesDir)) continue;
+        if (!existsSync(profilesDir) && !credentials) continue;
 
         const profiles: Record<string, unknown> = {};
-        for (const pEntry of readdirSync(profilesDir)) {
-          const pPath = join(profilesDir, pEntry);
-          if (statSync(pPath).isFile() && pEntry.endsWith(".json")) {
-            try { profiles[pEntry.replace(/\.json$/, "")] = JSON.parse(readFileSync(pPath, "utf-8")); } catch {}
-          } else if (statSync(pPath).isDirectory()) {
-            const configPath = join(pPath, "config.json");
-            if (existsSync(configPath)) {
-              try { profiles[pEntry] = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
+        if (existsSync(profilesDir)) {
+          for (const pEntry of readdirSync(profilesDir)) {
+            const pPath = join(profilesDir, pEntry);
+            if (statSync(pPath).isFile() && pEntry.endsWith(".json")) {
+              try { profiles[pEntry.replace(/\.json$/, "")] = JSON.parse(readFileSync(pPath, "utf-8")); } catch {}
+            } else if (statSync(pPath).isDirectory()) {
+              const configPath = join(pPath, "config.json");
+              const tokensPath = join(pPath, "tokens.json");
+              let merged: Record<string, unknown> = {};
+              if (existsSync(configPath)) {
+                try { merged = { ...merged, ...JSON.parse(readFileSync(configPath, "utf-8")) }; } catch {}
+              }
+              if (existsSync(tokensPath)) {
+                try { merged = { ...merged, ...JSON.parse(readFileSync(tokensPath, "utf-8")) }; } catch {}
+              }
+              if (Object.keys(merged).length > 0) profiles[pEntry] = merged;
             }
           }
         }
-        if (Object.keys(profiles).length > 0) result[connectorName] = { profiles };
+
+        const connectorData: { credentials?: unknown; profiles: Record<string, unknown> } = { profiles };
+        if (credentials) connectorData.credentials = credentials;
+        if (Object.keys(profiles).length > 0 || credentials) result[connectorName] = connectorData;
       }
     }
 
@@ -1488,7 +1507,7 @@ program
       raw = readFileSync(file, "utf-8");
     }
 
-    let data: { connectors: Record<string, { profiles: Record<string, unknown> }> };
+    let data: { connectors: Record<string, { credentials?: unknown; profiles: Record<string, unknown> }> };
     try { data = JSON.parse(raw); } catch {
       if (options.json) { console.log(JSON.stringify({ error: "Invalid JSON" })); }
       else { console.log(chalk.red("Invalid JSON in import file")); }
@@ -1508,9 +1527,19 @@ program
 
     for (const [connectorName, connData] of Object.entries(data.connectors)) {
       if (!/^[a-z0-9-]+$/.test(connectorName)) continue;
+
+      const connectorDir = join(connectDir, `connect-${connectorName}`);
+
+      // Restore credentials.json at connector root
+      if (connData.credentials && typeof connData.credentials === "object") {
+        mkdirSync(connectorDir, { recursive: true });
+        writeFileSync(join(connectorDir, "credentials.json"), JSON.stringify(connData.credentials, null, 2));
+        imported++;
+      }
+
       if (!connData.profiles || typeof connData.profiles !== "object") continue;
 
-      const profilesDir = join(connectDir, `connect-${connectorName}`, "profiles");
+      const profilesDir = join(connectorDir, "profiles");
       for (const [profileName, config] of Object.entries(connData.profiles)) {
         if (!config || typeof config !== "object") continue;
         mkdirSync(profilesDir, { recursive: true });
@@ -1534,7 +1563,7 @@ program
   .option("--json", "Output as JSON", false)
   .description("Check for updates and upgrade to the latest version")
   .action(async (options: { check: boolean; json: boolean }) => {
-    const currentVersion = "0.3.1";
+    const currentVersion = program.version() as string;
 
     try {
       const res = await fetch("https://registry.npmjs.org/@hasna/connectors/latest");
