@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.5.4")
+  .version("0.5.5")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -781,22 +781,37 @@ program
 program
   .command("status")
   .option("--json", "Output as JSON", false)
-  .description("Show auth status of installed connectors")
+  .description("Show auth status of all configured connectors (project + global)")
   .action((options: { json: boolean }) => {
     const installed = getInstalledConnectors();
+    const configDir = join(homedir(), ".connectors");
+    const seen = new Set<string>();
 
-    if (installed.length === 0) {
-      if (options.json) {
-        console.log(JSON.stringify([]));
-      } else {
-        console.log(chalk.dim("No connectors installed. Run: connectors install <name>"));
-      }
-      return;
-    }
+    type StatusEntry = {
+      name: string;
+      authType: string;
+      configured: boolean;
+      profile: string;
+      expired: boolean;
+      expiryLabel: string | null;
+      tokenExpiry: number | null;
+      hasRefreshToken: boolean;
+      source: "project" | "global";
+    };
 
-    const statuses = installed.map((name) => {
-      const meta = getConnector(name);
+    const allStatuses: StatusEntry[] = [];
+
+    // Helper: build a status entry for a connector
+    function buildStatusEntry(name: string, source: "project" | "global"): StatusEntry {
       const auth = getAuthStatus(name);
+
+      // Read current profile
+      const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
+      const currentProfileFile = join(configDir, connectorName, "current_profile");
+      let profile = "default";
+      if (existsSync(currentProfileFile)) {
+        try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+      }
 
       // Compute expiry label for OAuth connectors
       let expiryLabel: string | null = null;
@@ -819,38 +834,75 @@ program
 
       return {
         name,
-        category: meta?.category || "Unknown",
         authType: auth.type,
         configured: auth.configured,
+        profile,
         expired,
         expiryLabel,
         tokenExpiry: auth.tokenExpiry || null,
         hasRefreshToken: auth.hasRefreshToken || false,
+        source,
       };
-    });
+    }
 
-    if (options.json) {
-      console.log(JSON.stringify(statuses, null, 2));
+    // 1. Project-installed connectors
+    for (const name of installed) {
+      seen.add(name);
+      allStatuses.push(buildStatusEntry(name, "project"));
+    }
+
+    // 2. Global connectors from ~/.connectors/connect-*
+    if (existsSync(configDir)) {
+      try {
+        const globalDirs = readdirSync(configDir).filter((f: string) => {
+          if (!f.startsWith("connect-")) return false;
+          try { return statSync(join(configDir, f)).isDirectory(); } catch { return false; }
+        });
+
+        for (const dir of globalDirs) {
+          const name = dir.replace("connect-", "");
+          if (seen.has(name)) continue;
+          seen.add(name);
+          allStatuses.push(buildStatusEntry(name, "global"));
+        }
+      } catch {
+        // ignore read errors on ~/.connectors
+      }
+    }
+
+    if (allStatuses.length === 0) {
+      if (options.json) {
+        console.log(JSON.stringify({ configured: [], unconfigured: [], summary: { total: 0, configured: 0, unconfigured: 0 } }, null, 2));
+      } else {
+        console.log(chalk.dim("No connectors found. Run: connectors install <name>"));
+      }
       return;
     }
 
-    // Compute column widths
-    const nameWidth = Math.max(6, ...statuses.map((s) => s.name.length)) + 2;
-    const catWidth = Math.max(10, ...statuses.map((s) => s.category.length)) + 2;
+    // Group by configured vs unconfigured
+    const configuredList = allStatuses.filter((s) => s.configured);
+    const unconfiguredList = allStatuses.filter((s) => !s.configured);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        configured: configuredList,
+        unconfigured: unconfiguredList,
+        summary: {
+          total: allStatuses.length,
+          configured: configuredList.length,
+          unconfigured: unconfiguredList.length,
+        },
+      }, null, 2));
+      return;
+    }
+
+    // Compute column widths across all entries
+    const nameWidth = Math.max(6, ...allStatuses.map((s) => s.name.length)) + 2;
     const authWidth = 10;
+    const profileWidth = Math.max(8, ...allStatuses.map((s) => s.profile.length)) + 2;
 
-    console.log(chalk.bold("\nConnector Status\n"));
-
-    // Header
-    console.log(
-      `  ${chalk.dim("Name".padEnd(nameWidth))}` +
-      `${chalk.dim("Category".padEnd(catWidth))}` +
-      `${chalk.dim("Auth Type".padEnd(authWidth))}` +
-      `${chalk.dim("Status")}`
-    );
-    console.log(chalk.dim(`  ${"─".repeat(nameWidth + catWidth + authWidth + 24)}`));
-
-    for (const s of statuses) {
+    // Helper: print a row
+    function printRow(s: StatusEntry) {
       const authTypeLabel =
         s.authType === "oauth" ? "OAuth" :
         s.authType === "apikey" ? "API Key" :
@@ -858,27 +910,76 @@ program
 
       let statusLabel: string;
       if (s.configured && s.expired) {
-        statusLabel = chalk.yellow("⚠ Token expired");
+        statusLabel = chalk.yellow("expired");
       } else if (s.configured) {
-        statusLabel = chalk.green("✓ Configured");
+        statusLabel = chalk.green("yes");
       } else {
-        statusLabel = chalk.red("✗ Not configured");
+        statusLabel = chalk.red("no");
       }
 
-      // Append expiry info for configured OAuth connectors
+      const profileLabel = s.profile.padEnd(profileWidth);
+
+      // Expiry column for OAuth
       let expiryStr = "";
-      if (s.expiryLabel && s.configured && !s.expired) {
-        expiryStr = `   ${chalk.dim(s.expiryLabel)}`;
+      if (s.authType === "oauth") {
+        if (s.expired) {
+          expiryStr = chalk.yellow("Expired");
+        } else if (s.expiryLabel && s.configured) {
+          expiryStr = chalk.dim(s.expiryLabel);
+        } else {
+          expiryStr = chalk.dim("-");
+        }
+      } else {
+        expiryStr = chalk.dim("-");
       }
+
+      const sourceLabel = s.source === "global" ? chalk.dim(" (global)") : "";
 
       console.log(
         `  ${chalk.cyan(s.name.padEnd(nameWidth))}` +
-        `${s.category.padEnd(catWidth)}` +
         `${authTypeLabel.padEnd(authWidth)}` +
-        `${statusLabel}${expiryStr}`
+        `${statusLabel.padEnd(16)}` +
+        `${profileLabel}` +
+        `${expiryStr}${sourceLabel}`
       );
     }
 
+    // Header
+    function printHeader() {
+      console.log(
+        `  ${chalk.dim("Name".padEnd(nameWidth))}` +
+        `${chalk.dim("Auth".padEnd(authWidth))}` +
+        `${chalk.dim("Configured".padEnd(16))}` +
+        `${chalk.dim("Profile".padEnd(profileWidth))}` +
+        `${chalk.dim("Expiry")}`
+      );
+      console.log(chalk.dim(`  ${"─".repeat(nameWidth + authWidth + 16 + profileWidth + 12)}`));
+    }
+
+    console.log(chalk.bold("\nConnector Status\n"));
+
+    // Configured section
+    if (configuredList.length > 0) {
+      console.log(chalk.green.bold(`  Configured (${configuredList.length})\n`));
+      printHeader();
+      for (const s of configuredList) {
+        printRow(s);
+      }
+      console.log();
+    }
+
+    // Unconfigured section
+    if (unconfiguredList.length > 0) {
+      console.log(chalk.red.bold(`  Unconfigured (${unconfiguredList.length})\n`));
+      printHeader();
+      for (const s of unconfiguredList) {
+        printRow(s);
+      }
+      console.log();
+    }
+
+    // Summary
+    console.log(chalk.dim(`  Total: ${allStatuses.length}  |  Configured: ${configuredList.length}  |  Unconfigured: ${unconfiguredList.length}`));
     console.log();
   });
 
