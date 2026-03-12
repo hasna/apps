@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.11")
+  .version("0.3.12")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1067,7 +1067,7 @@ program
       console.log();
 
       try {
-        const port = 19426 + Math.floor(Math.random() * 1000);
+        const port = 19426; // Fixed port — OAuth redirect URIs must match
         const { startServer } = await import("../server/serve.js");
 
         console.log(chalk.dim(`Starting temporary server on port ${port}...`));
