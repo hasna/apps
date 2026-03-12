@@ -147,7 +147,7 @@ function redactIni(content: string): RedactResult {
     const line = lines[i]!;
     // //registry:_authToken=value (npmrc style)
     const authM = line.match(/^(\/\/[^:]+:_authToken=)(.+)$/);
-    if (authM) {
+    if (authM && !authM[2]!.startsWith("{{")) {
       redacted.push({ varName: "NPM_AUTH_TOKEN", line: i + 1, reason: "npm auth token" });
       out.push(`${authM[1]}{{NPM_AUTH_TOKEN}}`);
       continue;
