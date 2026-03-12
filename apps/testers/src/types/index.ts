@@ -5,6 +5,15 @@ export type RunStatus = "pending" | "running" | "passed" | "failed" | "cancelled
 export type ResultStatus = "passed" | "failed" | "error" | "skipped";
 export type ModelPreset = "quick" | "thorough" | "deep";
 
+export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains";
+
+export interface Assertion {
+  type: AssertionType;
+  selector?: string;
+  expected?: string | number;
+  description?: string;
+}
+
 export const MODEL_MAP: Record<ModelPreset, string> = {
   quick: "claude-haiku-4-5-20251001",
   thorough: "claude-sonnet-4-6-20260311",
@@ -47,6 +56,7 @@ export interface ScenarioRow {
   requires_auth: number;
   auth_config: string | null; // JSON
   metadata: string | null; // JSON
+  assertions: string; // JSON array
   version: number;
   created_at: string;
   updated_at: string;
@@ -66,6 +76,7 @@ export interface RunRow {
   started_at: string;
   finished_at: string | null;
   metadata: string | null; // JSON
+  is_baseline: number;
 }
 
 export interface ResultRow {
@@ -154,6 +165,7 @@ export interface Scenario {
   requiresAuth: boolean;
   authConfig: AuthConfig | null;
   metadata: Record<string, unknown> | null;
+  assertions: Assertion[];
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -173,6 +185,7 @@ export interface Run {
   startedAt: string;
   finishedAt: string | null;
   metadata: Record<string, unknown> | null;
+  isBaseline: boolean;
 }
 
 export interface Result {
@@ -238,6 +251,7 @@ export interface CreateScenarioInput {
   targetPath?: string;
   requiresAuth?: boolean;
   authConfig?: AuthConfig;
+  assertions?: Assertion[];
   metadata?: Record<string, unknown>;
   projectId?: string;
 }
@@ -253,6 +267,7 @@ export interface UpdateScenarioInput {
   targetPath?: string;
   requiresAuth?: boolean;
   authConfig?: AuthConfig;
+  assertions?: Assertion[];
   metadata?: Record<string, unknown>;
 }
 
@@ -390,6 +405,7 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     requiresAuth: row.requires_auth === 1,
     authConfig: row.auth_config ? JSON.parse(row.auth_config) : null,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    assertions: JSON.parse(row.assertions || "[]"),
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -411,6 +427,7 @@ export function runFromRow(row: RunRow): Run {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    isBaseline: row.is_baseline === 1,
   };
 }
 

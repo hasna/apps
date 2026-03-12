@@ -219,6 +219,30 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_deps_depends ON scenario_dependencies(depends_on);
   CREATE INDEX IF NOT EXISTS idx_flows_project ON flows(project_id);
   `,
+
+  // Migration 9: Structured assertions for scenarios
+  `
+  ALTER TABLE scenarios ADD COLUMN assertions TEXT DEFAULT '[]';
+  `,
+
+  // Migration 10: Environments table for multi-environment support
+  `
+  CREATE TABLE IF NOT EXISTS environments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    url TEXT NOT NULL,
+    auth_preset_name TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
+
+  // Migration 11: Baseline flag for visual regression
+  `
+  ALTER TABLE runs ADD COLUMN is_baseline INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -281,6 +305,7 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM flows");
   database.exec("DELETE FROM webhooks");
   database.exec("DELETE FROM auth_presets");
+  database.exec("DELETE FROM environments");
   database.exec("DELETE FROM schedules");
   database.exec("DELETE FROM runs");
   database.exec("DELETE FROM scenarios");

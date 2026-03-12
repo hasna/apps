@@ -7,6 +7,7 @@ import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
 import { createClient, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
+import { dispatchWebhooks } from "./webhooks.js";
 import type { Browser, Page } from "playwright";
 
 export interface RunOptions {
@@ -56,6 +57,18 @@ function emit(event: RunEvent): void {
   if (eventHandler) eventHandler(event);
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Scenario timeout after ${ms}ms: ${label}`));
+    }, ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 export async function runSingleScenario(
   scenario: Scenario,
   runId: string,
@@ -90,9 +103,11 @@ export async function runSingleScenario(
       ? `${options.url.replace(/\/$/, "")}${scenario.targetPath}`
       : options.url;
 
-    await page.goto(targetUrl, { timeout: options.timeout ?? config.browser.timeout });
+    const scenarioTimeout = scenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
 
-    const agentResult = await runAgentLoop({
+    await page.goto(targetUrl, { timeout: Math.min(scenarioTimeout, 30000) });
+
+    const agentResult = await withTimeout(runAgentLoop({
       client,
       page,
       scenario,
@@ -113,7 +128,7 @@ export async function runSingleScenario(
           stepNumber: stepEvent.stepNumber,
         });
       },
-    });
+    }), scenarioTimeout, scenario.name);
 
     // Save screenshots to DB
     for (const ss of agentResult.screenshots) {
@@ -277,6 +292,10 @@ export async function runBatch(
 
   emit({ type: "run:complete", runId: run.id });
 
+  // Dispatch webhooks (fire and forget)
+  const eventType = finalRun.status === "failed" ? "failed" : "completed";
+  dispatchWebhooks(eventType, finalRun).catch(() => {});
+
   return { run: finalRun, results };
 }
 
@@ -381,6 +400,8 @@ export function startRunAsync(
         finished_at: new Date().toISOString(),
       });
       emit({ type: "run:complete", runId: run.id });
+      const asyncRun = getRun(run.id);
+      if (asyncRun) dispatchWebhooks(asyncRun.status === "failed" ? "failed" : "completed", asyncRun).catch(() => {});
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       updateRun(run.id, {
@@ -388,6 +409,8 @@ export function startRunAsync(
         finished_at: new Date().toISOString(),
       });
       emit({ type: "run:complete", runId: run.id, error: errorMsg });
+      const failedRun = getRun(run.id);
+      if (failedRun) dispatchWebhooks("failed", failedRun).catch(() => {});
     }
   })();
 

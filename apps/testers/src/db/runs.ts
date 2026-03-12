@@ -133,6 +133,10 @@ export function updateRun(id: string, updates: Partial<RunRow>): Run {
     sets.push("metadata = ?");
     params.push(updates.metadata);
   }
+  if (updates.is_baseline !== undefined) {
+    sets.push("is_baseline = ?");
+    params.push(updates.is_baseline);
+  }
 
   if (sets.length === 0) {
     return existing;

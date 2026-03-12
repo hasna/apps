@@ -16,6 +16,7 @@ import { installBrowser } from "../lib/browser.js";
 import { initProject } from "../lib/init.js";
 import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
+import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
 import { getCostSummary, formatCostsTerminal, formatCostsJSON } from "../lib/costs.js";
 
@@ -24,7 +25,10 @@ import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSched
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
 import { addDependency, removeDependency, getDependencies, getDependents, createFlow, getFlow, listFlows, deleteFlow } from "../db/flows.js";
+import { createEnvironment, getEnvironment, listEnvironments, deleteEnvironment, setDefaultEnvironment, getDefaultEnvironment } from "../db/environments.js";
+import { generateGitHubActionsWorkflow } from "../lib/ci.js";
 import type { ScenarioPriority } from "../types/index.js";
+import { parseAssertionString } from "../lib/assertions.js";
 import { existsSync, mkdirSync } from "node:fs";
 
 function formatToolInput(input: Record<string, unknown>): string {
@@ -80,6 +84,7 @@ program
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--project <id>", "Project ID")
   .option("--template <name>", "Seed scenarios from a template (auth, crud, forms, nav, a11y)")
+  .option("--assert <assertion>", "Structured assertion (repeatable). Formats: selector:<sel> visible, text:<sel> contains:<text>, no-console-errors, url:contains:<path>, title:contains:<text>, count:<sel> eq:<n>", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .action((name: string, opts) => {
     try {
       if (opts.template) {
@@ -96,6 +101,7 @@ program
         return;
       }
 
+      const assertions = (opts.assert as string[]).map(parseAssertionString);
       const projectId = resolveProject(opts.project);
       const scenario = createScenario({
         name,
@@ -107,6 +113,7 @@ program
         targetPath: opts.path,
         requiresAuth: opts.auth,
         timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        assertions: assertions.length > 0 ? assertions : undefined,
         projectId,
       });
       console.log(chalk.green(`Created scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
@@ -251,7 +258,7 @@ program
 // ─── testers run <url> [description] ───────────────────────────────────────
 
 program
-  .command("run <url> [description]")
+  .command("run [url] [description]")
   .description("Run test scenarios against a URL")
   .option("-t, --tag <tag>", "Filter by tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("-s, --scenario <id>", "Run specific scenario ID")
@@ -265,9 +272,32 @@ program
   .option("--from-todos", "Import scenarios from todos before running", false)
   .option("--project <id>", "Project ID")
   .option("-b, --background", "Start run in background and return immediately", false)
-  .action(async (url: string, description: string | undefined, opts) => {
+  .option("--env <name>", "Use a named environment for the URL")
+  .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
+
+      // Resolve URL: explicit arg > --env > default environment
+      let url = urlArg;
+      if (!url && opts.env) {
+        const env = getEnvironment(opts.env);
+        if (!env) {
+          console.error(chalk.red(`Environment not found: ${opts.env}`));
+          process.exit(1);
+        }
+        url = env.url;
+      }
+      if (!url) {
+        const defaultEnv = getDefaultEnvironment();
+        if (defaultEnv) {
+          url = defaultEnv.url;
+          console.log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+        }
+      }
+      if (!url) {
+        console.error(chalk.red("No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'."));
+        process.exit(1);
+      }
 
       // If --from-todos, import scenarios first
       if (opts.fromTodos) {
@@ -999,6 +1029,7 @@ program
   .option("-n, --name <name>", "Project name")
   .option("-u, --url <url>", "Base URL")
   .option("-p, --path <path>", "Project path")
+  .option("--ci <provider>", "Generate CI workflow (github)")
   .action((opts) => {
     try {
       const { project, scenarios, framework } = initProject({
@@ -1026,6 +1057,19 @@ program
 
       for (const s of scenarios) {
         console.log(`    ${chalk.dim(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+      }
+
+      // Generate CI workflow if requested
+      if (opts.ci === "github") {
+        const workflowDir = join(process.cwd(), ".github", "workflows");
+        if (!existsSync(workflowDir)) {
+          mkdirSync(workflowDir, { recursive: true });
+        }
+        const workflowPath = join(workflowDir, "testers.yml");
+        writeFileSync(workflowPath, generateGitHubActionsWorkflow(), "utf-8");
+        console.log(`  CI:         ${chalk.green("GitHub Actions workflow written to .github/workflows/testers.yml")}`);
+      } else if (opts.ci) {
+        console.log(chalk.yellow(`  Unknown CI provider: ${opts.ci}. Supported: github`));
       }
 
       console.log("");
@@ -1210,6 +1254,7 @@ program
   .command("diff <run1> <run2>")
   .description("Compare two test runs")
   .option("--json", "JSON output", false)
+  .option("--threshold <percent>", "Visual diff threshold percentage", "0.1")
   .action((run1: string, run2: string, opts) => {
     try {
       const diff = diffRuns(run1, run2);
@@ -1218,8 +1263,21 @@ program
       } else {
         console.log(formatDiffTerminal(diff));
       }
-      // Exit 1 if regressions found
-      process.exit(diff.regressions.length > 0 ? 1 : 0);
+
+      // Visual screenshot diff
+      const threshold = parseFloat(opts.threshold);
+      const visualResults = compareRunScreenshots(run2, run1, threshold);
+      if (visualResults.length > 0) {
+        if (opts.json) {
+          console.log(JSON.stringify({ visualDiff: visualResults }, null, 2));
+        } else {
+          console.log(formatVisualDiffTerminal(visualResults, threshold));
+        }
+      }
+
+      // Exit 1 if status regressions or visual regressions found
+      const hasVisualRegressions = visualResults.some((r) => r.isRegression);
+      process.exit(diff.regressions.length > 0 || hasVisualRegressions ? 1 : 0);
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
@@ -1521,6 +1579,148 @@ flowCmd
       if (opts.json) console.log(formatJSON(run, results));
       else console.log(formatTerminal(run, results));
       process.exit(getExitCode(run));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers env ─────────────────────────────────────────────────────────────
+
+const envCmd = program
+  .command("env")
+  .description("Manage environments");
+
+envCmd
+  .command("add <name>")
+  .description("Add a named environment")
+  .requiredOption("--url <url>", "Environment URL")
+  .option("--auth <preset>", "Auth preset name")
+  .option("--project <id>", "Project ID")
+  .option("--default", "Set as default environment", false)
+  .action((name: string, opts) => {
+    try {
+      const env = createEnvironment({
+        name,
+        url: opts.url,
+        authPresetName: opts.auth,
+        projectId: opts.project,
+        isDefault: opts.default,
+      });
+      console.log(chalk.green(`Environment added: ${env.name} → ${env.url}${env.isDefault ? " (default)" : ""}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+envCmd
+  .command("list")
+  .description("List all environments")
+  .option("--project <id>", "Filter by project ID")
+  .action((opts) => {
+    try {
+      const envs = listEnvironments(opts.project);
+      if (envs.length === 0) {
+        console.log(chalk.dim("No environments configured. Add one with: testers env add <name> --url <url>"));
+        return;
+      }
+      for (const env of envs) {
+        const marker = env.isDefault ? chalk.green(" ★ default") : "";
+        const auth = env.authPresetName ? chalk.dim(` (auth: ${env.authPresetName})`) : "";
+        console.log(`  ${chalk.bold(env.name)}  ${env.url}${auth}${marker}`);
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+envCmd
+  .command("use <name>")
+  .description("Set an environment as the default")
+  .action((name: string) => {
+    try {
+      setDefaultEnvironment(name);
+      const env = getEnvironment(name)!;
+      console.log(chalk.green(`Default environment set: ${env.name} → ${env.url}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+envCmd
+  .command("delete <name>")
+  .description("Delete an environment")
+  .action((name: string) => {
+    try {
+      const deleted = deleteEnvironment(name);
+      if (deleted) {
+        console.log(chalk.green(`Environment deleted: ${name}`));
+      } else {
+        console.error(chalk.red(`Environment not found: ${name}`));
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers baseline <run-id> ───────────────────────────────────────────────
+
+program
+  .command("baseline <run-id>")
+  .description("Set a run as the visual baseline")
+  .action((runId: string) => {
+    try {
+      setBaseline(runId);
+      const run = getRun(runId);
+      console.log(chalk.green(`Baseline set: ${chalk.bold(runId.slice(0, 8))}${run ? ` (${run.status}, ${run.total} scenarios)` : ""}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers import-api <spec> ─────────────────────────────────────────────
+
+program
+  .command("import-api <spec>")
+  .description("Import test scenarios from an OpenAPI/Swagger spec file")
+  .option("--project <id>", "Project ID")
+  .action(async (spec: string, opts) => {
+    try {
+      const { importFromOpenAPI } = await import("../lib/openapi-import.js");
+      const { imported, scenarios } = importFromOpenAPI(spec, resolveProject(opts.project) ?? undefined);
+      console.log(chalk.green(`\nImported ${imported} scenarios from API spec:`));
+      for (const s of scenarios) {
+        console.log(`  ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+      }
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers record <url> ──────────────────────────────────────────────────
+
+program
+  .command("record <url>")
+  .description("Record a browser session and generate a test scenario")
+  .option("-n, --name <name>", "Scenario name", "Recorded session")
+  .option("--project <id>", "Project ID")
+  .action(async (url: string, opts) => {
+    try {
+      const { recordAndSave } = await import("../lib/recorder.js");
+      console.log(chalk.blue("Opening browser for recording..."));
+      const { recording, scenario } = await recordAndSave(url, opts.name, resolveProject(opts.project) ?? undefined);
+      console.log("");
+      console.log(chalk.green(`Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+      console.log(chalk.dim(`  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`));
+      console.log(chalk.dim(`  ${scenario.steps.length} steps generated`));
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
