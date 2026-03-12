@@ -24,7 +24,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.2.9",
+  version: "0.3.0",
 });
 
 // --- Tool: search_connectors ---
@@ -32,10 +32,8 @@ server.registerTool(
   "search_connectors",
   {
     title: "Search Connectors",
-    description: "Search connectors by name, keyword, or description.",
-    inputSchema: {
-      query: z.string().describe("Search query"),
-    },
+    description: "Search connectors by name or keyword.",
+    inputSchema: { query: z.string() },
   },
   async ({ query }) => {
     const results = searchConnectors(query);
@@ -65,10 +63,10 @@ server.registerTool(
   "list_connectors",
   {
     title: "List Connectors",
-    description: "List connectors, optionally filtered by category. Use compact=true for names only.",
+    description: "List connectors. category filters; compact=true returns names only.",
     inputSchema: {
-      category: z.string().optional().describe("Filter by category (e.g. 'AI & ML', 'Developer Tools')"),
-      compact: z.boolean().optional().describe("Return names only (default: false)"),
+      category: z.string().optional(),
+      compact: z.boolean().optional(),
     },
   },
   async ({ category, compact }) => {
@@ -113,10 +111,10 @@ server.registerTool(
   "connector_docs",
   {
     title: "Connector Documentation",
-    description: "Get connector docs. Use essential=true for auth+envVars only (faster).",
+    description: "Get connector docs. essential=true returns auth+envVars only.",
     inputSchema: {
-      name: z.string().describe("Connector name"),
-      essential: z.boolean().optional().describe("Return auth+envVars only (default: false)"),
+      name: z.string(),
+      essential: z.boolean().optional(),
     },
   },
   async ({ name, essential }) => {
@@ -162,10 +160,10 @@ server.registerTool(
   "install_connector",
   {
     title: "Install Connector",
-    description: "Install connectors into .connectors/ directory.",
+    description: "Install connectors into .connectors/.",
     inputSchema: {
-      names: z.array(z.string()).describe("Connector names to install"),
-      overwrite: z.boolean().optional().describe("Overwrite if already installed"),
+      names: z.array(z.string()),
+      overwrite: z.boolean().optional(),
     },
   },
   async ({ names, overwrite }) => {
@@ -210,10 +208,8 @@ server.registerTool(
   "remove_connector",
   {
     title: "Remove Connector",
-    description: "Remove an installed connector from the project.",
-    inputSchema: {
-      name: z.string().describe("Connector name to remove"),
-    },
+    description: "Remove an installed connector.",
+    inputSchema: { name: z.string() },
   },
   async ({ name }) => {
     const removed = removeConnector(name);
@@ -255,9 +251,7 @@ server.registerTool(
   {
     title: "Connector Info",
     description: "Get connector metadata and installed status.",
-    inputSchema: {
-      name: z.string().describe("Connector name"),
-    },
+    inputSchema: { name: z.string() },
   },
   async ({ name }) => {
     const meta = getConnector(name);
@@ -291,10 +285,8 @@ server.registerTool(
   "connector_auth_status",
   {
     title: "Connector Auth Status",
-    description: "Check connector auth status, token expiry, and env vars.",
-    inputSchema: {
-      name: z.string().describe("Connector name"),
-    },
+    description: "Check auth status, token expiry, and env vars.",
+    inputSchema: { name: z.string() },
   },
   async ({ name }) => {
     const meta = getConnector(name);
@@ -330,11 +322,11 @@ server.registerTool(
   "configure_auth",
   {
     title: "Configure Auth",
-    description: "Save an API key or bearer token for a connector.",
+    description: "Save an API key or token for a connector.",
     inputSchema: {
-      name: z.string().describe("Connector name"),
-      key: z.string().describe("API key or bearer token"),
-      field: z.string().optional().describe("Field name (default: 'apiKey')"),
+      name: z.string(),
+      key: z.string(),
+      field: z.string().optional(),
     },
   },
   async ({ name, key, field }) => {
@@ -401,9 +393,7 @@ server.registerTool(
   {
     title: "Search Tools",
     description: "List tool names, optionally filtered by keyword.",
-    inputSchema: {
-      query: z.string().optional().describe("Keyword filter"),
-    },
+    inputSchema: { query: z.string().optional() },
   },
   async ({ query }) => {
     const all = [
@@ -422,10 +412,8 @@ server.registerTool(
   "describe_tools",
   {
     title: "Describe Tools",
-    description: "Get descriptions for specific tools by name.",
-    inputSchema: {
-      names: z.array(z.string()).describe("Tool names"),
-    },
+    description: "Get full descriptions for specific tools.",
+    inputSchema: { names: z.array(z.string()) },
   },
   async ({ names }) => {
     const descriptions: Record<string, string> = {
