@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.5.1")
+  .version("0.5.2")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1790,9 +1790,12 @@ program
 
     let configured = 0;
     let unconfigured = 0;
-    const connectorDetails: Array<{ name: string; configured: boolean; authType: string; profile: string }> = [];
+    const connectorDetails: Array<{ name: string; configured: boolean; authType: string; profile: string; source: "project" | "global" }> = [];
+    const seen = new Set<string>();
 
+    // Project-installed connectors
     for (const name of installed) {
+      seen.add(name);
       const auth = getAuthStatus(name);
       if (auth.configured) configured++;
       else unconfigured++;
@@ -1805,7 +1808,38 @@ program
         try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
       }
 
-      connectorDetails.push({ name, configured: auth.configured, authType: auth.type, profile });
+      connectorDetails.push({ name, configured: auth.configured, authType: auth.type, profile, source: "project" });
+    }
+
+    // Globally configured connectors from ~/.connectors/connect-*
+    if (existsSync(configDir)) {
+      try {
+        const globalDirs = readdirSync(configDir).filter((f: string) => {
+          if (!f.startsWith("connect-")) return false;
+          try { return statSync(join(configDir, f)).isDirectory(); } catch { return false; }
+        });
+
+        for (const dir of globalDirs) {
+          const name = dir.replace("connect-", "");
+          if (seen.has(name)) continue;
+
+          const auth = getAuthStatus(name);
+          if (!auth.configured) continue; // Only show globally configured ones
+
+          seen.add(name);
+          configured++;
+
+          const currentProfileFile = join(configDir, dir, "current_profile");
+          let profile = "default";
+          if (existsSync(currentProfileFile)) {
+            try { profile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+          }
+
+          connectorDetails.push({ name, configured: true, authType: auth.type, profile, source: "global" });
+        }
+      } catch {
+        // ignore read errors on ~/.connectors
+      }
     }
 
     if (options.json) {
@@ -1827,14 +1861,31 @@ program
     console.log(`  Installed:    ${installed.length} connector${installed.length !== 1 ? "s" : ""}`);
     console.log(`  Configured:   ${chalk.green(String(configured))} ready, ${unconfigured > 0 ? chalk.red(String(unconfigured)) : chalk.dim("0")} need auth`);
 
-    if (connectorDetails.length > 0) {
-      console.log(chalk.bold("\n  Connectors:\n"));
-      const nameWidth = Math.max(10, ...connectorDetails.map(c => c.name.length)) + 2;
-      for (const c of connectorDetails) {
+    const projectConnectors = connectorDetails.filter(c => c.source === "project");
+    const globalConnectors = connectorDetails.filter(c => c.source === "global");
+
+    if (projectConnectors.length > 0) {
+      console.log(chalk.bold("\n  Project Connectors:\n"));
+      const nameWidth = Math.max(10, ...projectConnectors.map(c => c.name.length)) + 2;
+      for (const c of projectConnectors) {
         const status = c.configured ? chalk.green("✓") : chalk.red("✗");
         const profileLabel = c.profile !== "default" ? chalk.dim(` [${c.profile}]`) : "";
         console.log(`    ${status} ${chalk.cyan(c.name.padEnd(nameWidth))}${c.authType.padEnd(8)}${profileLabel}`);
       }
+    }
+
+    if (globalConnectors.length > 0) {
+      console.log(chalk.bold("\n  Global Connectors") + chalk.dim(" (~/.connectors)") + chalk.bold(":\n"));
+      const nameWidth = Math.max(10, ...globalConnectors.map(c => c.name.length)) + 2;
+      for (const c of globalConnectors) {
+        const status = c.configured ? chalk.green("✓") : chalk.red("✗");
+        const profileLabel = c.profile !== "default" ? chalk.dim(` [${c.profile}]`) : "";
+        console.log(`    ${status} ${chalk.cyan(c.name.padEnd(nameWidth))}${c.authType.padEnd(8)}${profileLabel}`);
+      }
+    }
+
+    if (connectorDetails.length === 0) {
+      console.log(chalk.dim("\n  No connectors installed or configured."));
     }
 
     console.log();
