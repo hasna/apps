@@ -625,6 +625,15 @@ export async function executeTool(
 
 // ─── Agent Loop ─────────────────────────────────────────────────────────────
 
+export type StepEventHandler = (event: {
+  type: "tool_call" | "tool_result" | "thinking";
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  toolResult?: string;
+  thinking?: string;
+  stepNumber: number;
+}) => void;
+
 interface AgentLoopOptions {
   client: Anthropic;
   page: Page;
@@ -633,6 +642,7 @@ interface AgentLoopOptions {
   model: string;
   runId: string;
   maxTurns?: number;
+  onStep?: StepEventHandler;
 }
 
 interface AgentLoopResult {
@@ -669,6 +679,7 @@ export async function runAgentLoop(
     model,
     runId,
     maxTurns = 30,
+    onStep,
   } = options;
 
   const systemPrompt = [
@@ -768,9 +779,23 @@ export async function runAgentLoop(
       // Process each tool call
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
+      // Emit AI thinking from text blocks
+      const textBlocks = response.content.filter(
+        (block): block is Anthropic.TextBlock => block.type === "text",
+      );
+      if (textBlocks.length > 0 && onStep) {
+        const thinking = textBlocks.map((b) => b.text).join("\n");
+        onStep({ type: "thinking", thinking, stepNumber });
+      }
+
       for (const toolBlock of toolUseBlocks) {
         stepNumber++;
         const toolInput = toolBlock.input as Record<string, unknown>;
+
+        // Emit tool call event
+        if (onStep) {
+          onStep({ type: "tool_call", toolName: toolBlock.name, toolInput, stepNumber });
+        }
 
         const execResult = await executeTool(
           page,
@@ -779,6 +804,11 @@ export async function runAgentLoop(
           toolInput,
           { runId, scenarioSlug, stepNumber },
         );
+
+        // Emit tool result event
+        if (onStep) {
+          onStep({ type: "tool_result", toolName: toolBlock.name, toolResult: execResult.result, stepNumber });
+        }
 
         // Collect screenshots
         if (execResult.screenshot) {

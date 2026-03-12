@@ -21,13 +21,27 @@ export interface RunOptions {
 }
 
 export interface RunEvent {
-  type: "scenario:start" | "scenario:pass" | "scenario:fail" | "scenario:error" | "screenshot:captured" | "run:complete";
+  type:
+    | "scenario:start"
+    | "scenario:pass"
+    | "scenario:fail"
+    | "scenario:error"
+    | "screenshot:captured"
+    | "run:complete"
+    | "step:tool_call"
+    | "step:tool_result"
+    | "step:thinking";
   scenarioId?: string;
   scenarioName?: string;
   resultId?: string;
   runId?: string;
   error?: string;
   screenshotPath?: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  toolResult?: string;
+  thinking?: string;
+  stepNumber?: number;
 }
 
 export type RunEventHandler = (event: RunEvent) => void;
@@ -86,6 +100,19 @@ export async function runSingleScenario(
       model,
       runId,
       maxTurns: 30,
+      onStep: (stepEvent) => {
+        emit({
+          type: `step:${stepEvent.type}` as RunEvent["type"],
+          scenarioId: scenario.id,
+          scenarioName: scenario.name,
+          runId,
+          toolName: stepEvent.toolName,
+          toolInput: stepEvent.toolInput,
+          toolResult: stepEvent.toolResult,
+          thinking: stepEvent.thinking,
+          stepNumber: stepEvent.stepNumber,
+        });
+      },
     });
 
     // Save screenshots to DB

@@ -8,7 +8,7 @@ import { createScenario, getScenario, getScenarioByShortId, listScenarios, updat
 import { getRun, listRuns } from "../db/runs.js";
 import { getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
-import { runByFilter, startRunAsync } from "../lib/runner.js";
+import { runByFilter, startRunAsync, onRunEvent } from "../lib/runner.js";
 import { formatTerminal, formatJSON, getExitCode, formatRunList, formatScenarioList } from "../lib/reporter.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
@@ -26,11 +26,21 @@ import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-
 import type { ScenarioPriority } from "../types/index.js";
 import { existsSync, mkdirSync } from "node:fs";
 
+function formatToolInput(input: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(input)) {
+    const str = typeof value === "string" ? value : JSON.stringify(value);
+    const truncated = str.length > 60 ? str.slice(0, 60) + "..." : str;
+    parts.push(`${key}="${truncated}"`);
+  }
+  return parts.join(" ");
+}
+
 const program = new Command();
 
 program
   .name("testers")
-  .version("0.0.1")
+  .version("0.0.4")
   .description("AI-powered browser testing CLI");
 
 // ─── Helper: active project ─────────────────────────────────────────────────
@@ -285,6 +295,49 @@ program
         console.log(chalk.dim(`  URL: ${url}`));
         console.log(chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`));
         process.exit(0);
+      }
+
+      // Register live progress handler for foreground runs
+      if (!opts.json && !opts.output) {
+        onRunEvent((event) => {
+          switch (event.type) {
+            case "scenario:start":
+              console.log(chalk.blue(`  [start] ${event.scenarioName ?? event.scenarioId}`));
+              break;
+            case "step:thinking":
+              if (event.thinking) {
+                const preview = event.thinking.length > 120 ? event.thinking.slice(0, 120) + "..." : event.thinking;
+                console.log(chalk.dim(`    [think] ${preview}`));
+              }
+              break;
+            case "step:tool_call":
+              console.log(chalk.cyan(`    [step ${event.stepNumber}] ${event.toolName}${event.toolInput ? ` ${formatToolInput(event.toolInput)}` : ""}`));
+              break;
+            case "step:tool_result":
+              if (event.toolName === "report_result") {
+                console.log(chalk.bold(`    [result] ${event.toolResult}`));
+              } else {
+                const resultPreview = (event.toolResult ?? "").length > 100 ? (event.toolResult ?? "").slice(0, 100) + "..." : (event.toolResult ?? "");
+                console.log(chalk.dim(`    [done]  ${resultPreview}`));
+              }
+              break;
+            case "screenshot:captured":
+              console.log(chalk.dim(`    [screenshot] ${event.screenshotPath}`));
+              break;
+            case "scenario:pass":
+              console.log(chalk.green(`  [PASS] ${event.scenarioName}`));
+              break;
+            case "scenario:fail":
+              console.log(chalk.red(`  [FAIL] ${event.scenarioName}`));
+              break;
+            case "scenario:error":
+              console.log(chalk.yellow(`  [ERR]  ${event.scenarioName}: ${event.error}`));
+              break;
+          }
+        });
+        console.log("");
+        console.log(chalk.bold(`  Running tests against ${url}`));
+        console.log("");
       }
 
       // If description provided, create an ad-hoc scenario and run it
