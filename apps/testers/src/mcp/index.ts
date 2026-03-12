@@ -18,7 +18,7 @@ import { getNextRunTime } from "../lib/scheduler.js";
 import { getDatabase } from "../db/database.js";
 
 const server = new McpServer({
-  name: "testers-mcp",
+  name: "testers",
   version: "0.0.1",
 });
 
@@ -542,6 +542,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Failed to start testers-mcp:", error);
+  console.error("Failed to start testers:", error);
   process.exit(1);
 });

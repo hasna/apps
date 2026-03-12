@@ -228,7 +228,7 @@ Screenshots are saved to `~/.testers/screenshots/` organized by:
 Install for Claude Code:
 
 ```bash
-claude mcp add --transport stdio --scope user testers-mcp -- testers-mcp
+claude mcp add --transport stdio --scope user testers -- testers-mcp
 ```
 
 Available tools: `create_scenario`, `list_scenarios`, `run_scenarios`, `get_results`, `get_screenshots`, and more.
