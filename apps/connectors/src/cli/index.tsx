@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.15")
+  .version("0.3.16")
   .enablePositionalOptions();
 
 // Interactive mode (default)
