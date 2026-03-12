@@ -182,7 +182,8 @@ program
   .option('--agent <agent>', 'Filter by agent (claude|codex)')
   .option('--project <path>', 'Filter by project path')
   .option('--limit <n>', 'Number of sessions', '20')
-  .action(async (opts: { agent?: string; project?: string; limit?: string }) => {
+  .option('--format <fmt>', 'Output format: table|compact|csv|json', 'table')
+  .action(async (opts: { agent?: string; project?: string; limit?: string; format?: string }) => {
     await autoSync()
     const db = openDatabase()
     const sessions = querySessions(db, {
@@ -190,8 +191,16 @@ program
       project: opts.project,
       limit: Number(opts.limit ?? 20),
     })
-    if (sessions.length === 0) {
-      console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
+    if (sessions.length === 0) { console.log(chalk.yellow('No sessions found.')); return }
+    const f = opts.format ?? 'table'
+    if (f === 'compact') {
+      for (const s of sessions) process.stdout.write(`${s.id.slice(0,8)} ${s.agent} ${fmt(s.total_cost_usd)} ${fmtTokens(s.total_tokens)} ${s.project_name || '—'}\n`)
+      return
+    }
+    if (f === 'json') { console.log(JSON.stringify(sessions, null, 2)); return }
+    if (f === 'csv') {
+      console.log('id,agent,project_name,total_cost_usd,total_tokens,request_count,started_at')
+      for (const s of sessions) console.log(`${s.id},${s.agent},"${s.project_name}",${s.total_cost_usd},${s.total_tokens},${s.request_count},${s.started_at}`)
       return
     }
     console.log()

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, and Gemini",
   "type": "module",
   "main": "dist/index.js",
@@ -48,7 +48,7 @@
   "author": "hasna",
   "license": "Apache-2.0",
   "publishConfig": {
-    "access": "restricted",
+    "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
