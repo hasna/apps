@@ -1,20 +1,32 @@
 {
   "name": "@hasna/economy-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SDK client for @hasna/economy REST API",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "files": ["dist", "LICENSE"],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target browser --packages external && tsc --emitDeclarationOnly --outDir dist",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
-  "devDependencies": { "typescript": "^5.7.2", "bun-types": "latest" },
-  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "bun-types": "latest"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "license": "Apache-2.0"
 }
