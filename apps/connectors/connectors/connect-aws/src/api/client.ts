@@ -6,6 +6,7 @@ const SERVICE_ENDPOINTS: Record<string, string> = {
   s3: 's3.{region}.amazonaws.com',
   lambda: 'lambda.{region}.amazonaws.com',
   dynamodb: 'dynamodb.{region}.amazonaws.com',
+  sesv2: 'email.{region}.amazonaws.com',
 };
 
 export interface AWSRequestOptions {

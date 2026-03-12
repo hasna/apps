@@ -3,10 +3,11 @@ import { AWSClient } from './client';
 import { S3Api } from './s3';
 import { LambdaApi } from './lambda';
 import { DynamoDBApi } from './dynamodb';
+import { SesApi } from './ses';
 
 /**
  * Main AWS Connector class
- * Provides access to S3, Lambda, and DynamoDB services
+ * Provides access to S3, Lambda, DynamoDB, and SES services
  */
 export class AWS {
   private readonly client: AWSClient;
@@ -15,12 +16,14 @@ export class AWS {
   public readonly s3: S3Api;
   public readonly lambda: LambdaApi;
   public readonly dynamodb: DynamoDBApi;
+  public readonly ses: SesApi;
 
   constructor(config: AWSConfig) {
     this.client = new AWSClient(config);
     this.s3 = new S3Api(this.client);
     this.lambda = new LambdaApi(this.client);
     this.dynamodb = new DynamoDBApi(this.client);
+    this.ses = new SesApi(this.client);
   }
 
   /**
@@ -69,3 +72,4 @@ export { AWSClient } from './client';
 export { S3Api } from './s3';
 export { LambdaApi } from './lambda';
 export { DynamoDBApi } from './dynamodb';
+export { SesApi } from './ses';

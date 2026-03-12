@@ -5,7 +5,7 @@ export { AWS } from './api';
 export * from './types';
 
 // Re-export individual API classes for advanced usage
-export { AWSClient, S3Api, LambdaApi, DynamoDBApi } from './api';
+export { AWSClient, S3Api, LambdaApi, DynamoDBApi, SesApi } from './api';
 
 // Export config utilities
 export {

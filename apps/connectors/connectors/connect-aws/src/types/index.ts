@@ -252,6 +252,97 @@ export interface DynamoDBScanResponse {
 }
 
 // ============================================
+// SES Types
+// ============================================
+
+export interface SesEmailAttachment {
+  filename: string;
+  /** Base64-encoded file content */
+  data: string;
+  contentType: string;
+}
+
+export interface SesSendEmailRequest {
+  from: string;
+  to: string | string[];
+  subject: string;
+  html?: string;
+  text?: string;
+  cc?: string | string[];
+  bcc?: string | string[];
+  replyTo?: string | string[];
+  attachments?: SesEmailAttachment[];
+}
+
+export interface SesSendEmailResponse {
+  messageId: string;
+}
+
+export interface SesEmailIdentity {
+  identityName: string;
+  identityType: 'EMAIL_ADDRESS' | 'DOMAIN';
+  sendingEnabled: boolean;
+  verificationStatus: string;
+}
+
+export interface SesListIdentitiesResponse {
+  identities: SesEmailIdentity[];
+  nextToken?: string;
+}
+
+export interface SesDkimRecord {
+  name: string;
+  type: string;
+  value: string;
+  region: string;
+}
+
+export interface SesDkimAttributes {
+  signingEnabled: boolean;
+  status: string;
+  tokens: string[];
+  signingAttributesOrigin: string;
+  dnsRecords: SesDkimRecord[];
+}
+
+export interface SesCreateIdentityResponse {
+  identityType: 'EMAIL_ADDRESS' | 'DOMAIN';
+  verifiedForSendingStatus: boolean;
+  dkimAttributes?: {
+    signingEnabled: boolean;
+    status: string;
+    tokens: string[];
+  };
+}
+
+export interface SesSendDataPoint {
+  timestamp: string;
+  deliveryAttempts: number;
+  bounces: number;
+  complaints: number;
+  rejects: number;
+}
+
+export interface SesSendStatistics {
+  deliveryAttempts: number;
+  bounces: number;
+  complaints: number;
+  rejects: number;
+  dataPoints: SesSendDataPoint[];
+}
+
+export interface SesSuppressedDestination {
+  emailAddress: string;
+  reason: 'BOUNCE' | 'COMPLAINT';
+  lastUpdateTime: string;
+}
+
+export interface SesSuppressedDestinationsResponse {
+  suppressedDestinations: SesSuppressedDestination[];
+  nextToken?: string;
+}
+
+// ============================================
 // API Error Types
 // ============================================
 
