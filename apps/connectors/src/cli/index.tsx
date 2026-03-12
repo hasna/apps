@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.10")
+  .version("0.3.11")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1860,7 +1860,7 @@ program
         continue;
       }
 
-      // Get the API key from the profile
+      // Get the API key or OAuth access token
       const docs = getConnectorDocs(name);
       const envVars = docs?.envVars || [];
       let apiKey: string | undefined;
@@ -1876,15 +1876,37 @@ program
       // Try profile config if no env var
       if (!apiKey) {
         const connectorConfigDir = join(homedir(), ".connectors", name.startsWith("connect-") ? name : `connect-${name}`);
-        const profileFile = join(connectorConfigDir, "profiles", "default.json");
-        if (existsSync(profileFile)) {
+
+        // Determine current profile
+        let currentProfile = "default";
+        const currentProfileFile = join(connectorConfigDir, "current_profile");
+        if (existsSync(currentProfileFile)) {
+          try { currentProfile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
+        }
+
+        // Try OAuth tokens first (profiles/<name>/tokens.json)
+        const tokensFile = join(connectorConfigDir, "profiles", currentProfile, "tokens.json");
+        if (existsSync(tokensFile)) {
           try {
-            const config = JSON.parse(readFileSync(profileFile, "utf-8"));
-            apiKey = Object.values(config).find((v): v is string => typeof v === "string" && v.length > 0) as string | undefined;
+            const tokens = JSON.parse(readFileSync(tokensFile, "utf-8"));
+            if (tokens.accessToken) apiKey = tokens.accessToken;
           } catch {}
         }
+
+        // Try flat profile config (profiles/<name>.json)
         if (!apiKey) {
-          const profileDirConfig = join(connectorConfigDir, "profiles", "default", "config.json");
+          const profileFile = join(connectorConfigDir, "profiles", `${currentProfile}.json`);
+          if (existsSync(profileFile)) {
+            try {
+              const config = JSON.parse(readFileSync(profileFile, "utf-8"));
+              apiKey = Object.values(config).find((v): v is string => typeof v === "string" && v.length > 0) as string | undefined;
+            } catch {}
+          }
+        }
+
+        // Try directory profile config (profiles/<name>/config.json)
+        if (!apiKey) {
+          const profileDirConfig = join(connectorConfigDir, "profiles", currentProfile, "config.json");
           if (existsSync(profileDirConfig)) {
             try {
               const config = JSON.parse(readFileSync(profileDirConfig, "utf-8"));
@@ -1900,13 +1922,28 @@ program
         continue;
       }
 
+      // Build the test URL — some connectors use query param auth
+      let testUrl = endpoint.url;
+      const QUERY_PARAM_AUTH: Record<string, string> = {
+        googlegemini: "key",
+        googlemaps: "key",
+        openweathermap: "appid",
+      };
+      if (QUERY_PARAM_AUTH[name]) {
+        const sep = testUrl.includes("?") ? "&" : "?";
+        testUrl = `${testUrl}${sep}${QUERY_PARAM_AUTH[name]}=${encodeURIComponent(apiKey)}`;
+      }
+
       // Make the test request
       const start = Date.now();
       try {
-        const res = await fetch(endpoint.url, {
+        const body = endpoint.method === "POST"
+          ? JSON.stringify(endpoint.body ?? { query: "test", num_results: 1 })
+          : undefined;
+        const res = await fetch(testUrl, {
           method: endpoint.method || "GET",
           headers: endpoint.headers(apiKey),
-          body: endpoint.method === "POST" ? JSON.stringify({ query: "test", num_results: 1 }) : undefined,
+          body,
           signal: AbortSignal.timeout(timeout),
         });
         const ms = Date.now() - start;
