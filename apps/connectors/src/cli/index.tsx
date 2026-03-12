@@ -48,7 +48,8 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.9");
+  .version("0.3.10")
+  .enablePositionalOptions();
 
 // Interactive mode (default)
 program
@@ -2008,7 +2009,7 @@ program
   .argument("<name>", "Connector name (e.g. stripe, gmail)")
   .argument("[args...]", "Command arguments (e.g. products list --limit 5)")
   .option("--timeout <ms>", "Timeout in milliseconds", "30000")
-  .allowUnknownOption(true)
+  .passThroughOptions()
   .action(async (name: string, args: string[], options: { timeout: string }) => {
     const meta = getConnector(name);
     if (!meta) {

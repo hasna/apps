@@ -119,19 +119,24 @@ function getCurrentProfile(name: string): string {
 }
 
 /**
- * Load the profile config for a connector (handles both file patterns)
+ * Load the profile config for a connector (handles both file patterns).
+ * Checks both flat (profiles/<name>.json) and directory (profiles/<name>/config.json)
+ * patterns and merges results. Directory pattern takes precedence when both exist.
  */
 function loadProfileConfig(name: string): Record<string, unknown> {
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
 
-  // Pattern 1: profiles/<name>.json (e.g., Stripe)
+  let flatConfig: Record<string, unknown> = {};
+  let dirConfig: Record<string, unknown> = {};
+
+  // Pattern 1: profiles/<name>.json (e.g., Stripe, GitHub, Exa)
   const profileFile = join(configDir, "profiles", `${profile}.json`);
   if (existsSync(profileFile)) {
     try {
-      return JSON.parse(readFileSync(profileFile, "utf-8"));
+      flatConfig = JSON.parse(readFileSync(profileFile, "utf-8"));
     } catch {
-      // fall through
+      // ignore parse errors
     }
   }
 
@@ -139,13 +144,17 @@ function loadProfileConfig(name: string): Record<string, unknown> {
   const profileDirConfig = join(configDir, "profiles", profile, "config.json");
   if (existsSync(profileDirConfig)) {
     try {
-      return JSON.parse(readFileSync(profileDirConfig, "utf-8"));
+      dirConfig = JSON.parse(readFileSync(profileDirConfig, "utf-8"));
     } catch {
-      // fall through
+      // ignore parse errors
     }
   }
 
-  return {};
+  // Merge both, directory pattern takes precedence
+  if (Object.keys(flatConfig).length === 0 && Object.keys(dirConfig).length === 0) {
+    return {};
+  }
+  return { ...flatConfig, ...dirConfig };
 }
 
 /**
@@ -186,15 +195,19 @@ export function getAuthStatus(name: string): AuthStatus {
   const envVarSetCount = envVars.filter((v) => v.set).length;
 
   if (authType === "oauth") {
+    // Check directory pattern: profiles/<name>/tokens.json
     const tokens = loadTokens(name);
+    // Check both flat and directory config patterns for accessToken/refreshToken
     const config = loadProfileConfig(name);
-    const hasTokens = !!tokens?.accessToken;
-    const hasRefreshToken = !!tokens?.refreshToken;
-    const tokenExpiry = tokens?.expiresAt;
+
+    const hasTokens = !!tokens?.accessToken || !!(config.accessToken);
+    const hasRefreshToken = !!tokens?.refreshToken || !!(config.refreshToken);
+    const tokenExpiry = tokens?.expiresAt || (config.expiresAt as number | undefined);
+    const hasEnvVar = envVars.some((v) => v.set);
 
     return {
       type: "oauth",
-      configured: hasTokens || hasRefreshToken,
+      configured: hasTokens || hasRefreshToken || hasEnvVar,
       tokenExpiry,
       hasRefreshToken,
       envVars,
