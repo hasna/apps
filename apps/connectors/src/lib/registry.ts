@@ -865,6 +865,105 @@ export const CONNECTORS: ConnectorMeta[] = [
     category: "AI & ML",
     tags: ["ai", "video", "3d"],
   },
+
+  // DevOps & Infrastructure (batch 6)
+  {
+    name: "linode",
+    displayName: "Linode",
+    description: "Cloud computing and hosting",
+    category: "Developer Tools",
+    tags: ["cloud", "hosting", "vps"],
+  },
+
+  // Communication (batch 7)
+  {
+    name: "mailgun",
+    displayName: "Mailgun",
+    description: "Email delivery API",
+    category: "Communication",
+    tags: ["email", "api", "transactional"],
+  },
+  {
+    name: "pusher",
+    displayName: "Pusher",
+    description: "Realtime messaging and channels",
+    category: "Communication",
+    tags: ["realtime", "websockets", "messaging"],
+  },
+  {
+    name: "ably",
+    displayName: "Ably",
+    description: "Realtime messaging infrastructure",
+    category: "Communication",
+    tags: ["realtime", "messaging", "pubsub"],
+  },
+  {
+    name: "vonage",
+    displayName: "Vonage",
+    description: "SMS, voice, and messaging APIs",
+    category: "Communication",
+    tags: ["sms", "voice", "messaging"],
+  },
+  {
+    name: "messagebird",
+    displayName: "MessageBird",
+    description: "Omnichannel messaging platform",
+    category: "Communication",
+    tags: ["sms", "messaging", "omnichannel"],
+  },
+
+  // CRM (batch 8)
+  {
+    name: "pipedrive",
+    displayName: "Pipedrive",
+    description: "Sales CRM and pipeline management",
+    category: "Business Tools",
+    tags: ["crm", "sales", "pipeline"],
+  },
+  {
+    name: "clearbit",
+    displayName: "Clearbit",
+    description: "Business intelligence and data enrichment",
+    category: "Data & Analytics",
+    tags: ["enrichment", "data", "b2b"],
+  },
+
+  // Productivity (batch 10)
+  {
+    name: "coda",
+    displayName: "Coda",
+    description: "Docs, tables, and automations",
+    category: "Business Tools",
+    tags: ["docs", "tables", "automation"],
+  },
+  {
+    name: "monday",
+    displayName: "Monday.com",
+    description: "Work management and project tracking",
+    category: "Business Tools",
+    tags: ["project-management", "workflow"],
+  },
+  {
+    name: "dropbox",
+    displayName: "Dropbox",
+    description: "Cloud file storage and sharing",
+    category: "Business Tools",
+    tags: ["storage", "files", "sharing"],
+  },
+  {
+    name: "box",
+    displayName: "Box",
+    description: "Enterprise content management",
+    category: "Business Tools",
+    tags: ["storage", "enterprise", "content"],
+  },
+  {
+    name: "miro",
+    displayName: "Miro",
+    description: "Visual collaboration and whiteboarding",
+    category: "Business Tools",
+    tags: ["whiteboard", "collaboration", "design"],
+  },
 ];
 
 export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
