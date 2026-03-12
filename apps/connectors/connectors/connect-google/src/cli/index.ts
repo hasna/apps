@@ -5,6 +5,8 @@ import { Google } from '../api';
 import {
   getAccessToken,
   setAccessToken,
+  getRefreshToken,
+  getValidAccessToken,
   clearConfig,
   getConfigDir,
   setProfileOverride,
@@ -55,12 +57,26 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 // Helper to get authenticated client
-function getClient(): Google {
-  const accessToken = getAccessToken();
+async function getClient(): Promise<Google> {
+  let accessToken = getAccessToken();
+
+  // If no access token, try to refresh using refresh token
   if (!accessToken) {
-    error(`No access token configured. Run "${CONNECTOR_NAME} config set-token <token>" or set GOOGLE_ACCESS_TOKEN environment variable.`);
-    process.exit(1);
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+      try {
+        accessToken = await getValidAccessToken();
+      } catch {
+        // Fall through to error below
+      }
+    }
+
+    if (!accessToken) {
+      error(`No access token configured. Run "${CONNECTOR_NAME} config set-token <token>" or set GOOGLE_ACCESS_TOKEN environment variable.`);
+      process.exit(1);
+    }
   }
+
   return new Google({ accessToken });
 }
 
@@ -208,7 +224,7 @@ gmailMessagesCmd
   .option('--labels <labels>', 'Label IDs (comma-separated)')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.listMessages({
         maxResults: parseInt(opts.max),
         q: opts.query,
@@ -227,7 +243,7 @@ gmailMessagesCmd
   .option('--format <format>', 'Message format (minimal, full, raw, metadata)', 'full')
   .action(async (id: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.getMessage(id, { format: opts.format });
       print(result, getFormat(gmailMessagesCmd));
     } catch (err) {
@@ -247,7 +263,7 @@ gmailMessagesCmd
   .option('--html', 'Send as HTML email')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.sendMessage({
         to: opts.to,
         subject: opts.subject,
@@ -269,7 +285,7 @@ gmailMessagesCmd
   .description('Delete a message permanently')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.gmail.deleteMessage(id);
       success(`Message ${id} deleted`);
     } catch (err) {
@@ -283,7 +299,7 @@ gmailMessagesCmd
   .description('Move a message to trash')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.gmail.trashMessage(id);
       success(`Message ${id} moved to trash`);
     } catch (err) {
@@ -297,7 +313,7 @@ gmailMessagesCmd
   .description('Remove a message from trash')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.gmail.untrashMessage(id);
       success(`Message ${id} removed from trash`);
     } catch (err) {
@@ -316,7 +332,7 @@ gmailLabelsCmd
   .description('List all labels')
   .action(async () => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.listLabels();
       print(result, getFormat(gmailLabelsCmd));
     } catch (err) {
@@ -330,7 +346,7 @@ gmailLabelsCmd
   .description('Get a label by ID')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.getLabel(id);
       print(result, getFormat(gmailLabelsCmd));
     } catch (err) {
@@ -344,7 +360,7 @@ gmailLabelsCmd
   .description('Create a new label')
   .action(async (name: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.createLabel(name);
       success('Label created!');
       print(result, getFormat(gmailLabelsCmd));
@@ -359,7 +375,7 @@ gmailLabelsCmd
   .description('Delete a label')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.gmail.deleteLabel(id);
       success(`Label ${id} deleted`);
     } catch (err) {
@@ -379,7 +395,7 @@ gmailDraftsCmd
   .option('-n, --max <number>', 'Maximum results', '10')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.listDrafts({
         maxResults: parseInt(opts.max),
       });
@@ -395,7 +411,7 @@ gmailDraftsCmd
   .description('Get a draft by ID')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.getDraft(id);
       print(result, getFormat(gmailDraftsCmd));
     } catch (err) {
@@ -412,7 +428,7 @@ gmailDraftsCmd
   .requiredOption('--body <body>', 'Email body')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.createDraft({
         to: opts.to,
         subject: opts.subject,
@@ -431,7 +447,7 @@ gmailDraftsCmd
   .description('Delete a draft')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.gmail.deleteDraft(id);
       success(`Draft ${id} deleted`);
     } catch (err) {
@@ -445,7 +461,7 @@ gmailDraftsCmd
   .description('Send a draft')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.gmail.sendDraft(id);
       success('Draft sent!');
       print(result, getFormat(gmailDraftsCmd));
@@ -475,7 +491,7 @@ driveFilesCmd
   .option('--folder <id>', 'List files in folder')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       let result;
       if (opts.folder) {
         result = await client.drive.listFilesInFolder(opts.folder, {
@@ -499,7 +515,7 @@ driveFilesCmd
   .description('Get file metadata')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.getFile(id);
       print(result, getFormat(driveFilesCmd));
     } catch (err) {
@@ -517,7 +533,7 @@ driveFilesCmd
   .option('--content <content>', 'File content')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.createFile({
         name: opts.name,
         parents: opts.parent ? [opts.parent] : undefined,
@@ -538,7 +554,7 @@ driveFilesCmd
   .option('--parent <id>', 'Parent folder ID')
   .action(async (name: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.createFolder(name, {
         parents: opts.parent ? [opts.parent] : undefined,
       });
@@ -558,7 +574,7 @@ driveFilesCmd
   .option('--starred', 'Star the file')
   .action(async (id: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.updateFile(id, {
         name: opts.name,
         description: opts.description,
@@ -577,7 +593,7 @@ driveFilesCmd
   .description('Delete a file permanently')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.drive.deleteFile(id);
       success(`File ${id} deleted`);
     } catch (err) {
@@ -591,7 +607,7 @@ driveFilesCmd
   .description('Move a file to trash')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.drive.trashFile(id);
       success(`File ${id} moved to trash`);
     } catch (err) {
@@ -606,7 +622,7 @@ driveFilesCmd
   .option('--name <name>', 'New name for the copy')
   .action(async (id: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.copyFile(id, { name: opts.name });
       success('File copied!');
       print(result, getFormat(driveFilesCmd));
@@ -626,7 +642,7 @@ drivePermissionsCmd
   .description('List permissions for a file')
   .action(async (fileId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.listPermissions(fileId);
       print(result, getFormat(drivePermissionsCmd));
     } catch (err) {
@@ -645,7 +661,7 @@ drivePermissionsCmd
   .option('--notify', 'Send notification email')
   .action(async (fileId: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.drive.createPermission(fileId, {
         type: opts.type,
         role: opts.role,
@@ -666,7 +682,7 @@ drivePermissionsCmd
   .description('Remove a permission')
   .action(async (fileId: string, permissionId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.drive.deletePermission(fileId, permissionId);
       success('Permission deleted');
     } catch (err) {
@@ -692,7 +708,7 @@ calendarListCmd
   .description('List calendars')
   .action(async () => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.listCalendars();
       print(result, getFormat(calendarListCmd));
     } catch (err) {
@@ -706,7 +722,7 @@ calendarListCmd
   .description('Get a calendar')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.getCalendar(id);
       print(result, getFormat(calendarListCmd));
     } catch (err) {
@@ -722,7 +738,7 @@ calendarListCmd
   .option('--timezone <tz>', 'Time zone')
   .action(async (summary: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.createCalendar(summary, {
         description: opts.description,
         timeZone: opts.timezone,
@@ -740,7 +756,7 @@ calendarListCmd
   .description('Delete a calendar')
   .action(async (id: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.calendar.deleteCalendar(id);
       success(`Calendar ${id} deleted`);
     } catch (err) {
@@ -763,7 +779,7 @@ calendarEventsCmd
   .option('-q, --query <query>', 'Search query')
   .action(async (calendarId: string = 'primary', opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.listEvents(calendarId, {
         maxResults: parseInt(opts.max),
         timeMin: opts.from,
@@ -784,7 +800,7 @@ calendarEventsCmd
   .description('List today\'s events')
   .action(async (calendarId: string = 'primary') => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.getTodayEvents(calendarId);
       print(result, getFormat(calendarEventsCmd));
     } catch (err) {
@@ -798,7 +814,7 @@ calendarEventsCmd
   .description('List this week\'s events')
   .action(async (calendarId: string = 'primary') => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.getWeekEvents(calendarId);
       print(result, getFormat(calendarEventsCmd));
     } catch (err) {
@@ -812,7 +828,7 @@ calendarEventsCmd
   .description('Get an event')
   .action(async (eventId: string, calendarId: string = 'primary') => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.getEvent(calendarId, eventId);
       print(result, getFormat(calendarEventsCmd));
     } catch (err) {
@@ -833,7 +849,7 @@ calendarEventsCmd
   .option('--attendees <emails>', 'Attendee emails (comma-separated)')
   .action(async (calendarId: string = 'primary', opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       let result;
 
       if (opts.date) {
@@ -873,7 +889,7 @@ calendarEventsCmd
   .description('Quick add an event using natural language')
   .action(async (text: string, calendarId: string = 'primary') => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.quickAddEvent(calendarId, text);
       success('Event created!');
       print(result, getFormat(calendarEventsCmd));
@@ -891,7 +907,7 @@ calendarEventsCmd
   .option('--location <location>', 'Event location')
   .action(async (eventId: string, calendarId: string = 'primary', opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.calendar.updateEvent(calendarId, eventId, {
         summary: opts.summary,
         description: opts.description,
@@ -910,7 +926,7 @@ calendarEventsCmd
   .description('Delete an event')
   .action(async (eventId: string, calendarId: string = 'primary') => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.calendar.deleteEvent(calendarId, eventId);
       success('Event deleted');
     } catch (err) {
@@ -931,7 +947,7 @@ docsCmd
   .description('Create a new document')
   .action(async (title: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.docs.createDocument({ title });
       success('Document created!');
       print(result, getFormat(docsCmd));
@@ -946,7 +962,7 @@ docsCmd
   .description('Get a document')
   .action(async (documentId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.docs.getDocument(documentId);
       print(result, getFormat(docsCmd));
     } catch (err) {
@@ -960,7 +976,7 @@ docsCmd
   .description('Read document content as plain text')
   .action(async (documentId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const doc = await client.docs.getDocument(documentId);
       const text = client.docs.extractPlainText(doc);
       console.log(text);
@@ -975,7 +991,7 @@ docsCmd
   .description('Append text to a document')
   .action(async (documentId: string, text: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.docs.appendText(documentId, text);
       success('Text appended to document');
     } catch (err) {
@@ -992,7 +1008,7 @@ docsCmd
   .option('--match-case', 'Case-sensitive matching')
   .action(async (documentId: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.docs.replaceAllText(documentId, opts.find, opts.replace, opts.matchCase);
       success('Text replaced');
       print(result, getFormat(docsCmd));
@@ -1010,7 +1026,7 @@ docsCmd
   .option('--height <height>', 'Image height in points')
   .action(async (documentId: string, imageUri: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.docs.insertImage(documentId, imageUri, {
         index: opts.index ? parseInt(opts.index) : undefined,
         width: opts.width ? parseInt(opts.width) : undefined,
@@ -1031,7 +1047,7 @@ docsCmd
   .option('--index <index>', 'Insert position')
   .action(async (documentId: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.docs.insertTable(documentId, parseInt(opts.rows), parseInt(opts.cols), {
         index: opts.index ? parseInt(opts.index) : undefined,
       });
@@ -1054,7 +1070,7 @@ sheetsCmd
   .description('Create a new spreadsheet')
   .action(async (title: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.sheets.createSpreadsheet({ title });
       success('Spreadsheet created!');
       print(result, getFormat(sheetsCmd));
@@ -1069,7 +1085,7 @@ sheetsCmd
   .description('Get spreadsheet metadata')
   .action(async (spreadsheetId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.sheets.getSpreadsheetMetadata(spreadsheetId);
       print(result, getFormat(sheetsCmd));
     } catch (err) {
@@ -1083,7 +1099,7 @@ sheetsCmd
   .description('List sheet names in a spreadsheet')
   .action(async (spreadsheetId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const names = await client.sheets.getSheetNames(spreadsheetId);
       print(names, getFormat(sheetsCmd));
     } catch (err) {
@@ -1097,7 +1113,7 @@ sheetsCmd
   .description('Read values from a range')
   .action(async (spreadsheetId: string, range: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.sheets.getValues(spreadsheetId, range);
       print(result, getFormat(sheetsCmd));
     } catch (err) {
@@ -1112,7 +1128,7 @@ sheetsCmd
   .requiredOption('--values <json>', 'Values as JSON array (e.g., \'[["A", "B"], ["1", "2"]]\')')
   .action(async (spreadsheetId: string, range: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const values = JSON.parse(opts.values);
       const result = await client.sheets.updateValues(spreadsheetId, range, values);
       success('Values written!');
@@ -1129,7 +1145,7 @@ sheetsCmd
   .requiredOption('--values <json>', 'Values as JSON array')
   .action(async (spreadsheetId: string, range: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const values = JSON.parse(opts.values);
       const result = await client.sheets.appendValues(spreadsheetId, range, values);
       success('Values appended!');
@@ -1146,7 +1162,7 @@ sheetsCmd
   .requiredOption('--row <json>', 'Row values as JSON array (e.g., \'["value1", "value2"]\')')
   .action(async (spreadsheetId: string, sheetName: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const row = JSON.parse(opts.row);
       const result = await client.sheets.appendRow(spreadsheetId, sheetName, row);
       success('Row appended!');
@@ -1162,7 +1178,7 @@ sheetsCmd
   .description('Clear values from a range')
   .action(async (spreadsheetId: string, range: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.sheets.clearValues(spreadsheetId, range);
       success('Values cleared!');
       print(result, getFormat(sheetsCmd));
@@ -1177,7 +1193,7 @@ sheetsCmd
   .description('Get a single cell value')
   .action(async (spreadsheetId: string, sheetName: string, cell: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const value = await client.sheets.getCellValue(spreadsheetId, sheetName, cell);
       console.log(value);
     } catch (err) {
@@ -1191,7 +1207,7 @@ sheetsCmd
   .description('Set a single cell value')
   .action(async (spreadsheetId: string, sheetName: string, cell: string, value: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.sheets.setCellValue(spreadsheetId, sheetName, cell, value);
       success('Cell value set!');
     } catch (err) {
@@ -1205,7 +1221,7 @@ sheetsCmd
   .description('Get a row by index (1-based)')
   .action(async (spreadsheetId: string, sheetName: string, rowIndex: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const row = await client.sheets.getRow(spreadsheetId, sheetName, parseInt(rowIndex));
       print(row, getFormat(sheetsCmd));
     } catch (err) {
@@ -1219,7 +1235,7 @@ sheetsCmd
   .description('Get a column by letter')
   .action(async (spreadsheetId: string, sheetName: string, column: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const col = await client.sheets.getColumn(spreadsheetId, sheetName, column);
       print(col, getFormat(sheetsCmd));
     } catch (err) {

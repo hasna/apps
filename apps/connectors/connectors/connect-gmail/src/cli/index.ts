@@ -75,7 +75,11 @@ function getFormat(cmd: Command): OutputFormat {
 
 // Helper to check authentication
 function requireAuth(): Gmail {
-  if (!isAuthenticated()) {
+  // isAuthenticated() checks for both accessToken and refreshToken.
+  // If accessToken is missing/expired but refreshToken exists, the client's
+  // getValidAccessToken() will handle the refresh automatically.
+  const tokens = loadTokens();
+  if (!tokens || (!tokens.accessToken && !tokens.refreshToken)) {
     error('Not authenticated. Run "connect-gmail auth login" first.');
     process.exit(1);
   }

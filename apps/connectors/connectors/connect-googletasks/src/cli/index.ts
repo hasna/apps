@@ -16,6 +16,7 @@ import {
   setTokens,
   getAccessToken,
   getRefreshToken,
+  isTokenExpired,
   clearTokens,
   loadProfile,
 } from '../utils/config';
@@ -40,11 +41,30 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 // Helper to get client
-function getClient(): GoogleTasksClient {
-  const token = getAccessToken();
-  if (!token) {
-    throw new Error('Not authenticated. Run "connect-googletasks auth login" first.');
+async function getClient(): Promise<GoogleTasksClient> {
+  let token = getAccessToken();
+
+  // If no access token or token is expired, try to refresh using refresh token
+  if (!token || isTokenExpired()) {
+    const refreshToken = getRefreshToken();
+    const clientId = getClientId();
+    const clientSecret = getClientSecret();
+
+    if (refreshToken && clientId && clientSecret) {
+      try {
+        const tokens = await GoogleTasksClient.refreshAccessToken(refreshToken, clientId, clientSecret);
+        setTokens(tokens.access_token, tokens.refresh_token, tokens.expires_in);
+        token = tokens.access_token;
+      } catch {
+        // Fall through to error below if refresh fails
+      }
+    }
+
+    if (!token) {
+      throw new Error('Not authenticated. Run "connect-googletasks auth login" first.');
+    }
   }
+
   return new GoogleTasksClient(token);
 }
 
@@ -307,7 +327,7 @@ listsCmd
   .description('List all task lists')
   .action(async function(this: Command) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const response = await client.listTaskLists();
       printTaskLists(response.items || [], getFormat(this));
     } catch (err) {
@@ -321,7 +341,7 @@ listsCmd
   .description('Get a task list by ID')
   .action(async function(this: Command, listId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const list = await client.getTaskList(listId);
       printTaskList(list, getFormat(this));
     } catch (err) {
@@ -335,7 +355,7 @@ listsCmd
   .description('Create a new task list')
   .action(async function(this: Command, title: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const list = await client.createTaskList({ title });
       success(`Task list "${list.title}" created`);
       printTaskList(list, getFormat(this));
@@ -350,7 +370,7 @@ listsCmd
   .description('Rename a task list')
   .action(async function(this: Command, listId: string, title: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const list = await client.updateTaskList(listId, { title });
       success(`Task list renamed to "${list.title}"`);
     } catch (err) {
@@ -364,7 +384,7 @@ listsCmd
   .description('Delete a task list')
   .action(async function(this: Command, listId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.deleteTaskList(listId);
       success('Task list deleted');
     } catch (err) {
@@ -389,7 +409,7 @@ tasksCmd
   .option('--max <number>', 'Maximum number of tasks', '100')
   .action(async function(this: Command, listId: string, opts) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const response = await client.listTasks(listId, {
         maxResults: parseInt(opts.max),
         showCompleted: opts.all || opts.completed,
@@ -408,7 +428,7 @@ tasksCmd
   .description('Get a task by ID')
   .action(async function(this: Command, listId: string, taskId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const task = await client.getTask(listId, taskId);
       printTask(task, getFormat(this));
     } catch (err) {
@@ -424,7 +444,7 @@ tasksCmd
   .option('-d, --due <date>', 'Due date (YYYY-MM-DD)')
   .action(async function(this: Command, listId: string, title: string, opts) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const task = await client.createTask(listId, {
         title,
         notes: opts.notes,
@@ -446,7 +466,7 @@ tasksCmd
   .option('-d, --due <date>', 'New due date (YYYY-MM-DD)')
   .action(async function(this: Command, listId: string, taskId: string, opts) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const task = await client.updateTask(listId, taskId, {
         title: opts.title,
         notes: opts.notes,
@@ -466,7 +486,7 @@ tasksCmd
   .description('Mark a task as completed')
   .action(async function(this: Command, listId: string, taskId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const task = await client.completeTask(listId, taskId);
       success(`Task "${task.title}" marked as completed`);
     } catch (err) {
@@ -481,7 +501,7 @@ tasksCmd
   .description('Mark a task as not completed')
   .action(async function(this: Command, listId: string, taskId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const task = await client.uncompleteTask(listId, taskId);
       success(`Task "${task.title}" marked as needs action`);
     } catch (err) {
@@ -496,7 +516,7 @@ tasksCmd
   .description('Delete a task')
   .action(async function(this: Command, listId: string, taskId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.deleteTask(listId, taskId);
       success('Task deleted');
     } catch (err) {
@@ -512,7 +532,7 @@ tasksCmd
   .option('--after <taskId>', 'Position after this task')
   .action(async function(this: Command, listId: string, taskId: string, opts) {
     try {
-      const client = getClient();
+      const client = await getClient();
       const task = await client.moveTask(listId, taskId, {
         parent: opts.parent,
         previous: opts.after,
@@ -529,7 +549,7 @@ tasksCmd
   .description('Clear all completed tasks from a list')
   .action(async function(this: Command, listId: string) {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.clearCompleted(listId);
       success('Completed tasks cleared');
     } catch (err) {

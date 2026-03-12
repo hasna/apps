@@ -67,16 +67,29 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 // Helper to get authenticated client
-function getClient(): GoogleSheets {
+async function getClient(): Promise<GoogleSheets> {
   const apiKey = getApiKey();
-  const accessToken = getAccessToken();
+  let accessToken = getAccessToken();
   const refreshToken = getRefreshToken();
   const clientId = getClientId();
   const clientSecret = getClientSecret();
 
+  // If no API key and no access token, try to refresh using refresh token
   if (!apiKey && !accessToken) {
-    error(`No credentials configured. Run "${CONNECTOR_NAME} config set-key <key>" for API key auth or "${CONNECTOR_NAME} config set-token <token>" for OAuth.`);
-    process.exit(1);
+    if (refreshToken && clientId && clientSecret) {
+      try {
+        info('No access token, attempting refresh...');
+        const tempClient = new GoogleSheets({ refreshToken, clientId, clientSecret });
+        accessToken = await tempClient.refreshAccessToken();
+        success('Token refreshed successfully');
+      } catch (err) {
+        error(`Failed to refresh token: ${err}. Run "${CONNECTOR_NAME} config set-token <token>" to re-authenticate.`);
+        process.exit(1);
+      }
+    } else {
+      error(`No credentials configured. Run "${CONNECTOR_NAME} config set-key <key>" for API key auth or "${CONNECTOR_NAME} config set-token <token>" for OAuth.`);
+      process.exit(1);
+    }
   }
 
   return new GoogleSheets({
@@ -265,7 +278,7 @@ program
   .option('--formulas', 'Return formulas instead of calculated values')
   .action(async (spreadsheetId: string, range: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const valueRenderOption = opts.formulas ? 'FORMULA' : opts.raw ? 'UNFORMATTED_VALUE' : 'FORMATTED_VALUE';
 
       const result = await client.values.get(spreadsheetId, range, {
@@ -285,7 +298,7 @@ program
   .option('--raw', 'Use RAW input (no formula parsing)')
   .action(async (spreadsheetId: string, range: string, valuesStr: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Writing requires OAuth authentication. Use "config set-token" to configure OAuth.');
@@ -314,7 +327,7 @@ program
   .option('--overwrite', 'Overwrite existing data instead of inserting rows')
   .action(async (spreadsheetId: string, range: string, valuesStr: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Writing requires OAuth authentication. Use "config set-token" to configure OAuth.');
@@ -345,7 +358,7 @@ program
   .option('--timezone <tz>', 'Spreadsheet timezone (e.g., "America/New_York")')
   .action(async (title: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Creating spreadsheets requires OAuth authentication. Use "config set-token" to configure OAuth.');
@@ -372,7 +385,7 @@ program
   .description('List all sheets in a spreadsheet')
   .action(async (spreadsheetId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const spreadsheet = await client.spreadsheets.get(spreadsheetId);
 
       console.log(chalk.bold(`Spreadsheet: ${spreadsheet.properties.title}`));
@@ -404,7 +417,7 @@ program
   .description('Get spreadsheet metadata')
   .action(async (spreadsheetId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const spreadsheet = await client.spreadsheets.get(spreadsheetId);
 
       print(spreadsheet, getFormat(program));
@@ -419,7 +432,7 @@ program
   .description('Clear values from a range')
   .action(async (spreadsheetId: string, range: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Clearing values requires OAuth authentication. Use "config set-token" to configure OAuth.');
@@ -448,7 +461,7 @@ sheetCmd
   .option('--index <index>', 'Position to insert the sheet')
   .action(async (spreadsheetId: string, title: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Adding sheets requires OAuth authentication.');
@@ -477,7 +490,7 @@ sheetCmd
   .description('Delete a sheet from a spreadsheet')
   .action(async (spreadsheetId: string, sheetIdStr: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Deleting sheets requires OAuth authentication.');
@@ -499,7 +512,7 @@ sheetCmd
   .description('Rename a sheet')
   .action(async (spreadsheetId: string, sheetIdStr: string, newTitle: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Renaming sheets requires OAuth authentication.');
@@ -521,7 +534,7 @@ sheetCmd
   .description('Copy a sheet to another spreadsheet')
   .action(async (spreadsheetId: string, sheetIdStr: string, destSpreadsheetId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
 
       if (client.isApiKeyAuth()) {
         error('Copying sheets requires OAuth authentication.');
