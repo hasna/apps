@@ -15,6 +15,6 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": { "typescript": "^5.7.2", "bun-types": "latest" },
-  "publishConfig": { "access": "restricted", "registry": "https://registry.npmjs.org/" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
   "license": "Apache-2.0"
 }
