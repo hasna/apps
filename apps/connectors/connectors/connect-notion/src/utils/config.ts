@@ -345,7 +345,8 @@ export function getAccessToken(): string | undefined {
 // ============================================
 
 export function getApiKey(): string | undefined {
-  return process.env.NOTION_API_KEY || loadConfig().accessToken;
+  const config = loadConfig();
+  return process.env.NOTION_API_KEY || config.accessToken || (config as Record<string, unknown>).apiKey as string | undefined;
 }
 
 export function setApiKey(apiKey: string): void {
