@@ -30,7 +30,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.3.14",
+  version: "0.3.15",
 });
 
 // --- Tool: search_connectors ---
@@ -556,6 +556,119 @@ server.registerTool(
   }
 );
 
+// --- Tool: setup_connector ---
+server.registerTool(
+  "setup_connector",
+  {
+    title: "Setup Connector",
+    description:
+      "Install a connector and configure auth in one step. Installs if not already present, saves API key if provided, and returns install + auth status.",
+    inputSchema: {
+      name: z.string().describe("Connector name (e.g. stripe, gmail, anthropic)"),
+      key: z.string().optional().describe("API key or bearer token to save"),
+      field: z
+        .string()
+        .optional()
+        .describe("Which field to save the key as (for multi-field connectors)"),
+      overwrite: z
+        .boolean()
+        .optional()
+        .describe("Overwrite existing installation (default: false)"),
+    },
+  },
+  async ({ name, key, field, overwrite }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      return {
+        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        isError: true,
+      };
+    }
+
+    // Step 1: Install
+    const installed = getInstalledConnectors();
+    const alreadyInstalled = installed.includes(meta.name);
+    let installStatus: { installed: boolean; path?: string; error?: string };
+
+    if (alreadyInstalled && !overwrite) {
+      installStatus = { installed: true, path: `.connectors/connect-${meta.name}` };
+    } else {
+      const result = installConnector(name, { overwrite: overwrite ?? false });
+      if (!result.success) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  connector: name,
+                  installed: false,
+                  error: result.error,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+      installStatus = { installed: true, path: result.path };
+    }
+
+    // Step 2: Configure auth (if key provided)
+    if (key) {
+      try {
+        saveApiKey(name, key, field);
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  connector: name,
+                  installed: installStatus.installed,
+                  path: installStatus.path,
+                  authError: error instanceof Error ? error.message : String(error),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Step 3: Return combined status
+    const authStatus = getAuthStatus(name);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              connector: name,
+              displayName: meta.displayName,
+              installed: installStatus.installed,
+              path: installStatus.path,
+              authType: authStatus.type,
+              authConfigured: authStatus.configured,
+              tokenExpiry: authStatus.tokenExpiry,
+              envVars: authStatus.envVars,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
 // --- Tool: search_tools ---
 server.registerTool(
   "search_tools",
@@ -569,8 +682,8 @@ server.registerTool(
       "search_connectors", "list_connectors", "connector_docs",
       "install_connector", "remove_connector", "list_installed",
       "connector_info", "connector_auth_status", "configure_auth",
-      "list_categories", "list_connector_operations", "run_connector_operation",
-      "search_tools", "describe_tools",
+      "setup_connector", "list_categories", "list_connector_operations",
+      "run_connector_operation", "search_tools", "describe_tools",
     ];
     const matches = query ? all.filter((n) => n.includes(query.toLowerCase())) : all;
     return { content: [{ type: "text" as const, text: matches.join(", ") }] };
@@ -596,6 +709,7 @@ server.registerTool(
       connector_info: "Get metadata and install status. Params: name",
       connector_auth_status: "Check auth status and env vars. Params: name",
       configure_auth: "Save API key or token. Params: name, key, field?",
+      setup_connector: "Install + configure auth + verify in one call. Params: name, key?, field?, overwrite?",
       list_categories: "List connector categories with counts.",
       list_connector_operations: "Discover available API operations for a connector. Params: name, command?",
       run_connector_operation: "Execute an API operation on a connector. Params: name, args[], format?, timeout?",
