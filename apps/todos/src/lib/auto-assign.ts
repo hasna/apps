@@ -9,7 +9,7 @@ import type { Task } from "../types/index.js";
  * Strategy: least-loaded agent with role "agent" (not admin/observer).
  * Returns agent name or null if no agents available.
  */
-export function findBestAgent(task: Task, db?: Database): string | null {
+export function findBestAgent(_task: Task, db?: Database): string | null {
   const d = db || getDatabase();
   const agents = listAgents(d).filter(a => (a.role || "agent") === "agent");
   if (agents.length === 0) return null;

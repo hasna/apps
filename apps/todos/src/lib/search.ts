@@ -9,6 +9,7 @@ function rowToTask(row: TaskRow): Task {
     metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
     status: row.status as Task["status"],
     priority: row.priority as Task["priority"],
+    requires_approval: Boolean(row.requires_approval),
   };
 }
 
