@@ -4,6 +4,7 @@ export type {
   RunStatus,
   ResultStatus,
   ModelPreset,
+  BrowserEngine,
   ProjectRow,
   AgentRow,
   ScenarioRow,
@@ -154,6 +155,14 @@ export {
   BrowserPool,
   installBrowser,
 } from "./lib/browser.js";
+
+export {
+  isLightpandaAvailable,
+  launchLightpanda,
+  getLightpandaPage,
+  closeLightpanda,
+  installLightpanda,
+} from "./lib/browser-lightpanda.js";
 
 export {
   Screenshotter,

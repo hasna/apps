@@ -2,6 +2,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
 
+export type BrowserEngine = "playwright" | "lightpanda";
+
 interface ViewportSize {
   width: number;
   height: number;
@@ -10,6 +12,7 @@ interface ViewportSize {
 interface LaunchOptions {
   headless?: boolean;
   viewport?: ViewportSize;
+  engine?: BrowserEngine;
 }
 
 interface PageOptions {
@@ -29,6 +32,17 @@ const DEFAULT_VIEWPORT: ViewportSize = { width: 1280, height: 720 };
  * Launches a Chromium browser instance via Playwright.
  */
 export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
+  const engine = options?.engine ?? (process.env["TESTERS_BROWSER_ENGINE"] as BrowserEngine | undefined) ?? "playwright";
+
+  if (engine === "lightpanda") {
+    const { launchLightpanda, isLightpandaAvailable } = await import("./browser-lightpanda.js");
+    if (!isLightpandaAvailable()) {
+      throw new BrowserError("Lightpanda not installed. Run: testers install-browser --engine lightpanda");
+    }
+    return launchLightpanda({ viewport: options?.viewport });
+  }
+
+  // Default: Playwright
   const headless = options?.headless ?? true;
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
@@ -52,8 +66,15 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
  */
 export async function getPage(
   browser: Browser,
-  options?: PageOptions,
+  options?: PageOptions & { engine?: BrowserEngine },
 ): Promise<Page> {
+  const engine = options?.engine ?? "playwright";
+
+  if (engine === "lightpanda") {
+    const { getLightpandaPage } = await import("./browser-lightpanda.js");
+    return getLightpandaPage(browser, options);
+  }
+
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
@@ -73,7 +94,12 @@ export async function getPage(
 /**
  * Closes a browser instance gracefully.
  */
-export async function closeBrowser(browser: Browser): Promise<void> {
+export async function closeBrowser(browser: Browser, engine?: BrowserEngine): Promise<void> {
+  if (engine === "lightpanda") {
+    const { closeLightpanda } = await import("./browser-lightpanda.js");
+    return closeLightpanda(browser);
+  }
+
   try {
     await browser.close();
   } catch (error) {
@@ -92,13 +118,16 @@ export class BrowserPool {
   private readonly headless: boolean;
   private readonly viewport: ViewportSize;
 
+  private readonly engine: BrowserEngine;
+
   constructor(
     size: number,
-    options?: { headless?: boolean; viewport?: ViewportSize },
+    options?: { headless?: boolean; viewport?: ViewportSize; engine?: BrowserEngine },
   ) {
     this.maxSize = size;
     this.headless = options?.headless ?? true;
     this.viewport = options?.viewport ?? DEFAULT_VIEWPORT;
+    this.engine = options?.engine ?? "playwright";
   }
 
   /**
@@ -111,7 +140,7 @@ export class BrowserPool {
     const idle = this.pool.find((entry) => !entry.inUse);
     if (idle) {
       idle.inUse = true;
-      const page = await getPage(idle.browser, { viewport: this.viewport });
+      const page = await getPage(idle.browser, { viewport: this.viewport, engine: this.engine });
       return { browser: idle.browser, page };
     }
 
@@ -120,10 +149,11 @@ export class BrowserPool {
       const browser = await launchBrowser({
         headless: this.headless,
         viewport: this.viewport,
+        engine: this.engine,
       });
       const entry: PoolEntry = { browser, inUse: true };
       this.pool.push(entry);
-      const page = await getPage(browser, { viewport: this.viewport });
+      const page = await getPage(browser, { viewport: this.viewport, engine: this.engine });
       return { browser, page };
     }
 
@@ -134,7 +164,7 @@ export class BrowserPool {
         if (available) {
           clearInterval(interval);
           available.inUse = true;
-          getPage(available.browser, { viewport: this.viewport })
+          getPage(available.browser, { viewport: this.viewport, engine: this.engine })
             .then((page) => resolve({ browser: available.browser, page }))
             .catch(reject);
         }
@@ -169,7 +199,12 @@ export class BrowserPool {
 /**
  * Installs Chromium for Playwright using bunx.
  */
-export async function installBrowser(): Promise<void> {
+export async function installBrowser(engine?: BrowserEngine): Promise<void> {
+  if (engine === "lightpanda") {
+    const { installLightpanda } = await import("./browser-lightpanda.js");
+    return installLightpanda();
+  }
+
   try {
     execSync("bunx playwright install chromium", {
       stdio: "inherit",

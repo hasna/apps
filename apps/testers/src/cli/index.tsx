@@ -272,6 +272,7 @@ program
   .option("--from-todos", "Import scenarios from todos before running", false)
   .option("--project <id>", "Project ID")
   .option("-b, --background", "Start run in background and return immediately", false)
+  .option("--browser <engine>", "Browser engine: playwright or lightpanda", "playwright")
   .option("--env <name>", "Use a named environment for the URL")
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
@@ -320,6 +321,7 @@ program
           parallel: parseInt(opts.parallel, 10),
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
           projectId,
+          engine: opts.browser,
         });
         console.log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
         console.log(chalk.dim(`  Scenarios: ${scenarioCount}`));
@@ -387,6 +389,7 @@ program
           parallel: parseInt(opts.parallel, 10),
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
           projectId,
+          engine: opts.browser,
         });
 
         if (opts.json || opts.output) {
@@ -416,6 +419,7 @@ program
         parallel: parseInt(opts.parallel, 10),
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         projectId,
+        engine: opts.browser,
       });
 
       if (opts.json || opts.output) {
@@ -640,12 +644,20 @@ program
 
 program
   .command("install-browser")
-  .description("Install Playwright Chromium browser")
-  .action(async () => {
+  .description("Install browser engine")
+  .option("--engine <engine>", "Engine to install: playwright, lightpanda, or all", "playwright")
+  .action(async (opts) => {
     try {
-      console.log(chalk.blue("Installing Playwright Chromium..."));
-      await installBrowser();
-      console.log(chalk.green("Browser installed successfully."));
+      if (opts.engine === "all" || opts.engine === "playwright") {
+        console.log(chalk.blue("Installing Playwright Chromium..."));
+        await installBrowser("playwright");
+        console.log(chalk.green("Playwright Chromium installed."));
+      }
+      if (opts.engine === "all" || opts.engine === "lightpanda") {
+        console.log(chalk.blue("Installing Lightpanda..."));
+        await installBrowser("lightpanda");
+        console.log(chalk.green("Lightpanda installed."));
+      }
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

@@ -19,6 +19,7 @@ export interface RunOptions {
   projectId?: string;
   apiKey?: string;
   screenshotDir?: string;
+  engine?: "playwright" | "lightpanda";
 }
 
 export interface RunEvent {
@@ -94,7 +95,7 @@ export async function runSingleScenario(
   let page: Page | null = null;
 
   try {
-    browser = await launchBrowser({ headless: !(options.headed ?? false) });
+    browser = await launchBrowser({ headless: !(options.headed ?? false), engine: options.engine });
     page = await getPage(browser, {
       viewport: config.browser.viewport,
     });
@@ -170,7 +171,7 @@ export async function runSingleScenario(
     emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: errorMsg, runId });
     return updatedResult;
   } finally {
-    if (browser) await closeBrowser(browser);
+    if (browser) await closeBrowser(browser, options.engine);
   }
 }
 
