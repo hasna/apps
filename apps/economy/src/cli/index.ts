@@ -14,7 +14,7 @@ const program = new Command()
 program
   .name('economy')
   .description('AI coding cost tracker — Claude Code, Codex, and Gemini')
-  .version('0.1.1')
+  .version('0.2.2')
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
