@@ -177,29 +177,85 @@ export async function runBatch(
 
   updateRun(run.id, { status: "running", total: scenarios.length });
 
+  // Try topological sort if dependencies exist, fallback to original order
+  let sortedScenarios = scenarios;
+  try {
+    const { topologicalSort } = await import("../db/flows.js");
+    const scenarioIds = scenarios.map((s) => s.id);
+    const sortedIds = topologicalSort(scenarioIds);
+    const scenarioMap = new Map(scenarios.map((s) => [s.id, s]));
+    sortedScenarios = sortedIds.map((id) => scenarioMap.get(id)).filter((s): s is Scenario => s !== undefined);
+    // Add any scenarios not in the sort (no deps)
+    for (const s of scenarios) {
+      if (!sortedIds.includes(s.id)) sortedScenarios.push(s);
+    }
+  } catch {
+    // flows module not available or no deps — use original order
+  }
+
   const results: Result[] = [];
+  const failedScenarioIds = new Set<string>();
+
+  // Check if a scenario's dependencies have all passed
+  const canRun = async (scenario: Scenario): Promise<boolean> => {
+    try {
+      const { getDependencies } = await import("../db/flows.js");
+      const deps = getDependencies(scenario.id);
+      for (const depId of deps) {
+        if (failedScenarioIds.has(depId)) return false;
+      }
+    } catch {
+      // No deps module — run everything
+    }
+    return true;
+  };
 
   if (parallel <= 1) {
-    // Sequential
-    for (const scenario of scenarios) {
+    // Sequential — respects dependency order
+    for (const scenario of sortedScenarios) {
+      if (!(await canRun(scenario))) {
+        // Skip — dependency failed
+        const result = createResult({ runId: run.id, scenarioId: scenario.id, model, stepsTotal: 0 });
+        const skipped = updateResult(result.id, { status: "skipped", error: "Skipped: dependency failed" });
+        results.push(skipped);
+        failedScenarioIds.add(scenario.id);
+        emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: "Dependency failed — skipped", runId: run.id });
+        continue;
+      }
+
       const result = await runSingleScenario(scenario, run.id, options);
       results.push(result);
+      if (result.status === "failed" || result.status === "error") {
+        failedScenarioIds.add(scenario.id);
+      }
     }
   } else {
-    // Parallel with concurrency limit
-    const queue = [...scenarios];
+    // Parallel with concurrency limit (no dependency ordering in parallel mode)
+    const queue = [...sortedScenarios];
     const running: Promise<void>[] = [];
 
     const processNext = async (): Promise<void> => {
       const scenario = queue.shift();
       if (!scenario) return;
 
+      if (!(await canRun(scenario))) {
+        const result = createResult({ runId: run.id, scenarioId: scenario.id, model, stepsTotal: 0 });
+        const skipped = updateResult(result.id, { status: "skipped", error: "Skipped: dependency failed" });
+        results.push(skipped);
+        failedScenarioIds.add(scenario.id);
+        await processNext();
+        return;
+      }
+
       const result = await runSingleScenario(scenario, run.id, options);
       results.push(result);
+      if (result.status === "failed" || result.status === "error") {
+        failedScenarioIds.add(scenario.id);
+      }
       await processNext();
     };
 
-    const workers = Math.min(parallel, scenarios.length);
+    const workers = Math.min(parallel, sortedScenarios.length);
     for (let i = 0; i < workers; i++) {
       running.push(processNext());
     }

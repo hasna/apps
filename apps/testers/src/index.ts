@@ -26,6 +26,9 @@ export type {
   CreateScheduleInput,
   UpdateScheduleInput,
   ScheduleFilter,
+  FlowRow,
+  Flow,
+  CreateFlowInput,
   AuthConfig,
   BrowserConfig,
   ScreenshotConfig,
@@ -51,6 +54,9 @@ export {
   ProjectNotFoundError,
   AgentNotFoundError,
   ScheduleNotFoundError,
+  FlowNotFoundError,
+  DependencyCycleError,
+  flowFromRow,
 } from "./types/index.js";
 
 // ─── Database ────────────────────────────────────────────────────────────────
@@ -120,6 +126,19 @@ export {
   getEnabledSchedules,
   updateLastRun,
 } from "./db/schedules.js";
+
+export {
+  addDependency,
+  removeDependency,
+  getDependencies,
+  getDependents,
+  getTransitiveDependencies,
+  topologicalSort,
+  createFlow,
+  getFlow,
+  listFlows,
+  deleteFlow,
+} from "./db/flows.js";
 
 // ─── Library ─────────────────────────────────────────────────────────────────
 export {

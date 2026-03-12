@@ -541,3 +541,58 @@ export class ScheduleNotFoundError extends Error {
     this.name = "ScheduleNotFoundError";
   }
 }
+
+export class FlowNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Flow not found: ${id}`);
+    this.name = "FlowNotFoundError";
+  }
+}
+
+export class DependencyCycleError extends Error {
+  constructor(scenarioId: string, dependsOn: string) {
+    super(`Adding dependency ${dependsOn} to ${scenarioId} would create a cycle`);
+    this.name = "DependencyCycleError";
+  }
+}
+
+// ─── Flow Types ──────────────────────────────────────────────────────────────
+
+export interface FlowRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  description: string | null;
+  scenario_ids: string; // JSON array
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Flow {
+  id: string;
+  projectId: string | null;
+  name: string;
+  description: string | null;
+  scenarioIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function flowFromRow(row: FlowRow): Flow {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    description: row.description,
+    scenarioIds: JSON.parse(row.scenario_ids),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export interface CreateFlowInput {
+  name: string;
+  description?: string;
+  scenarioIds: string[];
+  projectId?: string;
+}

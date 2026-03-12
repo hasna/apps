@@ -195,6 +195,30 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks(active);
   `,
+
+  // Migration 8: Scenario dependencies + flows
+  `
+  CREATE TABLE IF NOT EXISTS scenario_dependencies (
+    scenario_id TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    depends_on TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    PRIMARY KEY (scenario_id, depends_on),
+    CHECK (scenario_id != depends_on)
+  );
+
+  CREATE TABLE IF NOT EXISTS flows (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    scenario_ids TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_deps_scenario ON scenario_dependencies(scenario_id);
+  CREATE INDEX IF NOT EXISTS idx_deps_depends ON scenario_dependencies(depends_on);
+  CREATE INDEX IF NOT EXISTS idx_flows_project ON flows(project_id);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -253,6 +277,8 @@ export function resetDatabase(): void {
   const database = getDatabase();
   database.exec("DELETE FROM screenshots");
   database.exec("DELETE FROM results");
+  database.exec("DELETE FROM scenario_dependencies");
+  database.exec("DELETE FROM flows");
   database.exec("DELETE FROM webhooks");
   database.exec("DELETE FROM auth_presets");
   database.exec("DELETE FROM schedules");

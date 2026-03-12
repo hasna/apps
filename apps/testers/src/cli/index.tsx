@@ -23,6 +23,7 @@ import { createProject, getProject, listProjects, ensureProject } from "../db/pr
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
+import { addDependency, removeDependency, getDependencies, getDependents, createFlow, getFlow, listFlows, deleteFlow } from "../db/flows.js";
 import type { ScenarioPriority } from "../types/index.js";
 import { existsSync, mkdirSync } from "node:fs";
 
@@ -1332,6 +1333,194 @@ program
       } else {
         console.log(formatCostsTerminal(summary));
       }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// --- Chain / Unchain / Deps commands ---
+
+program
+  .command("chain <scenario-id>")
+  .description("Add a dependency to a scenario")
+  .requiredOption("--depends-on <id>", "Scenario ID that must run first")
+  .action((scenarioId: string, opts) => {
+    try {
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) { console.error(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+
+      const dep = getScenario(opts.dependsOn) ?? getScenarioByShortId(opts.dependsOn);
+      if (!dep) { console.error(chalk.red(`Dependency scenario not found: ${opts.dependsOn}`)); process.exit(1); }
+
+      addDependency(scenario.id, dep.id);
+      console.log(chalk.green(`${scenario.shortId} now depends on ${dep.shortId}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command("unchain <scenario-id>")
+  .description("Remove a dependency from a scenario")
+  .requiredOption("--from <id>", "Dependency to remove")
+  .action((scenarioId: string, opts) => {
+    try {
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) { console.error(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+
+      const dep = getScenario(opts.from) ?? getScenarioByShortId(opts.from);
+      if (!dep) { console.error(chalk.red(`Dependency not found: ${opts.from}`)); process.exit(1); }
+
+      removeDependency(scenario.id, dep.id);
+      console.log(chalk.green(`Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command("deps <scenario-id>")
+  .description("Show dependencies for a scenario")
+  .action((scenarioId: string) => {
+    try {
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) { console.error(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+
+      const deps = getDependencies(scenario.id);
+      const dependents = getDependents(scenario.id);
+
+      console.log("");
+      console.log(chalk.bold(`  Dependencies for ${scenario.shortId}: ${scenario.name}`));
+      console.log("");
+
+      if (deps.length > 0) {
+        console.log(chalk.dim("  Depends on:"));
+        for (const depId of deps) {
+          const s = getScenario(depId);
+          console.log(`    → ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
+        }
+      } else {
+        console.log(chalk.dim("  No dependencies"));
+      }
+
+      if (dependents.length > 0) {
+        console.log("");
+        console.log(chalk.dim("  Required by:"));
+        for (const depId of dependents) {
+          const s = getScenario(depId);
+          console.log(`    ← ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
+        }
+      }
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// --- Flow subcommands ---
+
+const flowCmd = program.command("flow").description("Manage test flows (ordered scenario chains)");
+
+flowCmd
+  .command("create <name>")
+  .description("Create a flow from scenario IDs")
+  .requiredOption("--chain <ids>", "Comma-separated scenario IDs in order")
+  .option("--project <id>", "Project ID")
+  .action((name: string, opts) => {
+    try {
+      const ids = opts.chain.split(",").map((id: string) => {
+        const s = getScenario(id.trim()) ?? getScenarioByShortId(id.trim());
+        if (!s) { console.error(chalk.red(`Scenario not found: ${id.trim()}`)); process.exit(1); }
+        return s.id;
+      });
+
+      // Auto-create dependencies: each scenario depends on the previous
+      for (let i = 1; i < ids.length; i++) {
+        try { addDependency(ids[i], ids[i - 1]); } catch { /* already exists */ }
+      }
+
+      const flow = createFlow({ name, scenarioIds: ids, projectId: resolveProject(opts.project) });
+      console.log(chalk.green(`Flow created: ${flow.id.slice(0, 8)} — ${flow.name} (${ids.length} scenarios)`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+flowCmd
+  .command("list")
+  .description("List all flows")
+  .option("--project <id>", "Project ID")
+  .action((opts) => {
+    const flows = listFlows(resolveProject(opts.project) ?? undefined);
+    if (flows.length === 0) {
+      console.log(chalk.dim("\n  No flows found.\n"));
+      return;
+    }
+    console.log("");
+    console.log(chalk.bold("  Flows"));
+    console.log("");
+    for (const f of flows) {
+      console.log(`  ${chalk.dim(f.id.slice(0, 8))}  ${f.name}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`);
+    }
+    console.log("");
+  });
+
+flowCmd
+  .command("show <id>")
+  .description("Show flow details")
+  .action((id: string) => {
+    const flow = getFlow(id);
+    if (!flow) { console.error(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
+    console.log("");
+    console.log(chalk.bold(`  Flow: ${flow.name}`));
+    console.log(`  ID: ${chalk.dim(flow.id)}`);
+    console.log(`  Scenarios (in order):`);
+    for (let i = 0; i < flow.scenarioIds.length; i++) {
+      const s = getScenario(flow.scenarioIds[i]);
+      console.log(`    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`);
+    }
+    console.log("");
+  });
+
+flowCmd
+  .command("delete <id>")
+  .description("Delete a flow")
+  .action((id: string) => {
+    if (deleteFlow(id)) console.log(chalk.green("Flow deleted."));
+    else { console.error(chalk.red("Flow not found.")); process.exit(1); }
+  });
+
+flowCmd
+  .command("run <id>")
+  .description("Run a flow (scenarios in dependency order)")
+  .option("-u, --url <url>", "Target URL (required)")
+  .option("-m, --model <model>", "AI model")
+  .option("--headed", "Run headed", false)
+  .option("--json", "JSON output", false)
+  .action(async (id: string, opts) => {
+    try {
+      const flow = getFlow(id);
+      if (!flow) { console.error(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
+      if (!opts.url) { console.error(chalk.red("--url is required for flow run")); process.exit(1); }
+
+      console.log(chalk.blue(`Running flow: ${flow.name} (${flow.scenarioIds.length} scenarios)`));
+
+      const { run, results } = await runByFilter({
+        url: opts.url,
+        scenarioIds: flow.scenarioIds,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: 1, // flows run sequentially by design
+      });
+
+      if (opts.json) console.log(formatJSON(run, results));
+      else console.log(formatTerminal(run, results));
+      process.exit(getExitCode(run));
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
