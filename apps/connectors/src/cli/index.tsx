@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.5.2")
+  .version("0.5.3")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1552,6 +1552,140 @@ program
       console.log(JSON.stringify({ success: true, imported }));
     } else {
       console.log(chalk.green(`✓ Imported ${imported} profile(s)`));
+    }
+  });
+
+// Auth-import command — migrate tokens from ~/.connect/ to ~/.connectors/
+program
+  .command("auth-import")
+  .option("--json", "Output as JSON", false)
+  .option("-d, --dry-run", "Preview what would be imported without copying", false)
+  .option("--force", "Overwrite existing files in ~/.connectors/", false)
+  .description("Migrate auth tokens from ~/.connect/ to ~/.connectors/")
+  .action((options: { json: boolean; dryRun: boolean; force: boolean }) => {
+    const oldBase = join(homedir(), ".connect");
+    const newBase = join(homedir(), ".connectors");
+
+    if (!existsSync(oldBase)) {
+      if (options.json) {
+        console.log(JSON.stringify({ imported: [], skipped: [], error: null, message: "No ~/.connect/ directory found" }));
+      } else {
+        console.log(chalk.dim("No ~/.connect/ directory found. Nothing to import."));
+      }
+      return;
+    }
+
+    // Find all connect-* directories in ~/.connect/
+    const entries = readdirSync(oldBase).filter((name) => {
+      if (!name.startsWith("connect-")) return false;
+      try { return statSync(join(oldBase, name)).isDirectory(); } catch { return false; }
+    });
+
+    if (entries.length === 0) {
+      if (options.json) {
+        console.log(JSON.stringify({ imported: [], skipped: [], message: "No connect-* directories found in ~/.connect/" }));
+      } else {
+        console.log(chalk.dim("No connect-* directories found in ~/.connect/. Nothing to import."));
+      }
+      return;
+    }
+
+    const imported: Array<{ connector: string; files: string[] }> = [];
+    const skipped: Array<{ connector: string; files: string[] }> = [];
+
+    for (const dirName of entries) {
+      const oldDir = join(oldBase, dirName);
+      const newDir = join(newBase, dirName);
+      const connectorName = dirName.replace(/^connect-/, "");
+
+      // Collect all files recursively from the old directory
+      const allFiles = listFilesRecursive(oldDir);
+
+      // Filter to auth-related files
+      const authFiles = allFiles.filter((f) => {
+        return f === "credentials.json"
+          || f === "config.json"
+          || f === "tokens.json"
+          || f === "current_profile"
+          || f.startsWith("profiles/") || f.startsWith("profiles\\");
+      });
+
+      if (authFiles.length === 0) continue;
+
+      const copiedFiles: string[] = [];
+      const skippedFiles: string[] = [];
+
+      for (const relFile of authFiles) {
+        const srcPath = join(oldDir, relFile);
+        const destPath = join(newDir, relFile);
+
+        if (existsSync(destPath) && !options.force) {
+          skippedFiles.push(relFile);
+          continue;
+        }
+
+        if (!options.dryRun) {
+          // Ensure parent directory exists
+          const parentDir = join(destPath, "..");
+          mkdirSync(parentDir, { recursive: true });
+          // Copy file contents
+          const content = readFileSync(srcPath);
+          writeFileSync(destPath, content);
+        }
+        copiedFiles.push(relFile);
+      }
+
+      if (copiedFiles.length > 0) {
+        imported.push({ connector: connectorName, files: copiedFiles });
+      }
+      if (skippedFiles.length > 0) {
+        skipped.push({ connector: connectorName, files: skippedFiles });
+      }
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ dryRun: options.dryRun, force: options.force, imported, skipped }, null, 2));
+      return;
+    }
+
+    if (options.dryRun) {
+      console.log(chalk.bold("\nDry run — no changes will be made\n"));
+    } else {
+      console.log(chalk.bold("\nAuth Import Results\n"));
+    }
+
+    for (const entry of imported) {
+      console.log(`  ${chalk.green("✓")} ${chalk.cyan(entry.connector)}`);
+      for (const f of entry.files) {
+        console.log(chalk.dim(`      ${options.dryRun ? "would copy" : "copied"}: ${f}`));
+      }
+    }
+
+    for (const entry of skipped) {
+      console.log(`  ${chalk.yellow("⊘")} ${chalk.cyan(entry.connector)}`);
+      for (const f of entry.files) {
+        console.log(chalk.dim(`      skipped (exists): ${f}`));
+      }
+    }
+
+    if (imported.length === 0 && skipped.length === 0) {
+      console.log(chalk.dim("  No auth files found to import."));
+    }
+
+    // Summary
+    const totalCopied = imported.reduce((sum, e) => sum + e.files.length, 0);
+    const totalSkipped = skipped.reduce((sum, e) => sum + e.files.length, 0);
+    const parts: string[] = [];
+    if (totalCopied > 0) parts.push(chalk.green(`${totalCopied} file${totalCopied !== 1 ? "s" : ""} ${options.dryRun ? "to copy" : "copied"}`));
+    if (totalSkipped > 0) parts.push(chalk.yellow(`${totalSkipped} skipped`));
+    if (parts.length > 0) {
+      console.log(`\n  ${chalk.bold("Summary:")} ${parts.join(", ")}`);
+    }
+
+    if (options.dryRun) {
+      console.log(chalk.dim("\n  Run without --dry-run to apply.\n"));
+    } else {
+      console.log();
     }
   });
 
