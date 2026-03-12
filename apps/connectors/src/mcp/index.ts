@@ -30,7 +30,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.3.8",
+  version: "0.3.9",
 });
 
 // --- Tool: search_connectors ---
@@ -509,7 +509,12 @@ server.registerTool(
 
     const result = await runConnectorCommand(name, finalArgs, timeout ?? 30000);
 
-    if (!result.success) {
+    // Commander.js writes help to stderr and exits with code 1 for unknown commands,
+    // or exits with code 0 for --help but output goes to stdout. Treat help text as success.
+    const combinedOutput = `${result.stdout}\n${result.stderr}`;
+    const looksLikeHelp = /Usage:|Commands:|Options:/i.test(combinedOutput);
+
+    if (!result.success && !looksLikeHelp) {
       return {
         content: [
           {
@@ -538,7 +543,9 @@ server.registerTool(
             {
               connector: name,
               success: true,
-              output: result.stdout,
+              output: looksLikeHelp
+                ? (result.stdout || result.stderr).trim()
+                : result.stdout,
             },
             null,
             2

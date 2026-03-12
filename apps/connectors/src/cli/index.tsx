@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.8");
+  .version("0.3.9");
 
 // Interactive mode (default)
 program
@@ -1376,11 +1376,49 @@ program
   });
 
 // Export command — backup all connector credentials
+const SENSITIVE_FIELDS = new Set([
+  "clientsecret", "client_secret",
+  "accesstoken", "access_token",
+  "refreshtoken", "refresh_token",
+  "apikey", "api_key",
+  "apitoken", "api_token",
+  "secret", "secretkey", "secret_key",
+  "bearertoken", "bearer_token",
+  "token", "password", "passwd",
+  "private_key", "privatekey",
+]);
+
+function redactValue(value: string): string {
+  if (value.length <= 8) return "••••••••";
+  return value.slice(0, 4) + "••••" + value.slice(-4);
+}
+
+function redactSecrets(obj: unknown): unknown {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === "string") return obj;
+  if (Array.isArray(obj)) return obj.map(redactSecrets);
+  if (typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      if (SENSITIVE_FIELDS.has(key.toLowerCase()) && typeof value === "string") {
+        result[key] = redactValue(value);
+      } else if (typeof value === "object" && value !== null) {
+        result[key] = redactSecrets(value);
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
 program
   .command("export")
   .option("-o, --output <file>", "Write to file instead of stdout")
+  .option("--include-secrets", "Include secrets in plaintext (dangerous — use only for backup/restore)")
   .description("Export all connector credentials as JSON backup")
-  .action((options: { output?: string }) => {
+  .action((options: { output?: string; includeSecrets?: boolean }) => {
     const connectDir = join(homedir(), ".connectors");
     const result: Record<string, { profiles: Record<string, unknown> }> = {};
 
@@ -1408,7 +1446,15 @@ program
       }
     }
 
-    const exportData = JSON.stringify({ connectors: result, exportedAt: new Date().toISOString() }, null, 2);
+    const exportPayload = options.includeSecrets
+      ? { connectors: result, exportedAt: new Date().toISOString() }
+      : { connectors: redactSecrets(result) as typeof result, exportedAt: new Date().toISOString(), redacted: true };
+
+    if (!options.includeSecrets) {
+      console.error(chalk.yellow("⚠ Secrets are redacted by default. Use --include-secrets for a full backup (e.g., for restore)."));
+    }
+
+    const exportData = JSON.stringify(exportPayload, null, 2);
 
     if (options.output) {
       writeFileSync(options.output, exportData);
