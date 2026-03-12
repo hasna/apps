@@ -17,7 +17,8 @@ import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
 import type { ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind } from "../types/index.js";
 
-const pkg = { version: "0.1.0" };
+import { createRequire } from "node:module";
+const pkg = createRequire(import.meta.url)("../../package.json") as { version: string };
 
 function fmtConfig(c: ReturnType<typeof getConfig>, format: string) {
   if (format === "json") return JSON.stringify(c, null, 2);
