@@ -20,8 +20,9 @@ function rowToAgent(row: AgentRow): Agent {
  */
 export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const d = db || getDatabase();
+  const normalizedName = input.name.trim().toLowerCase();
 
-  const existing = getAgentByName(input.name, d);
+  const existing = getAgentByName(normalizedName, d);
   if (existing) {
     d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), existing.id]);
     return getAgent(existing.id, d)!;
@@ -33,7 +34,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   d.run(
     `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, org_id, metadata, created_at, last_seen_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.name, input.description || null, input.role || "agent",
+    [id, normalizedName, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), input.reports_to || null,
      input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp],
@@ -50,7 +51,8 @@ export function getAgent(id: string, db?: Database): Agent | null {
 
 export function getAgentByName(name: string, db?: Database): Agent | null {
   const d = db || getDatabase();
-  const row = d.query("SELECT * FROM agents WHERE name = ?").get(name) as AgentRow | null;
+  const normalizedName = name.trim().toLowerCase();
+  const row = d.query("SELECT * FROM agents WHERE LOWER(name) = ?").get(normalizedName) as AgentRow | null;
   return row ? rowToAgent(row) : null;
 }
 
@@ -78,7 +80,7 @@ export function updateAgent(
 
   if (input.name !== undefined) {
     sets.push("name = ?");
-    params.push(input.name);
+    params.push(input.name.trim().toLowerCase());
   }
   if (input.description !== undefined) {
     sets.push("description = ?");

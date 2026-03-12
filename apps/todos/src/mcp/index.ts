@@ -28,7 +28,7 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, getAgent, getAgentByName, listAgents } from "../db/agents.js";
+import { registerAgent, getAgent, getAgentByName, listAgents, updateAgent, deleteAgent } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
@@ -47,7 +47,7 @@ import type { Task } from "../types/index.js";
 
 const server = new McpServer({
   name: "todos",
-  version: "0.9.15",
+  version: "0.9.33",
 });
 
 function formatError(error: unknown): string {
@@ -790,6 +790,68 @@ server.tool(
       parts.push(`Created: ${agent.created_at}`);
       parts.push(`Last seen: ${agent.last_seen_at}`);
       return { content: [{ type: "text" as const, text: parts.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// rename_agent
+server.tool(
+  "rename_agent",
+  "Rename an agent. Resolve by id or current name.",
+  {
+    id: z.string().optional().describe("Agent ID"),
+    name: z.string().optional().describe("Current agent name"),
+    new_name: z.string().describe("New name for the agent"),
+  },
+  async ({ id, name, new_name }) => {
+    try {
+      if (!id && !name) {
+        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+      }
+      const agent = id ? getAgent(id) : getAgentByName(name!);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+      }
+      const updated = updateAgent(agent.id, { name: new_name });
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Agent renamed: ${agent.name} -> ${updated.name}\nID: ${updated.id}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// delete_agent
+server.tool(
+  "delete_agent",
+  "Delete an agent permanently. Resolve by id or name.",
+  {
+    id: z.string().optional().describe("Agent ID"),
+    name: z.string().optional().describe("Agent name"),
+  },
+  async ({ id, name }) => {
+    try {
+      if (!id && !name) {
+        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+      }
+      const agent = id ? getAgent(id) : getAgentByName(name!);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+      }
+      const deleted = deleteAgent(agent.id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: deleted ? `Agent deleted: ${agent.name} (${agent.id})` : `Failed to delete agent: ${agent.name}`,
+        }],
+        isError: !deleted,
+      };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }

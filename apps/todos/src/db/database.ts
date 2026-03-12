@@ -569,7 +569,7 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     return row?.id ?? null;
   }
 
-  // Partial match (prefix)
+  // Partial match (prefix) on id column
   const rows = db.query(`SELECT id FROM ${table} WHERE id LIKE ?`).all(`${partialId}%`) as { id: string }[];
   if (rows.length === 1) {
     return rows[0]!.id;
@@ -578,5 +578,14 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     // Ambiguous - return null
     return null;
   }
+
+  // For tasks table, also try matching on short_id (e.g. "OPE-00006")
+  if (table === "tasks") {
+    const shortIdRows = db.query("SELECT id FROM tasks WHERE short_id = ?").all(partialId) as { id: string }[];
+    if (shortIdRows.length === 1) {
+      return shortIdRows[0]!.id;
+    }
+  }
+
   return null;
 }
