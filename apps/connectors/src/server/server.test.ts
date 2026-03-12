@@ -167,28 +167,30 @@ describe("auth", () => {
     test("creates profile directory and saves key for new connector", () => {
       saveApiKey(name1, "test-api-key-123");
 
-      const profileFile = join(
+      const configFile = join(
         testConfigDir(name1),
         "profiles",
-        "default.json"
+        "default",
+        "config.json"
       );
-      expect(existsSync(profileFile)).toBe(true);
+      expect(existsSync(configFile)).toBe(true);
 
-      const content = JSON.parse(readFileSync(profileFile, "utf-8"));
+      const content = JSON.parse(readFileSync(configFile, "utf-8"));
       expect(content.apiKey).toBe("test-api-key-123");
     });
 
     test("saves key with custom field name", () => {
       saveApiKey(name2, "my-secret-token", "secretToken");
 
-      const profileFile = join(
+      const configFile = join(
         testConfigDir(name2),
         "profiles",
-        "default.json"
+        "default",
+        "config.json"
       );
-      expect(existsSync(profileFile)).toBe(true);
+      expect(existsSync(configFile)).toBe(true);
 
-      const content = JSON.parse(readFileSync(profileFile, "utf-8"));
+      const content = JSON.parse(readFileSync(configFile, "utf-8"));
       expect(content.secretToken).toBe("my-secret-token");
     });
 
@@ -539,12 +541,13 @@ describe("auth", () => {
     test("defaults to 'apiKey' when no field specified and connector has no docs", () => {
       saveApiKey(name1, "my-test-key");
 
-      const profileFile = join(
+      const configFile = join(
         testConfigDir(name1),
         "profiles",
-        "default.json"
+        "default",
+        "config.json"
       );
-      const content = JSON.parse(readFileSync(profileFile, "utf-8"));
+      const content = JSON.parse(readFileSync(configFile, "utf-8"));
       expect(content.apiKey).toBe("my-test-key");
     });
   });
@@ -871,14 +874,15 @@ describe("server API routes", () => {
       const data = (await res.json()) as { success: boolean };
       expect(data.success).toBe(true);
 
-      // Verify the key was actually saved to disk
-      const profileFile = join(
+      // Verify the key was actually saved to disk (directory pattern)
+      const configFile = join(
         testConfigDir(testKeyName),
         "profiles",
-        "default.json"
+        "default",
+        "config.json"
       );
-      expect(existsSync(profileFile)).toBe(true);
-      const saved = JSON.parse(readFileSync(profileFile, "utf-8"));
+      expect(existsSync(configFile)).toBe(true);
+      const saved = JSON.parse(readFileSync(configFile, "utf-8"));
       expect(saved.apiKey).toBe("sk_test_key_12345");
     });
 
@@ -1216,12 +1220,13 @@ describe("server API routes", () => {
       const data = (await res.json()) as { success: boolean };
       expect(data.success).toBe(true);
 
-      const profileFile = join(
+      const configFile = join(
         testConfigDir(testKeyName),
         "profiles",
-        "default.json"
+        "default",
+        "config.json"
       );
-      const saved = JSON.parse(readFileSync(profileFile, "utf-8"));
+      const saved = JSON.parse(readFileSync(configFile, "utf-8"));
       expect(saved.bearerToken).toBe("my-token-456");
     });
   });

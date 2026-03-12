@@ -261,9 +261,10 @@ export function saveApiKey(name: string, key: string, field?: string): void {
     return;
   }
 
-  // Create new profile (use pattern 1 by default for API key connectors)
-  mkdirSync(join(configDir, "profiles"), { recursive: true });
-  writeFileSync(profileFile, JSON.stringify({ [keyField]: key }, null, 2));
+  // Create new profile using directory pattern (profiles/<name>/config.json)
+  // This matches what connector CLIs expect
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "config.json"), JSON.stringify({ [keyField]: key }, null, 2));
 }
 
 /**
