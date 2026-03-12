@@ -358,7 +358,19 @@ export function updateTask(
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
-  return getTask(id, d)!;
+  // Return updated task without re-fetching from DB
+  return {
+    ...task,
+    ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)),
+    tags: input.tags ?? task.tags,
+    metadata: input.metadata ?? task.metadata,
+    version: task.version + 1,
+    updated_at: now(),
+    completed_at: input.status === "completed" ? now() : task.completed_at,
+    requires_approval: input.requires_approval !== undefined ? input.requires_approval : task.requires_approval,
+    approved_by: input.approved_by ?? task.approved_by,
+    approved_at: input.approved_by ? now() : task.approved_at,
+  };
 }
 
 export function deleteTask(id: string, db?: Database): boolean {
@@ -385,6 +397,8 @@ export function startTask(
   db?: Database,
 ): Task {
   const d = db || getDatabase();
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
 
   // Check blocking dependencies
   const blocking = getBlockingDeps(id, d);
@@ -402,15 +416,15 @@ export function startTask(
   );
 
   if (result.changes === 0) {
-    const current = getTask(id, d);
-    if (!current) throw new TaskNotFoundError(id);
-    if (current.locked_by && current.locked_by !== agentId && !isLockExpired(current.locked_at)) {
-      throw new LockError(id, current.locked_by);
+    if (task.locked_by && task.locked_by !== agentId && !isLockExpired(task.locked_at)) {
+      throw new LockError(id, task.locked_by);
     }
   }
 
   logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
-  return getTask(id, d)!;
+
+  // Return constructed result — no re-fetch
+  return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, version: task.version + 1, updated_at: timestamp };
 }
 
 export function completeTask(
@@ -450,7 +464,10 @@ export function completeTask(
   );
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
-  return getTask(id, d)!;
+
+  // Return constructed result — no re-fetch
+  const meta = evidence ? { ...task.metadata, _evidence: evidence } : task.metadata;
+  return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, version: task.version + 1, updated_at: timestamp, metadata: meta };
 }
 
 export function lockTask(
