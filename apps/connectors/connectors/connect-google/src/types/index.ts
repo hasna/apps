@@ -6,6 +6,7 @@
 
 export interface GoogleConfig {
   accessToken: string;
+  autoRefresh?: boolean; // Enable auto-refresh of access token (default: true)
   baseUrls?: {
     gmail?: string;
     drive?: string;

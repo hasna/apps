@@ -1,5 +1,6 @@
 import type { GoogleContactsConfig, OAuthTokenResponse, OAuthTokens } from '../types';
 import { GoogleContactsApiError, AuthError, RateLimitError } from '../types';
+import { saveTokens } from '../utils/config';
 
 const DEFAULT_BASE_URL = 'https://people.googleapis.com';
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -118,6 +119,14 @@ export class GoogleContactsClient {
     }
 
     this.tokens = newTokens;
+
+    // Persist refreshed tokens to disk so they survive process exit
+    saveTokens({
+      accessToken: newTokens.accessToken,
+      refreshToken: newTokens.refreshToken,
+      expiresIn: newTokens.expiresIn,
+    });
+
     return this.tokens;
   }
 
