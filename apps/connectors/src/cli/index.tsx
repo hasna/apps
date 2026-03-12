@@ -24,7 +24,7 @@ import {
 import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join, relative } from "path";
-import { getAuthStatus, getAuthType, saveApiKey, getOAuthStartUrl, getEnvVars } from "../server/auth.js";
+import { getAuthStatus, getAuthType, saveApiKey, getOAuthStartUrl, getEnvVars, refreshOAuthToken } from "../server/auth.js";
 import { TEST_ENDPOINTS } from "../lib/test-endpoints.js";
 import { createInterface } from "readline";
 import { getConnectorOperations, runConnectorCommand, getConnectorCommandHelp, getConnectorCliPath } from "../lib/runner.js";
@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.4.1")
+  .version("0.4.2")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1913,12 +1913,25 @@ program
           try { currentProfile = readFileSync(currentProfileFile, "utf-8").trim() || "default"; } catch {}
         }
 
-        // Try OAuth tokens first (profiles/<name>/tokens.json)
+        // Try OAuth tokens first (profiles/<name>/tokens.json) — refresh if expired
         const tokensFile = join(connectorConfigDir, "profiles", currentProfile, "tokens.json");
         if (existsSync(tokensFile)) {
           try {
             const tokens = JSON.parse(readFileSync(tokensFile, "utf-8"));
-            if (tokens.accessToken) apiKey = tokens.accessToken;
+            const isExpired = tokens.expiresAt && Date.now() >= tokens.expiresAt - 60000;
+            if (isExpired && tokens.refreshToken) {
+              // Attempt auto-refresh before test
+              try {
+                const refreshed = await refreshOAuthToken(name);
+                apiKey = refreshed.accessToken;
+                if (!options.json) console.log(`  ${chalk.dim("↻")} ${chalk.dim(name)} — ${chalk.dim("token refreshed")}`);
+              } catch {
+                // Refresh failed, use existing token
+                if (tokens.accessToken) apiKey = tokens.accessToken;
+              }
+            } else if (tokens.accessToken) {
+              apiKey = tokens.accessToken;
+            }
           } catch {}
         }
 
