@@ -570,11 +570,25 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           await exchangeOAuthCode(name, code, redirectUri);
           logActivity("oauth_connected", name);
 
-          return htmlResponse(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#e5e5e5;">
-            <div style="text-align:center;">
-              <h2 style="color:#22c55e;">Connected!</h2>
-              <p style="color:#888;"><strong>${name}</strong> is now authenticated.</p>
-              <p style="color:#666;font-size:14px;">You can close this window and return to the dashboard.</p>
+          return htmlResponse(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            <style>
+              * { margin:0; padding:0; box-sizing:border-box; }
+              body { font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; display:flex; justify-content:center; align-items:center; min-height:100vh; background:#09090b; color:#fafafa; }
+              .card { background:#18181b; border:1px solid #27272a; border-radius:12px; padding:48px 40px; max-width:420px; text-align:center; }
+              .icon { width:64px; height:64px; border-radius:50%; background:#052e16; display:flex; align-items:center; justify-content:center; margin:0 auto 24px; }
+              .icon svg { width:32px; height:32px; color:#22c55e; }
+              h2 { font-size:24px; font-weight:600; margin-bottom:8px; color:#fafafa; }
+              .connector { color:#22c55e; font-weight:600; }
+              .subtitle { color:#a1a1aa; font-size:15px; margin-top:12px; line-height:1.5; }
+              .hint { color:#52525b; font-size:13px; margin-top:24px; }
+              .cmd { background:#27272a; color:#e4e4e7; padding:2px 8px; border-radius:4px; font-family:ui-monospace,monospace; font-size:12px; }
+            </style>
+          </head><body>
+            <div class="card">
+              <div class="icon"><svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></div>
+              <h2>Connected!</h2>
+              <p class="subtitle"><span class="connector">${name}</span> is now authenticated and ready to use.</p>
+              <p class="hint">You can close this window.<br>Try <span class="cmd">connectors run ${name} --help</span></p>
               <script>
                 if (window.opener) {
                   window.opener.postMessage({ type: 'oauth-complete', connector: '${name}' }, 'http://localhost:${port}');
