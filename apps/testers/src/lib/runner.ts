@@ -97,6 +97,9 @@ export async function runSingleScenario(
         filePath: ss.filePath,
         width: ss.width,
         height: ss.height,
+        description: ss.description,
+        pageUrl: ss.pageUrl,
+        thumbnailPath: ss.thumbnailPath,
       });
       emit({ type: "screenshot:captured", screenshotPath: ss.filePath, scenarioId: scenario.id, runId });
     }

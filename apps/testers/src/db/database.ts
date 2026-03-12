@@ -161,6 +161,40 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled);
   CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at);
   `,
+
+  // Migration 5: Enhanced screenshots with description, page_url, thumbnail
+  `
+  ALTER TABLE screenshots ADD COLUMN description TEXT;
+  ALTER TABLE screenshots ADD COLUMN page_url TEXT;
+  ALTER TABLE screenshots ADD COLUMN thumbnail_path TEXT;
+  `,
+
+  // Migration 6: Auth presets table
+  `
+  CREATE TABLE IF NOT EXISTS auth_presets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    password TEXT NOT NULL,
+    login_path TEXT DEFAULT '/login',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
+
+  // Migration 7: Webhooks table
+  `
+  CREATE TABLE IF NOT EXISTS webhooks (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    events TEXT NOT NULL DEFAULT '["failed"]',
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    secret TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks(active);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -219,6 +253,8 @@ export function resetDatabase(): void {
   const database = getDatabase();
   database.exec("DELETE FROM screenshots");
   database.exec("DELETE FROM results");
+  database.exec("DELETE FROM webhooks");
+  database.exec("DELETE FROM auth_presets");
   database.exec("DELETE FROM schedules");
   database.exec("DELETE FROM runs");
   database.exec("DELETE FROM scenarios");

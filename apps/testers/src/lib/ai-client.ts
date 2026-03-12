@@ -347,6 +347,9 @@ interface ScreenshotResult {
   width: number;
   height: number;
   timestamp: string;
+  description: string | null;
+  pageUrl: string | null;
+  thumbnailPath: string | null;
 }
 
 interface ToolExecutionResult {
@@ -644,6 +647,9 @@ interface AgentLoopResult {
     timestamp: string;
     action: string;
     stepNumber: number;
+    description: string | null;
+    pageUrl: string | null;
+    thumbnailPath: string | null;
   }>;
 }
 

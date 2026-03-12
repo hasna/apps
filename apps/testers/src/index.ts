@@ -186,3 +186,66 @@ export {
   getNextRunTime,
 } from "./lib/scheduler.js";
 export type { SchedulerEvent } from "./lib/scheduler.js";
+
+export {
+  initProject,
+  detectFramework,
+  getStarterScenarios,
+} from "./lib/init.js";
+export type { InitResult } from "./lib/init.js";
+
+export {
+  runSmoke,
+  parseSmokeIssues,
+  formatSmokeReport,
+} from "./lib/smoke.js";
+export type { SmokeResult, SmokeIssue } from "./lib/smoke.js";
+
+export {
+  diffRuns,
+  formatDiffTerminal,
+  formatDiffJSON,
+} from "./lib/diff.js";
+export type { DiffResult, ScenarioDiff } from "./lib/diff.js";
+
+export {
+  getTemplate,
+  listTemplateNames,
+  SCENARIO_TEMPLATES,
+} from "./lib/templates.js";
+
+export {
+  createAuthPreset,
+  getAuthPreset,
+  listAuthPresets,
+  deleteAuthPreset,
+} from "./db/auth-presets.js";
+
+export {
+  generateHtmlReport,
+  generateLatestReport,
+  imageToBase64,
+} from "./lib/report.js";
+
+export {
+  getCostSummary,
+  checkBudget,
+  formatCostsTerminal,
+  formatCostsJSON,
+} from "./lib/costs.js";
+export type { CostSummary, BudgetConfig } from "./lib/costs.js";
+
+export { startWatcher } from "./lib/watch.js";
+
+export {
+  createWebhook,
+  getWebhook,
+  listWebhooks,
+  deleteWebhook,
+  dispatchWebhooks,
+  testWebhook,
+} from "./lib/webhooks.js";
+export type { Webhook, WebhookPayload } from "./lib/webhooks.js";
+
+export { writeRunMeta, writeScenarioMeta } from "./lib/screenshotter.js";
+export type { CaptureResult } from "./lib/screenshotter.js";

@@ -87,17 +87,88 @@ testers run <url> [description]        # Run tests
   --project <name>                     # Filter by project
 ```
 
-### Results
+### Results & Analysis
 
 ```bash
 testers runs                           # List past runs
 testers results <run-id>               # Show run results
 testers screenshots <id>               # List screenshots
+testers replay <run-id>                # Re-run all scenarios from a run
+testers retry <run-id>                 # Re-run only failed scenarios
+testers diff <run1> <run2>             # Compare two runs (regressions/fixes)
+testers report <run-id>                # Generate HTML report with screenshots
+testers costs                          # Show cost tracking & budget status
+```
+
+### Projects
+
+```bash
+testers project create <name>          # Create a project
+testers project list                   # List projects
+testers project show <id>              # Show project details
+testers project use <name>             # Set active project
+```
+
+### Schedules (Recurring Tests)
+
+```bash
+testers schedule create <name>         # Create recurring schedule
+  --cron "0 2 * * *"                   # Cron expression (required)
+  --url http://localhost:3000          # Target URL (required)
+  --tag <tag>                          # Filter scenarios
+  --parallel <n>                       # Concurrent agents
+testers schedule list                  # List all schedules
+testers schedule enable <id>           # Enable a schedule
+testers schedule disable <id>          # Disable a schedule
+testers schedule run <id>              # Manually trigger
+testers daemon                         # Start scheduler daemon
+```
+
+### Smoke Testing
+
+```bash
+testers smoke <url>                    # Zero-config autonomous exploration
+  --model <preset>                     # AI model
+  --headed                             # Watch live
+```
+
+### Templates & Auth
+
+```bash
+testers add --template auth            # Seed auth test scenarios
+testers add --template crud            # Seed CRUD test scenarios
+testers add --template forms           # Seed form validation scenarios
+testers add --template nav             # Seed navigation scenarios
+testers add --template a11y            # Seed accessibility scenarios
+
+testers auth add <name>                # Create auth preset
+  --email <email> --password <pwd>
+testers auth list                      # List presets
+```
+
+### Watch Mode
+
+```bash
+testers watch <url>                    # Re-run on file changes
+  --dir .                              # Directory to watch
+  --tag <tag>                          # Filter scenarios
+  --debounce <ms>                      # Debounce delay (default: 2000)
+```
+
+### Webhooks
+
+```bash
+testers webhook add <url>              # Add webhook for notifications
+  --events failed,completed            # Events to listen for
+testers webhook list                   # List webhooks
+testers webhook test <id>              # Send test payload
+testers webhook delete <id>            # Remove webhook
 ```
 
 ### Utilities
 
 ```bash
+testers init                           # Setup wizard (detects framework)
 testers config                         # Show config
 testers status                         # Show auth & DB status
 testers install-browser                # Install Playwright chromium

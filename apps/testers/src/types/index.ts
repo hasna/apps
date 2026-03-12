@@ -94,6 +94,9 @@ export interface ScreenshotRow {
   width: number;
   height: number;
   timestamp: string;
+  description: string | null;
+  page_url: string | null;
+  thumbnail_path: string | null;
 }
 
 export interface ScheduleRow {
@@ -198,6 +201,9 @@ export interface Screenshot {
   width: number;
   height: number;
   timestamp: string;
+  description: string | null;
+  pageUrl: string | null;
+  thumbnailPath: string | null;
 }
 
 export interface Schedule {
@@ -437,6 +443,9 @@ export function screenshotFromRow(row: ScreenshotRow): Screenshot {
     width: row.width,
     height: row.height,
     timestamp: row.timestamp,
+    description: row.description,
+    pageUrl: row.page_url,
+    thumbnailPath: row.thumbnail_path,
   };
 }
 

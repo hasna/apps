@@ -12,14 +12,17 @@ export function createScreenshot(input: {
   filePath: string;
   width: number;
   height: number;
+  description?: string | null;
+  pageUrl?: string | null;
+  thumbnailPath?: string | null;
 }): Screenshot {
   const db = getDatabase();
   const id = uuid();
   const timestamp = now();
 
   db.query(`
-    INSERT INTO screenshots (id, result_id, step_number, action, file_path, width, height, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO screenshots (id, result_id, step_number, action, file_path, width, height, timestamp, description, page_url, thumbnail_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     input.resultId,
@@ -29,6 +32,9 @@ export function createScreenshot(input: {
     input.width,
     input.height,
     timestamp,
+    input.description ?? null,
+    input.pageUrl ?? null,
+    input.thumbnailPath ?? null,
   );
 
   return getScreenshot(id)!;

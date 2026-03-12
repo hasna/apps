@@ -13,9 +13,16 @@ import { formatTerminal, formatJSON, getExitCode, formatRunList, formatScenarioL
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
+import { initProject } from "../lib/init.js";
+import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
+import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
+import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
+import { getCostSummary, formatCostsTerminal, formatCostsJSON } from "../lib/costs.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
+import { getTemplate, listTemplateNames } from "../lib/templates.js";
+import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
 import type { ScenarioPriority } from "../types/index.js";
 import { existsSync, mkdirSync } from "node:fs";
 
@@ -61,8 +68,23 @@ program
   .option("--auth", "Requires authentication", false)
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--project <id>", "Project ID")
+  .option("--template <name>", "Seed scenarios from a template (auth, crud, forms, nav, a11y)")
   .action((name: string, opts) => {
     try {
+      if (opts.template) {
+        const template = getTemplate(opts.template);
+        if (!template) {
+          console.error(chalk.red(`Unknown template: ${opts.template}. Available: ${listTemplateNames().join(", ")}`));
+          process.exit(1);
+        }
+        const projectId = resolveProject(opts.project);
+        for (const input of template) {
+          const s = createScenario({ ...input, projectId });
+          console.log(chalk.green(`  Created ${s.shortId}: ${s.name}`));
+        }
+        return;
+      }
+
       const projectId = resolveProject(opts.project);
       const scenario = createScenario({
         name,
@@ -885,6 +907,354 @@ program
       });
 
       await checkAndRun();
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers init ──────────────────────────────────────────────────────────
+
+program
+  .command("init")
+  .description("Initialize a new testing project")
+  .option("-n, --name <name>", "Project name")
+  .option("-u, --url <url>", "Base URL")
+  .option("-p, --path <path>", "Project path")
+  .action((opts) => {
+    try {
+      const { project, scenarios, framework } = initProject({
+        name: opts.name,
+        url: opts.url,
+        path: opts.path,
+      });
+
+      console.log("");
+      console.log(chalk.bold("  Project initialized!"));
+      console.log("");
+
+      if (framework) {
+        console.log(`  Framework:  ${chalk.cyan(framework.name)}`);
+        if (framework.features.length > 0) {
+          console.log(`  Features:   ${chalk.dim(framework.features.join(", "))}`);
+        }
+      } else {
+        console.log(`  Framework:  ${chalk.dim("not detected")}`);
+      }
+
+      console.log(`  Project:    ${chalk.green(project.name)} ${chalk.dim(`(${project.id})`)}`);
+      console.log(`  Scenarios:  ${chalk.green(String(scenarios.length))} starter scenarios created`);
+      console.log("");
+
+      for (const s of scenarios) {
+        console.log(`    ${chalk.dim(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+      }
+
+      console.log("");
+      console.log(chalk.bold("  Next steps:"));
+      console.log(`    1. Start your dev server`);
+      console.log(`    2. Run ${chalk.cyan("testers run <url>")} to execute tests`);
+      console.log(`    3. Add more scenarios with ${chalk.cyan("testers add <name>")}`);
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers replay <run-id> ──────────────────────────────────────────────
+
+program
+  .command("replay <run-id>")
+  .description("Re-run all scenarios from a previous run")
+  .option("-u, --url <url>", "Override URL")
+  .option("-m, --model <model>", "Override model")
+  .option("--headed", "Run headed", false)
+  .option("--json", "JSON output", false)
+  .option("--parallel <n>", "Parallel count", "1")
+  .action(async (runId: string, opts) => {
+    try {
+      const originalRun = getRun(runId);
+      if (!originalRun) {
+        console.error(chalk.red(`Run not found: ${runId}`));
+        process.exit(1);
+      }
+
+      const originalResults = getResultsByRun(originalRun.id);
+      const scenarioIds = originalResults.map(r => r.scenarioId);
+
+      if (scenarioIds.length === 0) {
+        console.log(chalk.dim("No scenarios to replay."));
+        return;
+      }
+
+      console.log(chalk.blue(`Replaying ${scenarioIds.length} scenarios from run ${originalRun.id.slice(0, 8)}...`));
+
+      const { run, results } = await runByFilter({
+        url: opts.url ?? originalRun.url,
+        scenarioIds,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: parseInt(opts.parallel, 10),
+      });
+
+      if (opts.json) {
+        console.log(formatJSON(run, results));
+      } else {
+        console.log(formatTerminal(run, results));
+      }
+      process.exit(getExitCode(run));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers retry <run-id> ───────────────────────────────────────────────
+
+program
+  .command("retry <run-id>")
+  .description("Re-run only failed scenarios from a previous run")
+  .option("-u, --url <url>", "Override URL")
+  .option("-m, --model <model>", "Override model")
+  .option("--headed", "Run headed", false)
+  .option("--json", "JSON output", false)
+  .option("--parallel <n>", "Parallel count", "1")
+  .action(async (runId: string, opts) => {
+    try {
+      const originalRun = getRun(runId);
+      if (!originalRun) {
+        console.error(chalk.red(`Run not found: ${runId}`));
+        process.exit(1);
+      }
+
+      const originalResults = getResultsByRun(originalRun.id);
+      const failedScenarioIds = originalResults
+        .filter(r => r.status === "failed" || r.status === "error")
+        .map(r => r.scenarioId);
+
+      if (failedScenarioIds.length === 0) {
+        console.log(chalk.green("No failed scenarios to retry. All passed!"));
+        return;
+      }
+
+      console.log(chalk.blue(`Retrying ${failedScenarioIds.length} failed scenarios from run ${originalRun.id.slice(0, 8)}...`));
+
+      const { run, results } = await runByFilter({
+        url: opts.url ?? originalRun.url,
+        scenarioIds: failedScenarioIds,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: parseInt(opts.parallel, 10),
+      });
+
+      // Show comparison
+      if (!opts.json) {
+        console.log("");
+        console.log(chalk.bold("  Comparison with original run:"));
+        for (const result of results) {
+          const original = originalResults.find(r => r.scenarioId === result.scenarioId);
+          if (original) {
+            const changed = original.status !== result.status;
+            const arrow = changed
+              ? chalk.yellow(`${original.status} → ${result.status}`)
+              : chalk.dim(`${result.status} (unchanged)`);
+            const icon = result.status === "passed" ? chalk.green("✓") : chalk.red("✗");
+            // Get scenario name from the getScenario import
+            console.log(`  ${icon} ${result.scenarioId.slice(0, 8)}: ${arrow}`);
+          }
+        }
+        console.log("");
+      }
+
+      if (opts.json) {
+        console.log(formatJSON(run, results));
+      } else {
+        console.log(formatTerminal(run, results));
+      }
+      process.exit(getExitCode(run));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers smoke <url> ─────────────────────────────────────────────────────
+
+program
+  .command("smoke <url>")
+  .description("Run autonomous smoke test")
+  .option("-m, --model <model>", "AI model")
+  .option("--headed", "Watch browser", false)
+  .option("--timeout <ms>", "Timeout in milliseconds")
+  .option("--json", "JSON output", false)
+  .option("--project <id>", "Project ID")
+  .action(async (url: string, opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+
+      console.log(chalk.blue(`Running smoke test against ${chalk.bold(url)}...`));
+      console.log("");
+
+      const smokeResult = await runSmoke({
+        url,
+        model: opts.model,
+        headed: opts.headed,
+        timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        projectId,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify({
+          run: smokeResult.run,
+          result: smokeResult.result,
+          pagesVisited: smokeResult.pagesVisited,
+          issues: smokeResult.issuesFound,
+        }, null, 2));
+      } else {
+        console.log(formatSmokeReport(smokeResult));
+      }
+
+      // Exit with non-zero if critical/high issues found
+      const hasCritical = smokeResult.issuesFound.some(
+        (i) => i.severity === "critical" || i.severity === "high"
+      );
+      process.exit(hasCritical ? 1 : 0);
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers diff <run1> <run2> ──────────────────────────────────────────────
+
+program
+  .command("diff <run1> <run2>")
+  .description("Compare two test runs")
+  .option("--json", "JSON output", false)
+  .action((run1: string, run2: string, opts) => {
+    try {
+      const diff = diffRuns(run1, run2);
+      if (opts.json) {
+        console.log(formatDiffJSON(diff));
+      } else {
+        console.log(formatDiffTerminal(diff));
+      }
+      // Exit 1 if regressions found
+      process.exit(diff.regressions.length > 0 ? 1 : 0);
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers report [run-id] ─────────────────────────────────────────────────
+
+program
+  .command("report [run-id]")
+  .description("Generate HTML test report")
+  .option("--latest", "Use most recent run", false)
+  .option("-o, --output <file>", "Output file path", "report.html")
+  .action((runId: string | undefined, opts) => {
+    try {
+      let html: string;
+      if (opts.latest || !runId) {
+        html = generateLatestReport();
+      } else {
+        html = generateHtmlReport(runId);
+      }
+      writeFileSync(opts.output, html, "utf-8");
+      console.log(chalk.green(`Report generated: ${opts.output}`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers auth ──────────────────────────────────────────────────────────
+
+const authCmd = program.command("auth").description("Manage auth presets");
+
+authCmd
+  .command("add <name>")
+  .description("Create an auth preset")
+  .requiredOption("--email <email>", "Login email")
+  .requiredOption("--password <password>", "Login password")
+  .option("--login-path <path>", "Login page path", "/login")
+  .action((name: string, opts) => {
+    try {
+      const preset = createAuthPreset({
+        name,
+        email: opts.email,
+        password: opts.password,
+        loginPath: opts.loginPath,
+      });
+      console.log(chalk.green(`Created auth preset ${chalk.bold(preset.name)} (${preset.email})`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+authCmd
+  .command("list")
+  .description("List auth presets")
+  .action(() => {
+    try {
+      const presets = listAuthPresets();
+      if (presets.length === 0) {
+        console.log(chalk.dim("No auth presets found."));
+        return;
+      }
+      console.log("");
+      console.log(chalk.bold("  Auth Presets"));
+      console.log("");
+      console.log(`  ${"Name".padEnd(20)} ${"Email".padEnd(30)} ${"Login Path".padEnd(15)} Created`);
+      console.log(`  ${"─".repeat(20)} ${"─".repeat(30)} ${"─".repeat(15)} ${"─".repeat(22)}`);
+      for (const p of presets) {
+        console.log(`  ${p.name.padEnd(20)} ${p.email.padEnd(30)} ${p.loginPath.padEnd(15)} ${p.createdAt}`);
+      }
+      console.log("");
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+authCmd
+  .command("delete <name>")
+  .description("Delete an auth preset")
+  .action((name: string) => {
+    try {
+      const deleted = deleteAuthPreset(name);
+      if (deleted) {
+        console.log(chalk.green(`Deleted auth preset: ${name}`));
+      } else {
+        console.error(chalk.red(`Auth preset not found: ${name}`));
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers costs ──────────────────────────────────────────────────────────
+
+program
+  .command("costs")
+  .description("Show cost tracking and budget status")
+  .option("--project <id>", "Project ID")
+  .option("--period <period>", "Time period", "month")
+  .option("--json", "JSON output", false)
+  .action((opts) => {
+    try {
+      const summary = getCostSummary({ projectId: resolveProject(opts.project), period: opts.period });
+      if (opts.json) {
+        console.log(formatCostsJSON(summary));
+      } else {
+        console.log(formatCostsTerminal(summary));
+      }
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

@@ -34,36 +34,42 @@ describe("slugify", () => {
 });
 
 describe("generateFilename", () => {
-  it("generates correct filename for step 1", () => {
+  it("generates correct filename with underscore separator", () => {
     expect(generateFilename(1, "navigate homepage")).toBe(
-      "001-navigate-homepage.png",
+      "001_navigate-homepage.png",
     );
   });
 
   it("generates correct filename for step 15", () => {
     expect(generateFilename(15, "click submit")).toBe(
-      "015-click-submit.png",
+      "015_click-submit.png",
     );
   });
 
   it("generates correct filename for step 100+", () => {
     expect(generateFilename(100, "verify results")).toBe(
-      "100-verify-results.png",
+      "100_verify-results.png",
     );
   });
 });
 
 describe("getScreenshotDir", () => {
-  it("joins base, runId, and scenarioSlug correctly", () => {
-    expect(getScreenshotDir("/base", "run-123", "login-flow")).toBe(
-      "/base/run-123/login-flow",
-    );
+  it("builds project-scoped date-organized path", () => {
+    const ts = new Date("2026-03-12T10:30:00.000Z");
+    const dir = getScreenshotDir("/base", "abcd1234-full-id", "login-flow", "myapp", ts);
+    expect(dir).toBe("/base/myapp/2026-03-12/10-30-00_abcd1234/login-flow");
   });
 
-  it("handles paths with various characters", () => {
-    expect(
-      getScreenshotDir("/home/user/.testers/screenshots", "abc-def", "my-scenario"),
-    ).toBe("/home/user/.testers/screenshots/abc-def/my-scenario");
+  it("uses default project name when not provided", () => {
+    const ts = new Date("2026-03-12T10:30:00.000Z");
+    const dir = getScreenshotDir("/base", "abcd1234-full-id", "login-flow", undefined, ts);
+    expect(dir).toContain("/base/default/2026-03-12/");
+  });
+
+  it("handles various characters in scenario slug", () => {
+    const ts = new Date("2026-01-15T08:05:30.000Z");
+    const dir = getScreenshotDir("/screenshots", "run-abc", "my-scenario", "project-x", ts);
+    expect(dir).toBe("/screenshots/project-x/2026-01-15/08-05-30_run-abc/my-scenario");
   });
 });
 
