@@ -224,6 +224,93 @@ export async function runByFilter(
   return runBatch(scenarios, options);
 }
 
+/**
+ * Start a run asynchronously — creates the run record immediately and returns it,
+ * then executes scenarios in the background. Poll getRun(id) to check progress.
+ */
+export function startRunAsync(
+  options: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] }
+): { runId: string; scenarioCount: number } {
+  const config = loadConfig();
+  const model = resolveModel(options.model ?? config.defaultModel);
+
+  let scenarios: Scenario[];
+  if (options.scenarioIds && options.scenarioIds.length > 0) {
+    const all = listScenarios({ projectId: options.projectId });
+    scenarios = all.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
+  } else {
+    scenarios = listScenarios({
+      projectId: options.projectId,
+      tags: options.tags,
+      priority: options.priority as "low" | "medium" | "high" | "critical" | undefined,
+    });
+  }
+
+  const parallel = options.parallel ?? 1;
+  const run = createRun({
+    url: options.url,
+    model,
+    headed: options.headed,
+    parallel,
+    projectId: options.projectId,
+  });
+
+  if (scenarios.length === 0) {
+    updateRun(run.id, { status: "passed", total: 0, finished_at: new Date().toISOString() });
+    return { runId: run.id, scenarioCount: 0 };
+  }
+
+  updateRun(run.id, { status: "running", total: scenarios.length });
+
+  // Fire and forget — execute in background
+  (async () => {
+    const results: Result[] = [];
+    try {
+      if (parallel <= 1) {
+        for (const scenario of scenarios) {
+          const result = await runSingleScenario(scenario, run.id, options);
+          results.push(result);
+        }
+      } else {
+        const queue = [...scenarios];
+        const running: Promise<void>[] = [];
+        const processNext = async (): Promise<void> => {
+          const scenario = queue.shift();
+          if (!scenario) return;
+          const result = await runSingleScenario(scenario, run.id, options);
+          results.push(result);
+          await processNext();
+        };
+        const workers = Math.min(parallel, scenarios.length);
+        for (let i = 0; i < workers; i++) {
+          running.push(processNext());
+        }
+        await Promise.all(running);
+      }
+
+      const passed = results.filter((r) => r.status === "passed").length;
+      const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
+      updateRun(run.id, {
+        status: failed > 0 ? "failed" : "passed",
+        passed,
+        failed,
+        total: scenarios.length,
+        finished_at: new Date().toISOString(),
+      });
+      emit({ type: "run:complete", runId: run.id });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      updateRun(run.id, {
+        status: "failed",
+        finished_at: new Date().toISOString(),
+      });
+      emit({ type: "run:complete", runId: run.id, error: errorMsg });
+    }
+  })();
+
+  return { runId: run.id, scenarioCount: scenarios.length };
+}
+
 function estimateCost(model: string, tokens: number): number {
   // Rough cost estimates in cents per 1M tokens (input + output averaged)
   const costs: Record<string, number> = {

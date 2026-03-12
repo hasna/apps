@@ -156,6 +156,7 @@ export {
   runSingleScenario,
   runBatch,
   runByFilter,
+  startRunAsync,
   onRunEvent,
 } from "./lib/runner.js";
 export type { RunOptions, RunEvent, RunEventHandler } from "./lib/runner.js";

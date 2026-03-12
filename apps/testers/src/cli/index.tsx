@@ -8,7 +8,7 @@ import { createScenario, getScenario, getScenarioByShortId, listScenarios, updat
 import { getRun, listRuns } from "../db/runs.js";
 import { getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
-import { runByFilter } from "../lib/runner.js";
+import { runByFilter, startRunAsync } from "../lib/runner.js";
 import { formatTerminal, formatJSON, getExitCode, formatRunList, formatScenarioList } from "../lib/reporter.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
@@ -253,9 +253,39 @@ program
   .option("--timeout <ms>", "Timeout in milliseconds")
   .option("--from-todos", "Import scenarios from todos before running", false)
   .option("--project <id>", "Project ID")
+  .option("-b, --background", "Start run in background and return immediately", false)
   .action(async (url: string, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
+
+      // If --from-todos, import scenarios first
+      if (opts.fromTodos) {
+        const result = importFromTodos({ projectId });
+        console.log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
+      }
+
+      // Background mode — start async and return immediately
+      if (opts.background) {
+        if (description) {
+          createScenario({ name: description, description, tags: ["ad-hoc"], projectId });
+        }
+        const { runId, scenarioCount } = startRunAsync({
+          url,
+          tags: opts.tag.length > 0 ? opts.tag : undefined,
+          scenarioIds: opts.scenario ? [opts.scenario] : undefined,
+          priority: opts.priority,
+          model: opts.model,
+          headed: opts.headed,
+          parallel: parseInt(opts.parallel, 10),
+          timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+          projectId,
+        });
+        console.log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
+        console.log(chalk.dim(`  Scenarios: ${scenarioCount}`));
+        console.log(chalk.dim(`  URL: ${url}`));
+        console.log(chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`));
+        process.exit(0);
+      }
 
       // If description provided, create an ad-hoc scenario and run it
       if (description) {
@@ -289,12 +319,6 @@ program
         }
 
         process.exit(getExitCode(run));
-      }
-
-      // If --from-todos, import scenarios first
-      if (opts.fromTodos) {
-        const result = importFromTodos({ projectId });
-        console.log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
       }
 
       // Run by filter

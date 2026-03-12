@@ -1,6 +1,6 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
@@ -28,7 +28,7 @@
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @anthropic-ai/sdk --external playwright",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --external @anthropic-ai/sdk --external playwright",
     "build:lib": "bun build src/index.ts --outdir dist --target bun --external playwright --external @anthropic-ai/sdk --external @modelcontextprotocol/sdk",
-    "build:types": "tsc --emitDeclarationOnly --outDir dist",
+    "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

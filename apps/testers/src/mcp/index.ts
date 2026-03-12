@@ -10,7 +10,7 @@ import { listResults } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { createProject, ensureProject, listProjects } from "../db/projects.js";
 import { registerAgent, listAgents } from "../db/agents.js";
-import { runByFilter } from "../lib/runner.js";
+import { startRunAsync } from "../lib/runner.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
@@ -176,18 +176,15 @@ server.tool(
   },
   async ({ url, tags, scenarioIds, priority, model, headed, parallel }) => {
     try {
-      const { run, results } = await runByFilter({ url, tags, scenarioIds, priority, model, headed, parallel });
-      const passed = results.filter((r) => r.status === "passed").length;
-      const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
-      const skipped = results.filter((r) => r.status === "skipped").length;
+      const { runId, scenarioCount } = startRunAsync({ url, tags, scenarioIds, priority, model, headed, parallel });
       const text = [
-        `Run ${run.id} — ${run.status}`,
-        `URL: ${run.url}`,
-        `Total: ${results.length} | Passed: ${passed} | Failed: ${failed} | Skipped: ${skipped}`,
-        `Model: ${run.model}`,
-        `Started: ${run.startedAt}`,
-        run.finishedAt ? `Finished: ${run.finishedAt}` : null,
-      ].filter(Boolean).join("\n");
+        `Run started: ${runId}`,
+        `Scenarios: ${scenarioCount}`,
+        `URL: ${url}`,
+        `Status: running (async)`,
+        ``,
+        `Poll with get_run to check progress.`,
+      ].join("\n");
       return { content: [{ type: "text" as const, text }] };
     } catch (error) {
       const e = error instanceof Error ? error : new Error(String(error));
