@@ -31,6 +31,7 @@ export function heartbeat(agent: string, status?: string, metadata?: Record<stri
   const db = getDb();
   const metadataJson = metadata ? JSON.stringify(metadata) : null;
   const resolvedStatus = status || "online";
+  const normalizedAgent = agent.trim().toLowerCase();
 
   db.prepare(`
     INSERT INTO agent_presence (agent, status, last_seen_at, metadata)
@@ -39,12 +40,13 @@ export function heartbeat(agent: string, status?: string, metadata?: Record<stri
       status = excluded.status,
       last_seen_at = excluded.last_seen_at,
       metadata = excluded.metadata
-  `).run(agent, resolvedStatus, metadataJson);
+  `).run(normalizedAgent, resolvedStatus, metadataJson);
 }
 
 export function getPresence(agent: string): AgentPresence | null {
   const db = getDb();
-  const row = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(agent) as Record<string, unknown> | null;
+  const normalizedAgent = agent.trim().toLowerCase();
+  const row = db.prepare("SELECT * FROM agent_presence WHERE LOWER(agent) = ?").get(normalizedAgent) as Record<string, unknown> | null;
   return row ? parsePresence(row) : null;
 }
 
@@ -66,18 +68,22 @@ export function listAgents(opts?: { online_only?: boolean }): AgentPresence[] {
 
 export function removePresence(agent: string): boolean {
   const db = getDb();
-  const result = db.prepare("DELETE FROM agent_presence WHERE agent = ?").run(agent);
+  const normalizedAgent = agent.trim().toLowerCase();
+  const result = db.prepare("DELETE FROM agent_presence WHERE LOWER(agent) = ?").run(normalizedAgent);
   return result.changes > 0;
 }
 
 export function renameAgent(oldName: string, newName: string): boolean {
   const db = getDb();
-  const existing = db.prepare("SELECT agent FROM agent_presence WHERE agent = ?").get(oldName);
+  const normalizedOld = oldName.trim().toLowerCase();
+  const normalizedNew = newName.trim().toLowerCase();
+
+  const existing = db.prepare("SELECT agent FROM agent_presence WHERE LOWER(agent) = ?").get(normalizedOld);
   if (!existing) return false;
 
-  const conflict = db.prepare("SELECT agent FROM agent_presence WHERE agent = ?").get(newName);
-  if (conflict) throw new Error(`Agent "${newName}" already exists`);
+  const conflict = db.prepare("SELECT agent FROM agent_presence WHERE LOWER(agent) = ?").get(normalizedNew);
+  if (conflict) throw new Error(`Agent "${normalizedNew}" already exists`);
 
-  db.prepare("UPDATE agent_presence SET agent = ? WHERE agent = ?").run(newName, oldName);
+  db.prepare("UPDATE agent_presence SET agent = ? WHERE LOWER(agent) = ?").run(normalizedNew, normalizedOld);
   return true;
 }
