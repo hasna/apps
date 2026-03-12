@@ -14,7 +14,7 @@ import type {
 /**
  * SES v2 API client
  */
-export class SesApi {
+export class AwsAwsSesApi {
   private readonly client: AWSClient;
 
   constructor(client: AWSClient) {
