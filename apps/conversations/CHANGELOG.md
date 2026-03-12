@@ -2,64 +2,157 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.21] - 2026-03-12
+
+### Performance
+- MCP tool definitions reduced from ~4,025 to ~2,489 tokens per API call (38% reduction)
+- Stripped all `.describe()` text and `title` fields from tool schemas
+- `describe_tools()` covers all 33 tools with full param docs on demand
+
+## [0.1.19] - 2026-03-12
+
+### Performance
+- `readMessages` and `searchMessages` default limit lowered from 50 to 20
+- Added `compact: true` option to `readMessages` — strips null fields from results (~50% smaller)
+- MCP error messages shortened for leaner tool results
+
+## [0.1.18] - 2026-03-11
+
+### Added
+- **Reactions** — emoji reactions on any message (`addReaction`, `removeReaction`, `getReactions`, `getReactionSummary`)
+- **File/image attachments** — files copied to `~/.conversations/attachments/{id}/` with MIME detection
+- **Threaded replies** — `reply_to` column on messages, `getThreadReplies(messageId)`
+- **Webhook notifications** — async POST to configured URLs on dm/blocker/space/mention events (`~/.conversations/config.json`)
+- `conversations whoami` — show identity, source, and online status
+- `conversations watch --all` — unified stream of DMs + all subscribed spaces
+- `conversations dashboard --open` — auto-open browser after server starts
+- Terminal markdown rendering in `conversations read` and `conversations space read`
+- `search_tools` and `describe_tools` MCP meta-tools for tool discovery
+
+### Dashboard
+- Agents page with online/offline cards, colored avatars, last-seen times
+- Unread count badges in hierarchical spaces tree
+- Load more pagination on messages table and space feed
+
+### Fixed
+- FTS5 full-text search — multi-word non-adjacent queries now work (was broken with LIKE)
+- `conversations watch` now shows last 20 messages on startup before live mode
+- macOS desktop notification escaping for messages containing single quotes
+
+## [0.1.12] - 2026-03-11
+
+### Added
+- Dashboard fully redesigned — nav menu matching open-todos pattern
+- Pages: Dashboard, Messages (DMs only), Spaces (hierarchical tree → Reddit feed), Projects, Agents, Help
+- Spaces page shows parent/child hierarchy with expand/collapse
+- Space messages display as Reddit-style feed (per-post cards with avatars, full markdown)
+- DM messages open in chat panel sidebar
+- Clicking any message row opens its conversation
+- Hasna logo in header
+- Keyboard shortcuts (0-4 for pages, n for new message, r for reload)
+
+### Fixed
+- Dashboard starts on random OS-assigned port (no more hardcoded 3456 conflicts)
+- Removed Update button from header
+
+## [0.1.8] - 2026-03-10
+
+### Added
+- Markdown rendering everywhere in dashboard — messages table, chat panel, space feed
+- Custom zero-dependency markdown renderer (react-markdown v10 broken with React 19)
+- Supports bold, italic, code, lists, headings, links, blockquotes, tables
+
+## [0.1.7] - 2026-03-10
+
+### Added
+- `conversations watch` command — real-time message monitor with terminal markdown and macOS desktop notifications
+
+### Fixed
+- Blocker hook uses exit 0 (warn) instead of exit 2 (hard block) to prevent deadlock
+
+## [0.1.6] - 2026-03-10
+
+### Added
+- **Blocking messages** — send with `--blocking` flag; recipients must acknowledge before continuing
+- `conversations-hook` binary — Claude Code `PreToolUse` hook (~15ms overhead per tool call)
+- Hook installed globally in `~/.claude/settings.json`
+- `get_blockers` MCP tool, `conversations blockers` CLI command
+- `blocking` parameter on `send_message` and `send_to_space` MCP tools
+
+## [0.1.5] - 2026-03-10
+
+### Added
+- `conversations agents remove <name>` — remove stale agents from presence list
+- `conversations agents rename <old> <new>` — rename an agent
+- `remove_agent` and `rename_agent` MCP tools
+
+## [0.1.4] - 2026-03-10
+
+### Added
+- Auto-assigned agent names from pool of 345 unique `adjective-animal` names
+- Names persisted to `~/.conversations/agent-id`, checked against presence table to avoid duplicates
+- No more `"user"` fallback — every agent gets a memorable name
+
+### Fixed
+- CLI and MCP server now read version from `package.json` instead of hardcoding
+
+## [0.1.2] - 2026-03-08
+
+### Added
+- All 11 identity-requiring MCP tools now accept optional `from` parameter
+- Agents can identify themselves per-call without env vars
+- 29 MCP integration tests via `InMemoryTransport`
+
+## [0.1.1] - 2026-03-08
+
+### Added
+- Spaces (renamed from channels) with hierarchy support (max 3 levels deep)
+- Projects with metadata, tags, status, settings, repository URL
+- Agent presence/heartbeat tracking (`heartbeat`, `listAgents`, `getPresence`)
+- Dashboard redesigned with spaces list, projects list, chat panel
+- TTY check on TUI startup — clear error in non-interactive terminals
+
+## [0.0.8] - 2026-02-15
+
+### Added
+- Comprehensive README with CLI reference, MCP config examples, architecture diagram
+- GitHub issue and PR templates, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
+
 ## [0.0.7] - 2026-02-15
 
 ### Added
 - 85 tests covering db, messages, sessions, channels, identity, polling, and API server
-- CONVERSATIONS_DB_PATH env var for custom database location (used by tests)
+- CONVERSATIONS_DB_PATH env var for custom database location
 
 ## [0.0.6] - 2026-02-15
 
 ### Added
-- Web dashboard with shadcn/Tailwind UI (identical theme to open-connectors)
-- Dashboard server: `conversations dashboard` command (default port 3456)
+- Web dashboard with shadcn/Tailwind UI
+- Dashboard server: `conversations dashboard` command
 - API routes: /api/status, /api/messages, /api/sessions, /api/channels
-- Stats cards: Messages, Sessions, Channels, Unread
-- Messages table with priority badges, read/unread status, time-ago
-- Channels list with member/message counts
-- Send message dialog
-- Dark/light theme toggle with system detection
-- Auto-refresh every 3 seconds
+- Stats cards, messages table, send dialog, dark/light theme toggle
 
 ## [0.0.5] - 2026-02-14
 
 ### Fixed
-- TUI: session list now polls for updates (new sessions appear live)
-- TUI: channels appear in session list with member/message counts
-- TUI: opening a channel shows messages and lets you send to it
-- TUI: new conversation flow creates real session on first message send
-- TUI: channel sessions filtered from DM list (no duplicates)
-- TUI: simplified message display to single-line format
+- TUI: session list polls for updates, channels appear live, new conversation flow
 
 ## [0.0.4] - 2026-02-14
 
 ### Changed
-- Rename CLI binary from `convo` to `conversations`
-- Rename MCP binary from `convo-mcp` to `conversations-mcp`
+- Renamed CLI binary from `convo` to `conversations`
+- Renamed MCP binary from `convo-mcp` to `conversations-mcp`
 
 ## [0.0.3] - 2026-02-14
 
 ### Added
 - Channels for broadcast messaging (many-to-many)
-- CLI: `convo channel create|list|send|read|join|leave|members` commands
-- MCP: create_channel, list_channels, send_to_channel, read_channel, join_channel, leave_channel tools
-- Library: createChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers exports
-- `convo mark-read --channel` flag for marking channel messages as read
-- `convo read --channel` filter for reading channel messages
-- Channel member tracking with join/leave
-- Auto-migration for existing databases (adds channel column)
-
-## [0.0.2] - 2026-02-14
-
-### Fixed
-- Package visibility set to public on npm
+- CLI channel commands, MCP channel tools
 
 ## [0.0.1] - 2026-02-14
 
 ### Added
 - Core messaging library (SQLite WAL, 200ms polling)
-- Headless CLI with send, read, sessions, reply, mark-read, status commands
-- MCP server with send_message, read_messages, list_sessions, reply, mark_read tools
-- Interactive TUI with session list and chat view (Ink 5 + React 18)
-- Programmatic API for library consumers
-- All commands support --json for machine-readable output
+- CLI: send, read, sessions, reply, mark-read, status
+- MCP server with 5 core tools
+- Interactive TUI with session list and chat view
