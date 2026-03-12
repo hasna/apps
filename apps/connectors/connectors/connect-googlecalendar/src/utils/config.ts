@@ -171,6 +171,49 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 }
 
 // ============================================
+// OAuth2 Credentials (Client ID/Secret) - Root credentials.json (shared across profiles)
+// ============================================
+
+const CREDENTIALS_FILE = join(CONFIG_DIR, 'credentials.json');
+
+interface CredentialsConfig {
+  clientId?: string;
+  clientSecret?: string;
+}
+
+function loadCredentials(): CredentialsConfig {
+  ensureConfigDir();
+
+  if (!existsSync(CREDENTIALS_FILE)) {
+    // Migration: check if credentials exist in any profile and copy to base
+    const profiles = listProfiles();
+    for (const prof of profiles) {
+      const profileConfig = loadProfile(prof);
+      if (profileConfig.clientId && profileConfig.clientSecret) {
+        const creds = {
+          clientId: profileConfig.clientId,
+          clientSecret: profileConfig.clientSecret,
+        };
+        writeFileSync(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 });
+        return creds;
+      }
+    }
+    return {};
+  }
+
+  try {
+    return JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveCredentials(creds: CredentialsConfig): void {
+  ensureConfigDir();
+  writeFileSync(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 });
+}
+
+// ============================================
 // Token Management
 // ============================================
 
@@ -195,23 +238,23 @@ export function setRefreshToken(refreshToken: string): void {
 }
 
 export function getClientId(): string | undefined {
-  return process.env.GOOGLE_CALENDAR_CLIENT_ID || loadProfile().clientId;
+  return process.env.GOOGLE_CALENDAR_CLIENT_ID || loadCredentials().clientId || loadProfile().clientId;
 }
 
 export function setClientId(clientId: string): void {
-  const config = loadProfile();
-  config.clientId = clientId;
-  saveProfile(config);
+  const creds = loadCredentials();
+  creds.clientId = clientId;
+  saveCredentials(creds);
 }
 
 export function getClientSecret(): string | undefined {
-  return process.env.GOOGLE_CALENDAR_CLIENT_SECRET || loadProfile().clientSecret;
+  return process.env.GOOGLE_CALENDAR_CLIENT_SECRET || loadCredentials().clientSecret || loadProfile().clientSecret;
 }
 
 export function setClientSecret(clientSecret: string): void {
-  const config = loadProfile();
-  config.clientSecret = clientSecret;
-  saveProfile(config);
+  const creds = loadCredentials();
+  creds.clientSecret = clientSecret;
+  saveCredentials(creds);
 }
 
 export function setTokens(tokens: { accessToken: string; refreshToken?: string; expiresIn?: number }): void {
