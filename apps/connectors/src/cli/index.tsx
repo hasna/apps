@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.5.5")
+  .version("0.5.6")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -503,10 +503,11 @@ program
 
     if (!meta) {
       if (options.json) {
-        console.log(JSON.stringify({ error: `Connector '${connector}' not found` }));
+        console.log(JSON.stringify({ error: `Connector '${connector}' not found. Run 'connectors list' to see available connectors.` }));
         process.exit(1);
       }
       console.log(chalk.red(`Connector '${connector}' not found`));
+      console.log(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${connector}' to search.`));
       process.exit(1);
       return;
     }
@@ -541,9 +542,10 @@ program
     const meta = getConnector(connector);
     if (!meta) {
       if (options.json) {
-        console.log(JSON.stringify({ error: `Connector '${connector}' not found` }));
+        console.log(JSON.stringify({ error: `Connector '${connector}' not found. Run 'connectors list' to see available connectors.` }));
       } else {
         console.log(chalk.red(`Connector '${connector}' not found`));
+        console.log(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${connector}' to search.`));
       }
       process.exit(1);
       return;
@@ -552,9 +554,10 @@ program
     const docs = getConnectorDocs(connector);
     if (!docs) {
       if (options.json) {
-        console.log(JSON.stringify({ error: `No documentation found for '${connector}'` }));
+        console.log(JSON.stringify({ error: `No documentation found for '${connector}'. The connector may not be installed yet. Run 'connectors install ${connector}' first.` }));
       } else {
         console.log(chalk.red(`No documentation found for '${connector}'`));
+        console.log(chalk.dim(`The connector may not be installed yet. Run 'connectors install ${connector}' first.`));
       }
       process.exit(1);
       return;
@@ -641,6 +644,7 @@ program
       console.log(chalk.green(`✓ Removed ${connector}`));
     } else {
       console.log(chalk.red(`✗ ${connector} is not installed`));
+      console.log(chalk.dim(`Run 'connectors install ${connector}' to install it, or 'connectors list --installed' to see installed connectors.`));
       process.exit(1);
     }
   });
@@ -720,7 +724,7 @@ program
           console.log(JSON.stringify({ error: `Not installed: ${notInstalled.join(", ")}` }));
         } else {
           console.log(chalk.red(`Not installed: ${notInstalled.join(", ")}`));
-          console.log(chalk.dim("Installed connectors: " + installed.join(", ")));
+          console.log(chalk.dim(`Run 'connectors install ${notInstalled[0]}' to install, or 'connectors list --installed' to see installed connectors.`));
         }
         process.exit(1);
         return;
@@ -1124,9 +1128,10 @@ program
     const meta = getConnector(connector);
     if (!meta) {
       if (options.json) {
-        console.log(JSON.stringify({ error: `Connector '${connector}' not found` }));
+        console.log(JSON.stringify({ error: `Connector '${connector}' not found. Run 'connectors list' to see available connectors.` }));
       } else {
         console.log(chalk.red(`Connector '${connector}' not found`));
+        console.log(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${connector}' to search.`));
       }
       process.exit(1);
       return;
@@ -2140,8 +2145,11 @@ program
     let toTest: string[];
     if (connector) {
       if (!getConnector(connector)) {
-        if (options.json) { console.log(JSON.stringify({ error: `Connector '${connector}' not found` })); }
-        else { console.log(chalk.red(`Connector '${connector}' not found`)); }
+        if (options.json) { console.log(JSON.stringify({ error: `Connector '${connector}' not found. Run 'connectors list' to see available connectors.` })); }
+        else {
+          console.log(chalk.red(`Connector '${connector}' not found`));
+          console.log(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${connector}' to search.`));
+        }
         process.exit(1);
         return;
       }
@@ -2164,14 +2172,14 @@ program
       const endpoint = TEST_ENDPOINTS[name];
 
       if (!auth.configured) {
-        results.push({ name, status: "no-key", message: "No credentials configured" });
-        if (!options.json) console.log(`  ${chalk.dim("○")} ${chalk.dim(name)} — ${chalk.dim("no credentials configured")}`);
+        results.push({ name, status: "no-key", message: `No credentials configured. Run 'connectors auth ${name}' or 'connectors setup ${name} --key <your-key>'` });
+        if (!options.json) console.log(`  ${chalk.dim("○")} ${chalk.dim(name)} — ${chalk.dim(`no credentials configured — run 'connectors auth ${name}'`)}`);
         continue;
       }
 
       if (!endpoint) {
-        results.push({ name, status: "skip", message: "No test endpoint defined" });
-        if (!options.json) console.log(`  ${chalk.dim("○")} ${chalk.dim(name)} — ${chalk.dim("no test endpoint (key exists)")}`);
+        results.push({ name, status: "skip", message: `No test endpoint defined. Run 'connectors ops ${name}' to see available operations` });
+        if (!options.json) console.log(`  ${chalk.dim("○")} ${chalk.dim(name)} — ${chalk.dim(`no test endpoint — run 'connectors ops ${name}' to see operations`)}`);
         continue;
       }
 
@@ -2282,9 +2290,10 @@ program
           if (!options.json) console.log(`  ${chalk.green("✓")} ${chalk.green(name)} — ${chalk.dim(`${res.status} OK`)} ${chalk.dim(`(${ms}ms)`)}`);
         } else {
           const body = await res.text().catch(() => "");
-          const msg = res.status === 401 ? "Invalid or expired credentials" : `HTTP ${res.status}`;
+          const msg = res.status === 401 ? `Invalid or expired credentials. Run 'connectors auth ${name}' to reconfigure` : `HTTP ${res.status}`;
           results.push({ name, status: "fail", message: msg, ms });
-          if (!options.json) console.log(`  ${chalk.red("✗")} ${chalk.red(name)} — ${chalk.red(msg)} ${chalk.dim(`(${ms}ms)`)}`);
+          if (!options.json) console.log(`  ${chalk.red("✗")} ${chalk.red(name)} — ${chalk.red(res.status === 401 ? "Invalid or expired credentials" : `HTTP ${res.status}`)} ${chalk.dim(`(${ms}ms)`)}`);
+          if (!options.json && res.status === 401) console.log(chalk.dim(`      → Run 'connectors auth ${name}' to reconfigure credentials`));
         }
       } catch (e) {
         const ms = Date.now() - start;
@@ -2324,11 +2333,13 @@ program
     const meta = getConnector(name);
     if (!meta) {
       console.error(chalk.red(`Connector '${name}' not found.`));
+      console.error(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${name}' to search.`));
       process.exit(1);
     }
 
     if (!getConnectorCliPath(name)) {
       console.error(chalk.red(`Connector '${name}' does not have a CLI.`));
+      console.error(chalk.dim(`Run 'connectors docs ${name}' to see how to use this connector programmatically.`));
       process.exit(1);
     }
 
@@ -2379,11 +2390,13 @@ program
     const meta = getConnector(name);
     if (!meta) {
       console.error(chalk.red(`Connector '${name}' not found.`));
+      console.error(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${name}' to search.`));
       process.exit(1);
     }
 
     if (!getConnectorCliPath(name)) {
       console.error(chalk.red(`Connector '${name}' does not have a CLI.`));
+      console.error(chalk.dim(`Run 'connectors docs ${name}' to see how to use this connector programmatically.`));
       process.exit(1);
     }
 
@@ -2419,9 +2432,10 @@ program
     const meta = getConnector(name);
     if (!meta) {
       if (options.json) {
-        console.log(JSON.stringify({ error: `Connector '${name}' not found` }));
+        console.log(JSON.stringify({ error: `Connector '${name}' not found. Run 'connectors list' to see available connectors.` }));
       } else {
         console.log(chalk.red(`Connector '${name}' not found`));
+        console.log(chalk.dim(`Run 'connectors list' to see available connectors, or 'connectors search ${name}' to search.`));
       }
       process.exit(1);
       return;

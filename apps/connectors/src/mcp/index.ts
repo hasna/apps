@@ -30,7 +30,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.5.5",
+  version: "0.5.6",
 });
 
 // --- Tool: search_connectors ---
@@ -87,7 +87,7 @@ server.registerTool(
           content: [
             {
               type: "text",
-              text: `Unknown category: "${category}". Available: ${CATEGORIES.join(", ")}`,
+              text: `Unknown category: "${category}". Use list_categories to see available categories: ${CATEGORIES.join(", ")}`,
             },
           ],
           isError: true,
@@ -127,7 +127,7 @@ server.registerTool(
     const meta = getConnector(name);
     if (!meta) {
       return {
-        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        content: [{ type: "text", text: `Connector '${name}' not found. Use search_connectors or list_connectors to find available connectors.` }],
         isError: true,
       };
     }
@@ -135,7 +135,7 @@ server.registerTool(
     const docs = getConnectorDocs(name);
     if (!docs) {
       return {
-        content: [{ type: "text", text: `No documentation found for '${name}'.` }],
+        content: [{ type: "text", text: `No documentation found for '${name}'. Use install_connector to install it first.` }],
         isError: true,
       };
     }
@@ -263,7 +263,7 @@ server.registerTool(
     const meta = getConnector(name);
     if (!meta) {
       return {
-        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        content: [{ type: "text", text: `Connector '${name}' not found. Use search_connectors or list_connectors to find available connectors.` }],
         isError: true,
       };
     }
@@ -298,7 +298,7 @@ server.registerTool(
     const meta = getConnector(name);
     if (!meta) {
       return {
-        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        content: [{ type: "text", text: `Connector '${name}' not found. Use search_connectors or list_connectors to find available connectors.` }],
         isError: true,
       };
     }
@@ -412,7 +412,7 @@ server.registerTool(
     const meta = getConnector(name);
     if (!meta) {
       return {
-        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        content: [{ type: "text", text: `Connector '${name}' not found. Use search_connectors or list_connectors to find available connectors.` }],
         isError: true,
       };
     }
@@ -422,7 +422,7 @@ server.registerTool(
         content: [
           {
             type: "text",
-            text: `Connector '${name}' does not have a CLI. It may be API-only.`,
+            text: `Connector '${name}' does not have a CLI. It may be API-only. Use connector_docs to see how to use it programmatically.`,
           },
         ],
         isError: true,
@@ -494,7 +494,7 @@ server.registerTool(
     const meta = getConnector(name);
     if (!meta) {
       return {
-        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        content: [{ type: "text", text: `Connector '${name}' not found. Use search_connectors or list_connectors to find available connectors.` }],
         isError: true,
       };
     }
@@ -580,7 +580,7 @@ server.registerTool(
     const meta = getConnector(name);
     if (!meta) {
       return {
-        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        content: [{ type: "text", text: `Connector '${name}' not found. Use search_connectors or list_connectors to find available connectors.` }],
         isError: true,
       };
     }
