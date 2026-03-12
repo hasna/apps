@@ -48,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.5.9")
+  .version("0.6.0")
   .enablePositionalOptions();
 
 // Interactive mode (default)
@@ -1309,177 +1309,98 @@ program
     process.exit(0);
   });
 
-// Init command — guided onboarding for picking and installing connectors
+// Init command — polished first-run experience with quick suggestions
 program
   .command("init")
-  .option("--json", "Output categories and connectors as JSON (non-interactive)", false)
-  .description("Guided onboarding: pick categories, choose connectors, install them")
+  .option("--json", "Output presets and suggestions as JSON (non-interactive)", false)
+  .description("Get started with Connectors — see suggestions, presets, and next steps")
   .action(async (options: { json: boolean }) => {
-    // JSON mode: dump categories with their connectors and exit
-    if (options.json) {
-      const data = CATEGORIES.map((category) => ({
-        name: category,
-        connectors: getConnectorsByCategory(category).map((c) => ({
-          name: c.name,
-          displayName: c.displayName,
-          description: c.description,
-          version: c.version || null,
-        })),
-      }));
-      console.log(JSON.stringify(data, null, 2));
-      process.exit(0);
-      return;
-    }
+    // Preset categories with emoji labels and example connectors
+    const initPresets = [
+      { key: "ai", emoji: "🤖", label: "AI & ML", connectors: ["anthropic", "openai", "groq", "mistral", "googlegemini", "elevenlabs"], description: "AI and ML models" },
+      { key: "communication", emoji: "💬", label: "Communication", connectors: ["gmail", "slack", "discord", "resend", "twilio"], description: "Messaging and communication" },
+      { key: "devtools", emoji: "🛠", label: "Developer Tools", connectors: ["github", "vercel", "sentry", "docker", "cloudflare", "firecrawl"], description: "Developer tooling" },
+      { key: "commerce", emoji: "💳", label: "Commerce", connectors: ["stripe", "shopify", "paypal", "revolut", "mercury"], description: "Commerce and finance" },
+      { key: "google", emoji: "📁", label: "Google Workspace", connectors: ["gmail", "googledrive", "googlecalendar", "googledocs", "googlesheets"], description: "Google Workspace suite" },
+    ];
 
-    // Interactive mode requires TTY
-    if (!isTTY) {
-      console.error("Interactive mode requires a TTY. Use --json for non-interactive output.");
-      process.exit(1);
-      return;
-    }
-
-    // Helper: prompt user and return trimmed answer
-    function ask(question: string): Promise<string> {
-      return new Promise((resolve) => {
-        const rl = createInterface({ input: process.stdin, output: process.stdout });
-        rl.question(question, (answer) => {
-          rl.close();
-          resolve(answer.trim());
-        });
-      });
-    }
-
-    // Welcome
-    console.log();
-    console.log(chalk.bold("Welcome to Connectors!"));
-    console.log(chalk.dim("Let's get you set up with the API connectors you need.\n"));
-
-    // Step 1: Show categories with counts
-    console.log(chalk.bold("Available categories:\n"));
-    const categoryList = CATEGORIES.map((cat) => ({
-      name: cat,
-      connectors: getConnectorsByCategory(cat),
-    }));
-    for (let i = 0; i < categoryList.length; i++) {
-      const c = categoryList[i];
-      console.log(`  ${chalk.cyan(String(i + 1).padStart(2))}. ${c.name} ${chalk.dim(`(${c.connectors.length} connectors)`)}`);
-    }
-    console.log();
-
-    // Step 2: Ask user to pick categories
-    const catAnswer = await ask(
-      chalk.bold("Pick categories") + chalk.dim(" (comma-separated numbers, e.g. 1,3,5): ")
-    );
-
-    if (!catAnswer) {
-      console.log(chalk.dim("\nNo categories selected. Exiting.\n"));
-      process.exit(0);
-      return;
-    }
-
-    const catIndices = catAnswer
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10) - 1)
-      .filter((i) => i >= 0 && i < categoryList.length);
-
-    if (catIndices.length === 0) {
-      console.log(chalk.red("\nNo valid categories selected. Exiting.\n"));
-      process.exit(1);
-      return;
-    }
-
-    // Gather connectors from selected categories (deduplicated)
-    const selectedCategories = catIndices.map((i) => categoryList[i]);
-    const seen = new Set<string>();
-    const connectorPool: Array<{ name: string; displayName: string; description: string; category: string }> = [];
-    for (const cat of selectedCategories) {
-      for (const c of cat.connectors) {
-        if (!seen.has(c.name)) {
-          seen.add(c.name);
-          connectorPool.push({
-            name: c.name,
-            displayName: c.displayName,
-            description: c.description,
-            category: cat.name,
-          });
+    // Auto-detect existing auth — scan ~/.connectors/ for configured connectors
+    const connectorsHome = join(homedir(), ".connectors");
+    let configuredCount = 0;
+    const configuredNames: string[] = [];
+    try {
+      if (existsSync(connectorsHome)) {
+        const entries = readdirSync(connectorsHome).filter(
+          (e) => e.startsWith("connect-") && statSync(join(connectorsHome, e)).isDirectory()
+        );
+        for (const entry of entries) {
+          const profilesDir = join(connectorsHome, entry, "profiles");
+          if (existsSync(profilesDir)) {
+            configuredCount++;
+            configuredNames.push(entry.replace(/^connect-/, ""));
+          }
         }
       }
+    } catch {
+      // Ignore errors scanning home directory
     }
 
-    // Step 3: Show connectors in selected categories
-    console.log();
-    console.log(chalk.bold(`Connectors in ${selectedCategories.map((c) => c.name).join(", ")}:\n`));
+    // Build JSON data (used by both --json and non-TTY modes)
+    const jsonData = {
+      total: CONNECTORS.length,
+      configured: configuredCount,
+      configuredConnectors: configuredNames,
+      presets: initPresets.map((p) => ({
+        key: p.key,
+        label: p.label,
+        description: p.description,
+        connectors: p.connectors,
+      })),
+    };
 
-    const nameWidth = Math.max(12, ...connectorPool.map((c) => c.name.length)) + 2;
-    for (let i = 0; i < connectorPool.length; i++) {
-      const c = connectorPool[i];
-      console.log(
-        `  ${chalk.cyan(String(i + 1).padStart(3))}. ${c.name.padEnd(nameWidth)}${chalk.dim(c.description)}`
-      );
-    }
-    console.log();
-
-    // Step 4: Ask which connectors to install
-    const connAnswer = await ask(
-      chalk.bold("Install which connectors?") + chalk.dim(" (comma-separated numbers, or 'all'): ")
-    );
-
-    if (!connAnswer) {
-      console.log(chalk.dim("\nNo connectors selected. Exiting.\n"));
+    // JSON mode or non-TTY: output presets as JSON and exit
+    if (options.json || !isTTY) {
+      console.log(JSON.stringify(jsonData, null, 2));
       process.exit(0);
       return;
     }
 
-    let toInstall: string[];
-    if (connAnswer.toLowerCase() === "all") {
-      toInstall = connectorPool.map((c) => c.name);
-    } else {
-      const connIndices = connAnswer
-        .split(",")
-        .map((s) => parseInt(s.trim(), 10) - 1)
-        .filter((i) => i >= 0 && i < connectorPool.length);
+    // TTY mode: polished first-run experience
 
-      if (connIndices.length === 0) {
-        console.log(chalk.red("\nNo valid connectors selected. Exiting.\n"));
-        process.exit(1);
-        return;
-      }
-      toInstall = connIndices.map((i) => connectorPool[i].name);
+    // Welcome message
+    console.log();
+    console.log(chalk.bold(`Welcome to Connectors! ${CONNECTORS.length} API connectors ready to use.`));
+    console.log();
+
+    // Auto-detect existing auth
+    if (configuredCount > 0) {
+      console.log(chalk.green(`  You already have ${configuredCount} connector${configuredCount === 1 ? "" : "s"} configured`) + chalk.dim(` (${configuredNames.slice(0, 5).join(", ")}${configuredNames.length > 5 ? ", ..." : ""})`));
+      console.log();
     }
 
-    // Step 5: Install
-    console.log(chalk.bold(`\nInstalling ${toInstall.length} connector(s)...\n`));
-
-    const results = toInstall.map((name) => installConnector(name, { overwrite: false }));
-    const succeeded: string[] = [];
-    for (const result of results) {
-      if (result.success) {
-        console.log(chalk.green(`  ✓ ${result.connector}`));
-        succeeded.push(result.connector);
-      } else {
-        console.log(chalk.red(`  ✗ ${result.connector}: ${result.error}`));
-      }
-    }
-
-    // Step 6: Next steps
-    if (succeeded.length > 0) {
-      console.log(chalk.bold("\nNext steps:\n"));
-      console.log(`  ${chalk.dim("1.")} Import in your code:`);
-      console.log(`     ${chalk.cyan(`import { ${succeeded.slice(0, 3).join(", ")}${succeeded.length > 3 ? ", ..." : ""} } from './.connectors'`)}`);
-      console.log();
-      console.log(`  ${chalk.dim("2.")} Configure authentication:`);
-      console.log(`     ${chalk.cyan("connectors auth <name>")}  ${chalk.dim("— set API keys interactively")}`);
-      console.log(`     ${chalk.cyan("connectors serve")}        ${chalk.dim("— open dashboard for OAuth setup")}`);
-      console.log();
-      console.log(`  ${chalk.dim("3.")} Check connector docs:`);
-      console.log(`     ${chalk.cyan(`connectors docs ${succeeded[0]}`)}  ${chalk.dim("— see auth & env var details")}`);
-      console.log();
-      console.log(`  ${chalk.dim("4.")} Verify everything works:`);
-      console.log(`     ${chalk.cyan("connectors doctor")}       ${chalk.dim("— health check all connectors")}`);
+    // Quick suggestions — preset categories
+    console.log(chalk.bold("Quick start bundles:\n"));
+    for (const preset of initPresets) {
+      console.log(`  ${preset.emoji}  ${chalk.bold(preset.label)} ${chalk.dim(`(${preset.connectors.length} connectors)`)}`);
+      console.log(`     ${chalk.dim(preset.connectors.slice(0, 5).join(", ") + (preset.connectors.length > 5 ? ", ..." : ""))}`);
     }
     console.log();
 
-    process.exit(results.every((r) => r.success) ? 0 : 1);
+    // Suggestion
+    console.log(
+      `Run ${chalk.cyan("connectors install --preset ai")} to install a bundle, or ${chalk.cyan("connectors setup <name> --key <key>")} to set up a specific connector.`
+    );
+    console.log();
+
+    // Next steps
+    console.log(chalk.bold("Next steps:\n"));
+    console.log(`  ${chalk.cyan("connectors list")}              ${chalk.dim(`— browse all ${CONNECTORS.length} connectors`)}`);
+    console.log(`  ${chalk.cyan("connectors setup <name> --key <key>")}  ${chalk.dim("— set up a connector")}`);
+    console.log(`  ${chalk.cyan("connectors ops <name>")}         ${chalk.dim("— see what a connector can do")}`);
+    console.log(`  ${chalk.cyan("connectors serve")}              ${chalk.dim("— open the auth dashboard")}`);
+    console.log();
+
+    process.exit(0);
   });
 
 // Export command — backup all connector credentials
