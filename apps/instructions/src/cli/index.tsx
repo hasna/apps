@@ -9,7 +9,9 @@ import { createProfile, deleteProfile, getProfile, getProfileConfigs, listProfil
 import { listSnapshots, getSnapshot } from "../db/snapshots.js";
 import { getDatabase } from "../db/database.js";
 import { applyConfig, applyConfigs } from "../lib/apply.js";
-import { diffConfig, syncFromDir, syncToDir, detectCategory, detectAgent, detectFormat } from "../lib/sync.js";
+import { diffConfig, syncKnown, syncToDisk, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
+import { syncFromDir } from "../lib/sync-dir.js";
+import { redactContent, scanSecrets } from "../lib/redact.js";
 import { exportConfigs } from "../lib/export.js";
 import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
@@ -100,7 +102,9 @@ program
       console.error(chalk.red(`File not found: ${abs}`));
       process.exit(1);
     }
-    const content = readFileSync(abs, "utf-8");
+    const rawContent = readFileSync(abs, "utf-8");
+    const fmt = detectFormat(abs);
+    const { content, redacted, isTemplate } = redactContent(rawContent, fmt as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
     const targetPath = abs.startsWith(homedir()) ? abs.replace(homedir(), "~") : abs;
     const name = opts.name || filePath.split("/").pop()!;
     const config = createConfig({
@@ -109,11 +113,16 @@ program
       category: (opts.category as ConfigCategory) ?? detectCategory(abs),
       agent: (opts.agent as ConfigAgent) ?? detectAgent(abs),
       target_path: opts.kind === "reference" ? null : targetPath,
-      format: detectFormat(abs),
+      format: fmt,
       content,
-      is_template: opts.template ?? false,
+      is_template: (opts.template ?? false) || isTemplate,
     });
     console.log(chalk.green("✓") + ` Added: ${chalk.bold(config.name)} ${chalk.dim(`(${config.slug})`)}`);
+    if (redacted.length > 0) {
+      console.log(chalk.yellow(`  ⚠ Redacted ${redacted.length} secret(s):`));
+      for (const r of redacted) console.log(chalk.yellow(`    line ${r.line}: {{${r.varName}}} — ${r.reason}`));
+      console.log(chalk.dim("  Config stored as a template. Use `configs template vars` to see placeholders."));
+    }
   });
 
 // ── apply ─────────────────────────────────────────────────────────────────────
@@ -153,19 +162,34 @@ program
 // ── sync ─────────────────────────────────────────────────────────────────────
 program
   .command("sync")
-  .description("Bulk sync a directory with the DB")
-  .option("-d, --dir <dir>", "directory to sync (default: ~/.claude)", "~/.claude")
-  .option("--from-disk", "read files from disk into DB (default)")
-  .option("--to-disk", "apply DB configs back to disk")
+  .description("Sync known AI coding configs from disk into DB (claude, codex, gemini, zsh, git, npm)")
+  .option("-a, --agent <agent>", "only sync configs for this agent (claude|codex|gemini|zsh|git|npm)")
+  .option("-c, --category <cat>", "only sync configs in this category")
+  .option("--to-disk", "apply DB configs back to disk instead")
   .option("--dry-run", "preview without writing")
+  .option("--list", "show which files would be synced without doing anything")
   .action(async (opts) => {
-    const toDisk = opts.toDisk;
-    if (toDisk) {
-      const result = await syncToDir(opts.dir, { dryRun: opts.dryRun });
-      console.log(chalk.green(`✓`) + ` Synced to disk: +${result.added} updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
+    if (opts.list) {
+      const targets = KNOWN_CONFIGS.filter((k) => {
+        if (opts.agent && k.agent !== opts.agent) return false;
+        if (opts.category && k.category !== opts.category) return false;
+        return true;
+      });
+      console.log(chalk.bold(`Known configs (${targets.length}):`));
+      for (const k of targets) {
+        console.log(`  ${chalk.cyan(k.rulesDir ? k.rulesDir + "/*.md" : k.path)} ${chalk.dim(`[${k.category}/${k.agent}]`)}`);
+      }
+      return;
+    }
+    if (opts.toDisk) {
+      const result = await syncToDisk({ dryRun: opts.dryRun, agent: opts.agent, category: opts.category });
+      console.log(chalk.green("✓") + ` Written to disk: updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
     } else {
-      const result = await syncFromDir(opts.dir, { dryRun: opts.dryRun });
-      console.log(chalk.green(`✓`) + ` Synced from disk: +${result.added} updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
+      const result = await syncKnown({ dryRun: opts.dryRun, agent: opts.agent, category: opts.category });
+      console.log(chalk.green("✓") + ` Synced: +${result.added} updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
+      if (result.skipped.length > 0) {
+        console.log(chalk.dim("  skipped (not found): " + result.skipped.join(", ")));
+      }
     }
   });
 
@@ -336,6 +360,33 @@ templateCmd.command("vars <id>").description("Show template variables").action(a
     }
   } catch (e) { console.error(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
 });
+
+// ── scan ──────────────────────────────────────────────────────────────────────
+program
+  .command("scan [id]")
+  .description("Scan configs for secrets. Omit id to scan all.")
+  .option("--fix", "redact found secrets in-place")
+  .action(async (id, opts) => {
+    const configs = id ? [getConfig(id)] : listConfigs({ kind: "file" });
+    let total = 0;
+    for (const c of configs) {
+      const secrets = scanSecrets(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      if (secrets.length === 0) continue;
+      total += secrets.length;
+      console.log(chalk.yellow(`⚠ ${c.slug}`) + chalk.dim(` — ${secrets.length} secret(s):`));
+      for (const s of secrets) console.log(`  line ${s.line}: ${chalk.red(s.varName)} — ${s.reason}`);
+      if (opts.fix) {
+        const { content, isTemplate } = redactContent(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+        updateConfig(c.id, { content, is_template: isTemplate });
+        console.log(chalk.green("  ✓ Redacted and updated."));
+      }
+    }
+    if (total === 0) {
+      console.log(chalk.green("✓") + " No secrets detected.");
+    } else if (!opts.fix) {
+      console.log(chalk.yellow(`\nRun with --fix to redact in-place.`));
+    }
+  });
 
 program.version(pkg.version).name("configs");
 program.parse(process.argv);
