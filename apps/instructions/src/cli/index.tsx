@@ -365,25 +365,54 @@ templateCmd.command("vars <id>").description("Show template variables").action(a
 // ── scan ──────────────────────────────────────────────────────────────────────
 program
   .command("scan [id]")
-  .description("Scan configs for secrets. Omit id to scan all.")
+  .description("Scan configs for secrets. Defaults to known configs only.")
   .option("--fix", "redact found secrets in-place")
+  .option("--all", "scan every config in the DB (slow on large DBs)")
+  .option("-c, --category <cat>", "scan only a specific category")
   .action(async (id, opts) => {
-    const configs = id ? [getConfig(id)] : listConfigs({ kind: "file" });
+    let configs;
+    if (id) {
+      configs = [getConfig(id)];
+    } else if (opts.all) {
+      // Scan full DB in batches to avoid OOM
+      configs = listConfigs(opts.category ? { kind: "file", category: opts.category as ConfigCategory } : { kind: "file" });
+    } else {
+      // Default: fetch only the ~30 known configs individually by slug (fast, no full table scan)
+      const { KNOWN_CONFIGS } = await import("../lib/sync.js");
+      const slugs = [
+        ...KNOWN_CONFIGS.filter((k) => !k.rulesDir).map((k) => k.name),
+        // rules/*.md slugs follow pattern claude-rules-{filename}-md
+      ];
+      const fetched = [];
+      for (const slug of slugs) {
+        try { fetched.push(getConfig(slug)); } catch { /* not in DB yet */ }
+      }
+      // Also grab rules by category+agent (small set)
+      const rules = listConfigs({ category: "rules", agent: "claude" });
+      for (const r of rules) if (!fetched.find((c) => c.id === r.id)) fetched.push(r);
+      configs = fetched;
+    }
+
     let total = 0;
-    for (const c of configs) {
-      const secrets = scanSecrets(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
-      if (secrets.length === 0) continue;
-      total += secrets.length;
-      console.log(chalk.yellow(`⚠ ${c.slug}`) + chalk.dim(` — ${secrets.length} secret(s):`));
-      for (const s of secrets) console.log(`  line ${s.line}: ${chalk.red(s.varName)} — ${s.reason}`);
-      if (opts.fix) {
-        const { content, isTemplate } = redactContent(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
-        updateConfig(c.id, { content, is_template: isTemplate });
-        console.log(chalk.green("  ✓ Redacted and updated."));
+    const BATCH = 200;
+    for (let i = 0; i < configs.length; i += BATCH) {
+      const batch = configs.slice(i, i + BATCH);
+      for (const c of batch) {
+        const fmt = c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text";
+        const secrets = scanSecrets(c.content, fmt);
+        if (secrets.length === 0) continue;
+        total += secrets.length;
+        console.log(chalk.yellow(`⚠ ${c.slug}`) + chalk.dim(` — ${secrets.length} secret(s):`));
+        for (const s of secrets) console.log(`  line ${s.line}: ${chalk.red(s.varName)} — ${s.reason}`);
+        if (opts.fix) {
+          const { content, isTemplate } = redactContent(c.content, fmt);
+          updateConfig(c.id, { content, is_template: isTemplate });
+          console.log(chalk.green("  ✓ Redacted."));
+        }
       }
     }
     if (total === 0) {
-      console.log(chalk.green("✓") + " No secrets detected.");
+      console.log(chalk.green("✓") + ` No secrets detected${opts.all ? "" : " (known configs). Use --all to scan entire DB"}.`);
     } else if (!opts.fix) {
       console.log(chalk.yellow(`\nRun with --fix to redact in-place.`));
     }
