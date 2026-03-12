@@ -42,6 +42,22 @@ export interface CreateProjectInput {
   task_prefix?: string;
 }
 
+// Org
+export interface Org {
+  id: string;
+  name: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateOrgInput {
+  name: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // Plan
 export interface Plan {
   id: string;
@@ -82,6 +98,7 @@ export interface Agent {
   level: string | null; // ic, lead, manager, director, vp, c-level
   permissions: string[];
   reports_to: string | null; // agent ID of manager
+  org_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
@@ -96,6 +113,7 @@ export interface AgentRow {
   level: string | null;
   permissions: string | null;
   reports_to: string | null;
+  org_id: string | null;
   metadata: string | null;
   created_at: string;
   last_seen_at: string;
@@ -109,6 +127,7 @@ export interface RegisterAgentInput {
   level?: string;
   permissions?: string[];
   reports_to?: string;
+  org_id?: string;
   metadata?: Record<string, unknown>;
 }
 

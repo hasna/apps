@@ -430,6 +430,37 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         }
       }
 
+      // ── API: Orgs ──
+      if (path === "/api/orgs" && method === "GET") {
+        const { listOrgs } = await import("../db/orgs.js");
+        return json(listOrgs(), 200, port);
+      }
+      if (path === "/api/orgs" && method === "POST") {
+        try {
+          const body = await req.json() as { name: string; description?: string };
+          if (!body.name) return json({ error: "Missing name" }, 400, port);
+          const { createOrg } = await import("../db/orgs.js");
+          return json(createOrg(body), 201, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+      const orgMatch = path.match(/^\/api\/orgs\/([^/]+)$/);
+      if (orgMatch && method === "PATCH") {
+        try {
+          const body = await req.json() as Record<string, unknown>;
+          const { updateOrg } = await import("../db/orgs.js");
+          return json(updateOrg(orgMatch[1]!, body as any), 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+      if (orgMatch && method === "DELETE") {
+        const { deleteOrg } = await import("../db/orgs.js");
+        const deleted = deleteOrg(orgMatch[1]!);
+        return json(deleted ? { success: true } : { error: "Not found" }, deleted ? 200 : 404, port);
+      }
+
       // ── API: Org chart ──
       if (path === "/api/org" && method === "GET") {
         const { getOrgChart } = await import("../db/agents.js");

@@ -31,12 +31,12 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, metadata, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, org_id, metadata, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, input.name, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), input.reports_to || null,
-     JSON.stringify(input.metadata || {}), timestamp, timestamp],
+     input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp],
   );
 
   return getAgent(id, d)!;
@@ -66,7 +66,7 @@ export function updateAgentActivity(id: string, db?: Database): void {
 
 export function updateAgent(
   id: string,
-  input: { name?: string; description?: string; role?: string; title?: string; level?: string; permissions?: string[]; reports_to?: string | null; metadata?: Record<string, unknown> },
+  input: { name?: string; description?: string; role?: string; title?: string; level?: string; permissions?: string[]; reports_to?: string | null; org_id?: string | null; metadata?: Record<string, unknown> },
   db?: Database,
 ): Agent {
   const d = db || getDatabase();
@@ -103,6 +103,10 @@ export function updateAgent(
   if (input.reports_to !== undefined) {
     sets.push("reports_to = ?");
     params.push(input.reports_to);
+  }
+  if (input.org_id !== undefined) {
+    sets.push("org_id = ?");
+    params.push(input.org_id);
   }
   if (input.metadata !== undefined) {
     sets.push("metadata = ?");

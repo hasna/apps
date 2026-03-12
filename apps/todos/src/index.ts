@@ -93,6 +93,9 @@ export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./db/templates.js";
 
+// Orgs
+export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
+
 // Search
 export { searchTasks } from "./lib/search.js";
 
@@ -142,6 +145,8 @@ export type {
   CreateWebhookInput,
   TaskTemplate,
   CreateTemplateInput,
+  Org,
+  CreateOrgInput,
 } from "./types/index.js";
 
 export {

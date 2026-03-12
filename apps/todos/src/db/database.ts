@@ -288,6 +288,20 @@ const MIGRATIONS = [
   ALTER TABLE agents ADD COLUMN level TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (11);
   `,
+  // Migration 12: Orgs
+  `
+  CREATE TABLE IF NOT EXISTS orgs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  ALTER TABLE agents ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL;
+  ALTER TABLE projects ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (12);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -365,6 +379,14 @@ function ensureSchema(db: Database): void {
   };
 
   // ── Tables ──
+  ensureTable("orgs", `
+    CREATE TABLE orgs (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
   ensureTable("agents", `
     CREATE TABLE agents (
       id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT,
@@ -447,6 +469,10 @@ function ensureSchema(db: Database): void {
   ensureColumn("agents", "reports_to", "TEXT");
   ensureColumn("agents", "title", "TEXT");
   ensureColumn("agents", "level", "TEXT");
+  ensureColumn("agents", "org_id", "TEXT");
+
+  // Projects
+  ensureColumn("projects", "org_id", "TEXT");
 
   // Plans
   ensureColumn("plans", "task_list_id", "TEXT");
