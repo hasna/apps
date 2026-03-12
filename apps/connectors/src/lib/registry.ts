@@ -486,6 +486,80 @@ export const CONNECTORS: ConnectorMeta[] = [
     category: "Advertising",
     tags: ["ads", "twitter"],
   },
+
+  // Project Management
+  {
+    name: "linear",
+    displayName: "Linear",
+    description: "Issue tracking and project management",
+    category: "Business Tools",
+    tags: ["issues", "project-management"],
+  },
+  {
+    name: "jira",
+    displayName: "Jira",
+    description: "Issue tracking, projects, and agile boards",
+    category: "Business Tools",
+    tags: ["issues", "project-management", "agile"],
+  },
+  {
+    name: "confluence",
+    displayName: "Confluence",
+    description: "Pages, spaces, and content management",
+    category: "Business Tools",
+    tags: ["wiki", "documentation"],
+  },
+  {
+    name: "asana",
+    displayName: "Asana",
+    description: "Projects, tasks, and team workflows",
+    category: "Business Tools",
+    tags: ["tasks", "project-management"],
+  },
+  {
+    name: "trello",
+    displayName: "Trello",
+    description: "Boards, lists, and cards",
+    category: "Business Tools",
+    tags: ["kanban", "project-management"],
+  },
+  {
+    name: "clickup",
+    displayName: "ClickUp",
+    description: "Tasks, docs, and project management",
+    category: "Business Tools",
+    tags: ["tasks", "project-management"],
+  },
+  {
+    name: "todoist",
+    displayName: "Todoist",
+    description: "Task management and to-do lists",
+    category: "Business Tools",
+    tags: ["tasks", "todo"],
+  },
+
+  // Messaging
+  {
+    name: "slack",
+    displayName: "Slack",
+    description: "Channels, messages, and workspace management",
+    category: "Communication",
+    tags: ["chat", "messaging", "workspace"],
+  },
+  {
+    name: "telegram",
+    displayName: "Telegram",
+    description: "Bot API for messages, chats, and updates",
+    category: "Communication",
+    tags: ["chat", "bot", "messaging"],
+  },
+  {
+    name: "whatsapp",
+    displayName: "WhatsApp",
+    description: "Business Cloud API for messages and templates",
+    category: "Communication",
+    tags: ["messaging", "business"],
+  },
 ];
 
 export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
