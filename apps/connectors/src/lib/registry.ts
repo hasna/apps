@@ -964,6 +964,66 @@ export const CONNECTORS: ConnectorMeta[] = [
     category: "Business Tools",
     tags: ["whiteboard", "collaboration", "design"],
   },
+
+  // Payments (batch 9)
+  {
+    name: "square",
+    displayName: "Square",
+    description: "Payments, POS, and commerce",
+    category: "Commerce & Finance",
+    tags: ["payments", "pos", "commerce"],
+  },
+  {
+    name: "paddle",
+    displayName: "Paddle",
+    description: "SaaS billing and payments",
+    category: "Commerce & Finance",
+    tags: ["payments", "billing", "saas"],
+  },
+  {
+    name: "chargebee",
+    displayName: "Chargebee",
+    description: "Subscription billing and revenue management",
+    category: "Commerce & Finance",
+    tags: ["billing", "subscriptions"],
+  },
+
+  // Analytics (batch 11)
+  {
+    name: "fathom",
+    displayName: "Fathom Analytics",
+    description: "Privacy-first website analytics",
+    category: "Data & Analytics",
+    tags: ["analytics", "privacy"],
+  },
+  {
+    name: "snowflake",
+    displayName: "Snowflake",
+    description: "Cloud data warehouse",
+    category: "Data & Analytics",
+    tags: ["data", "warehouse", "sql"],
+  },
+  {
+    name: "databricks",
+    displayName: "Databricks",
+    description: "Data lakehouse and ML platform",
+    category: "Data & Analytics",
+    tags: ["data", "ml", "lakehouse"],
+  },
+  {
+    name: "datadog",
+    displayName: "Datadog",
+    description: "Monitoring and observability",
+    category: "Developer Tools",
+    tags: ["monitoring", "observability", "apm"],
+  },
+  {
+    name: "grafana",
+    displayName: "Grafana",
+    description: "Dashboards and observability",
+    category: "Developer Tools",
+    tags: ["monitoring", "dashboards", "observability"],
+  },
 ];
 
 export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
