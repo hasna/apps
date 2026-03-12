@@ -31,10 +31,11 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, permissions, metadata, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, permissions, reports_to, metadata, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, input.name, input.description || null, input.role || "agent",
-     JSON.stringify(input.permissions || ["*"]), JSON.stringify(input.metadata || {}), timestamp, timestamp],
+     JSON.stringify(input.permissions || ["*"]), input.reports_to || null,
+     JSON.stringify(input.metadata || {}), timestamp, timestamp],
   );
 
   return getAgent(id, d)!;
@@ -64,7 +65,7 @@ export function updateAgentActivity(id: string, db?: Database): void {
 
 export function updateAgent(
   id: string,
-  input: { name?: string; description?: string; role?: string; permissions?: string[]; metadata?: Record<string, unknown> },
+  input: { name?: string; description?: string; role?: string; permissions?: string[]; reports_to?: string | null; metadata?: Record<string, unknown> },
   db?: Database,
 ): Agent {
   const d = db || getDatabase();
@@ -90,6 +91,10 @@ export function updateAgent(
     sets.push("permissions = ?");
     params.push(JSON.stringify(input.permissions));
   }
+  if (input.reports_to !== undefined) {
+    sets.push("reports_to = ?");
+    params.push(input.reports_to);
+  }
   if (input.metadata !== undefined) {
     sets.push("metadata = ?");
     params.push(JSON.stringify(input.metadata));
@@ -103,4 +108,33 @@ export function updateAgent(
 export function deleteAgent(id: string, db?: Database): boolean {
   const d = db || getDatabase();
   return d.run("DELETE FROM agents WHERE id = ?", [id]).changes > 0;
+}
+
+/** Get direct reports of an agent. */
+export function getDirectReports(agentId: string, db?: Database): Agent[] {
+  const d = db || getDatabase();
+  return (d.query("SELECT * FROM agents WHERE reports_to = ? ORDER BY name").all(agentId) as AgentRow[]).map(rowToAgent);
+}
+
+/** Get the full org tree starting from top-level agents (reports_to IS NULL). */
+export function getOrgChart(db?: Database): OrgNode[] {
+  const agents = listAgents(db);
+  const byManager = new Map<string | null, Agent[]>();
+  for (const a of agents) {
+    const key = a.reports_to;
+    if (!byManager.has(key)) byManager.set(key, []);
+    byManager.get(key)!.push(a);
+  }
+
+  function buildTree(parentId: string | null): OrgNode[] {
+    const children = byManager.get(parentId) || [];
+    return children.map(a => ({ agent: a, reports: buildTree(a.id) }));
+  }
+
+  return buildTree(null);
+}
+
+export interface OrgNode {
+  agent: Agent;
+  reports: OrgNode[];
 }

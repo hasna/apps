@@ -79,6 +79,7 @@ export interface Agent {
   description: string | null;
   role: string | null;
   permissions: string[];
+  reports_to: string | null; // agent ID of manager
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
@@ -90,6 +91,7 @@ export interface AgentRow {
   description: string | null;
   role: string | null;
   permissions: string | null;
+  reports_to: string | null;
   metadata: string | null;
   created_at: string;
   last_seen_at: string;
@@ -100,6 +102,7 @@ export interface RegisterAgentInput {
   description?: string;
   role?: string;
   permissions?: string[];
+  reports_to?: string;
   metadata?: Record<string, unknown>;
 }
 

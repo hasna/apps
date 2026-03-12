@@ -59,7 +59,10 @@ export {
   updateAgent,
   updateAgentActivity,
   deleteAgent,
+  getDirectReports,
+  getOrgChart,
 } from "./db/agents.js";
+export type { OrgNode } from "./db/agents.js";
 
 // Task Lists
 export {

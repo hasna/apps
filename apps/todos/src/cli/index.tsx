@@ -1505,6 +1505,46 @@ program
     }
   });
 
+// org
+program
+  .command("org")
+  .description("Show agent org chart — who reports to who")
+  .option("--set <agent=manager>", "Set reporting: 'seneca=julius' or 'seneca=' to clear")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const { getOrgChart, getAgentByName: getByName, updateAgent: update } = require("../db/agents.js");
+
+    if (opts.set) {
+      const [agentName, managerName] = opts.set.split("=");
+      const agent = getByName(agentName);
+      if (!agent) { console.error(chalk.red(`Agent not found: ${agentName}`)); process.exit(1); }
+      let managerId: string | null = null;
+      if (managerName) {
+        const manager = getByName(managerName);
+        if (!manager) { console.error(chalk.red(`Manager not found: ${managerName}`)); process.exit(1); }
+        managerId = manager.id;
+      }
+      update(agent.id, { reports_to: managerId });
+      if (globalOpts.json) { output({ agent: agentName, reports_to: managerName || null }, true); }
+      else { console.log(chalk.green(managerId ? `${agentName} → ${managerName}` : `${agentName} → (top-level)`)); }
+      return;
+    }
+
+    const tree = getOrgChart();
+    if (globalOpts.json) { output(tree, true); return; }
+    if (tree.length === 0) { console.log(chalk.dim("No agents registered.")); return; }
+
+    function render(nodes: any[], indent = 0): void {
+      for (const n of nodes) {
+        const prefix = "  ".repeat(indent);
+        const role = n.agent.role ? chalk.dim(` (${n.agent.role})`) : "";
+        console.log(`${prefix}${indent > 0 ? "├── " : ""}${chalk.bold(n.agent.name)}${role} ${chalk.dim(n.agent.id)}`);
+        render(n.reports, indent + 1);
+      }
+    }
+    render(tree);
+  });
+
 // lists
 program
   .command("lists")

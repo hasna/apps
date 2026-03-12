@@ -1155,6 +1155,56 @@ server.tool(
   },
 );
 
+// get_org_chart — org hierarchy
+server.tool(
+  "get_org_chart",
+  "Get agent org chart — who reports to who.",
+  {},
+  async () => {
+    try {
+      const { getOrgChart } = await import("../db/agents.js");
+      const tree = getOrgChart();
+      function render(nodes: any[], indent = 0): string {
+        return nodes.map(n => {
+          const prefix = "  ".repeat(indent);
+          const role = n.agent.role ? ` (${n.agent.role})` : "";
+          const line = `${prefix}${n.agent.name}${role} [${n.agent.id}]`;
+          const children = n.reports.length > 0 ? "\n" + render(n.reports, indent + 1) : "";
+          return line + children;
+        }).join("\n");
+      }
+      const text = tree.length > 0 ? render(tree) : "No agents registered.";
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
+// set_reports_to — set agent hierarchy
+server.tool(
+  "set_reports_to",
+  "Set who an agent reports to in the org chart.",
+  {
+    agent_name: z.string(),
+    manager_name: z.string().optional(),
+  },
+  async ({ agent_name, manager_name }) => {
+    try {
+      const agent = getAgentByName(agent_name);
+      if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_name}` }], isError: true };
+      let managerId: string | null = null;
+      if (manager_name) {
+        const manager = getAgentByName(manager_name);
+        if (!manager) return { content: [{ type: "text" as const, text: `Manager not found: ${manager_name}` }], isError: true };
+        managerId = manager.id;
+      }
+      const { updateAgent } = await import("../db/agents.js");
+      updateAgent(agent.id, { reports_to: managerId });
+      const result = managerId ? `${agent_name} now reports to ${manager_name}` : `${agent_name} reports to no one (top-level)`;
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+
 // === META TOOLS ===
 
 // search_tools

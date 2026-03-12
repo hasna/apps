@@ -281,6 +281,11 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (10);
   `,
+  // Migration 11: Org chart — agent hierarchy
+  `
+  ALTER TABLE agents ADD COLUMN reports_to TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (11);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -437,6 +442,7 @@ function ensureSchema(db: Database): void {
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
   ensureColumn("agents", "permissions", 'TEXT DEFAULT \'["*"]\'');
+  ensureColumn("agents", "reports_to", "TEXT");
 
   // Plans
   ensureColumn("plans", "task_list_id", "TEXT");

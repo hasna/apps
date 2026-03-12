@@ -430,6 +430,20 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         }
       }
 
+      // ── API: Org chart ──
+      if (path === "/api/org" && method === "GET") {
+        const { getOrgChart } = await import("../db/agents.js");
+        return json(getOrgChart(), 200, port);
+      }
+
+      // ── API: Agent team (direct reports) ──
+      const teamMatch = path.match(/^\/api\/agents\/([^/]+)\/team$/);
+      if (teamMatch && method === "GET") {
+        const agentId = decodeURIComponent(teamMatch[1]!);
+        const { getDirectReports } = await import("../db/agents.js");
+        return json(getDirectReports(agentId), 200, port);
+      }
+
       // ── API: Agents ──
       if (path === "/api/agents" && method === "GET") {
         return json(listAgents(), 200, port);
