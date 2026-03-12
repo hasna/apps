@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dashboard/dist/
+dashboard/node_modules/
+sdk/dist/
+sdk/node_modules/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+bun.lock

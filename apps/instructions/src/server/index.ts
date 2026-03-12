@@ -1,0 +1,204 @@
+#!/usr/bin/env bun
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { createConfig, deleteConfig, getConfig, getConfigById, getConfigStats, listConfigs, updateConfig } from "../db/configs.js";
+import { createProfile, deleteProfile, getProfile, getProfileConfigs, listProfiles, updateProfile } from "../db/profiles.js";
+import { listSnapshots, createSnapshot } from "../db/snapshots.js";
+import { listMachines, registerMachine } from "../db/machines.js";
+import { applyConfig, applyConfigs } from "../lib/apply.js";
+import { syncFromDir, syncToDir } from "../lib/sync.js";
+import type { ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind } from "../types/index.js";
+
+const PORT = Number(process.env["CONFIGS_PORT"] ?? 3457);
+
+function pickFields<T extends object>(obj: T, fields?: string): Partial<T> | T {
+  if (!fields) return obj;
+  const keys = fields.split(",").map((f) => f.trim());
+  return Object.fromEntries(keys.filter((k) => k in obj).map((k) => [k, (obj as Record<string, unknown>)[k]])) as Partial<T>;
+}
+
+
+const app = new Hono();
+app.use("*", cors());
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+app.get("/api/stats", (c) => c.json(getConfigStats()));
+
+// ── Configs ───────────────────────────────────────────────────────────────────
+app.get("/api/configs", (c) => {
+  const { category, agent, kind, search, fields } = c.req.query();
+  const configs = listConfigs({
+    category: category as ConfigCategory || undefined,
+    agent: agent as ConfigAgent || undefined,
+    kind: kind as ConfigKind || undefined,
+    search: search || undefined,
+  });
+  return c.json(fields ? configs.map((cfg) => pickFields(cfg, fields)) : configs);
+});
+
+app.post("/api/configs", async (c) => {
+  try {
+    const body = await c.req.json();
+    const config = createConfig({
+      name: body.name,
+      content: body.content ?? "",
+      category: body.category,
+      agent: body.agent,
+      kind: body.kind,
+      target_path: body.target_path,
+      format: body.format,
+      tags: body.tags,
+      description: body.description,
+      is_template: body.is_template,
+    });
+    return c.json(config, 201);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.get("/api/configs/:id", (c) => {
+  try {
+    const { fields } = c.req.query();
+    const config = getConfig(c.req.param("id"));
+    return c.json(pickFields(config, fields));
+  } catch {
+    return c.json({ error: "Not found" }, 404);
+  }
+});
+
+app.put("/api/configs/:id", async (c) => {
+  try {
+    const body = await c.req.json();
+    const config = updateConfig(c.req.param("id"), body);
+    return c.json(config);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.delete("/api/configs/:id", (c) => {
+  try {
+    deleteConfig(c.req.param("id"));
+    return c.json({ ok: true });
+  } catch {
+    return c.json({ error: "Not found" }, 404);
+  }
+});
+
+app.post("/api/configs/:id/apply", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const config = getConfig(c.req.param("id"));
+    const result = await applyConfig(config, { dryRun: body.dry_run });
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.post("/api/configs/:id/snapshot", async (c) => {
+  try {
+    const config = getConfig(c.req.param("id"));
+    const snap = createSnapshot(config.id, config.content, config.version);
+    return c.json(snap, 201);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.get("/api/configs/:id/snapshots", (c) => {
+  try {
+    const config = getConfig(c.req.param("id"));
+    return c.json(listSnapshots(config.id));
+  } catch {
+    return c.json({ error: "Not found" }, 404);
+  }
+});
+
+// ── Sync ──────────────────────────────────────────────────────────────────────
+app.post("/api/sync", async (c) => {
+  try {
+    const body = await c.req.json();
+    const dir = body.dir || "~/.claude";
+    const direction = body.direction || "from_disk";
+    const result = direction === "to_disk"
+      ? await syncToDir(dir, { dryRun: body.dry_run })
+      : await syncFromDir(dir, { dryRun: body.dry_run });
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+// ── Profiles ──────────────────────────────────────────────────────────────────
+app.get("/api/profiles", (c) => c.json(listProfiles()));
+
+app.post("/api/profiles", async (c) => {
+  try {
+    const body = await c.req.json();
+    const profile = createProfile({ name: body.name, description: body.description });
+    return c.json(profile, 201);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.get("/api/profiles/:id", (c) => {
+  try {
+    const profile = getProfile(c.req.param("id"));
+    const configs = getProfileConfigs(c.req.param("id"));
+    return c.json({ ...profile, configs });
+  } catch {
+    return c.json({ error: "Not found" }, 404);
+  }
+});
+
+app.put("/api/profiles/:id", async (c) => {
+  try {
+    const body = await c.req.json();
+    const profile = updateProfile(c.req.param("id"), body);
+    return c.json(profile);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.delete("/api/profiles/:id", (c) => {
+  try {
+    deleteProfile(c.req.param("id"));
+    return c.json({ ok: true });
+  } catch {
+    return c.json({ error: "Not found" }, 404);
+  }
+});
+
+app.post("/api/profiles/:id/apply", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const configs = getProfileConfigs(c.req.param("id"));
+    const results = await applyConfigs(configs, { dryRun: body.dry_run });
+    return c.json(results);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+// ── Machines ──────────────────────────────────────────────────────────────────
+app.get("/api/machines", (c) => c.json(listMachines()));
+
+app.post("/api/machines", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const machine = registerMachine(body.hostname, body.os);
+    return c.json(machine, 201);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+// ── Health ─────────────────────────────────────────────────────────────────────
+app.get("/health", (c) => c.json({ ok: true, version: "0.1.0" }));
+
+console.log(`configs-serve listening on http://localhost:${PORT}`);
+export default { port: PORT, fetch: app.fetch };
