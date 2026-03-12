@@ -11,6 +11,11 @@ import type { Period, Agent } from '../types/index.js'
 const db = openDatabase()
 ensurePricingSeeded(db)
 
+const server = new Server(
+  { name: 'economy', version: '0.2.2' },
+  { capabilities: { tools: {} } },
+)
+
 // ── Compact formatters (85-95% fewer tokens than JSON) ────────────────────────
 
 const fmtUsd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
