@@ -78,6 +78,8 @@ export interface Agent {
   name: string;
   description: string | null;
   role: string | null;
+  title: string | null; // job title: "Senior Engineer", "QA Lead", etc.
+  level: string | null; // ic, lead, manager, director, vp, c-level
   permissions: string[];
   reports_to: string | null; // agent ID of manager
   metadata: Record<string, unknown>;
@@ -90,6 +92,8 @@ export interface AgentRow {
   name: string;
   description: string | null;
   role: string | null;
+  title: string | null;
+  level: string | null;
   permissions: string | null;
   reports_to: string | null;
   metadata: string | null;
@@ -101,6 +105,8 @@ export interface RegisterAgentInput {
   name: string;
   description?: string;
   role?: string;
+  title?: string;
+  level?: string;
   permissions?: string[];
   reports_to?: string;
   metadata?: Record<string, unknown>;

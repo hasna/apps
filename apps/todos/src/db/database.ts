@@ -284,6 +284,8 @@ const MIGRATIONS = [
   // Migration 11: Org chart — agent hierarchy
   `
   ALTER TABLE agents ADD COLUMN reports_to TEXT;
+  ALTER TABLE agents ADD COLUMN title TEXT;
+  ALTER TABLE agents ADD COLUMN level TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (11);
   `,
 ];
@@ -443,6 +445,8 @@ function ensureSchema(db: Database): void {
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
   ensureColumn("agents", "permissions", 'TEXT DEFAULT \'["*"]\'');
   ensureColumn("agents", "reports_to", "TEXT");
+  ensureColumn("agents", "title", "TEXT");
+  ensureColumn("agents", "level", "TEXT");
 
   // Plans
   ensureColumn("plans", "task_list_id", "TEXT");

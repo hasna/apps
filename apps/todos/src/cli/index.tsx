@@ -1537,8 +1537,9 @@ program
     function render(nodes: any[], indent = 0): void {
       for (const n of nodes) {
         const prefix = "  ".repeat(indent);
-        const role = n.agent.role ? chalk.dim(` (${n.agent.role})`) : "";
-        console.log(`${prefix}${indent > 0 ? "├── " : ""}${chalk.bold(n.agent.name)}${role} ${chalk.dim(n.agent.id)}`);
+        const title = n.agent.title ? chalk.cyan(` — ${n.agent.title}`) : "";
+        const level = n.agent.level ? chalk.dim(` (${n.agent.level})`) : "";
+        console.log(`${prefix}${indent > 0 ? "├── " : ""}${chalk.bold(n.agent.name)}${title}${level}`);
         render(n.reports, indent + 1);
       }
     }

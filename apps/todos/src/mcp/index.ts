@@ -1167,8 +1167,9 @@ server.tool(
       function render(nodes: any[], indent = 0): string {
         return nodes.map(n => {
           const prefix = "  ".repeat(indent);
-          const role = n.agent.role ? ` (${n.agent.role})` : "";
-          const line = `${prefix}${n.agent.name}${role} [${n.agent.id}]`;
+          const title = n.agent.title ? ` — ${n.agent.title}` : "";
+          const level = n.agent.level ? ` (${n.agent.level})` : "";
+          const line = `${prefix}${n.agent.name}${title}${level}`;
           const children = n.reports.length > 0 ? "\n" + render(n.reports, indent + 1) : "";
           return line + children;
         }).join("\n");

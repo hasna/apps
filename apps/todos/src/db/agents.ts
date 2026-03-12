@@ -31,9 +31,10 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, permissions, reports_to, metadata, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, metadata, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, input.name, input.description || null, input.role || "agent",
+     input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), input.reports_to || null,
      JSON.stringify(input.metadata || {}), timestamp, timestamp],
   );
@@ -65,7 +66,7 @@ export function updateAgentActivity(id: string, db?: Database): void {
 
 export function updateAgent(
   id: string,
-  input: { name?: string; description?: string; role?: string; permissions?: string[]; reports_to?: string | null; metadata?: Record<string, unknown> },
+  input: { name?: string; description?: string; role?: string; title?: string; level?: string; permissions?: string[]; reports_to?: string | null; metadata?: Record<string, unknown> },
   db?: Database,
 ): Agent {
   const d = db || getDatabase();
@@ -90,6 +91,14 @@ export function updateAgent(
   if (input.permissions !== undefined) {
     sets.push("permissions = ?");
     params.push(JSON.stringify(input.permissions));
+  }
+  if (input.title !== undefined) {
+    sets.push("title = ?");
+    params.push(input.title);
+  }
+  if (input.level !== undefined) {
+    sets.push("level = ?");
+    params.push(input.level);
   }
   if (input.reports_to !== undefined) {
     sets.push("reports_to = ?");
