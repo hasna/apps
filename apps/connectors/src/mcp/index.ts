@@ -18,13 +18,19 @@ import {
   getConnectorDocs,
 } from "../lib/installer.js";
 import { getAuthStatus, saveApiKey } from "../server/auth.js";
+import {
+  getConnectorOperations,
+  runConnectorCommand,
+  getConnectorCommandHelp,
+  getConnectorCliPath,
+} from "../lib/runner.js";
 
 // Load versions at startup
 loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.3.1",
+  version: "0.3.2",
 });
 
 // --- Tool: search_connectors ---
@@ -387,6 +393,162 @@ server.registerTool(
   }
 );
 
+// --- Tool: list_connector_operations ---
+server.registerTool(
+  "list_connector_operations",
+  {
+    title: "List Connector Operations",
+    description:
+      "Discover available API operations for a connector. Returns CLI commands the connector supports (e.g. messages, products, customers). Use this before run_connector_operation to know what's available.",
+    inputSchema: {
+      name: z.string().describe("Connector name (e.g. stripe, gmail, anthropic)"),
+      command: z
+        .string()
+        .optional()
+        .describe("Get detailed help for a specific subcommand (e.g. products, messages)"),
+    },
+  },
+  async ({ name, command }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      return {
+        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        isError: true,
+      };
+    }
+
+    if (!getConnectorCliPath(name)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Connector '${name}' does not have a CLI. It may be API-only.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (command) {
+      const help = await getConnectorCommandHelp(name, command);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { connector: name, command, help },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    const ops = await getConnectorOperations(name);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              connector: name,
+              displayName: meta.displayName,
+              commands: ops.commands,
+              helpText: ops.helpText,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// --- Tool: run_connector_operation ---
+server.registerTool(
+  "run_connector_operation",
+  {
+    title: "Run Connector Operation",
+    description:
+      "Execute an API operation on a connector. Pass the connector name and CLI arguments. Use list_connector_operations first to discover available commands. Example: name='stripe', args=['products', 'list', '--limit', '5']",
+    inputSchema: {
+      name: z.string().describe("Connector name (e.g. stripe, gmail, anthropic)"),
+      args: z
+        .array(z.string())
+        .describe(
+          "CLI arguments for the connector command (e.g. ['products', 'list', '--limit', '5'])"
+        ),
+      format: z
+        .enum(["json", "pretty"])
+        .optional()
+        .describe("Output format (default: json for structured parsing)"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Timeout in milliseconds (default: 30000)"),
+    },
+  },
+  async ({ name, args, format, timeout }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      return {
+        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        isError: true,
+      };
+    }
+
+    // Prepend --format json by default for structured output
+    const finalArgs = [...args];
+    if (format) {
+      finalArgs.push("--format", format);
+    } else if (!args.includes("--format") && !args.includes("-f")) {
+      finalArgs.push("--format", "json");
+    }
+
+    const result = await runConnectorCommand(name, finalArgs, timeout ?? 30000);
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                connector: name,
+                success: false,
+                error: result.stderr || result.stdout,
+                exitCode: result.exitCode,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              connector: name,
+              success: true,
+              output: result.stdout,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
 // --- Tool: search_tools ---
 server.registerTool(
   "search_tools",
@@ -400,7 +562,8 @@ server.registerTool(
       "search_connectors", "list_connectors", "connector_docs",
       "install_connector", "remove_connector", "list_installed",
       "connector_info", "connector_auth_status", "configure_auth",
-      "list_categories", "search_tools", "describe_tools",
+      "list_categories", "list_connector_operations", "run_connector_operation",
+      "search_tools", "describe_tools",
     ];
     const matches = query ? all.filter((n) => n.includes(query.toLowerCase())) : all;
     return { content: [{ type: "text" as const, text: matches.join(", ") }] };
@@ -427,6 +590,8 @@ server.registerTool(
       connector_auth_status: "Check auth status and env vars. Params: name",
       configure_auth: "Save API key or token. Params: name, key, field?",
       list_categories: "List connector categories with counts.",
+      list_connector_operations: "Discover available API operations for a connector. Params: name, command?",
+      run_connector_operation: "Execute an API operation on a connector. Params: name, args[], format?, timeout?",
     };
     const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
     return { content: [{ type: "text" as const, text: result }] };

@@ -27,6 +27,7 @@ import { join, relative } from "path";
 import { getAuthStatus, getAuthType, saveApiKey, getOAuthStartUrl, getEnvVars } from "../server/auth.js";
 import { TEST_ENDPOINTS } from "../lib/test-endpoints.js";
 import { createInterface } from "readline";
+import { getConnectorOperations, runConnectorCommand, getConnectorCommandHelp, getConnectorCliPath } from "../lib/runner.js";
 
 // Load versions from connector package.json files
 loadConnectorVersions();
@@ -47,7 +48,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("0.3.1");
+  .version("0.3.2");
 
 // Interactive mode (default)
 program
@@ -1896,6 +1897,99 @@ program
     }
 
     process.exit(results.some(r => r.status === "fail") ? 1 : 0);
+  });
+
+// ============================================
+// Operations Discovery
+// ============================================
+program
+  .command("ops")
+  .description("List available API operations for a connector")
+  .argument("<name>", "Connector name (e.g. stripe, gmail)")
+  .argument("[command]", "Get detailed help for a specific subcommand")
+  .option("--json", "Output as JSON")
+  .action(async (name: string, command: string | undefined, options: { json?: boolean }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      console.error(chalk.red(`Connector '${name}' not found.`));
+      process.exit(1);
+    }
+
+    if (!getConnectorCliPath(name)) {
+      console.error(chalk.red(`Connector '${name}' does not have a CLI.`));
+      process.exit(1);
+    }
+
+    if (command) {
+      const help = await getConnectorCommandHelp(name, command);
+      if (options.json) {
+        console.log(JSON.stringify({ connector: name, command, help }, null, 2));
+      } else {
+        console.log(chalk.bold(`\n${meta.displayName} → ${command}\n`));
+        console.log(help);
+      }
+      return;
+    }
+
+    const ops = await getConnectorOperations(name);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        connector: name,
+        displayName: meta.displayName,
+        commands: ops.commands,
+      }, null, 2));
+    } else {
+      console.log(chalk.bold(`\n${meta.displayName} operations:\n`));
+      if (ops.commands.length > 0) {
+        for (const cmd of ops.commands) {
+          console.log(`  ${chalk.cyan(cmd)}`);
+        }
+        console.log(chalk.dim(`\n  Run ${chalk.white(`connectors ops ${name} <command>`)} for details`));
+        console.log(chalk.dim(`  Run ${chalk.white(`connectors run ${name} <command> [args...]`)} to execute\n`));
+      } else {
+        console.log(ops.helpText);
+      }
+    }
+  });
+
+// ============================================
+// Run Connector Operation
+// ============================================
+program
+  .command("run")
+  .description("Execute an API operation on a connector")
+  .argument("<name>", "Connector name (e.g. stripe, gmail)")
+  .argument("[args...]", "Command arguments (e.g. products list --limit 5)")
+  .option("--timeout <ms>", "Timeout in milliseconds", "30000")
+  .allowUnknownOption(true)
+  .action(async (name: string, args: string[], options: { timeout: string }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      console.error(chalk.red(`Connector '${name}' not found.`));
+      process.exit(1);
+    }
+
+    if (!getConnectorCliPath(name)) {
+      console.error(chalk.red(`Connector '${name}' does not have a CLI.`));
+      process.exit(1);
+    }
+
+    if (args.length === 0) {
+      console.error(chalk.yellow(`No command specified. Run ${chalk.white(`connectors ops ${name}`)} to see available operations.`));
+      process.exit(1);
+    }
+
+    const result = await runConnectorCommand(name, args, parseInt(options.timeout));
+
+    if (result.stdout) {
+      console.log(result.stdout);
+    }
+    if (result.stderr) {
+      console.error(result.stderr);
+    }
+
+    process.exit(result.exitCode);
   });
 
 program.parse();
