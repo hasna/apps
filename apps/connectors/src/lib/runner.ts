@@ -26,6 +26,74 @@ function resolveConnectorsDir(): string {
 const CONNECTORS_DIR = resolveConnectorsDir();
 
 /**
+ * Derive the expected env var name from a connector name.
+ * e.g. "exa" → "EXA", "stabilityai" → "STABILITYAI", "openweathermap" → "OPENWEATHERMAP"
+ *
+ * Special cases where the connector name doesn't match the env var prefix
+ * are handled with an explicit map.
+ */
+const ENV_VAR_NAME_OVERRIDES: Record<string, string[]> = {
+  // Connectors whose env var prefix differs from uppercase(name)
+  googlemaps: ["GOOGLE_MAPS"],
+  googletasks: ["GOOGLE_TASKS", "GOOGLE"],
+  google: ["GOOGLE"],
+  stabilityai: ["STABILITY"],
+  openweathermap: ["OPENWEATHERMAP", "OPENWEATHER"],
+};
+
+/**
+ * Build the subprocess env with auto-detected credentials.
+ *
+ * For each connector we derive the "canonical" env var (e.g. EXA_API_KEY)
+ * and, if it's not already set, check common alternative patterns from the
+ * user's environment. When a match is found we inject it so the connector
+ * subprocess can read it.
+ *
+ * Patterns checked (in priority order):
+ *   1. HASNAXYZ_{NAME}_LIVE_API_KEY  → {NAME}_API_KEY
+ *   2. HASNA_{NAME}_LIVE_API_KEY     → {NAME}_API_KEY
+ *   3. {NAME}_LIVE_API_KEY           → {NAME}_API_KEY
+ *   4. {NAME}_KEY                    → {NAME}_API_KEY
+ *   5. {NAME}_TOKEN                  → {NAME}_API_KEY
+ */
+export function buildEnvWithCredentials(
+  connectorName: string,
+  baseEnv: NodeJS.ProcessEnv
+): NodeJS.ProcessEnv {
+  const env = { ...baseEnv };
+
+  const prefixes = ENV_VAR_NAME_OVERRIDES[connectorName] || [
+    connectorName.toUpperCase().replace(/-/g, "_"),
+  ];
+
+  for (const prefix of prefixes) {
+    const canonicalKey = `${prefix}_API_KEY`;
+
+    // If the canonical var is already set, nothing to do for this prefix
+    if (env[canonicalKey]) continue;
+
+    // Check alternative patterns in priority order
+    const alternatives = [
+      `HASNAXYZ_${prefix}_LIVE_API_KEY`,
+      `HASNA_${prefix}_LIVE_API_KEY`,
+      `${prefix}_LIVE_API_KEY`,
+      `${prefix}_KEY`,
+      `${prefix}_TOKEN`,
+    ];
+
+    for (const alt of alternatives) {
+      const value = env[alt];
+      if (value) {
+        env[canonicalKey] = value;
+        break;
+      }
+    }
+  }
+
+  return env;
+}
+
+/**
  * Get the path to a connector's CLI entry point.
  * Returns null if the connector has no CLI.
  */
@@ -69,7 +137,7 @@ export function runConnectorCommand(
   return new Promise((resolve) => {
     const proc = spawn("bun", ["run", cliPath, ...args], {
       timeout: timeoutMs,
-      env: { ...process.env },
+      env: buildEnvWithCredentials(name, process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
