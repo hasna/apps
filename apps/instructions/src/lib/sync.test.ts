@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabase, resetDatabase } from "../db/database";
 import { createConfig, listConfigs } from "../db/configs";
-import { syncFromDir, syncToDir, diffConfig, detectCategory, detectAgent, detectFormat } from "./sync";
+import { diffConfig, detectCategory, detectAgent, detectFormat } from "./sync";
+import { syncFromDir } from "./sync-dir";
 
 let tmpDir: string;
 

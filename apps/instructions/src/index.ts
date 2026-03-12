@@ -21,8 +21,10 @@ export { applyConfig, applyConfigs, expandPath } from "./lib/apply.js";
 export type { ApplyOptions } from "./lib/apply.js";
 
 // Lib — sync
-export { syncFromDir, syncToDir, diffConfig, detectCategory, detectAgent, detectFormat } from "./lib/sync.js";
-export type { SyncFromDirOptions, SyncToDirOptions } from "./lib/sync.js";
+export { syncKnown, syncToDisk, diffConfig, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "./lib/sync.js";
+export { syncFromDir, syncToDir } from "./lib/sync-dir.js";
+export type { SyncKnownOptions, SyncToDiskOptions } from "./lib/sync.js";
+export type { SyncFromDirOptions } from "./lib/sync-dir.js";
 
 // Lib — export/import
 export { exportConfigs } from "./lib/export.js";

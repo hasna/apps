@@ -1,12 +1,199 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, join, relative, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
 import { homedir } from "node:os";
 import type { Config, ConfigAgent, ConfigCategory, ConfigFormat, SyncResult } from "../types/index.js";
 import { getDatabase } from "../db/database.js";
-import { createConfig, getConfigById, listConfigs, updateConfig } from "../db/configs.js";
+import { createConfig, listConfigs, updateConfig } from "../db/configs.js";
 import { applyConfig, expandPath } from "./apply.js";
+import { redactContent } from "./redact.js";
 
-// Auto-detect category from path patterns
+// ── Known config map ──────────────────────────────────────────────────────────
+// These are the ONLY files `configs sync` will ingest by default.
+// Explicit, curated — no directory walking.
+
+export interface KnownConfig {
+  path: string; // ~ prefixed
+  name: string;
+  category: ConfigCategory;
+  agent: ConfigAgent;
+  format?: ConfigFormat;
+  kind?: "file" | "reference";
+  description?: string;
+  // If set, read all *.md files from this dir instead of a single file
+  rulesDir?: string;
+}
+
+export const KNOWN_CONFIGS: KnownConfig[] = [
+  // ── Claude Code ────────────────────────────────────────────────────────────
+  { path: "~/.claude/CLAUDE.md",         name: "claude-claude-md",         category: "rules",  agent: "claude", format: "markdown" },
+  { path: "~/.claude/settings.json",     name: "claude-settings",          category: "agent",  agent: "claude", format: "json" },
+  { path: "~/.claude/settings.local.json", name: "claude-settings-local",  category: "agent",  agent: "claude", format: "json" },
+  { path: "~/.claude/keybindings.json",  name: "claude-keybindings",       category: "agent",  agent: "claude", format: "json" },
+  // rules/*.md — handled specially via rulesDir
+  { path: "~/.claude/rules",             name: "claude-rules",             category: "rules",  agent: "claude", rulesDir: "~/.claude/rules" },
+
+  // ── Codex ──────────────────────────────────────────────────────────────────
+  { path: "~/.codex/config.toml",        name: "codex-config",             category: "agent",  agent: "codex",  format: "toml" },
+  { path: "~/.codex/AGENTS.md",          name: "codex-agents-md",          category: "rules",  agent: "codex",  format: "markdown" },
+
+  // ── Gemini ─────────────────────────────────────────────────────────────────
+  { path: "~/.gemini/settings.json",     name: "gemini-settings",          category: "agent",  agent: "gemini", format: "json" },
+  { path: "~/.gemini/GEMINI.md",         name: "gemini-gemini-md",         category: "rules",  agent: "gemini", format: "markdown" },
+
+  // ── MCP ────────────────────────────────────────────────────────────────────
+  { path: "~/.claude.json",              name: "claude-json",              category: "mcp",    agent: "claude", format: "json", description: "Claude Code global config (includes MCP server entries)" },
+
+  // ── Shell ──────────────────────────────────────────────────────────────────
+  { path: "~/.zshrc",                    name: "zshrc",                    category: "shell",  agent: "zsh" },
+  { path: "~/.zprofile",                 name: "zprofile",                 category: "shell",  agent: "zsh" },
+  { path: "~/.bashrc",                   name: "bashrc",                   category: "shell",  agent: "zsh" },
+  { path: "~/.bash_profile",             name: "bash-profile",             category: "shell",  agent: "zsh" },
+
+  // ── Git ────────────────────────────────────────────────────────────────────
+  { path: "~/.gitconfig",                name: "gitconfig",                category: "git",    agent: "git",    format: "ini" },
+  { path: "~/.gitignore_global",         name: "gitignore-global",         category: "git",    agent: "git" },
+
+  // ── Tools ──────────────────────────────────────────────────────────────────
+  { path: "~/.npmrc",                    name: "npmrc",                    category: "tools",  agent: "npm",    format: "ini" },
+  { path: "~/.bunfig.toml",              name: "bunfig",                   category: "tools",  agent: "global", format: "toml" },
+];
+
+export interface SyncKnownOptions {
+  db?: ReturnType<typeof getDatabase>;
+  dryRun?: boolean;
+  agent?: ConfigAgent;
+  category?: ConfigCategory;
+}
+
+export async function syncKnown(opts: SyncKnownOptions = {}): Promise<SyncResult> {
+  const d = opts.db || getDatabase();
+  const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
+  const home = homedir();
+
+  let targets = KNOWN_CONFIGS;
+  if (opts.agent) targets = targets.filter((k) => k.agent === opts.agent);
+  if (opts.category) targets = targets.filter((k) => k.category === opts.category);
+
+  const allConfigs = listConfigs(undefined, d);
+
+  for (const known of targets) {
+    // rulesDir: ingest each *.md file individually
+    if (known.rulesDir) {
+      const absDir = expandPath(known.rulesDir);
+      if (!existsSync(absDir)) { result.skipped.push(known.rulesDir); continue; }
+      const mdFiles = readdirSync(absDir).filter((f) => f.endsWith(".md"));
+      for (const f of mdFiles) {
+        const abs = join(absDir, f);
+        const targetPath = abs.replace(home, "~");
+        const raw = readFileSync(abs, "utf-8");
+        const { content, isTemplate } = redactContent(raw, "markdown");
+        const name = `claude-rules-${f}`;
+        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        const existing = allConfigs.find((c) => c.target_path === targetPath || c.slug === slug);
+        if (!existing) {
+          if (!opts.dryRun) createConfig({ name, category: "rules", agent: "claude", format: "markdown", content, target_path: targetPath, is_template: isTemplate }, d);
+          result.added++;
+        } else if (existing.content !== content) {
+          if (!opts.dryRun) updateConfig(existing.id, { content, is_template: isTemplate }, d);
+          result.updated++;
+        } else {
+          result.unchanged++;
+        }
+      }
+      continue;
+    }
+
+    const abs = expandPath(known.path);
+    if (!existsSync(abs)) { result.skipped.push(known.path); continue; }
+
+    try {
+      const rawContent = readFileSync(abs, "utf-8");
+      if (rawContent.length > 500_000) { result.skipped.push(known.path + " (too large)"); continue; }
+      const fmt = known.format ?? detectFormat(abs);
+      // Always redact before storing
+      const { content, isTemplate } = redactContent(rawContent, fmt as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      const targetPath = abs.replace(home, "~");
+      const existing = allConfigs.find((c) => c.target_path === targetPath || c.slug === known.name);
+
+      if (!existing) {
+        if (!opts.dryRun) {
+          createConfig({
+            name: known.name,
+            category: known.category,
+            agent: known.agent,
+            format: fmt,
+            content,
+            target_path: known.kind === "reference" ? null : targetPath,
+            kind: known.kind ?? "file",
+            description: known.description,
+            is_template: isTemplate,
+          }, d);
+        }
+        result.added++;
+      } else if (existing.content !== content) {
+        if (!opts.dryRun) updateConfig(existing.id, { content, is_template: isTemplate }, d);
+        result.updated++;
+      } else {
+        result.unchanged++;
+      }
+    } catch {
+      result.skipped.push(known.path);
+    }
+  }
+  return result;
+}
+
+// ── Apply configs back to disk ────────────────────────────────────────────────
+export interface SyncToDiskOptions {
+  db?: ReturnType<typeof getDatabase>;
+  dryRun?: boolean;
+  agent?: ConfigAgent;
+  category?: ConfigCategory;
+}
+
+export async function syncToDisk(opts: SyncToDiskOptions = {}): Promise<SyncResult> {
+  const d = opts.db || getDatabase();
+  const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
+
+  let configs = listConfigs({ kind: "file", ...opts.agent ? { agent: opts.agent } : {}, ...opts.category ? { category: opts.category } : {} }, d);
+
+  for (const config of configs) {
+    if (!config.target_path) continue;
+    try {
+      const r = await applyConfig(config, { dryRun: opts.dryRun, db: d });
+      r.changed ? result.updated++ : result.unchanged++;
+    } catch {
+      result.skipped.push(config.target_path);
+    }
+  }
+  return result;
+}
+
+// ── Diff a config against disk ────────────────────────────────────────────────
+export function diffConfig(config: Config): string {
+  if (!config.target_path) return "(reference — no target path)";
+  const path = expandPath(config.target_path);
+  if (!existsSync(path)) return `(file not found on disk: ${path})`;
+  const diskContent = readFileSync(path, "utf-8");
+  if (diskContent === config.content) return "(no diff — identical)";
+
+  const stored = config.content.split("\n");
+  const disk = diskContent.split("\n");
+  const lines: string[] = [`--- stored (DB)`, `+++ disk (${path})`];
+  const maxLen = Math.max(stored.length, disk.length);
+  for (let i = 0; i < maxLen; i++) {
+    const s = stored[i];
+    const dk = disk[i];
+    if (s === dk) { if (s !== undefined) lines.push(` ${s}`); }
+    else {
+      if (s !== undefined) lines.push(`-${s}`);
+      if (dk !== undefined) lines.push(`+${dk}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// ── Helpers (kept for tests + add command) ────────────────────────────────────
 export function detectCategory(filePath: string): ConfigCategory {
   const p = filePath.toLowerCase().replace(homedir(), "~");
   if (p.includes("/.claude/rules/") || p.endsWith("claude.md") || p.endsWith("agents.md") || p.endsWith("gemini.md")) return "rules";
@@ -40,140 +227,7 @@ export function detectFormat(filePath: string): ConfigFormat {
   return "text";
 }
 
-const SKIP_PATTERNS = [".db", ".db-shm", ".db-wal", ".log", ".lock", ".DS_Store", "node_modules", ".git"];
-
-function shouldSkip(p: string): boolean {
-  return SKIP_PATTERNS.some((pat) => p.includes(pat));
-}
-
-function walkDir(dir: string, files: string[] = []): string[] {
-  const entries = readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = join(dir, entry.name);
-    if (shouldSkip(full)) continue;
-    if (entry.isDirectory()) {
-      walkDir(full, files);
-    } else if (entry.isFile()) {
-      files.push(full);
-    }
-  }
-  return files;
-}
-
-export interface SyncFromDirOptions {
-  db?: ReturnType<typeof getDatabase>;
-  dryRun?: boolean;
-  recursive?: boolean;
-}
-
-export async function syncFromDir(
-  dir: string,
-  opts: SyncFromDirOptions = {}
-): Promise<SyncResult> {
-  const d = opts.db || getDatabase();
-  const absDir = expandPath(dir);
-  if (!existsSync(absDir)) {
-    return { added: 0, updated: 0, unchanged: 0, skipped: [`Directory not found: ${absDir}`] };
-  }
-
-  const files = opts.recursive !== false ? walkDir(absDir) : readdirSync(absDir)
-    .map((f) => join(absDir, f))
-    .filter((f) => statSync(f).isFile());
-
-  const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
-  const allConfigs = listConfigs(undefined, d);
-
-  for (const file of files) {
-    if (shouldSkip(file)) { result.skipped.push(file); continue; }
-    try {
-      const content = readFileSync(file, "utf-8");
-      const targetPath = file.startsWith(homedir()) ? file.replace(homedir(), "~") : file;
-      const existing = allConfigs.find((c) => c.target_path === targetPath);
-
-      if (!existing) {
-        if (!opts.dryRun) {
-          const name = relative(absDir, file);
-          createConfig({
-            name,
-            category: detectCategory(file),
-            agent: detectAgent(file),
-            target_path: targetPath,
-            format: detectFormat(file),
-            content,
-          }, d);
-        }
-        result.added++;
-      } else if (existing.content !== content) {
-        if (!opts.dryRun) {
-          updateConfig(existing.id, { content }, d);
-        }
-        result.updated++;
-      } else {
-        result.unchanged++;
-      }
-    } catch {
-      result.skipped.push(file);
-    }
-  }
-  return result;
-}
-
-export interface SyncToDirOptions {
-  db?: ReturnType<typeof getDatabase>;
-  dryRun?: boolean;
-}
-
-export async function syncToDir(
-  dir: string,
-  opts: SyncToDirOptions = {}
-): Promise<SyncResult> {
-  const d = opts.db || getDatabase();
-  const absDir = expandPath(dir);
-  const normalizedDir = dir.startsWith("~/") ? dir : absDir.replace(homedir(), "~");
-  const configs = listConfigs(undefined, d).filter(
-    (c) => c.target_path && (c.target_path.startsWith(normalizedDir) || c.target_path.startsWith(absDir))
-  );
-
-  const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
-
-  for (const config of configs) {
-    if (config.kind === "reference") continue;
-    try {
-      const r = await applyConfig(config, { dryRun: opts.dryRun, db: d });
-      if (r.changed) {
-        existsSync(expandPath(config.target_path!)) ? result.updated++ : result.added++;
-      } else {
-        result.unchanged++;
-      }
-    } catch {
-      result.skipped.push(config.target_path || config.id);
-    }
-  }
-  return result;
-}
-
-export function diffConfig(config: Config): string {
-  if (!config.target_path) return "(reference — no target path)";
-  const path = expandPath(config.target_path);
-  if (!existsSync(path)) return `(file not found on disk: ${path})`;
-  const diskContent = readFileSync(path, "utf-8");
-  if (diskContent === config.content) return "(no diff — identical)";
-
-  // Simple unified diff
-  const stored = config.content.split("\n");
-  const disk = diskContent.split("\n");
-  const lines: string[] = [`--- stored (DB)`, `+++ disk (${path})`];
-  const maxLen = Math.max(stored.length, disk.length);
-  for (let i = 0; i < maxLen; i++) {
-    const s = stored[i];
-    const d = disk[i];
-    if (s === d) { if (s !== undefined) lines.push(` ${s}`); }
-    else {
-      if (s !== undefined) lines.push(`-${s}`);
-      if (d !== undefined) lines.push(`+${d}`);
-    }
-  }
-  return lines.join("\n");
-}
-
+// Legacy: kept for explicit directory sync (e.g. custom dirs the user adds manually)
 export { Config };
+export type { SyncFromDirOptions } from "./sync-dir.js";
+export { syncFromDir, syncToDir } from "./sync-dir.js";
