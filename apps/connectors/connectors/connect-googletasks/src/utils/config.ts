@@ -259,7 +259,7 @@ function saveCredentials(creds: CredentialsConfig): void {
 // ============================================
 
 export function getClientId(): string | undefined {
-  return process.env.GOOGLE_CLIENT_ID || loadCredentials().clientId || loadProfile().clientId;
+  return process.env.GOOGLE_TASKS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || loadCredentials().clientId || loadProfile().clientId;
 }
 
 export function setClientId(clientId: string): void {
@@ -269,7 +269,7 @@ export function setClientId(clientId: string): void {
 }
 
 export function getClientSecret(): string | undefined {
-  return process.env.GOOGLE_CLIENT_SECRET || loadCredentials().clientSecret || loadProfile().clientSecret;
+  return process.env.GOOGLE_TASKS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || loadCredentials().clientSecret || loadProfile().clientSecret;
 }
 
 export function setClientSecret(clientSecret: string): void {

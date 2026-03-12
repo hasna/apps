@@ -466,6 +466,7 @@ messagesCmd
 
 messagesCmd
   .command('read <messageId>')
+  .alias('get')
   .description('Read a specific message')
   .option('--body', 'Include full message body')
   .option('--html', 'Show HTML body instead of plain text')
