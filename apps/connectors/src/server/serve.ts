@@ -215,9 +215,31 @@ export async function startServer(requestedPort: number, options?: { open?: bool
 
       // ── API Routes ──
 
-      // GET /api/connectors
+      // GET /api/connectors[?compact=true][?fields=name,category,installed]
       if (path === "/api/connectors" && method === "GET") {
-        return json(getAllConnectorsWithAuth(), 200, port);
+        const compact = url.searchParams.get("compact") === "true";
+        const fieldsParam = url.searchParams.get("fields");
+        const fields = fieldsParam ? new Set(fieldsParam.split(",").map((f) => f.trim())) : null;
+
+        const data = getAllConnectorsWithAuth();
+
+        if (compact) {
+          // Compact: name + category + installed only (~61% smaller)
+          return json(data.map((c) => ({ name: c.name, category: c.category, installed: c.installed })), 200, port);
+        }
+
+        if (fields) {
+          // Field filtering: return only requested fields
+          return json(data.map((c) => {
+            const out: Record<string, unknown> = {};
+            for (const f of fields) {
+              if (f in c) out[f] = (c as unknown as Record<string, unknown>)[f];
+            }
+            return out;
+          }), 200, port);
+        }
+
+        return json(data, 200, port);
       }
 
       // GET /api/connectors/:name

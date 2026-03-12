@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-03-12
+
+### Added
+
+- `GET /api/connectors?compact=true` — returns `{name, category, installed}` only (61% smaller: ~2,700 → ~1,054 tokens)
+- `GET /api/connectors?fields=name,category,installed` — arbitrary field filtering for any subset of connector fields
+
 ## [0.3.0] - 2026-03-12
 
 ### Changed
