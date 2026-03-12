@@ -157,56 +157,31 @@ export function updateProject(id: string, updates: {
 }): Project {
   const db = getDb();
 
-  const existing = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown> | null;
-  if (!existing) {
-    throw new Error(`Project not found: ${id}`);
-  }
-
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
 
-  if (updates.name !== undefined) {
-    sets.push("name = ?");
-    params.push(updates.name);
-  }
-  if (updates.description !== undefined) {
-    sets.push("description = ?");
-    params.push(updates.description);
-  }
-  if (updates.path !== undefined) {
-    sets.push("path = ?");
-    params.push(updates.path);
-  }
-  if (updates.metadata !== undefined) {
-    sets.push("metadata = ?");
-    params.push(JSON.stringify(updates.metadata));
-  }
-  if (updates.tags !== undefined) {
-    sets.push("tags = ?");
-    params.push(JSON.stringify(updates.tags));
-  }
-  if (updates.status !== undefined) {
-    sets.push("status = ?");
-    params.push(updates.status);
-  }
-  if (updates.repository !== undefined) {
-    sets.push("repository = ?");
-    params.push(updates.repository);
-  }
-  if (updates.settings !== undefined) {
-    sets.push("settings = ?");
-    params.push(JSON.stringify(updates.settings));
-  }
+  if (updates.name !== undefined) { sets.push("name = ?"); params.push(updates.name); }
+  if (updates.description !== undefined) { sets.push("description = ?"); params.push(updates.description); }
+  if (updates.path !== undefined) { sets.push("path = ?"); params.push(updates.path); }
+  if (updates.metadata !== undefined) { sets.push("metadata = ?"); params.push(JSON.stringify(updates.metadata)); }
+  if (updates.tags !== undefined) { sets.push("tags = ?"); params.push(JSON.stringify(updates.tags)); }
+  if (updates.status !== undefined) { sets.push("status = ?"); params.push(updates.status); }
+  if (updates.repository !== undefined) { sets.push("repository = ?"); params.push(updates.repository); }
+  if (updates.settings !== undefined) { sets.push("settings = ?"); params.push(JSON.stringify(updates.settings)); }
 
+  // If nothing to update, fetch and return current state
   if (sets.length === 0) {
-    return parseProject(existing);
+    const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown> | null;
+    if (!row) throw new Error(`Project not found: ${id}`);
+    return parseProject(row);
   }
 
   params.push(id);
   const row = db.prepare(
     `UPDATE projects SET ${sets.join(", ")} WHERE id = ? RETURNING *`
-  ).get(...params) as Record<string, unknown>;
+  ).get(...params) as Record<string, unknown> | null;
 
+  if (!row) throw new Error(`Project not found: ${id}`);
   return parseProject(row);
 }
 

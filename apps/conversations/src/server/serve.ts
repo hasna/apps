@@ -36,6 +36,32 @@ function securityHeaders(base?: HeadersInit): Headers {
   return headers;
 }
 
+/**
+ * Filter object fields based on ?fields= query param.
+ * Usage: /api/messages?fields=id,from_agent,content
+ */
+function applyFields<T>(data: T, fields?: string | null): unknown {
+  if (!fields) return data;
+  const keys = fields.split(",").map(s => s.trim()).filter(Boolean);
+  if (!keys.length) return data;
+  if (Array.isArray(data)) {
+    return data.map(item => {
+      if (item && typeof item === "object") {
+        const out: Record<string, unknown> = {};
+        for (const k of keys) if (k in item) out[k] = (item as Record<string, unknown>)[k];
+        return out;
+      }
+      return item;
+    });
+  }
+  if (data && typeof data === "object") {
+    const out: Record<string, unknown> = {};
+    for (const k of keys) if (k in (data as object)) out[k] = (data as Record<string, unknown>)[k];
+    return out;
+  }
+  return data;
+}
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -113,9 +139,9 @@ export function startDashboardServer(port = 0, host?: string) {
         const space = url.searchParams.get("space") || undefined;
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const messages = readMessages({ session_id: session, space, from, to, limit, order: "desc" });
-        // Return newest first for the dashboard
-        return jsonResponse(messages);
+        const compact = url.searchParams.get("compact") === "true";
+        const messages = readMessages({ session_id: session, space, from, to, limit, order: "desc", compact });
+        return jsonResponse(applyFields(messages, url.searchParams.get("fields")));
       }
 
       if (path === "/api/messages" && req.method === "POST") {
@@ -263,7 +289,7 @@ export function startDashboardServer(port = 0, host?: string) {
 
       if (path === "/api/sessions") {
         const agent = url.searchParams.get("agent") || undefined;
-        return jsonResponse(listSessions(agent));
+        return jsonResponse(applyFields(listSessions(agent), url.searchParams.get("fields")));
       }
 
       if (path === "/api/spaces" && req.method === "GET") {
@@ -272,7 +298,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const listOpts: { project_id?: string; include_archived?: boolean } = {};
         if (projectId) listOpts.project_id = projectId;
         if (includeArchived) listOpts.include_archived = true;
-        return jsonResponse(listSpaces(Object.keys(listOpts).length > 0 ? listOpts : undefined));
+        return jsonResponse(applyFields(listSpaces(Object.keys(listOpts).length > 0 ? listOpts : undefined), url.searchParams.get("fields")));
       }
 
       if (path === "/api/spaces" && req.method === "POST") {
@@ -353,7 +379,7 @@ export function startDashboardServer(port = 0, host?: string) {
 
       if (path === "/api/projects" && req.method === "GET") {
         const status = url.searchParams.get("status") as "active" | "archived" | null;
-        return jsonResponse(listProjects(status ? { status } : undefined));
+        return jsonResponse(applyFields(listProjects(status ? { status } : undefined), url.searchParams.get("fields")));
       }
 
       if (path === "/api/projects" && req.method === "POST") {
@@ -428,7 +454,7 @@ export function startDashboardServer(port = 0, host?: string) {
       if (path === "/api/agents" && req.method === "GET") {
         const onlineOnly = url.searchParams.get("online_only") === "true";
         const agents = listAgents({ online_only: onlineOnly });
-        return jsonResponse(agents);
+        return jsonResponse(applyFields(agents, url.searchParams.get("fields")));
       }
 
       if (path === "/api/version" && req.method === "GET") {

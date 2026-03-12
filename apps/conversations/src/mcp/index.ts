@@ -49,7 +49,7 @@ server.registerTool("send_message", {
   });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(msg, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(msg) }],
   };
 });
 
@@ -68,7 +68,7 @@ server.registerTool("read_messages", {
   const messages = readMessages(args);
 
   return {
-    content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(messages) }],
   };
 });
 
@@ -82,7 +82,7 @@ server.registerTool("list_sessions", {
   const sessions = listSessions(agent);
 
   return {
-    content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(sessions) }],
   };
 });
 
@@ -119,7 +119,7 @@ server.registerTool("reply", {
   });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(msg, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(msg) }],
   };
 });
 
@@ -147,7 +147,7 @@ server.registerTool("mark_read", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ marked_read: count }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ marked_read: count }) }],
   };
 });
 
@@ -165,7 +165,7 @@ server.registerTool("search_messages", {
   const messages = searchMessages({ query, space, from, to, limit });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(messages) }],
   };
 });
 
@@ -205,7 +205,7 @@ server.registerTool("create_space", {
   try {
     const sp = createSpace(name, agent, { description, parent_id, project_id });
     return {
-      content: [{ type: "text", text: JSON.stringify(sp, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(sp) }],
     };
   } catch (e: any) {
     if (e.message?.includes("UNIQUE constraint")) {
@@ -242,7 +242,7 @@ server.registerTool("list_spaces", {
   const spaces = listSpaces(opts);
 
   return {
-    content: [{ type: "text", text: JSON.stringify(spaces, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(spaces) }],
   };
 });
 
@@ -278,7 +278,7 @@ server.registerTool("send_to_space", {
   });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(msg, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(msg) }],
   };
 });
 
@@ -294,7 +294,7 @@ server.registerTool("read_space", {
   const messages = readMessages({ space, since, limit });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(messages) }],
   };
 });
 
@@ -317,7 +317,7 @@ server.registerTool("join_space", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ space, agent, joined: true }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ space, agent, joined: true }) }],
   };
 });
 
@@ -333,7 +333,7 @@ server.registerTool("leave_space", {
   const left = leaveSpace(space, agent);
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ space, agent, left }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ space, agent, left }) }],
   };
 });
 
@@ -355,7 +355,7 @@ server.registerTool("update_space", {
   try {
     const sp = updateSpace(name, updates);
     return {
-      content: [{ type: "text", text: JSON.stringify(sp, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(sp) }],
     };
   } catch (e: any) {
     return {
@@ -374,7 +374,7 @@ server.registerTool("archive_space", {
   try {
     const sp = archiveSpace(name);
     return {
-      content: [{ type: "text", text: JSON.stringify(sp, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(sp) }],
     };
   } catch (e: any) {
     return {
@@ -393,7 +393,7 @@ server.registerTool("unarchive_space", {
   try {
     const sp = unarchiveSpace(name);
     return {
-      content: [{ type: "text", text: JSON.stringify(sp, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(sp) }],
     };
   } catch (e: any) {
     return {
@@ -470,7 +470,7 @@ server.registerTool("create_project", {
     });
 
     return {
-      content: [{ type: "text", text: JSON.stringify(project, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(project) }],
     };
   } catch (e: any) {
     if (e.message?.includes("UNIQUE constraint")) {
@@ -496,7 +496,7 @@ server.registerTool("list_projects", {
   const projects = listProjects(status ? { status } : undefined);
 
   return {
-    content: [{ type: "text", text: JSON.stringify(projects, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(projects) }],
   };
 });
 
@@ -520,7 +520,7 @@ server.registerTool("get_project", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify(project, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(project) }],
   };
 });
 
@@ -580,7 +580,7 @@ server.registerTool("update_project", {
   try {
     const project = updateProject(id, updates as any);
     return {
-      content: [{ type: "text", text: JSON.stringify(project, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(project) }],
     };
   } catch (e: any) {
     return {
@@ -605,7 +605,7 @@ server.registerTool("delete_project", {
       };
     }
     return {
-      content: [{ type: "text", text: JSON.stringify({ id, deleted: true }, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify({ id, deleted: true }) }],
     };
   } catch (e: any) {
     return {
@@ -636,7 +636,7 @@ server.registerTool("delete_message", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ deleted: true }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ deleted: true }) }],
   };
 });
 
@@ -660,7 +660,7 @@ server.registerTool("edit_message", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify(msg, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(msg) }],
   };
 });
 
@@ -680,7 +680,7 @@ server.registerTool("pin_message", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify(msg, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(msg) }],
   };
 });
 
@@ -700,7 +700,7 @@ server.registerTool("unpin_message", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify(msg, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(msg) }],
   };
 });
 
@@ -716,7 +716,7 @@ server.registerTool("get_pinned_messages", {
   const messages = getPinnedMessages({ space, session_id, limit });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(messages) }],
   };
 });
 
@@ -734,7 +734,7 @@ server.registerTool("heartbeat", {
   heartbeat(agent, status);
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ agent, status: status || "online", heartbeat: true }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ agent, status: status || "online", heartbeat: true }) }],
   };
 });
 
@@ -748,7 +748,7 @@ server.registerTool("list_agents", {
   const agents = listAgents({ online_only });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(agents, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(agents) }],
   };
 });
 
@@ -763,7 +763,7 @@ server.registerTool("get_blockers", {
   const blockers = getUnreadBlockers(agent);
 
   return {
-    content: [{ type: "text", text: JSON.stringify(blockers, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(blockers) }],
   };
 });
 
@@ -787,7 +787,7 @@ server.registerTool("remove_agent", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ agent, removed: true }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ agent, removed: true }) }],
   };
 });
 
@@ -819,7 +819,7 @@ server.registerTool("rename_agent", {
     }
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true }, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify({ old_name: oldName, new_name: newName, renamed: true }) }],
     };
   } catch (e: any) {
     return {
