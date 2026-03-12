@@ -173,7 +173,10 @@ export function loadProfile(profile?: string): ProfileConfig {
       const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'));
       if (tokens.accessToken && !config.accessToken) config.accessToken = tokens.accessToken;
       if (tokens.refreshToken && !config.refreshToken) config.refreshToken = tokens.refreshToken;
-      if (tokens.expiresAt && !config.expiresAt) config.expiresAt = tokens.expiresAt;
+      if (tokens.expiresAt) {
+        if (!config.expiresAt) config.expiresAt = tokens.expiresAt;
+        if (!config.tokenExpiry) config.tokenExpiry = tokens.expiresAt;
+      }
     } catch {}
   }
 
