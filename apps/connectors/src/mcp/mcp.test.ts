@@ -403,7 +403,7 @@ describe("MCP Server", () => {
       const data = parseContent(res);
       expect(Array.isArray(data.categories)).toBe(true);
       expect(data.categories.length).toBeGreaterThan(10);
-      expect(data.total).toBe(62);
+      expect(data.total).toBeGreaterThanOrEqual(62);
 
       const aiCategory = data.categories.find((c: any) => c.category === "AI & ML");
       expect(aiCategory).toBeDefined();

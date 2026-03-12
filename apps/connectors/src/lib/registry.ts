@@ -560,6 +560,197 @@ export const CONNECTORS: ConnectorMeta[] = [
     category: "Communication",
     tags: ["messaging", "business"],
   },
+
+  // CRM & Sales
+  {
+    name: "hubspot",
+    displayName: "HubSpot",
+    description: "CRM contacts, companies, deals, and tickets",
+    category: "Business Tools",
+    tags: ["crm", "sales", "marketing"],
+  },
+  {
+    name: "salesforce",
+    displayName: "Salesforce",
+    description: "CRM accounts, contacts, leads, and opportunities",
+    category: "Business Tools",
+    tags: ["crm", "sales", "enterprise"],
+  },
+
+  // Customer Support
+  {
+    name: "intercom",
+    displayName: "Intercom",
+    description: "Contacts, conversations, and customer engagement",
+    category: "Communication",
+    tags: ["support", "messaging", "crm"],
+  },
+  {
+    name: "zendesk",
+    displayName: "Zendesk",
+    description: "Support tickets and helpdesk",
+    category: "Business Tools",
+    tags: ["support", "helpdesk", "tickets"],
+  },
+  {
+    name: "freshdesk",
+    displayName: "Freshdesk",
+    description: "Helpdesk and customer support",
+    category: "Business Tools",
+    tags: ["support", "helpdesk"],
+  },
+  {
+    name: "crisp",
+    displayName: "Crisp",
+    description: "Customer messaging and live chat",
+    category: "Communication",
+    tags: ["chat", "support", "messaging"],
+  },
+  {
+    name: "drift",
+    displayName: "Drift",
+    description: "Conversational marketing and sales",
+    category: "Communication",
+    tags: ["chat", "marketing", "sales"],
+  },
+
+  // Email Marketing
+  {
+    name: "mailchimp",
+    displayName: "Mailchimp",
+    description: "Email marketing and automation",
+    category: "Communication",
+    tags: ["email", "marketing", "automation"],
+  },
+  {
+    name: "convertkit",
+    displayName: "ConvertKit",
+    description: "Email marketing for creators",
+    category: "Communication",
+    tags: ["email", "marketing", "creators"],
+  },
+  {
+    name: "sendgrid",
+    displayName: "SendGrid",
+    description: "Email delivery and marketing",
+    category: "Communication",
+    tags: ["email", "api", "transactional"],
+  },
+
+  // Infrastructure
+  {
+    name: "vercel",
+    displayName: "Vercel",
+    description: "Deployment and hosting platform",
+    category: "Developer Tools",
+    tags: ["hosting", "deployment", "serverless"],
+  },
+  {
+    name: "netlify",
+    displayName: "Netlify",
+    description: "Web hosting and deployment",
+    category: "Developer Tools",
+    tags: ["hosting", "deployment", "jamstack"],
+  },
+  {
+    name: "supabase",
+    displayName: "Supabase",
+    description: "PostgreSQL database and auth",
+    category: "Developer Tools",
+    tags: ["database", "auth", "postgres"],
+  },
+  {
+    name: "mongodb",
+    displayName: "MongoDB",
+    description: "Document database and Atlas",
+    category: "Developer Tools",
+    tags: ["database", "nosql"],
+  },
+
+  // Data & Analytics (additional)
+  {
+    name: "airtable",
+    displayName: "Airtable",
+    description: "Spreadsheet-database hybrid",
+    category: "Data & Analytics",
+    tags: ["database", "spreadsheet"],
+  },
+  {
+    name: "segment",
+    displayName: "Segment",
+    description: "Customer data platform",
+    category: "Data & Analytics",
+    tags: ["analytics", "cdp", "data"],
+  },
+  {
+    name: "amplitude",
+    displayName: "Amplitude",
+    description: "Product analytics platform",
+    category: "Data & Analytics",
+    tags: ["analytics", "product"],
+  },
+  {
+    name: "posthog",
+    displayName: "PostHog",
+    description: "Product analytics and feature flags",
+    category: "Data & Analytics",
+    tags: ["analytics", "feature-flags"],
+  },
+
+  // Commerce (additional)
+  {
+    name: "paypal",
+    displayName: "PayPal",
+    description: "Payments and checkout",
+    category: "Commerce & Finance",
+    tags: ["payments", "checkout"],
+  },
+  {
+    name: "lemonsqueezy",
+    displayName: "Lemon Squeezy",
+    description: "Payments for digital products",
+    category: "Commerce & Finance",
+    tags: ["payments", "digital", "saas"],
+  },
+  {
+    name: "gumroad",
+    displayName: "Gumroad",
+    description: "Sell digital products and memberships",
+    category: "Commerce & Finance",
+    tags: ["ecommerce", "digital", "creators"],
+  },
+
+  // Scheduling & Documents
+  {
+    name: "calendly",
+    displayName: "Calendly",
+    description: "Scheduling and appointment booking",
+    category: "Business Tools",
+    tags: ["scheduling", "calendar"],
+  },
+  {
+    name: "docusign",
+    displayName: "DocuSign",
+    description: "Electronic signatures and agreements",
+    category: "Business Tools",
+    tags: ["esign", "documents", "contracts"],
+  },
+
+  // Social (additional)
+  {
+    name: "pinterest",
+    displayName: "Pinterest",
+    description: "Pins, boards, and visual discovery",
+    category: "Social Media",
+    tags: ["social", "visual", "marketing"],
+  },
+  {
+    name: "linkedin",
+    displayName: "LinkedIn",
+    description: "Professional network and marketing",
+    category: "Social Media",
+    tags: ["social", "professional", "b2b"],
+  },
 ];
 
 export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
