@@ -9,8 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- MCP lean stubs: removed all `.describe()` from Zod params — ~90% token reduction on cold start
-- All 12 tool schemas now have bare types only; full descriptions available via `describe_tools`
+- MCP lean stubs: removed all `.describe()` from Zod params across all 12 tools
+- All tool schemas now bare types only; full descriptions available on-demand via `describe_tools`
+- Real measured reduction: 3,500 → 2,248 chars (~36%, ~313 tokens) vs v0.2.7 baseline
+- Note: 12-tool MCP gains are modest; pattern has larger impact on MCPs with 40+ tools
 
 ## [0.2.9] - 2026-03-11
 
