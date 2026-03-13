@@ -6,6 +6,7 @@ import {
   createTask,
   getTaskWithRelations,
   listTasks,
+  countTasks,
   updateTask,
   deleteTask,
   startTask,
@@ -14,6 +15,12 @@ import {
   unlockTask,
   addDependency,
   removeDependency,
+  bulkUpdateTasks,
+  bulkCreateTasks,
+  cloneTask,
+  getTaskStats,
+  getTaskGraph,
+  moveTask,
 } from "../db/tasks.js";
 import { addComment } from "../db/comments.js";
 import {
@@ -37,10 +44,12 @@ import { getDatabase, resolvePartialId } from "../db/database.js";
 import {
   VersionConflictError,
   TaskNotFoundError,
+  ProjectNotFoundError,
   LockError,
   DependencyCycleError,
   PlanNotFoundError,
   TaskListNotFoundError,
+  AgentNotFoundError,
   CompletionGuardError,
 } from "../types/index.js";
 import type { Task } from "../types/index.js";
@@ -51,18 +60,38 @@ const server = new McpServer({
 });
 
 function formatError(error: unknown): string {
-  if (error instanceof VersionConflictError) return `Version conflict: ${error.message}`;
-  if (error instanceof TaskNotFoundError) return `Not found: ${error.message}`;
-  if (error instanceof PlanNotFoundError) return `Not found: ${error.message}`;
-  if (error instanceof TaskListNotFoundError) return `Not found: ${error.message}`;
-  if (error instanceof LockError) return `Lock error: ${error.message}`;
-  if (error instanceof DependencyCycleError) return `Dependency cycle: ${error.message}`;
-  if (error instanceof CompletionGuardError) {
-    const retry = error.retryAfterSeconds ? ` (retry after ${error.retryAfterSeconds}s)` : "";
-    return `Completion blocked: ${error.reason}${retry}`;
+  if (error instanceof VersionConflictError) {
+    return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
   }
-  if (error instanceof Error) return error.message;
-  return String(error);
+  if (error instanceof TaskNotFoundError) {
+    return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
+  }
+  if (error instanceof ProjectNotFoundError) {
+    return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });
+  }
+  if (error instanceof PlanNotFoundError) {
+    return JSON.stringify({ code: PlanNotFoundError.code, message: error.message, suggestion: PlanNotFoundError.suggestion });
+  }
+  if (error instanceof TaskListNotFoundError) {
+    return JSON.stringify({ code: TaskListNotFoundError.code, message: error.message, suggestion: TaskListNotFoundError.suggestion });
+  }
+  if (error instanceof LockError) {
+    return JSON.stringify({ code: LockError.code, message: error.message, suggestion: LockError.suggestion });
+  }
+  if (error instanceof AgentNotFoundError) {
+    return JSON.stringify({ code: AgentNotFoundError.code, message: error.message, suggestion: AgentNotFoundError.suggestion });
+  }
+  if (error instanceof DependencyCycleError) {
+    return JSON.stringify({ code: DependencyCycleError.code, message: error.message, suggestion: DependencyCycleError.suggestion });
+  }
+  if (error instanceof CompletionGuardError) {
+    const retry = error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {};
+    return JSON.stringify({ code: CompletionGuardError.code, message: error.reason, suggestion: CompletionGuardError.suggestion, ...retry });
+  }
+  if (error instanceof Error) {
+    return JSON.stringify({ code: "UNKNOWN_ERROR", message: error.message });
+  }
+  return JSON.stringify({ code: "UNKNOWN_ERROR", message: String(error) });
 }
 
 function resolveId(partialId: string, table = "tasks"): string {
@@ -126,22 +155,22 @@ server.tool(
   "create_task",
   "Create a new task",
   {
-    title: z.string(),
-    description: z.string().optional(),
-    project_id: z.string().optional(),
-    parent_id: z.string().optional(),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
-    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
-    agent_id: z.string().optional(),
-    assigned_to: z.string().optional(),
-    session_id: z.string().optional(),
-    working_dir: z.string().optional(),
-    plan_id: z.string().optional(),
-    task_list_id: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-    metadata: z.record(z.unknown()).optional(),
-    estimated_minutes: z.number().optional(),
-    requires_approval: z.boolean().optional(),
+    title: z.string().describe("Task title, e.g. 'Fix login bug' or 'Add dark mode support'"),
+    description: z.string().optional().describe("Detailed task description with context, acceptance criteria, etc."),
+    project_id: z.string().optional().describe("Project ID or partial ID (first 8+ chars). Links task to a project for short_id generation."),
+    parent_id: z.string().optional().describe("Parent task ID or partial ID — creates a subtask. Subtasks cascade-delete with parent."),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Task priority: low, medium (default), high, critical"),
+    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional().describe("Task status: pending (default), in_progress, completed, failed, cancelled"),
+    agent_id: z.string().optional().describe("Creator agent ID, e.g. 'a1b2c3d4'. Set automatically if agent is registered."),
+    assigned_to: z.string().optional().describe("Agent ID or name to assign the task to, e.g. 'maximus' or 'a1b2c3d4'"),
+    session_id: z.string().optional().describe("Session ID for tracking which agent session created the task"),
+    working_dir: z.string().optional().describe("Working directory path, e.g. '/Users/dev/my-project'"),
+    plan_id: z.string().optional().describe("Plan ID or partial ID to group this task under a plan"),
+    task_list_id: z.string().optional().describe("Task list ID or partial ID to file this task in a specific list"),
+    tags: z.array(z.string()).optional().describe("Array of string tags, e.g. ['bug', 'urgent', 'frontend']"),
+    metadata: z.record(z.unknown()).optional().describe("Arbitrary JSON metadata object, e.g. {source: 'github', pr: 123}"),
+    estimated_minutes: z.number().optional().describe("Estimated time in minutes, e.g. 30, 60, 120"),
+    requires_approval: z.boolean().optional().describe("If true, task must be approved via approve_task before it can be completed"),
   },
   async (params) => {
     try {
@@ -161,21 +190,23 @@ server.tool(
 // 2. list_tasks
 server.tool(
   "list_tasks",
-  "List tasks with optional filters",
+  "List tasks with optional filters. Supports pagination via limit/offset.",
   {
-    project_id: z.string().optional(),
+    project_id: z.string().optional().describe("Filter by project ID or partial ID (first 8+ chars)"),
     status: z.union([
       z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]),
       z.array(z.enum(["pending", "in_progress", "completed", "failed", "cancelled"])),
-    ]).optional(),
+    ]).optional().describe("Filter by status: pending, in_progress, completed, failed, cancelled. Single value or array."),
     priority: z.union([
       z.enum(["low", "medium", "high", "critical"]),
       z.array(z.enum(["low", "medium", "high", "critical"])),
-    ]).optional(),
-    assigned_to: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-    plan_id: z.string().optional(),
-    task_list_id: z.string().optional(),
+    ]).optional().describe("Filter by priority: low, medium, high, critical. Single value or array."),
+    assigned_to: z.string().optional().describe("Filter by assigned agent ID or name"),
+    tags: z.array(z.string()).optional().describe("Filter by tags — tasks must have ALL specified tags"),
+    plan_id: z.string().optional().describe("Filter by plan ID or partial ID"),
+    task_list_id: z.string().optional().describe("Filter by task list ID or partial ID"),
+    limit: z.number().optional().describe("Max tasks to return, e.g. 20. Use with offset for pagination."),
+    offset: z.number().optional().describe("Skip N tasks. Use with limit for pagination, e.g. offset=20 for page 2."),
   },
   async (params) => {
     try {
@@ -184,15 +215,18 @@ server.tool(
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
       if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
       const tasks = listTasks(resolved);
+      const { limit: _limit, offset: _offset, ...countFilter } = resolved;
+      const total = countTasks(countFilter);
       if (tasks.length === 0) {
-        return { content: [{ type: "text" as const, text: "No tasks found." }] };
+        return { content: [{ type: "text" as const, text: total > 0 ? `No tasks in this page (total: ${total}).` : "No tasks found." }] };
       }
       const text = tasks.map((t) => {
         const lock = t.locked_by ? ` [locked by ${t.locked_by}]` : "";
         const assigned = t.assigned_to ? ` -> ${t.assigned_to}` : "";
         return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}`;
       }).join("\n");
-      return { content: [{ type: "text" as const, text: `${tasks.length} task(s):\n${text}` }] };
+      const pagination = resolved.limit ? `\n(showing ${tasks.length} of ${total}, offset: ${resolved.offset || 0})` : "";
+      return { content: [{ type: "text" as const, text: `${tasks.length} task(s):\n${text}${pagination}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -202,9 +236,9 @@ server.tool(
 // 3. get_task
 server.tool(
   "get_task",
-  "Get full task details with relations",
+  "Get full task details including subtasks, dependencies, blockers, comments, and parent.",
   {
-    id: z.string(),
+    id: z.string().describe("Task ID, short_id (e.g. 'APP-00001'), or partial ID (first 8+ chars)"),
   },
   async ({ id }) => {
     try {
@@ -253,19 +287,19 @@ server.tool(
 // 4. update_task
 server.tool(
   "update_task",
-  "Update task fields. Version required for optimistic locking.",
+  "Update task fields. Version required for optimistic locking — get it from get_task first.",
   {
-    id: z.string(),
-    version: z.number(),
-    title: z.string().optional(),
-    description: z.string().optional(),
-    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
-    assigned_to: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-    metadata: z.record(z.unknown()).optional(),
-    plan_id: z.string().optional(),
-    task_list_id: z.string().optional(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    version: z.number().describe("Current task version for optimistic locking. Get from get_task. Prevents concurrent overwrites."),
+    title: z.string().optional().describe("New task title"),
+    description: z.string().optional().describe("New task description"),
+    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional().describe("New status: pending, in_progress, completed, failed, cancelled"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("New priority: low, medium, high, critical"),
+    assigned_to: z.string().optional().describe("Agent ID or name to reassign to"),
+    tags: z.array(z.string()).optional().describe("Replace tags array, e.g. ['bug', 'urgent']"),
+    metadata: z.record(z.unknown()).optional().describe("Replace metadata object"),
+    plan_id: z.string().optional().describe("Move task to a different plan"),
+    task_list_id: z.string().optional().describe("Move task to a different task list"),
   },
   async ({ id, ...rest }) => {
     try {
@@ -281,9 +315,9 @@ server.tool(
 // 5. delete_task
 server.tool(
   "delete_task",
-  "Delete a task permanently",
+  "Delete a task permanently. Subtasks are cascade-deleted. Dependencies are removed.",
   {
-    id: z.string(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
   },
   async ({ id }) => {
     try {
@@ -304,10 +338,10 @@ server.tool(
 // 6. start_task
 server.tool(
   "start_task",
-  "Claim, lock, and set task status to in_progress.",
+  "Claim, lock, and set task status to in_progress. Combines lock + status update in one call.",
   {
-    id: z.string(),
-    agent_id: z.string(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    agent_id: z.string().describe("Your agent ID (8-char), e.g. 'a1b2c3d4'. Registers you as the worker."),
   },
   async ({ id, agent_id }) => {
     try {
@@ -323,10 +357,10 @@ server.tool(
 // 7. complete_task
 server.tool(
   "complete_task",
-  "Mark task completed and release lock.",
+  "Mark task as completed, release lock, and set completed_at timestamp.",
   {
-    id: z.string(),
-    agent_id: z.string().optional(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    agent_id: z.string().optional().describe("Agent ID completing the task. Required if task is locked by a different agent."),
   },
   async ({ id, agent_id }) => {
     try {
@@ -342,10 +376,10 @@ server.tool(
 // 8. lock_task
 server.tool(
   "lock_task",
-  "Acquire exclusive lock on a task",
+  "Acquire exclusive lock on a task. Locks auto-expire after 30 minutes. Re-locking by same agent is idempotent.",
   {
-    id: z.string(),
-    agent_id: z.string(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    agent_id: z.string().describe("Your agent ID to acquire the lock"),
   },
   async ({ id, agent_id }) => {
     try {
@@ -364,10 +398,10 @@ server.tool(
 // 9. unlock_task
 server.tool(
   "unlock_task",
-  "Release exclusive lock on a task",
+  "Release exclusive lock on a task. Only the lock holder or an admin can unlock.",
   {
-    id: z.string(),
-    agent_id: z.string().optional(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    agent_id: z.string().optional().describe("Agent ID releasing the lock. If omitted, force-unlocks regardless of holder."),
   },
   async ({ id, agent_id }) => {
     try {
@@ -383,10 +417,10 @@ server.tool(
 // 10. add_dependency
 server.tool(
   "add_dependency",
-  "Add a dependency: task_id depends on depends_on.",
+  "Add a dependency: task_id depends on depends_on. Prevents cycles via BFS detection.",
   {
-    task_id: z.string(),
-    depends_on: z.string(),
+    task_id: z.string().describe("Task ID that will depend on the other task"),
+    depends_on: z.string().describe("Task ID of the dependency (the blocker)"),
   },
   async ({ task_id, depends_on }) => {
     try {
@@ -403,10 +437,10 @@ server.tool(
 // 11. remove_dependency
 server.tool(
   "remove_dependency",
-  "Remove a dependency between tasks",
+  "Remove a dependency link between two tasks.",
   {
-    task_id: z.string(),
-    depends_on: z.string(),
+    task_id: z.string().describe("Task ID that currently depends on the other task"),
+    depends_on: z.string().describe("Task ID of the dependency to remove"),
   },
   async ({ task_id, depends_on }) => {
     try {
@@ -428,12 +462,12 @@ server.tool(
 // 12. add_comment
 server.tool(
   "add_comment",
-  "Add a comment/note to a task",
+  "Add a comment or note to a task. Comments are append-only.",
   {
-    task_id: z.string(),
-    content: z.string(),
-    agent_id: z.string().optional(),
-    session_id: z.string().optional(),
+    task_id: z.string().describe("Task ID or partial ID to comment on"),
+    content: z.string().describe("Comment text, e.g. 'Blocked by API rate limit, retrying in 5 min'"),
+    agent_id: z.string().optional().describe("Agent ID who is leaving the comment"),
+    session_id: z.string().optional().describe("Session ID for tracking"),
   },
   async ({ task_id, ...rest }) => {
     try {
@@ -471,12 +505,12 @@ server.tool(
 // 14. create_project
 server.tool(
   "create_project",
-  "Register a new project",
+  "Register a new project. Projects auto-generate a task prefix for short IDs (e.g. APP-00001).",
   {
-    name: z.string(),
-    path: z.string(),
-    description: z.string().optional(),
-    task_list_id: z.string().optional(),
+    name: z.string().describe("Project name, e.g. 'my-app' or 'backend-api'"),
+    path: z.string().describe("Absolute path to project root, e.g. '/Users/dev/my-app'. Must be unique."),
+    description: z.string().optional().describe("Brief project description"),
+    task_list_id: z.string().optional().describe("Default task list ID for this project's tasks"),
   },
   async (params) => {
     try {
@@ -497,14 +531,14 @@ server.tool(
 // create_plan
 server.tool(
   "create_plan",
-  "Create a new plan",
+  "Create a new plan to group related tasks into an execution unit.",
   {
-    name: z.string(),
-    project_id: z.string().optional(),
-    description: z.string().optional(),
-    status: z.enum(["active", "completed", "archived"]).optional(),
-    task_list_id: z.string().optional(),
-    agent_id: z.string().optional(),
+    name: z.string().describe("Plan name, e.g. 'Sprint 1' or 'Auth refactor'"),
+    project_id: z.string().optional().describe("Project ID or partial ID to associate the plan with"),
+    description: z.string().optional().describe("Plan description with goals and scope"),
+    status: z.enum(["active", "completed", "archived"]).optional().describe("Plan status: active (default), completed, archived"),
+    task_list_id: z.string().optional().describe("Task list ID or partial ID"),
+    agent_id: z.string().optional().describe("Agent ID who created the plan"),
   },
   async (params) => {
     try {
@@ -527,9 +561,9 @@ server.tool(
 // list_plans
 server.tool(
   "list_plans",
-  "List plans with optional project filter",
+  "List all plans, optionally filtered by project.",
   {
-    project_id: z.string().optional(),
+    project_id: z.string().optional().describe("Filter by project ID or partial ID"),
   },
   async ({ project_id }) => {
     try {
@@ -552,9 +586,9 @@ server.tool(
 // get_plan
 server.tool(
   "get_plan",
-  "Get plan details",
+  "Get plan details including name, status, description, and timestamps.",
   {
-    id: z.string(),
+    id: z.string().describe("Plan ID or partial ID (first 8+ chars)"),
   },
   async ({ id }) => {
     try {
@@ -580,14 +614,14 @@ server.tool(
 // update_plan
 server.tool(
   "update_plan",
-  "Update a plan",
+  "Update plan fields (name, description, status).",
   {
-    id: z.string(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    status: z.enum(["active", "completed", "archived"]).optional(),
-    task_list_id: z.string().optional(),
-    agent_id: z.string().optional(),
+    id: z.string().describe("Plan ID or partial ID (first 8+ chars)"),
+    name: z.string().optional().describe("New plan name"),
+    description: z.string().optional().describe("New plan description"),
+    status: z.enum(["active", "completed", "archived"]).optional().describe("New status: active, completed, archived"),
+    task_list_id: z.string().optional().describe("New task list ID or partial ID"),
+    agent_id: z.string().optional().describe("Agent ID making the update"),
   },
   async ({ id, ...rest }) => {
     try {
@@ -610,9 +644,9 @@ server.tool(
 // delete_plan
 server.tool(
   "delete_plan",
-  "Delete a plan",
+  "Delete a plan. Tasks in the plan are orphaned (not deleted).",
   {
-    id: z.string(),
+    id: z.string().describe("Plan ID or partial ID (first 8+ chars)"),
   },
   async ({ id }) => {
     try {
@@ -633,17 +667,36 @@ server.tool(
 // 15. search_tasks
 server.tool(
   "search_tasks",
-  "Full-text search across task titles, descriptions, tags.",
+  "Full-text search across task titles, descriptions, and tags. Supports status/priority/agent/date filters.",
   {
-    query: z.string(),
-    project_id: z.string().optional(),
-    task_list_id: z.string().optional(),
+    query: z.string().describe("Search text to match against titles, descriptions, and tags, e.g. 'login bug' or 'auth'"),
+    project_id: z.string().optional().describe("Filter by project ID or partial ID"),
+    task_list_id: z.string().optional().describe("Filter by task list ID or partial ID"),
+    status: z.union([
+      z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]),
+      z.array(z.enum(["pending", "in_progress", "completed", "failed", "cancelled"])),
+    ]).optional().describe("Filter by status (single value or array)"),
+    priority: z.union([
+      z.enum(["low", "medium", "high", "critical"]),
+      z.array(z.enum(["low", "medium", "high", "critical"])),
+    ]).optional().describe("Filter by priority (single value or array)"),
+    assigned_to: z.string().optional().describe("Filter by assigned agent ID"),
+    agent_id: z.string().optional().describe("Filter by creator agent ID"),
+    created_after: z.string().optional().describe("ISO date string — only tasks created after this date"),
+    updated_after: z.string().optional().describe("ISO date string — only tasks updated after this date"),
+    has_dependencies: z.boolean().optional().describe("true = only tasks with dependencies, false = only tasks without"),
+    is_blocked: z.boolean().optional().describe("true = only blocked tasks (unfinished deps), false = only unblocked"),
   },
-  async ({ query, project_id, task_list_id }) => {
+  async ({ query, project_id, task_list_id, ...filters }) => {
     try {
       const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
       const resolvedTaskListId = task_list_id ? resolveId(task_list_id, "task_lists") : undefined;
-      const tasks = searchTasks(query, resolvedProjectId, resolvedTaskListId);
+      const tasks = searchTasks({
+        query,
+        project_id: resolvedProjectId,
+        task_list_id: resolvedTaskListId,
+        ...filters,
+      });
       if (tasks.length === 0) {
         return { content: [{ type: "text" as const, text: `No tasks matching "${query}".` }] };
       }
@@ -660,14 +713,14 @@ server.tool(
 // 16. sync
 server.tool(
   "sync",
-  "Sync tasks with an agent task list.",
+  "Sync tasks between local todos DB and an agent's task list (e.g. Claude Code task list).",
   {
-    task_list_id: z.string().optional(),
-    agent: z.string().optional(),
-    all_agents: z.boolean().optional(),
-    project_id: z.string().optional(),
-    direction: z.enum(["push", "pull", "both"]).optional(),
-    prefer: z.enum(["local", "remote"]).optional(),
+    task_list_id: z.string().optional().describe("Explicit task list ID to sync with. Auto-detected from agent config if omitted."),
+    agent: z.string().optional().describe("Agent name to sync with, e.g. 'claude', 'codex'. Defaults to 'claude'."),
+    all_agents: z.boolean().optional().describe("If true, sync with all configured agents at once"),
+    project_id: z.string().optional().describe("Filter sync to a specific project ID or partial ID"),
+    direction: z.enum(["push", "pull", "both"]).optional().describe("Sync direction: push (local->remote), pull (remote->local), both (default)"),
+    prefer: z.enum(["local", "remote"]).optional().describe("Conflict resolution: local or remote (default) wins on conflict"),
   },
   async ({ task_list_id, agent, all_agents, project_id, direction, prefer }) => {
     try {
@@ -723,10 +776,10 @@ server.tool(
 // register_agent
 server.tool(
   "register_agent",
-  "Register an agent (idempotent by name).",
+  "Register an agent (idempotent by name). Returns existing agent if name matches. Updates last_seen_at.",
   {
-    name: z.string(),
-    description: z.string().optional(),
+    name: z.string().describe("Agent name, e.g. 'maximus', 'claude', 'codex'. Must be unique."),
+    description: z.string().optional().describe("Agent description, e.g. 'Backend developer agent'"),
   },
   async ({ name, description }) => {
     try {
@@ -767,10 +820,10 @@ server.tool(
 // get_agent
 server.tool(
   "get_agent",
-  "Get agent details by ID or name",
+  "Get agent details by ID or name. Provide one of id or name.",
   {
-    id: z.string().optional(),
-    name: z.string().optional(),
+    id: z.string().optional().describe("Agent ID (8-char), e.g. 'a1b2c3d4'"),
+    name: z.string().optional().describe("Agent name, e.g. 'maximus'"),
   },
   async ({ id, name }) => {
     try {
@@ -863,12 +916,12 @@ server.tool(
 // create_task_list
 server.tool(
   "create_task_list",
-  "Create a new task list",
+  "Create a new task list — a container/folder for organizing tasks.",
   {
-    name: z.string(),
-    slug: z.string().optional(),
-    project_id: z.string().optional(),
-    description: z.string().optional(),
+    name: z.string().describe("Task list name, e.g. 'Sprint 1' or 'Backlog'"),
+    slug: z.string().optional().describe("URL-friendly slug, e.g. 'sprint-1'. Auto-generated from name if omitted."),
+    project_id: z.string().optional().describe("Project ID or partial ID to associate this list with"),
+    description: z.string().optional().describe("Brief description of the task list's purpose"),
   },
   async (params) => {
     try {
@@ -890,9 +943,9 @@ server.tool(
 // list_task_lists
 server.tool(
   "list_task_lists",
-  "List task lists, optionally filtered by project",
+  "List all task lists, optionally filtered by project.",
   {
-    project_id: z.string().optional(),
+    project_id: z.string().optional().describe("Filter by project ID or partial ID"),
   },
   async ({ project_id }) => {
     try {
@@ -915,9 +968,9 @@ server.tool(
 // get_task_list
 server.tool(
   "get_task_list",
-  "Get task list details",
+  "Get task list details including name, slug, project, and metadata.",
   {
-    id: z.string(),
+    id: z.string().describe("Task list ID or partial ID (first 8+ chars)"),
   },
   async ({ id }) => {
     try {
@@ -946,11 +999,11 @@ server.tool(
 // update_task_list
 server.tool(
   "update_task_list",
-  "Update a task list",
+  "Update a task list's name or description.",
   {
-    id: z.string(),
-    name: z.string().optional(),
-    description: z.string().optional(),
+    id: z.string().describe("Task list ID or partial ID (first 8+ chars)"),
+    name: z.string().optional().describe("New task list name"),
+    description: z.string().optional().describe("New task list description"),
   },
   async ({ id, ...rest }) => {
     try {
@@ -971,9 +1024,9 @@ server.tool(
 // delete_task_list
 server.tool(
   "delete_task_list",
-  "Delete a task list. Tasks lose association but keep data.",
+  "Delete a task list. Tasks in the list are orphaned (task_list_id set to NULL), not deleted.",
   {
-    id: z.string(),
+    id: z.string().describe("Task list ID or partial ID (first 8+ chars)"),
   },
   async ({ id }) => {
     try {
@@ -996,9 +1049,9 @@ server.tool(
 // get_task_history
 server.tool(
   "get_task_history",
-  "Get audit log for a task.",
+  "Get audit log for a task — shows all field changes with timestamps, old/new values, and who made them.",
   {
-    task_id: z.string(),
+    task_id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
   },
   async ({ task_id }) => {
     try {
@@ -1015,9 +1068,9 @@ server.tool(
 // get_recent_activity
 server.tool(
   "get_recent_activity",
-  "Get recent task changes across all tasks.",
+  "Get recent task changes across all tasks — a global activity feed.",
   {
-    limit: z.number().optional(),
+    limit: z.number().optional().describe("Max number of entries to return. Default: 50."),
   },
   async ({ limit }) => {
     try {
@@ -1035,11 +1088,11 @@ server.tool(
 // create_webhook
 server.tool(
   "create_webhook",
-  "Register a webhook to receive task change events.",
+  "Register a webhook to receive task change events via HTTP POST.",
   {
-    url: z.string(),
-    events: z.array(z.string()).optional(),
-    secret: z.string().optional(),
+    url: z.string().describe("Webhook endpoint URL, e.g. 'https://example.com/hooks/todos'"),
+    events: z.array(z.string()).optional().describe("Event types to subscribe to, e.g. ['task.created', 'task.completed']. Empty = all events."),
+    secret: z.string().optional().describe("Shared secret for HMAC signature verification of webhook payloads"),
   },
   async (params) => {
     try {
@@ -1069,9 +1122,9 @@ server.tool(
 // delete_webhook
 server.tool(
   "delete_webhook",
-  "Delete a webhook",
+  "Delete a webhook by ID.",
   {
-    id: z.string(),
+    id: z.string().describe("Webhook ID or partial ID"),
   },
   async ({ id }) => {
     try {
@@ -1087,15 +1140,15 @@ server.tool(
 // create_template
 server.tool(
   "create_template",
-  "Create a reusable task template.",
+  "Create a reusable task template for quickly creating similar tasks.",
   {
-    name: z.string(),
-    title_pattern: z.string(),
-    description: z.string().optional(),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
-    tags: z.array(z.string()).optional(),
-    project_id: z.string().optional(),
-    plan_id: z.string().optional(),
+    name: z.string().describe("Template name, e.g. 'Bug Report' or 'Feature Request'"),
+    title_pattern: z.string().describe("Title pattern with optional placeholders, e.g. 'Fix: {description}' or 'Review PR #{number}'"),
+    description: z.string().optional().describe("Default description for tasks created from this template"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Default priority: low, medium, high, critical"),
+    tags: z.array(z.string()).optional().describe("Default tags, e.g. ['bug', 'triage']"),
+    project_id: z.string().optional().describe("Default project ID or partial ID"),
+    plan_id: z.string().optional().describe("Default plan ID or partial ID"),
   },
   async (params) => {
     try {
@@ -1125,14 +1178,14 @@ server.tool(
 // create_task_from_template
 server.tool(
   "create_task_from_template",
-  "Create a task from a template with optional overrides.",
+  "Create a task from a saved template. Override any template defaults with explicit values.",
   {
-    template_id: z.string(),
-    title: z.string().optional(),
-    description: z.string().optional(),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
-    assigned_to: z.string().optional(),
-    project_id: z.string().optional(),
+    template_id: z.string().describe("Template ID or partial ID"),
+    title: z.string().optional().describe("Override the template's title pattern"),
+    description: z.string().optional().describe("Override the template's description"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Override priority: low, medium, high, critical"),
+    assigned_to: z.string().optional().describe("Agent ID or name to assign the new task to"),
+    project_id: z.string().optional().describe("Override project ID or partial ID"),
   },
   async (params) => {
     try {
@@ -1150,8 +1203,8 @@ server.tool(
 // delete_template
 server.tool(
   "delete_template",
-  "Delete a task template",
-  { id: z.string() },
+  "Delete a task template by ID.",
+  { id: z.string().describe("Template ID or partial ID") },
   async ({ id }) => {
     try {
       const { deleteTemplate } = await import("../db/templates.js");
@@ -1166,10 +1219,10 @@ server.tool(
 // approve_task
 server.tool(
   "approve_task",
-  "Approve a task that requires approval.",
+  "Approve a task that has requires_approval=true. Must be approved before it can be completed.",
   {
-    id: z.string(),
-    agent_id: z.string().optional(),
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    agent_id: z.string().optional().describe("Agent ID of the approver. Defaults to 'system'."),
   },
   async ({ id, agent_id }) => {
     try {
@@ -1187,9 +1240,9 @@ server.tool(
 // get_my_tasks — agent discovery
 server.tool(
   "get_my_tasks",
-  "Get assigned tasks and stats for an agent.",
+  "Get all tasks assigned to or created by an agent, with stats (pending/active/done/completion rate).",
   {
-    agent_name: z.string(),
+    agent_name: z.string().describe("Agent name, e.g. 'maximus'. Auto-registers the agent if not found."),
   },
   async ({ agent_name }) => {
     try {
@@ -1220,7 +1273,7 @@ server.tool(
 // get_org_chart — org hierarchy
 server.tool(
   "get_org_chart",
-  "Get agent org chart — who reports to who.",
+  "Get agent org chart — hierarchical tree showing who reports to whom.",
   {},
   async () => {
     try {
@@ -1245,10 +1298,10 @@ server.tool(
 // set_reports_to — set agent hierarchy
 server.tool(
   "set_reports_to",
-  "Set who an agent reports to in the org chart.",
+  "Set who an agent reports to in the org chart. Omit manager_name to make agent top-level.",
   {
-    agent_name: z.string(),
-    manager_name: z.string().optional(),
+    agent_name: z.string().describe("Name of the agent to update, e.g. 'brutus'"),
+    manager_name: z.string().optional().describe("Name of the manager agent. Omit to remove reporting relationship (top-level)."),
   },
   async ({ agent_name, manager_name }) => {
     try {
@@ -1268,13 +1321,224 @@ server.tool(
   },
 );
 
+// bulk_update_tasks
+server.tool(
+  "bulk_update_tasks",
+  "Update multiple tasks at once. Applies the same field changes to all specified tasks.",
+  {
+    task_ids: z.array(z.string()).describe("Array of task IDs to update, e.g. ['abc12345', 'def67890']"),
+    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional().describe("New status for all tasks: pending, in_progress, completed, failed, cancelled"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("New priority for all tasks: low, medium, high, critical"),
+    assigned_to: z.string().optional().describe("Agent ID or name to assign all tasks to"),
+    tags: z.array(z.string()).optional().describe("Replace tags on all tasks, e.g. ['reviewed', 'ready']"),
+  },
+  async ({ task_ids, ...updates }) => {
+    try {
+      const resolvedIds = task_ids.map(id => resolveId(id));
+      const result = bulkUpdateTasks(resolvedIds, updates);
+      const parts = [`Updated ${result.updated} task(s).`];
+      if (result.failed.length > 0) {
+        parts.push(`Failed ${result.failed.length}:`);
+        for (const f of result.failed) parts.push(`  ${f.id.slice(0, 8)}: ${f.error}`);
+      }
+      return { content: [{ type: "text" as const, text: parts.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// clone_task
+server.tool(
+  "clone_task",
+  "Duplicate an existing task with optional field overrides. Creates a new independent copy.",
+  {
+    task_id: z.string().describe("ID of the task to clone"),
+    title: z.string().optional().describe("Override title"),
+    description: z.string().optional().describe("Override description"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+    project_id: z.string().optional(),
+    plan_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+    assigned_to: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    estimated_minutes: z.number().optional(),
+  },
+  async ({ task_id, ...overrides }) => {
+    try {
+      const resolvedId = resolveId(task_id);
+      const resolved = { ...overrides };
+      if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
+      if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
+      const task = cloneTask(resolvedId, resolved);
+      return { content: [{ type: "text" as const, text: `cloned: ${formatTask(task)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_task_stats
+server.tool(
+  "get_task_stats",
+  "Get task analytics: counts by status, priority, agent, and completion rate. All via SQL aggregation.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    task_list_id: z.string().optional().describe("Filter by task list"),
+    agent_id: z.string().optional().describe("Filter by agent (matches agent_id or assigned_to)"),
+  },
+  async ({ project_id, task_list_id, agent_id }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string; agent_id?: string } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+      if (agent_id) filters.agent_id = agent_id;
+      const stats = getTaskStats(Object.keys(filters).length > 0 ? filters : undefined);
+      return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_task_graph
+server.tool(
+  "get_task_graph",
+  "Get full dependency tree for a task — all upstream blockers and downstream dependents in one call.",
+  {
+    id: z.string().describe("Task ID or partial ID"),
+    direction: z.enum(["up", "down", "both"]).optional().describe("up=dependencies, down=dependents, both=full tree (default: both)"),
+  },
+  async ({ id, direction }) => {
+    try {
+      const taskId = resolveId(id, "tasks");
+      const graph = getTaskGraph(taskId, direction || "both");
+
+      function formatNode(node: { task: { status: string; short_id: string | null; id: string; title: string; is_blocked: boolean }; depends_on: any[]; blocks: any[] }, indent: number): string {
+        const prefix = "  ".repeat(indent);
+        const idLabel = node.task.short_id || node.task.id.slice(0, 8);
+        const blocked = node.task.is_blocked ? " (blocked: yes)" : "";
+        let out = `${prefix}[${node.task.status}] ${idLabel} | ${node.task.title}${blocked}\n`;
+        if (node.depends_on.length > 0) {
+          out += `${prefix}  Depends on:\n`;
+          for (const dep of node.depends_on) {
+            out += formatNode(dep, indent + 2);
+          }
+        }
+        if (node.blocks.length > 0) {
+          out += `${prefix}  Blocks:\n`;
+          for (const dep of node.blocks) {
+            out += formatNode(dep, indent + 2);
+          }
+        }
+        return out;
+      }
+
+      let text = `Task: ${formatNode(graph, 0)}`;
+      if (graph.depends_on.length > 0) {
+        text += `\nDepends on:\n`;
+        for (const dep of graph.depends_on) {
+          text += formatNode(dep, 1);
+        }
+      }
+      if (graph.blocks.length > 0) {
+        text += `\nBlocks:\n`;
+        for (const dep of graph.blocks) {
+          text += formatNode(dep, 1);
+        }
+      }
+
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// bulk_create_tasks
+server.tool(
+  "bulk_create_tasks",
+  "Create multiple tasks in one atomic operation. Supports inter-task dependencies via temp_id references.",
+  {
+    tasks: z.array(z.object({
+      temp_id: z.string().optional().describe("Temporary ID for referencing this task in depends_on_temp_ids"),
+      title: z.string(),
+      description: z.string().optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+      project_id: z.string().optional(),
+      plan_id: z.string().optional(),
+      task_list_id: z.string().optional(),
+      agent_id: z.string().optional(),
+      assigned_to: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      estimated_minutes: z.number().optional(),
+      depends_on_temp_ids: z.array(z.string()).optional().describe("temp_ids of tasks this task depends on"),
+    })),
+    project_id: z.string().optional().describe("Default project_id for all tasks"),
+    plan_id: z.string().optional().describe("Default plan_id for all tasks"),
+    task_list_id: z.string().optional().describe("Default task_list_id for all tasks"),
+  },
+  async ({ tasks, project_id, plan_id, task_list_id }) => {
+    try {
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const resolvedPlanId = plan_id ? resolveId(plan_id, "plans") : undefined;
+      const resolvedTaskListId = task_list_id ? resolveId(task_list_id, "task_lists") : undefined;
+
+      const enrichedTasks = tasks.map(t => ({
+        ...t,
+        project_id: t.project_id || resolvedProjectId,
+        plan_id: t.plan_id || resolvedPlanId,
+        task_list_id: t.task_list_id || resolvedTaskListId,
+      }));
+
+      const result = bulkCreateTasks(enrichedTasks);
+      const lines = result.created.map(t => {
+        const tid = t.temp_id ? `[${t.temp_id}] ` : "";
+        const sid = t.short_id || t.id.slice(0, 8);
+        return `  ${tid}${sid} | ${t.title}`;
+      });
+      return { content: [{ type: "text" as const, text: `Created ${result.created.length} task(s):\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// move_task
+server.tool(
+  "move_task",
+  "Move a task to a different list, project, or plan. Pass null to unset.",
+  {
+    task_id: z.string().describe("ID of the task to move"),
+    task_list_id: z.string().nullable().optional().describe("Target task list ID (null to unset)"),
+    project_id: z.string().nullable().optional().describe("Target project ID (null to unset)"),
+    plan_id: z.string().nullable().optional().describe("Target plan ID (null to unset)"),
+  },
+  async ({ task_id, ...target }) => {
+    try {
+      const resolvedId = resolveId(task_id);
+      const resolvedTarget: { task_list_id?: string | null; project_id?: string | null; plan_id?: string | null } = {};
+      if (target.task_list_id !== undefined) resolvedTarget.task_list_id = target.task_list_id ? resolveId(target.task_list_id, "task_lists") : null;
+      if (target.project_id !== undefined) resolvedTarget.project_id = target.project_id ? resolveId(target.project_id, "projects") : null;
+      if (target.plan_id !== undefined) resolvedTarget.plan_id = target.plan_id ? resolveId(target.plan_id, "plans") : null;
+      const task = moveTask(resolvedId, resolvedTarget);
+      return { content: [{ type: "text" as const, text: `moved: ${formatTask(task)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
 // === META TOOLS ===
 
 // search_tools
 server.tool(
   "search_tools",
-  "List tool names matching a query.",
-  { query: z.string().optional() },
+  "List all available tool names, or filter by query substring. Use describe_tools for full parameter details.",
+  { query: z.string().optional().describe("Optional substring to filter tool names, e.g. 'task', 'agent', 'plan', 'bulk'") },
   async ({ query }) => {
     const all = [
       "create_task","list_tasks","get_task","update_task","delete_task",
@@ -1282,12 +1546,14 @@ server.tool(
       "add_dependency","remove_dependency","add_comment",
       "create_project","list_projects",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
-      "register_agent","list_agents","get_agent","get_my_tasks",
+      "register_agent","list_agents","get_agent","rename_agent","delete_agent",
+      "get_my_tasks","get_org_chart","set_reports_to",
       "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-      "search_tasks","sync",
+      "search_tasks","sync","clone_task","move_task",
       "get_task_history","get_recent_activity",
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
+      "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "search_tools","describe_tools",
     ];
     const q = query?.toLowerCase();
@@ -1299,29 +1565,91 @@ server.tool(
 // describe_tools
 server.tool(
   "describe_tools",
-  "Get descriptions for specific tools by name.",
-  { names: z.array(z.string()) },
+  "Get detailed descriptions and parameter info for specific tools by name. Pass tool names to get usage details.",
+  { names: z.array(z.string()).describe("Array of tool names to describe, e.g. ['create_task', 'update_task']") },
   async ({ names }) => {
     const descriptions: Record<string, string> = {
-      create_task: "Create a task. Params: title(req), description, priority, project_id, plan_id, tags, assigned_to, estimated_minutes, requires_approval",
-      list_tasks: "List tasks. Params: status, priority, project_id, plan_id, assigned_to, tags, limit",
-      get_task: "Get full task details. Params: id",
-      update_task: "Update task fields. Params: id, version(req), title, description, status, priority, tags, assigned_to, due_at",
-      delete_task: "Delete a task. Params: id",
-      start_task: "Claim, lock, and start a task. Params: id",
-      complete_task: "Mark task completed. Params: id, agent_id",
-      approve_task: "Approve task requiring approval. Params: id, agent_id",
-      create_plan: "Create a plan. Params: name, description, project_id, task_list_id, agent_id, status",
-      list_plans: "List plans. Params: project_id",
-      get_plan: "Get plan with tasks. Params: id",
-      search_tasks: "Full-text search tasks. Params: query, project_id, task_list_id",
-      get_my_tasks: "Get your tasks and stats. Params: agent_name",
-      get_task_history: "Get task audit log. Params: task_id",
-      get_recent_activity: "Recent changes across all tasks. Params: limit",
-      create_template: "Create task template. Params: name, title_pattern, description, priority, tags",
-      create_task_from_template: "Create task from template. Params: template_id, title, priority, assigned_to",
+      // Task CRUD
+      create_task: "Create a new task.\n  Params: title(string, req), description(string), priority(low|medium|high|critical, default:medium), status(pending|in_progress|completed|failed|cancelled, default:pending), project_id(string), parent_id(string — creates subtask), plan_id(string), task_list_id(string), agent_id(string), assigned_to(string), tags(string[]), metadata(object), estimated_minutes(number), requires_approval(boolean), session_id(string), working_dir(string)\n  Example: {title: 'Fix login bug', priority: 'high', tags: ['bug'], assigned_to: 'maximus'}",
+      list_tasks: "List tasks with optional filters. Supports pagination.\n  Params: status(string|string[]), priority(string|string[]), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), limit(number), offset(number)\n  Example: {status: ['pending', 'in_progress'], priority: 'high', limit: 20}",
+      get_task: "Get full task details including subtasks, dependencies, blockers, comments, and parent.\n  Params: id(string, req — task ID, short_id like 'APP-00001', or partial ID)\n  Example: {id: 'a1b2c3d4'}",
+      update_task: "Update task fields. Requires version for optimistic locking (get it from get_task first).\n  Params: id(string, req), version(number, req), title(string), description(string), status(pending|in_progress|completed|failed|cancelled), priority(low|medium|high|critical), assigned_to(string), tags(string[]), metadata(object), plan_id(string), task_list_id(string)\n  Example: {id: 'a1b2c3d4', version: 3, status: 'completed'}",
+      delete_task: "Delete a task permanently. Subtasks cascade-delete. Dependencies removed.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+
+      // Task workflow
+      start_task: "Claim, lock, and set task status to in_progress in one call.\n  Params: id(string, req), agent_id(string, req — your 8-char agent ID)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
+      complete_task: "Mark task completed, release lock, set completed_at timestamp.\n  Params: id(string, req), agent_id(string, optional — required if locked by different agent)\n  Example: {id: 'a1b2c3d4'}",
+      lock_task: "Acquire exclusive lock on a task. Locks auto-expire after 30 min. Re-locking by same agent is idempotent.\n  Params: id(string, req), agent_id(string, req)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
+      unlock_task: "Release exclusive lock on a task.\n  Params: id(string, req), agent_id(string, optional — omit to force-unlock)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
+      approve_task: "Approve a task with requires_approval=true. Must be approved before completion.\n  Params: id(string, req), agent_id(string, optional — defaults to 'system')\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
+
+      // Dependencies & comments
+      add_dependency: "Add a dependency: task_id depends on depends_on. Prevents cycles via BFS.\n  Params: task_id(string, req), depends_on(string, req)\n  Example: {task_id: 'abc12345', depends_on: 'def67890'}",
+      remove_dependency: "Remove a dependency link between two tasks.\n  Params: task_id(string, req), depends_on(string, req)\n  Example: {task_id: 'abc12345', depends_on: 'def67890'}",
+      add_comment: "Add a comment/note to a task. Comments are append-only.\n  Params: task_id(string, req), content(string, req), agent_id(string), session_id(string)\n  Example: {task_id: 'a1b2c3d4', content: 'Blocked by API rate limit'}",
+
+      // Projects
+      create_project: "Register a new project. Auto-generates task prefix for short IDs (e.g. APP-00001).\n  Params: name(string, req), path(string, req — unique absolute path), description(string), task_list_id(string)\n  Example: {name: 'my-app', path: '/Users/dev/my-app'}",
+      list_projects: "List all registered projects. No params.",
+
+      // Plans
+      create_plan: "Create a plan to group related tasks.\n  Params: name(string, req), project_id(string), description(string), status(active|completed|archived, default:active), task_list_id(string), agent_id(string)\n  Example: {name: 'Sprint 1', project_id: 'a1b2c3d4'}",
+      list_plans: "List all plans, optionally filtered by project.\n  Params: project_id(string)\n  Example: {project_id: 'a1b2c3d4'}",
+      get_plan: "Get plan details (name, status, description, timestamps).\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+      update_plan: "Update plan fields.\n  Params: id(string, req), name(string), description(string), status(active|completed|archived), task_list_id(string), agent_id(string)\n  Example: {id: 'a1b2c3d4', status: 'completed'}",
+      delete_plan: "Delete a plan. Tasks in the plan are orphaned, not deleted.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+
+      // Agents
+      register_agent: "Register an agent (idempotent by name). Returns existing agent if name matches.\n  Params: name(string, req — e.g. 'maximus'), description(string)\n  Example: {name: 'maximus', description: 'Backend developer'}",
+      list_agents: "List all registered agents with IDs, names, and last seen timestamps. No params.",
+      get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
+      rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",
+      delete_agent: "Delete an agent permanently. Resolve by id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
+      get_my_tasks: "Get all tasks assigned to/created by an agent, with stats (pending/active/done/rate).\n  Params: agent_name(string, req)\n  Example: {agent_name: 'maximus'}",
+      get_org_chart: "Get agent org chart — hierarchical tree showing who reports to whom. No params.",
+      set_reports_to: "Set who an agent reports to in the org chart. Omit manager_name for top-level.\n  Params: agent_name(string, req), manager_name(string, optional)\n  Example: {agent_name: 'brutus', manager_name: 'maximus'}",
+
+      // Task lists
+      create_task_list: "Create a task list — a container/folder for organizing tasks.\n  Params: name(string, req), slug(string — auto-generated if omitted), project_id(string), description(string)\n  Example: {name: 'Sprint 1', project_id: 'a1b2c3d4'}",
+      list_task_lists: "List all task lists, optionally filtered by project.\n  Params: project_id(string)\n  Example: {project_id: 'a1b2c3d4'}",
+      get_task_list: "Get task list details (name, slug, project, metadata).\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+      update_task_list: "Update a task list's name or description.\n  Params: id(string, req), name(string), description(string)\n  Example: {id: 'a1b2c3d4', name: 'Sprint 2'}",
+      delete_task_list: "Delete a task list. Tasks are orphaned (not deleted).\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+
+      // Search & sync
+      search_tasks: "Full-text search across task titles, descriptions, and tags. Supports filters.\n  Params: query(string, req), project_id(string), task_list_id(string), status(string|string[]), priority(string|string[]), assigned_to(string), agent_id(string), created_after(ISO date), updated_after(ISO date), has_dependencies(boolean), is_blocked(boolean)\n  Example: {query: 'auth bug', status: 'pending'}",
+      sync: "Sync tasks between local DB and agent task list (e.g. Claude Code).\n  Params: agent(string, default:'claude'), task_list_id(string), all_agents(boolean), project_id(string), direction(push|pull|both, default:both), prefer(local|remote, default:remote)\n  Example: {agent: 'claude', direction: 'push'}",
+
+      // Bulk operations
+      clone_task: "Duplicate a task with optional field overrides. Creates new independent copy.\n  Params: task_id(string, req), title(string), description(string), priority(low|medium|high|critical), status(pending|in_progress|completed|failed|cancelled), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), estimated_minutes(number)\n  Example: {task_id: 'a1b2c3d4', title: 'Cloned task', assigned_to: 'brutus'}",
+      move_task: "Move a task to a different list, project, or plan. Pass null to unset.\n  Params: task_id(string, req), task_list_id(string|null), project_id(string|null), plan_id(string|null)\n  Example: {task_id: 'a1b2c3d4', task_list_id: 'e5f6g7h8'}",
+      bulk_update_tasks: "Update multiple tasks at once with the same changes.\n  Params: task_ids(string[], req), status(pending|in_progress|completed|failed|cancelled), priority(low|medium|high|critical), assigned_to(string), tags(string[])\n  Example: {task_ids: ['abc12345', 'def67890'], status: 'completed'}",
+      bulk_create_tasks: "Create multiple tasks atomically. Supports inter-task dependencies via temp_id references.\n  Params: tasks(array, req — [{temp_id, title, description, priority, status, project_id, plan_id, task_list_id, agent_id, assigned_to, tags, estimated_minutes, depends_on_temp_ids}]), project_id(string — default for all), plan_id(string — default for all), task_list_id(string — default for all)\n  Example: {tasks: [{temp_id: 'a', title: 'First'}, {temp_id: 'b', title: 'Second', depends_on_temp_ids: ['a']}]}",
+
+      // Analytics
+      get_task_stats: "Get task analytics: counts by status, priority, agent, and completion rate. All via SQL.\n  Params: project_id(string), task_list_id(string), agent_id(string)\n  Example: {project_id: 'a1b2c3d4'}",
+      get_task_graph: "Get full dependency tree for a task — upstream blockers and downstream dependents.\n  Params: id(string, req), direction(up|down|both, default:both)\n  Example: {id: 'a1b2c3d4', direction: 'up'}",
+
+      // Audit
+      get_task_history: "Get audit log for a task — all field changes with timestamps and actors.\n  Params: task_id(string, req)\n  Example: {task_id: 'a1b2c3d4'}",
+      get_recent_activity: "Get recent task changes across all tasks — global activity feed.\n  Params: limit(number, default:50)\n  Example: {limit: 20}",
+
+      // Webhooks
+      create_webhook: "Register a webhook to receive task change events via HTTP POST.\n  Params: url(string, req), events(string[] — empty=all), secret(string — HMAC signing)\n  Example: {url: 'https://example.com/hook', events: ['task.created', 'task.completed']}",
+      list_webhooks: "List all registered webhooks. No params.",
+      delete_webhook: "Delete a webhook by ID.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+
+      // Templates
+      create_template: "Create a reusable task template.\n  Params: name(string, req), title_pattern(string, req — e.g. 'Fix: {description}'), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string)\n  Example: {name: 'Bug Report', title_pattern: 'Bug: {description}', priority: 'high', tags: ['bug']}",
+      list_templates: "List all task templates. No params.",
+      create_task_from_template: "Create a task from a template with optional overrides.\n  Params: template_id(string, req), title(string), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string)\n  Example: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}",
+      delete_template: "Delete a task template.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+
+      // Meta
+      search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",
+      describe_tools: "Get detailed descriptions and parameter info for tools by name.\n  Params: names(string[], req)\n  Example: {names: ['create_task', 'update_task']}",
     };
-    const result = names.map(n => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
+    const result = names.map(n => `${n}: ${descriptions[n] || "Unknown tool. Use search_tools to list available tools."}`).join("\n\n");
     return { content: [{ type: "text" as const, text: result }] };
   },
 );
