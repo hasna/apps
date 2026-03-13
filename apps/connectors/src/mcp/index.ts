@@ -30,7 +30,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "0.8.1",
+  version: "0.8.2",
 });
 
 // --- Tool: search_connectors ---
@@ -331,8 +331,8 @@ server.registerTool(
     description: "Save an API key or token for a connector.",
     inputSchema: {
       name: z.string(),
-      key: z.string(),
-      field: z.string().optional(),
+      key: z.string().describe("The API key or token VALUE to save"),
+      field: z.string().optional().describe("Config field name to save as (e.g. apiKey, clientId, clientSecret). Defaults to auto-detected field."),
     },
   },
   async ({ name, key, field }) => {
@@ -565,11 +565,11 @@ server.registerTool(
       "Install a connector and configure auth in one step. Installs if not already present, saves API key if provided, and returns install + auth status.",
     inputSchema: {
       name: z.string().describe("Connector name (e.g. stripe, gmail, anthropic)"),
-      key: z.string().optional().describe("API key or bearer token to save"),
+      key: z.string().optional().describe("The API key or token VALUE to save"),
       field: z
         .string()
         .optional()
-        .describe("Which field to save the key as (for multi-field connectors)"),
+        .describe("Config field name to save as (e.g. apiKey, clientId, clientSecret). Defaults to auto-detected field."),
       overwrite: z
         .boolean()
         .optional()

@@ -182,7 +182,7 @@ export class DriveClient {
 
   async download(fileId: string): Promise<ArrayBuffer> {
     const accessToken = await getValidAccessToken();
-    const url = DRIVE_API_BASE + '/files/' + fileId + '?alt=media';
+    const url = DRIVE_API_BASE + '/files/' + fileId + '?alt=media&supportsAllDrives=true';
 
     const response = await fetch(url, {
       headers: {
@@ -199,7 +199,7 @@ export class DriveClient {
 
   async export(fileId: string, mimeType: string): Promise<ArrayBuffer> {
     const accessToken = await getValidAccessToken();
-    const url = DRIVE_API_BASE + '/files/' + fileId + '/export?mimeType=' + encodeURIComponent(mimeType);
+    const url = DRIVE_API_BASE + '/files/' + fileId + '/export?mimeType=' + encodeURIComponent(mimeType) + '&supportsAllDrives=true';
 
     const response = await fetch(url, {
       headers: {
