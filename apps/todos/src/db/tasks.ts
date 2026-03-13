@@ -19,6 +19,7 @@ import { clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now, u
 import { nextTaskShortId } from "./projects.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { logTaskChange } from "./audit.js";
+import { nextOccurrence } from "../lib/recurrence.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -57,8 +58,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -83,6 +84,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       input.requires_approval ? 1 : 0,
       null,
       null,
+      input.recurrence_rule || null,
+      input.recurrence_parent_id || null,
     ],
   );
 
@@ -225,6 +228,12 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   if (filter.task_list_id) {
     conditions.push("task_list_id = ?");
     params.push(filter.task_list_id);
+  }
+
+  if (filter.has_recurrence === true) {
+    conditions.push("recurrence_rule IS NOT NULL");
+  } else if (filter.has_recurrence === false) {
+    conditions.push("recurrence_rule IS NULL");
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -406,6 +415,10 @@ export function updateTask(
     sets.push("approved_at = ?");
     params.push(now());
   }
+  if (input.recurrence_rule !== undefined) {
+    sets.push("recurrence_rule = ?");
+    params.push(input.recurrence_rule);
+  }
 
   params.push(id, input.version);
 
@@ -508,7 +521,7 @@ export function completeTask(
   id: string,
   agentId?: string,
   db?: Database,
-  evidence?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string },
+  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; skip_recurrence?: boolean },
 ): Task {
   const d = db || getDatabase();
   const task = getTask(id, d);
@@ -527,8 +540,12 @@ export function completeTask(
   // Completion guard: rate limit, min work time, cooldown
   checkCompletionGuard(task, agentId || null, d);
 
+  // Extract evidence fields (everything except skip_recurrence)
+  const evidence = options ? { files_changed: options.files_changed, test_results: options.test_results, commit_hash: options.commit_hash, notes: options.notes } : undefined;
+  const hasEvidence = evidence && (evidence.files_changed || evidence.test_results || evidence.commit_hash || evidence.notes);
+
   // Store evidence in metadata if provided
-  if (evidence) {
+  if (hasEvidence) {
     const meta = { ...task.metadata, _evidence: evidence };
     d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [JSON.stringify(meta), id]);
   }
@@ -542,8 +559,17 @@ export function completeTask(
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
 
+  // Auto-spawn next recurring task
+  let spawnedTask: Task | null = null;
+  if (task.recurrence_rule && !options?.skip_recurrence) {
+    spawnedTask = spawnNextRecurrence(task, d);
+  }
+
   // Return constructed result — no re-fetch
-  const meta = evidence ? { ...task.metadata, _evidence: evidence } : task.metadata;
+  const meta = hasEvidence ? { ...task.metadata, _evidence: evidence } : task.metadata;
+  if (spawnedTask) {
+    (meta as Record<string, unknown>)._next_recurrence = { id: spawnedTask.id, short_id: spawnedTask.short_id, due_at: spawnedTask.due_at };
+  }
   return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, version: task.version + 1, updated_at: timestamp, metadata: meta };
 }
 
@@ -690,6 +716,7 @@ export function cloneTask(
     tags: overrides?.tags ?? source.tags,
     metadata: overrides?.metadata ?? source.metadata,
     estimated_minutes: overrides?.estimated_minutes ?? source.estimated_minutes ?? undefined,
+    recurrence_rule: overrides?.recurrence_rule ?? source.recurrence_rule ?? undefined,
   };
 
   return createTask(input, d);
@@ -788,6 +815,35 @@ export function moveTask(
   d.run(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params);
 
   return getTask(taskId, d)!;
+}
+
+function spawnNextRecurrence(completedTask: Task, db: Database): Task {
+  const dueAt = nextOccurrence(completedTask.recurrence_rule!, new Date());
+
+  // Strip short_id prefix from title if present
+  let title = completedTask.title;
+  if (completedTask.short_id && title.startsWith(completedTask.short_id + ": ")) {
+    title = title.slice(completedTask.short_id.length + 2);
+  }
+
+  // The recurrence_parent_id chains back to the original recurring task
+  const recurrenceParentId = completedTask.recurrence_parent_id || completedTask.id;
+
+  return createTask({
+    title,
+    description: completedTask.description ?? undefined,
+    priority: completedTask.priority,
+    project_id: completedTask.project_id ?? undefined,
+    task_list_id: completedTask.task_list_id ?? undefined,
+    plan_id: completedTask.plan_id ?? undefined,
+    assigned_to: completedTask.assigned_to ?? undefined,
+    tags: completedTask.tags,
+    metadata: completedTask.metadata,
+    estimated_minutes: completedTask.estimated_minutes ?? undefined,
+    recurrence_rule: completedTask.recurrence_rule!,
+    recurrence_parent_id: recurrenceParentId,
+    due_at: dueAt,
+  }, db);
 }
 
 function wouldCreateCycle(

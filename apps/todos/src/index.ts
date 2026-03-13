@@ -119,6 +119,10 @@ export type { TodosConfig, AgentConfig, CompletionGuardConfig } from "./lib/conf
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";
 
+// Recurrence
+export { parseRecurrenceRule, isValidRecurrenceRule, nextOccurrence } from "./lib/recurrence.js";
+export type { ParsedRule } from "./lib/recurrence.js";
+
 // Types
 export type {
   Task,

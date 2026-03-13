@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
-import { createTask, getTask } from "../db/tasks.js";
+import { createTask, getTask, listTasks, completeTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
 import { addComment } from "../db/comments.js";
 import { searchTasks } from "../lib/search.js";
@@ -85,5 +85,61 @@ describe("MCP tool operations", () => {
 
     // Second update with stale version fails
     expect(() => updateTask(task.id, { version: 1, title: "Stale" }, db)).toThrow();
+  });
+});
+
+describe("Recurring task operations", () => {
+  it("create_task with recurrence_rule", () => {
+    const task = createTask(
+      { title: "Daily standup", recurrence_rule: "every weekday" },
+      db,
+    );
+    expect(task.title).toBe("Daily standup");
+    expect(task.recurrence_rule).toBe("every weekday");
+  });
+
+  it("complete recurring task spawns next instance", () => {
+    const task = createTask(
+      { title: "Weekly review", recurrence_rule: "every week" },
+      db,
+    );
+    const completed = completeTask(task.id, undefined, db);
+    expect(completed.status).toBe("completed");
+    expect(completed.metadata._next_recurrence).toBeDefined();
+
+    const next = completed.metadata._next_recurrence as { id: string; due_at: string };
+    const spawned = getTask(next.id, db);
+    expect(spawned).not.toBeNull();
+    expect(spawned!.recurrence_rule).toBe("every week");
+    expect(spawned!.recurrence_parent_id).toBe(task.id);
+    expect(spawned!.due_at).toBeTruthy();
+  });
+
+  it("complete with skip_recurrence prevents next instance", () => {
+    const task = createTask(
+      { title: "Skippable", recurrence_rule: "every day" },
+      db,
+    );
+    const completed = completeTask(task.id, undefined, db, { skip_recurrence: true });
+    expect(completed.status).toBe("completed");
+    expect(completed.metadata._next_recurrence).toBeUndefined();
+
+    // Only the original task should exist (now completed)
+    const all = listTasks({}, db);
+    expect(all).toHaveLength(1);
+    expect(all[0]!.id).toBe(task.id);
+  });
+
+  it("list with has_recurrence filter", () => {
+    createTask({ title: "Recurring", recurrence_rule: "every day" }, db);
+    createTask({ title: "One-off" }, db);
+
+    const recurring = listTasks({ has_recurrence: true }, db);
+    expect(recurring).toHaveLength(1);
+    expect(recurring[0]!.title).toBe("Recurring");
+
+    const nonRecurring = listTasks({ has_recurrence: false }, db);
+    expect(nonRecurring).toHaveLength(1);
+    expect(nonRecurring[0]!.title).toBe("One-off");
   });
 });

@@ -302,6 +302,14 @@ const MIGRATIONS = [
   ALTER TABLE projects ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL;
   INSERT OR IGNORE INTO _migrations (id) VALUES (12);
   `,
+  // Migration 13: Recurrence fields
+  `
+  ALTER TABLE tasks ADD COLUMN recurrence_rule TEXT;
+  ALTER TABLE tasks ADD COLUMN recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_parent ON tasks(recurrence_parent_id);
+  CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_rule ON tasks(recurrence_rule) WHERE recurrence_rule IS NOT NULL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (13);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -462,6 +470,8 @@ function ensureSchema(db: Database): void {
   ensureColumn("tasks", "requires_approval", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("tasks", "approved_by", "TEXT");
   ensureColumn("tasks", "approved_at", "TEXT");
+  ensureColumn("tasks", "recurrence_rule", "TEXT");
+  ensureColumn("tasks", "recurrence_parent_id", "TEXT REFERENCES tasks(id) ON DELETE SET NULL");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
@@ -494,6 +504,8 @@ function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_plans_agent ON plans(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_history_agent ON task_history(agent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_parent ON tasks(recurrence_parent_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_rule ON tasks(recurrence_rule) WHERE recurrence_rule IS NOT NULL");
 }
 
 function backfillTaskTags(db: Database): void {

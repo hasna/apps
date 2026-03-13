@@ -197,6 +197,8 @@ export interface Task {
   requires_approval: boolean;
   approved_by: string | null;
   approved_at: string | null;
+  recurrence_rule: string | null;
+  recurrence_parent_id: string | null;
 }
 
 // Task with relations loaded
@@ -226,6 +228,8 @@ export interface CreateTaskInput {
   due_at?: string;
   estimated_minutes?: number;
   requires_approval?: boolean;
+  recurrence_rule?: string;
+  recurrence_parent_id?: string;
 }
 
 export interface UpdateTaskInput {
@@ -242,6 +246,7 @@ export interface UpdateTaskInput {
   estimated_minutes?: number;
   requires_approval?: boolean;
   approved_by?: string;
+  recurrence_rule?: string | null;
   version: number; // required for optimistic locking
 }
 
@@ -256,6 +261,7 @@ export interface TaskFilter {
   agent_id?: string;
   session_id?: string;
   tags?: string[];
+  has_recurrence?: boolean;
   include_subtasks?: boolean;
   limit?: number;
   offset?: number;
@@ -331,6 +337,8 @@ export interface TaskRow {
   requires_approval: number;
   approved_by: string | null;
   approved_at: string | null;
+  recurrence_rule: string | null;
+  recurrence_parent_id: string | null;
 }
 
 export interface SessionRow {

@@ -123,7 +123,8 @@ function formatTask(task: Task): string {
   const id = task.short_id || task.id.slice(0, 8);
   const assigned = task.assigned_to ? ` -> ${task.assigned_to}` : "";
   const lock = task.locked_by ? ` [locked:${task.locked_by}]` : "";
-  return `${id} ${task.status.padEnd(11)} ${task.priority.padEnd(8)} ${task.title}${assigned}${lock}`;
+  const recur = task.recurrence_rule ? ` [↻]` : "";
+  return `${id} ${task.status.padEnd(11)} ${task.priority.padEnd(8)} ${task.title}${assigned}${lock}${recur}`;
 }
 
 /** Full multi-line task detail for get_task responses. */
@@ -142,6 +143,8 @@ function formatTaskDetail(task: Task): string {
   if (task.project_id) parts.push(`Project: ${task.project_id}`);
   if (task.plan_id) parts.push(`Plan: ${task.plan_id}`);
   if (task.tags.length > 0) parts.push(`Tags: ${task.tags.join(", ")}`);
+  if (task.recurrence_rule) parts.push(`Recurrence: ${task.recurrence_rule}`);
+  if (task.recurrence_parent_id) parts.push(`Recurrence parent: ${task.recurrence_parent_id}`);
   parts.push(`Version: ${task.version}`);
   parts.push(`Created: ${task.created_at}`);
   if (task.completed_at) parts.push(`Completed: ${task.completed_at}`);
@@ -171,6 +174,7 @@ server.tool(
     metadata: z.record(z.unknown()).optional().describe("Arbitrary JSON metadata object, e.g. {source: 'github', pr: 123}"),
     estimated_minutes: z.number().optional().describe("Estimated time in minutes, e.g. 30, 60, 120"),
     requires_approval: z.boolean().optional().describe("If true, task must be approved via approve_task before it can be completed"),
+    recurrence_rule: z.string().optional().describe("Recurrence rule, e.g. 'every day', 'every weekday', 'every 2 weeks', 'every monday', 'every mon,wed,fri'"),
   },
   async (params) => {
     try {
@@ -205,6 +209,7 @@ server.tool(
     tags: z.array(z.string()).optional().describe("Filter by tags — tasks must have ALL specified tags"),
     plan_id: z.string().optional().describe("Filter by plan ID or partial ID"),
     task_list_id: z.string().optional().describe("Filter by task list ID or partial ID"),
+    has_recurrence: z.boolean().optional().describe("true = only recurring tasks, false = only non-recurring"),
     limit: z.number().optional().describe("Max tasks to return, e.g. 20. Use with offset for pagination."),
     offset: z.number().optional().describe("Skip N tasks. Use with limit for pagination, e.g. offset=20 for page 2."),
   },
@@ -357,16 +362,22 @@ server.tool(
 // 7. complete_task
 server.tool(
   "complete_task",
-  "Mark task as completed, release lock, and set completed_at timestamp.",
+  "Mark task as completed, release lock, and set completed_at timestamp. For recurring tasks, auto-spawns next instance unless skip_recurrence is true.",
   {
     id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
     agent_id: z.string().optional().describe("Agent ID completing the task. Required if task is locked by a different agent."),
+    skip_recurrence: z.boolean().optional().describe("Set true to prevent auto-creating the next recurring instance"),
   },
-  async ({ id, agent_id }) => {
+  async ({ id, agent_id, skip_recurrence }) => {
     try {
       const resolvedId = resolveId(id);
-      const task = completeTask(resolvedId, agent_id);
-      return { content: [{ type: "text" as const, text: `completed: ${formatTask(task)}` }] };
+      const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence });
+      let text = `completed: ${formatTask(task)}`;
+      if (task.metadata._next_recurrence) {
+        const next = task.metadata._next_recurrence as { id: string; short_id?: string; due_at?: string };
+        text += `\nnext: ${next.short_id || next.id.slice(0, 8)} due ${next.due_at}`;
+      }
+      return { content: [{ type: "text" as const, text }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1570,15 +1581,15 @@ server.tool(
   async ({ names }) => {
     const descriptions: Record<string, string> = {
       // Task CRUD
-      create_task: "Create a new task.\n  Params: title(string, req), description(string), priority(low|medium|high|critical, default:medium), status(pending|in_progress|completed|failed|cancelled, default:pending), project_id(string), parent_id(string — creates subtask), plan_id(string), task_list_id(string), agent_id(string), assigned_to(string), tags(string[]), metadata(object), estimated_minutes(number), requires_approval(boolean), session_id(string), working_dir(string)\n  Example: {title: 'Fix login bug', priority: 'high', tags: ['bug'], assigned_to: 'maximus'}",
-      list_tasks: "List tasks with optional filters. Supports pagination.\n  Params: status(string|string[]), priority(string|string[]), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), limit(number), offset(number)\n  Example: {status: ['pending', 'in_progress'], priority: 'high', limit: 20}",
+      create_task: "Create a new task.\n  Params: title(string, req), description(string), priority(low|medium|high|critical, default:medium), status(pending|in_progress|completed|failed|cancelled, default:pending), project_id(string), parent_id(string — creates subtask), plan_id(string), task_list_id(string), agent_id(string), assigned_to(string), tags(string[]), metadata(object), estimated_minutes(number), requires_approval(boolean), recurrence_rule(string — e.g. 'every day', 'every weekday', 'every 2 weeks', 'every monday'), session_id(string), working_dir(string)\n  Example: {title: 'Daily standup', recurrence_rule: 'every weekday', priority: 'medium'}",
+      list_tasks: "List tasks with optional filters. Supports pagination.\n  Params: status(string|string[]), priority(string|string[]), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), has_recurrence(boolean — true=only recurring, false=only non-recurring), limit(number), offset(number)\n  Example: {status: ['pending', 'in_progress'], has_recurrence: true, limit: 20}",
       get_task: "Get full task details including subtasks, dependencies, blockers, comments, and parent.\n  Params: id(string, req — task ID, short_id like 'APP-00001', or partial ID)\n  Example: {id: 'a1b2c3d4'}",
       update_task: "Update task fields. Requires version for optimistic locking (get it from get_task first).\n  Params: id(string, req), version(number, req), title(string), description(string), status(pending|in_progress|completed|failed|cancelled), priority(low|medium|high|critical), assigned_to(string), tags(string[]), metadata(object), plan_id(string), task_list_id(string)\n  Example: {id: 'a1b2c3d4', version: 3, status: 'completed'}",
       delete_task: "Delete a task permanently. Subtasks cascade-delete. Dependencies removed.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
 
       // Task workflow
       start_task: "Claim, lock, and set task status to in_progress in one call.\n  Params: id(string, req), agent_id(string, req — your 8-char agent ID)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
-      complete_task: "Mark task completed, release lock, set completed_at timestamp.\n  Params: id(string, req), agent_id(string, optional — required if locked by different agent)\n  Example: {id: 'a1b2c3d4'}",
+      complete_task: "Mark task completed, release lock, set completed_at timestamp. For recurring tasks, auto-spawns next instance unless skip_recurrence is true.\n  Params: id(string, req), agent_id(string, optional — required if locked by different agent), skip_recurrence(boolean — set true to prevent auto-creating next recurring instance)\n  Example: {id: 'a1b2c3d4', skip_recurrence: false}",
       lock_task: "Acquire exclusive lock on a task. Locks auto-expire after 30 min. Re-locking by same agent is idempotent.\n  Params: id(string, req), agent_id(string, req)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
       unlock_task: "Release exclusive lock on a task.\n  Params: id(string, req), agent_id(string, optional — omit to force-unlock)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
       approve_task: "Approve a task with requires_approval=true. Must be approved before completion.\n  Params: id(string, req), agent_id(string, optional — defaults to 'system')\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",

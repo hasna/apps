@@ -989,3 +989,158 @@ describe("moveTask", () => {
     expect(moved.version).toBe(2);
   });
 });
+
+describe("recurrence fields", () => {
+  it("should create a task with recurrence_rule", () => {
+    const task = createTask({ title: "Daily standup", recurrence_rule: "FREQ=DAILY;BYHOUR=9" }, db);
+    expect(task.recurrence_rule).toBe("FREQ=DAILY;BYHOUR=9");
+    expect(task.recurrence_parent_id).toBeNull();
+  });
+
+  it("should create a task with recurrence_parent_id", () => {
+    const parent = createTask({ title: "Recurring parent", recurrence_rule: "FREQ=WEEKLY" }, db);
+    const child = createTask({ title: "Recurring child", recurrence_parent_id: parent.id }, db);
+    expect(child.recurrence_parent_id).toBe(parent.id);
+  });
+
+  it("should default recurrence fields to null", () => {
+    const task = createTask({ title: "Normal task" }, db);
+    expect(task.recurrence_rule).toBeNull();
+    expect(task.recurrence_parent_id).toBeNull();
+  });
+
+  it("should filter tasks with has_recurrence=true", () => {
+    createTask({ title: "Recurring", recurrence_rule: "FREQ=DAILY" }, db);
+    createTask({ title: "Normal" }, db);
+
+    const recurring = listTasks({ has_recurrence: true }, db);
+    expect(recurring.length).toBe(1);
+    expect(recurring[0]!.title).toBe("Recurring");
+  });
+
+  it("should filter tasks with has_recurrence=false", () => {
+    createTask({ title: "Recurring", recurrence_rule: "FREQ=DAILY" }, db);
+    createTask({ title: "Normal" }, db);
+
+    const nonRecurring = listTasks({ has_recurrence: false }, db);
+    expect(nonRecurring.length).toBe(1);
+    expect(nonRecurring[0]!.title).toBe("Normal");
+  });
+
+  it("should update recurrence_rule", () => {
+    const task = createTask({ title: "Task", recurrence_rule: "FREQ=DAILY" }, db);
+    const updated = updateTask(task.id, { recurrence_rule: "FREQ=WEEKLY", version: task.version }, db);
+    expect(updated.recurrence_rule).toBe("FREQ=WEEKLY");
+  });
+
+  it("should clear recurrence_rule with null", () => {
+    const task = createTask({ title: "Task", recurrence_rule: "FREQ=DAILY" }, db);
+    const updated = updateTask(task.id, { recurrence_rule: null, version: task.version }, db);
+    expect(updated.recurrence_rule).toBeNull();
+  });
+
+  it("should include recurrence_rule in cloned task", () => {
+    const task = createTask({ title: "Recurring", recurrence_rule: "FREQ=MONTHLY" }, db);
+    const cloned = cloneTask(task.id, undefined, db);
+    expect(cloned.recurrence_rule).toBe("FREQ=MONTHLY");
+    expect(cloned.recurrence_parent_id).toBeNull();
+  });
+});
+
+describe("recurring task auto-spawn", () => {
+  it("completing a recurring task spawns next instance", () => {
+    const task = createTask({
+      title: "Daily standup",
+      recurrence_rule: "every day",
+      status: "in_progress",
+    }, db);
+
+    const completed = completeTask(task.id, "agent1", db);
+    expect(completed.status).toBe("completed");
+
+    // Check that a new task was spawned
+    const allTasks = listTasks({}, db);
+    const spawned = allTasks.find(t => t.recurrence_parent_id === task.id);
+    expect(spawned).toBeTruthy();
+    expect(spawned!.title).toContain("Daily standup");
+    expect(spawned!.status).toBe("pending");
+    expect(spawned!.recurrence_rule).toBe("every day");
+    expect(spawned!.due_at).toBeTruthy();
+  });
+
+  it("skip_recurrence prevents spawn", () => {
+    const task = createTask({
+      title: "Weekly review",
+      recurrence_rule: "every week",
+      status: "in_progress",
+    }, db);
+
+    completeTask(task.id, "agent1", db, { skip_recurrence: true });
+
+    const allTasks = listTasks({}, db);
+    const spawned = allTasks.find(t => t.recurrence_parent_id === task.id);
+    expect(spawned).toBeUndefined();
+  });
+
+  it("non-recurring task completion does not spawn", () => {
+    const task = createTask({ title: "One-off task", status: "in_progress" }, db);
+    const before = listTasks({}, db).length;
+    completeTask(task.id, "agent1", db);
+    const after = listTasks({}, db).length;
+    expect(after).toBe(before); // No new task created
+  });
+
+  it("spawned task chains recurrence_parent_id to original", () => {
+    const original = createTask({
+      title: "Chained task",
+      recurrence_rule: "every day",
+      status: "in_progress",
+    }, db);
+
+    // Complete original
+    completeTask(original.id, "agent1", db);
+    const second = listTasks({}, db).find(t => t.recurrence_parent_id === original.id)!;
+
+    // Start and complete the second
+    const started = startTask(second.id, "agent1", db);
+    completeTask(started.id, "agent1", db);
+
+    // Third task should also point to original
+    const third = listTasks({}, db).find(t => t.recurrence_parent_id === original.id && t.id !== second.id);
+    expect(third).toBeTruthy();
+    expect(third!.recurrence_parent_id).toBe(original.id);
+  });
+
+  it("spawned task copies project_id and tags", () => {
+    const project = createProject({ name: "Test Proj", path: "/tmp/recur-test" }, db);
+    const task = createTask({
+      title: "Tagged recurring",
+      recurrence_rule: "every week",
+      project_id: project.id,
+      tags: ["standup", "recurring"],
+      priority: "high",
+      status: "in_progress",
+    }, db);
+
+    completeTask(task.id, "agent1", db);
+    const spawned = listTasks({ has_recurrence: true }, db).find(t => t.status === "pending");
+    expect(spawned).toBeTruthy();
+    expect(spawned!.project_id).toBe(project.id);
+    expect(spawned!.tags).toEqual(["standup", "recurring"]);
+    expect(spawned!.priority).toBe("high");
+  });
+
+  it("spawned task metadata includes _next_recurrence info", () => {
+    const task = createTask({
+      title: "Check metadata",
+      recurrence_rule: "every day",
+      status: "in_progress",
+    }, db);
+
+    const completed = completeTask(task.id, "agent1", db);
+    expect(completed.metadata._next_recurrence).toBeTruthy();
+    const next = completed.metadata._next_recurrence as Record<string, unknown>;
+    expect(next.id).toBeTruthy();
+    expect(next.due_at).toBeTruthy();
+  });
+});
