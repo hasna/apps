@@ -1024,6 +1024,183 @@ export const CONNECTORS: ConnectorMeta[] = [
     category: "Developer Tools",
     tags: ["monitoring", "dashboards", "observability"],
   },
+
+  // Social (batch 12)
+  {
+    name: "spotify",
+    displayName: "Spotify",
+    description: "Music streaming and playlists",
+    category: "Social Media",
+    tags: ["music", "streaming", "playlists"],
+  },
+  {
+    name: "medium",
+    displayName: "Medium",
+    description: "Publishing and blogging platform",
+    category: "Social Media",
+    tags: ["writing", "blogging", "publishing"],
+  },
+  {
+    name: "producthunt",
+    displayName: "Product Hunt",
+    description: "Product launches and discovery",
+    category: "Social Media",
+    tags: ["products", "launches", "tech"],
+  },
+  {
+    name: "giphy",
+    displayName: "Giphy",
+    description: "GIF search and sharing",
+    category: "Social Media",
+    tags: ["gifs", "media", "search"],
+  },
+  {
+    name: "imgur",
+    displayName: "Imgur",
+    description: "Image hosting and sharing",
+    category: "Social Media",
+    tags: ["images", "hosting", "sharing"],
+  },
+  {
+    name: "mastodon",
+    displayName: "Mastodon",
+    description: "Decentralized social network",
+    category: "Social Media",
+    tags: ["social", "fediverse", "decentralized"],
+  },
+
+  // Marketing (batch 12)
+  {
+    name: "activecampaign",
+    displayName: "ActiveCampaign",
+    description: "Marketing automation and CRM",
+    category: "Communication",
+    tags: ["email", "marketing", "automation"],
+  },
+  {
+    name: "brevo",
+    displayName: "Brevo",
+    description: "Email marketing and transactional emails",
+    category: "Communication",
+    tags: ["email", "marketing", "transactional"],
+  },
+  {
+    name: "klaviyo",
+    displayName: "Klaviyo",
+    description: "E-commerce email and SMS marketing",
+    category: "Communication",
+    tags: ["email", "sms", "ecommerce"],
+  },
+  {
+    name: "customerio",
+    displayName: "Customer.io",
+    description: "Messaging automation platform",
+    category: "Communication",
+    tags: ["messaging", "automation", "engagement"],
+  },
+  {
+    name: "bannerbear",
+    displayName: "Bannerbear",
+    description: "Auto-generate images and videos",
+    category: "Design & Content",
+    tags: ["images", "automation", "templates"],
+  },
+
+  // Auth & Identity
+  {
+    name: "okta",
+    displayName: "Okta",
+    description: "Identity and access management",
+    category: "Developer Tools",
+    tags: ["auth", "identity", "sso"],
+  },
+  {
+    name: "auth0",
+    displayName: "Auth0",
+    description: "Authentication and authorization platform",
+    category: "Developer Tools",
+    tags: ["auth", "identity", "oauth"],
+  },
+
+  // Design
+  {
+    name: "adobe",
+    displayName: "Adobe",
+    description: "Creative Cloud APIs",
+    category: "Design & Content",
+    tags: ["design", "creative", "pdf"],
+  },
+
+  // Finance
+  {
+    name: "plaid",
+    displayName: "Plaid",
+    description: "Banking and financial data",
+    category: "Commerce & Finance",
+    tags: ["banking", "fintech", "data"],
+  },
+  {
+    name: "wise",
+    displayName: "Wise",
+    description: "International money transfers",
+    category: "Commerce & Finance",
+    tags: ["payments", "transfers", "forex"],
+  },
+  {
+    name: "coingecko",
+    displayName: "CoinGecko",
+    description: "Cryptocurrency data and prices",
+    category: "Data & Analytics",
+    tags: ["crypto", "prices", "data"],
+  },
+
+  // IoT
+  {
+    name: "homeassistant",
+    displayName: "Home Assistant",
+    description: "Smart home automation",
+    category: "Developer Tools",
+    tags: ["iot", "smart-home", "automation"],
+  },
+
+  // HR
+  {
+    name: "bamboohr",
+    displayName: "BambooHR",
+    description: "HR management and employee data",
+    category: "Business Tools",
+    tags: ["hr", "employees", "management"],
+  },
+
+  // DevOps (additional)
+  {
+    name: "gitlab",
+    displayName: "GitLab",
+    description: "DevOps platform with git repos and CI/CD",
+    category: "Developer Tools",
+    tags: ["git", "cicd", "devops"],
+  },
+  {
+    name: "uptimerobot",
+    displayName: "UptimeRobot",
+    description: "Website uptime monitoring",
+    category: "Developer Tools",
+    tags: ["monitoring", "uptime", "alerts"],
+  },
+  {
+    name: "pagerduty",
+    displayName: "PagerDuty",
+    description: "Incident management and on-call",
+    category: "Developer Tools",
+    tags: ["incidents", "oncall", "alerts"],
+  },
+  {
+    name: "launchdarkly",
+    displayName: "LaunchDarkly",
+    description: "Feature flags and experimentation",
+    category: "Developer Tools",
+    tags: ["feature-flags", "experimentation"],
+  },
 ];
 
 export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
