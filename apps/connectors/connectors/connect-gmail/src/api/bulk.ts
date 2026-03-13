@@ -3,6 +3,15 @@ import type { GmailMessage, GmailLabel } from '../types';
 import { MessagesApi } from './messages';
 import { LabelsApi } from './labels';
 
+/**
+ * Returns true if the value looks like a Gmail label ID rather than a label name.
+ * User-created label IDs start with "Label_". System label IDs are all-uppercase
+ * ASCII (e.g. INBOX, SENT, UNREAD, STARRED, IMPORTANT, TRASH, SPAM, CATEGORY_*).
+ */
+function isLabelId(value: string): boolean {
+  return value.startsWith('Label_') || /^[A-Z0-9_]+$/.test(value);
+}
+
 // ============================================
 // Bulk Operation Types
 // ============================================
@@ -136,19 +145,32 @@ export class BulkApi {
     const resolvedRemoveIds = [...removeLabelIds];
 
     if (addLabels.length > 0 || removeLabels.length > 0) {
-      const allLabels = await this.labels.list();
-      const labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
-
-      for (const name of addLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedAddIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      // Lazily fetch the label list only if we have names that need resolving
+      const needsLookup = [...addLabels, ...removeLabels].some(v => !isLabelId(v));
+      let labelMap: Map<string, string> = new Map();
+      if (needsLookup) {
+        const allLabels = await this.labels.list();
+        labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
       }
 
-      for (const name of removeLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedRemoveIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      for (const value of addLabels) {
+        if (isLabelId(value)) {
+          resolvedAddIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedAddIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
+      }
+
+      for (const value of removeLabels) {
+        if (isLabelId(value)) {
+          resolvedRemoveIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedRemoveIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
       }
     }
 
@@ -416,19 +438,32 @@ export class BulkApi {
     const resolvedRemoveIds = [...removeLabelIds];
 
     if (addLabels.length > 0 || removeLabels.length > 0) {
-      const allLabels = await this.labels.list();
-      const labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
-
-      for (const name of addLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedAddIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      // Lazily fetch the label list only if we have names that need resolving
+      const needsLookup = [...addLabels, ...removeLabels].some(v => !isLabelId(v));
+      let labelMap: Map<string, string> = new Map();
+      if (needsLookup) {
+        const allLabels = await this.labels.list();
+        labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
       }
 
-      for (const name of removeLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedRemoveIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      for (const value of addLabels) {
+        if (isLabelId(value)) {
+          resolvedAddIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedAddIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
+      }
+
+      for (const value of removeLabels) {
+        if (isLabelId(value)) {
+          resolvedRemoveIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedRemoveIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
       }
     }
 
