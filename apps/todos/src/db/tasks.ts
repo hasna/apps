@@ -250,6 +250,83 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   return rows.map(rowToTask);
 }
 
+export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db?: Database): number {
+  const d = db || getDatabase();
+  const conditions: string[] = [];
+  const params: SQLQueryBindings[] = [];
+
+  if (filter.project_id) {
+    conditions.push("project_id = ?");
+    params.push(filter.project_id);
+  }
+
+  if (filter.parent_id !== undefined) {
+    if (filter.parent_id === null) {
+      conditions.push("parent_id IS NULL");
+    } else {
+      conditions.push("parent_id = ?");
+      params.push(filter.parent_id);
+    }
+  }
+
+  if (filter.status) {
+    if (Array.isArray(filter.status)) {
+      conditions.push(`status IN (${filter.status.map(() => "?").join(",")})`);
+      params.push(...filter.status);
+    } else {
+      conditions.push("status = ?");
+      params.push(filter.status);
+    }
+  }
+
+  if (filter.priority) {
+    if (Array.isArray(filter.priority)) {
+      conditions.push(
+        `priority IN (${filter.priority.map(() => "?").join(",")})`,
+      );
+      params.push(...filter.priority);
+    } else {
+      conditions.push("priority = ?");
+      params.push(filter.priority);
+    }
+  }
+
+  if (filter.assigned_to) {
+    conditions.push("assigned_to = ?");
+    params.push(filter.assigned_to);
+  }
+
+  if (filter.agent_id) {
+    conditions.push("agent_id = ?");
+    params.push(filter.agent_id);
+  }
+
+  if (filter.session_id) {
+    conditions.push("session_id = ?");
+    params.push(filter.session_id);
+  }
+
+  if (filter.tags && filter.tags.length > 0) {
+    const placeholders = filter.tags.map(() => "?").join(",");
+    conditions.push(`id IN (SELECT task_id FROM task_tags WHERE tag IN (${placeholders}))`);
+    params.push(...filter.tags);
+  }
+
+  if (filter.plan_id) {
+    conditions.push("plan_id = ?");
+    params.push(filter.plan_id);
+  }
+
+  if (filter.task_list_id) {
+    conditions.push("task_list_id = ?");
+    params.push(filter.task_list_id);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const row = d.query(`SELECT COUNT(*) as count FROM tasks ${where}`).get(...params) as { count: number };
+  return row.count;
+}
+
 export function updateTask(
   id: string,
   input: UpdateTaskInput,
@@ -590,6 +667,129 @@ export function getTaskDependents(
     .all(taskId) as TaskDependency[];
 }
 
+export function cloneTask(
+  taskId: string,
+  overrides?: Partial<CreateTaskInput>,
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  const source = getTask(taskId, d);
+  if (!source) throw new TaskNotFoundError(taskId);
+
+  const input: CreateTaskInput = {
+    title: overrides?.title ?? source.title,
+    description: overrides?.description ?? source.description ?? undefined,
+    priority: overrides?.priority ?? source.priority,
+    project_id: overrides?.project_id ?? source.project_id ?? undefined,
+    parent_id: overrides?.parent_id ?? source.parent_id ?? undefined,
+    plan_id: overrides?.plan_id ?? source.plan_id ?? undefined,
+    task_list_id: overrides?.task_list_id ?? source.task_list_id ?? undefined,
+    status: overrides?.status ?? "pending",
+    agent_id: overrides?.agent_id ?? source.agent_id ?? undefined,
+    assigned_to: overrides?.assigned_to ?? source.assigned_to ?? undefined,
+    tags: overrides?.tags ?? source.tags,
+    metadata: overrides?.metadata ?? source.metadata,
+    estimated_minutes: overrides?.estimated_minutes ?? source.estimated_minutes ?? undefined,
+  };
+
+  return createTask(input, d);
+}
+
+// Task Graph
+
+export interface TaskGraphNode {
+  id: string;
+  short_id: string | null;
+  title: string;
+  status: string;
+  priority: string;
+  is_blocked: boolean;
+}
+
+export interface TaskGraph {
+  task: TaskGraphNode;
+  depends_on: TaskGraph[];
+  blocks: TaskGraph[];
+}
+
+export function getTaskGraph(
+  taskId: string,
+  direction: "up" | "down" | "both" = "both",
+  db?: Database,
+): TaskGraph {
+  const d = db || getDatabase();
+  const task = getTask(taskId, d);
+  if (!task) throw new TaskNotFoundError(taskId);
+
+  function toNode(t: Task): TaskGraphNode {
+    const deps = getTaskDependencies(t.id, d);
+    const hasUnfinishedDeps = deps.some(dep => {
+      const depTask = getTask(dep.depends_on, d);
+      return depTask && depTask.status !== "completed";
+    });
+    return { id: t.id, short_id: t.short_id, title: t.title, status: t.status, priority: t.priority, is_blocked: hasUnfinishedDeps };
+  }
+
+  function buildUp(id: string, visited: Set<string>): TaskGraph[] {
+    if (visited.has(id)) return [];
+    visited.add(id);
+    const deps = d.query("SELECT depends_on FROM task_dependencies WHERE task_id = ?").all(id) as { depends_on: string }[];
+    return deps.map(dep => {
+      const depTask = getTask(dep.depends_on, d);
+      if (!depTask) return null;
+      return { task: toNode(depTask), depends_on: buildUp(dep.depends_on, visited), blocks: [] };
+    }).filter(Boolean) as TaskGraph[];
+  }
+
+  function buildDown(id: string, visited: Set<string>): TaskGraph[] {
+    if (visited.has(id)) return [];
+    visited.add(id);
+    const dependents = d.query("SELECT task_id FROM task_dependencies WHERE depends_on = ?").all(id) as { task_id: string }[];
+    return dependents.map(dep => {
+      const depTask = getTask(dep.task_id, d);
+      if (!depTask) return null;
+      return { task: toNode(depTask), depends_on: [], blocks: buildDown(dep.task_id, visited) };
+    }).filter(Boolean) as TaskGraph[];
+  }
+
+  const rootNode = toNode(task);
+  const depends_on = (direction === "up" || direction === "both") ? buildUp(taskId, new Set()) : [];
+  const blocks = (direction === "down" || direction === "both") ? buildDown(taskId, new Set()) : [];
+
+  return { task: rootNode, depends_on, blocks };
+}
+
+export function moveTask(
+  taskId: string,
+  target: { task_list_id?: string | null; project_id?: string | null; plan_id?: string | null },
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  const task = getTask(taskId, d);
+  if (!task) throw new TaskNotFoundError(taskId);
+
+  const sets: string[] = ["updated_at = ?", "version = version + 1"];
+  const params: SQLQueryBindings[] = [now()];
+
+  if (target.task_list_id !== undefined) {
+    sets.push("task_list_id = ?");
+    params.push(target.task_list_id);
+  }
+  if (target.project_id !== undefined) {
+    sets.push("project_id = ?");
+    params.push(target.project_id);
+  }
+  if (target.plan_id !== undefined) {
+    sets.push("plan_id = ?");
+    params.push(target.plan_id);
+  }
+
+  params.push(taskId);
+  d.run(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params);
+
+  return getTask(taskId, d)!;
+}
+
 function wouldCreateCycle(
   taskId: string,
   dependsOn: string,
@@ -615,4 +815,121 @@ function wouldCreateCycle(
   }
 
   return false;
+}
+
+export function getTaskStats(
+  filters?: { project_id?: string; task_list_id?: string; agent_id?: string },
+  db?: Database,
+): { total: number; by_status: Record<string, number>; by_priority: Record<string, number>; completion_rate: number; by_agent: Record<string, number> } {
+  const d = db || getDatabase();
+  const conditions: string[] = [];
+  const params: SQLQueryBindings[] = [];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+  if (filters?.agent_id) { conditions.push("(agent_id = ? OR assigned_to = ?)"); params.push(filters.agent_id, filters.agent_id); }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const totalRow = d.query(`SELECT COUNT(*) as count FROM tasks ${where}`).get(...params) as { count: number };
+
+  const statusRows = d.query(`SELECT status, COUNT(*) as count FROM tasks ${where} GROUP BY status`).all(...params) as { status: string; count: number }[];
+  const by_status: Record<string, number> = {};
+  for (const r of statusRows) by_status[r.status] = r.count;
+
+  const priorityRows = d.query(`SELECT priority, COUNT(*) as count FROM tasks ${where} GROUP BY priority`).all(...params) as { priority: string; count: number }[];
+  const by_priority: Record<string, number> = {};
+  for (const r of priorityRows) by_priority[r.priority] = r.count;
+
+  const agentRows = d.query(`SELECT COALESCE(assigned_to, agent_id, 'unassigned') as agent, COUNT(*) as count FROM tasks ${where} GROUP BY agent`).all(...params) as { agent: string; count: number }[];
+  const by_agent: Record<string, number> = {};
+  for (const r of agentRows) by_agent[r.agent] = r.count;
+
+  const completed = by_status["completed"] || 0;
+  const completion_rate = totalRow.count > 0 ? Math.round((completed / totalRow.count) * 100) : 0;
+
+  return { total: totalRow.count, by_status, by_priority, completion_rate, by_agent };
+}
+
+export interface BulkCreateTaskInput {
+  temp_id?: string;
+  title: string;
+  description?: string;
+  priority?: "low" | "medium" | "high" | "critical";
+  status?: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  project_id?: string;
+  parent_id?: string;
+  plan_id?: string;
+  task_list_id?: string;
+  agent_id?: string;
+  assigned_to?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  estimated_minutes?: number;
+  depends_on_temp_ids?: string[];
+}
+
+export function bulkCreateTasks(
+  inputs: BulkCreateTaskInput[],
+  db?: Database,
+): { created: { temp_id: string | null; id: string; short_id: string | null; title: string }[] } {
+  const d = db || getDatabase();
+  const tempIdToRealId = new Map<string, string>();
+  const created: { temp_id: string | null; id: string; short_id: string | null; title: string }[] = [];
+
+  const tx = d.transaction(() => {
+    // First pass: create all tasks
+    for (const input of inputs) {
+      const { temp_id, depends_on_temp_ids: _deps, ...createInput } = input;
+      const task = createTask(createInput, d);
+      if (temp_id) tempIdToRealId.set(temp_id, task.id);
+      created.push({ temp_id: temp_id || null, id: task.id, short_id: task.short_id, title: task.title });
+    }
+
+    // Second pass: wire up dependencies using temp_id mappings
+    for (const input of inputs) {
+      if (input.depends_on_temp_ids && input.depends_on_temp_ids.length > 0) {
+        const taskId = input.temp_id ? tempIdToRealId.get(input.temp_id) : null;
+        if (!taskId) continue;
+        for (const depTempId of input.depends_on_temp_ids) {
+          const depRealId = tempIdToRealId.get(depTempId);
+          if (depRealId) {
+            addDependency(taskId, depRealId, d);
+          }
+        }
+      }
+    }
+  });
+  tx();
+
+  return { created };
+}
+
+export function bulkUpdateTasks(
+  taskIds: string[],
+  updates: { status?: Task["status"]; priority?: Task["priority"]; assigned_to?: string; tags?: string[] },
+  db?: Database,
+): { updated: number; failed: { id: string; error: string }[] } {
+  const d = db || getDatabase();
+  let updated = 0;
+  const failed: { id: string; error: string }[] = [];
+
+  const tx = d.transaction(() => {
+    for (const id of taskIds) {
+      try {
+        const task = getTask(id, d);
+        if (!task) {
+          failed.push({ id, error: "Task not found" });
+          continue;
+        }
+        updateTask(id, { ...updates, version: task.version }, d);
+        updated++;
+      } catch (e) {
+        failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  });
+  tx();
+
+  return { updated, failed };
 }

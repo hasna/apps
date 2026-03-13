@@ -7,6 +7,7 @@ export {
   getTask,
   getTaskWithRelations,
   listTasks,
+  countTasks,
   updateTask,
   deleteTask,
   startTask,
@@ -18,7 +19,14 @@ export {
   getTaskDependencies,
   getTaskDependents,
   getBlockingDeps,
+  bulkUpdateTasks,
+  bulkCreateTasks,
+  cloneTask,
+  getTaskStats,
+  getTaskGraph,
+  moveTask,
 } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput } from "./db/tasks.js";
 
 // Projects
 export {
@@ -98,6 +106,7 @@ export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from 
 
 // Search
 export { searchTasks } from "./lib/search.js";
+export type { SearchOptions } from "./lib/search.js";
 
 // Sync
 export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js";

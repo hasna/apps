@@ -6,6 +6,7 @@ import {
   getTask,
   getTaskWithRelations,
   listTasks,
+  countTasks,
   updateTask,
   deleteTask,
   startTask,
@@ -14,6 +15,12 @@ import {
   unlockTask,
   addDependency,
   removeDependency,
+  bulkUpdateTasks,
+  bulkCreateTasks,
+  cloneTask,
+  getTaskStats,
+  getTaskGraph,
+  moveTask,
 } from "./tasks.js";
 import {
   VersionConflictError,
@@ -23,6 +30,7 @@ import {
 } from "../types/index.js";
 import { createTaskList, deleteTaskList } from "./task-lists.js";
 import { createProject } from "./projects.js";
+import { createPlan } from "./plans.js";
 
 let db: Database;
 
@@ -169,6 +177,85 @@ describe("listTasks", () => {
     expect(tasks[0]!.priority).toBe("critical");
     expect(tasks[1]!.priority).toBe("high");
     expect(tasks[2]!.priority).toBe("low");
+  });
+
+  it("should limit results", () => {
+    createTask({ title: "Task 1" }, db);
+    createTask({ title: "Task 2" }, db);
+    createTask({ title: "Task 3" }, db);
+
+    const tasks = listTasks({ limit: 2 }, db);
+    expect(tasks).toHaveLength(2);
+  });
+
+  it("should support limit with offset", () => {
+    createTask({ title: "Task 1", priority: "critical" }, db);
+    createTask({ title: "Task 2", priority: "high" }, db);
+    createTask({ title: "Task 3", priority: "medium" }, db);
+    createTask({ title: "Task 4", priority: "low" }, db);
+
+    const page1 = listTasks({ limit: 2, offset: 0 }, db);
+    const page2 = listTasks({ limit: 2, offset: 2 }, db);
+
+    expect(page1).toHaveLength(2);
+    expect(page2).toHaveLength(2);
+    // No overlap between pages
+    const page1Ids = page1.map(t => t.id);
+    const page2Ids = page2.map(t => t.id);
+    expect(page1Ids.some(id => page2Ids.includes(id))).toBe(false);
+  });
+
+  it("should return empty array when offset exceeds total", () => {
+    createTask({ title: "Task 1" }, db);
+    createTask({ title: "Task 2" }, db);
+
+    const tasks = listTasks({ limit: 10, offset: 100 }, db);
+    expect(tasks).toHaveLength(0);
+  });
+});
+
+describe("countTasks", () => {
+  it("should count all tasks", () => {
+    createTask({ title: "Task 1" }, db);
+    createTask({ title: "Task 2" }, db);
+    createTask({ title: "Task 3" }, db);
+
+    expect(countTasks({}, db)).toBe(3);
+  });
+
+  it("should count with status filter", () => {
+    createTask({ title: "Pending 1", status: "pending" }, db);
+    createTask({ title: "Pending 2", status: "pending" }, db);
+    createTask({ title: "Done", status: "completed" }, db);
+
+    expect(countTasks({ status: "pending" }, db)).toBe(2);
+    expect(countTasks({ status: "completed" }, db)).toBe(1);
+  });
+
+  it("should count with project filter", () => {
+    const project = createProject({ name: "Test Project", path: "/test" }, db);
+    createTask({ title: "In project", project_id: project.id }, db);
+    createTask({ title: "No project" }, db);
+
+    expect(countTasks({ project_id: project.id }, db)).toBe(1);
+  });
+
+  it("should return 0 for no matches", () => {
+    createTask({ title: "Task 1" }, db);
+
+    expect(countTasks({ status: "failed" }, db)).toBe(0);
+  });
+
+  it("should be consistent with listTasks count", () => {
+    createTask({ title: "Task 1", priority: "high" }, db);
+    createTask({ title: "Task 2", priority: "high" }, db);
+    createTask({ title: "Task 3", priority: "low" }, db);
+
+    const filter = { priority: "high" as const };
+    const tasks = listTasks(filter, db);
+    const count = countTasks(filter, db);
+    expect(count).toBe(tasks.length);
+    expect(count).toBe(2);
   });
 });
 
@@ -460,5 +547,445 @@ describe("short_id and task prefix", () => {
     const project = createProject({ name: "Test", path: "/test", task_prefix: "TST" }, db);
     const task = createTask({ title: "Original title", project_id: project.id }, db);
     expect(task.title).toBe("TST-00001: Original title");
+  });
+});
+
+describe("cloneTask", () => {
+  it("should clone a task with no overrides", () => {
+    const source = createTask({
+      title: "Original",
+      description: "A description",
+      priority: "high",
+      assigned_to: "claude",
+      tags: ["bug", "urgent"],
+      metadata: { key: "value" },
+    }, db);
+
+    const clone = cloneTask(source.id, undefined, db);
+    expect(clone.id).not.toBe(source.id);
+    expect(clone.title).toBe("Original");
+    expect(clone.description).toBe("A description");
+    expect(clone.priority).toBe("high");
+    expect(clone.assigned_to).toBe("claude");
+    expect(clone.tags).toEqual(["bug", "urgent"]);
+    expect(clone.metadata).toEqual({ key: "value" });
+    expect(clone.status).toBe("pending");
+    expect(clone.version).toBe(1);
+  });
+
+  it("should clone with title override", () => {
+    const source = createTask({ title: "Original" }, db);
+    const clone = cloneTask(source.id, { title: "Cloned title" }, db);
+    expect(clone.title).toBe("Cloned title");
+  });
+
+  it("should clone with priority override", () => {
+    const source = createTask({ title: "Task", priority: "low" }, db);
+    const clone = cloneTask(source.id, { priority: "critical" }, db);
+    expect(clone.priority).toBe("critical");
+  });
+
+  it("should clone with project_id override", () => {
+    const p1 = createProject({ name: "Project A", path: "/pa" }, db);
+    const p2 = createProject({ name: "Project B", path: "/pb" }, db);
+    const source = createTask({ title: "Task", project_id: p1.id }, db);
+    const clone = cloneTask(source.id, { project_id: p2.id }, db);
+    expect(clone.project_id).toBe(p2.id);
+  });
+
+  it("should throw TaskNotFoundError for non-existent task", () => {
+    expect(() => cloneTask("non-existent", undefined, db)).toThrow(TaskNotFoundError);
+  });
+
+  it("should reset status to pending by default", () => {
+    const source = createTask({ title: "Task", status: "in_progress" }, db);
+    const clone = cloneTask(source.id, undefined, db);
+    expect(clone.status).toBe("pending");
+  });
+
+  it("should create an independent copy with new ID", () => {
+    const source = createTask({ title: "Original" }, db);
+    const clone = cloneTask(source.id, undefined, db);
+    expect(clone.id).not.toBe(source.id);
+
+    // Deleting the clone should not affect the source
+    deleteTask(clone.id, db);
+    const original = getTask(source.id, db);
+    expect(original).not.toBeNull();
+    expect(original!.title).toBe("Original");
+  });
+});
+
+describe("bulkUpdateTasks", () => {
+  it("should bulk update status on multiple tasks", () => {
+    const t1 = createTask({ title: "Task 1" }, db);
+    const t2 = createTask({ title: "Task 2" }, db);
+    const t3 = createTask({ title: "Task 3" }, db);
+
+    const result = bulkUpdateTasks([t1.id, t2.id, t3.id], { status: "in_progress" }, db);
+    expect(result.updated).toBe(3);
+    expect(result.failed).toHaveLength(0);
+
+    expect(getTask(t1.id, db)!.status).toBe("in_progress");
+    expect(getTask(t2.id, db)!.status).toBe("in_progress");
+    expect(getTask(t3.id, db)!.status).toBe("in_progress");
+  });
+
+  it("should handle partial failure with invalid IDs", () => {
+    const t1 = createTask({ title: "Task 1" }, db);
+    const fakeId = "00000000-0000-0000-0000-000000000000";
+
+    const result = bulkUpdateTasks([t1.id, fakeId], { status: "completed" }, db);
+    expect(result.updated).toBe(1);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.id).toBe(fakeId);
+    expect(result.failed[0]!.error).toBe("Task not found");
+
+    expect(getTask(t1.id, db)!.status).toBe("completed");
+  });
+
+  it("should return zero updated for empty array", () => {
+    const result = bulkUpdateTasks([], { status: "in_progress" }, db);
+    expect(result.updated).toBe(0);
+    expect(result.failed).toHaveLength(0);
+  });
+
+  it("should bulk update priority", () => {
+    const t1 = createTask({ title: "Task 1" }, db);
+    const t2 = createTask({ title: "Task 2" }, db);
+
+    const result = bulkUpdateTasks([t1.id, t2.id], { priority: "critical" }, db);
+    expect(result.updated).toBe(2);
+    expect(result.failed).toHaveLength(0);
+
+    expect(getTask(t1.id, db)!.priority).toBe("critical");
+    expect(getTask(t2.id, db)!.priority).toBe("critical");
+  });
+
+  it("should bulk update tags", () => {
+    const t1 = createTask({ title: "Task 1" }, db);
+    const t2 = createTask({ title: "Task 2" }, db);
+
+    const result = bulkUpdateTasks([t1.id, t2.id], { tags: ["urgent", "backend"] }, db);
+    expect(result.updated).toBe(2);
+
+    expect(getTask(t1.id, db)!.tags).toEqual(["urgent", "backend"]);
+    expect(getTask(t2.id, db)!.tags).toEqual(["urgent", "backend"]);
+  });
+
+  it("should bulk update assigned_to", () => {
+    const t1 = createTask({ title: "Task 1" }, db);
+    const t2 = createTask({ title: "Task 2" }, db);
+
+    const result = bulkUpdateTasks([t1.id, t2.id], { assigned_to: "agent-123" }, db);
+    expect(result.updated).toBe(2);
+
+    expect(getTask(t1.id, db)!.assigned_to).toBe("agent-123");
+    expect(getTask(t2.id, db)!.assigned_to).toBe("agent-123");
+  });
+});
+
+describe("getTaskStats", () => {
+  it("should return all zeros with no tasks", () => {
+    const stats = getTaskStats(undefined, db);
+    expect(stats.total).toBe(0);
+    expect(stats.by_status).toEqual({});
+    expect(stats.by_priority).toEqual({});
+    expect(stats.by_agent).toEqual({});
+    expect(stats.completion_rate).toBe(0);
+  });
+
+  it("should return correct counts with mixed statuses", () => {
+    createTask({ title: "Task 1" }, db); // pending by default
+    createTask({ title: "Task 2" }, db);
+    const t3 = createTask({ title: "Task 3" }, db);
+    updateTask(t3.id, { status: "in_progress", version: t3.version }, db);
+    const t4 = createTask({ title: "Task 4" }, db);
+    updateTask(t4.id, { status: "completed", version: t4.version }, db);
+
+    const stats = getTaskStats(undefined, db);
+    expect(stats.total).toBe(4);
+    expect(stats.by_status["pending"]).toBe(2);
+    expect(stats.by_status["in_progress"]).toBe(1);
+    expect(stats.by_status["completed"]).toBe(1);
+  });
+
+  it("should filter by project_id", () => {
+    const proj = createProject({ name: "Test Project", path: "/tmp/test-stats" }, db);
+    createTask({ title: "In project", project_id: proj.id }, db);
+    createTask({ title: "No project" }, db);
+
+    const stats = getTaskStats({ project_id: proj.id }, db);
+    expect(stats.total).toBe(1);
+    expect(stats.by_status["pending"]).toBe(1);
+  });
+
+  it("should calculate completion rate correctly", () => {
+    const t1 = createTask({ title: "Task 1" }, db);
+    updateTask(t1.id, { status: "completed", version: t1.version }, db);
+    const t2 = createTask({ title: "Task 2" }, db);
+    updateTask(t2.id, { status: "completed", version: t2.version }, db);
+    createTask({ title: "Task 3" }, db); // pending
+    createTask({ title: "Task 4" }, db); // pending
+
+    const stats = getTaskStats(undefined, db);
+    expect(stats.total).toBe(4);
+    expect(stats.completion_rate).toBe(50);
+  });
+
+  it("should count by priority", () => {
+    createTask({ title: "Low", priority: "low" }, db);
+    createTask({ title: "High 1", priority: "high" }, db);
+    createTask({ title: "High 2", priority: "high" }, db);
+    createTask({ title: "Critical", priority: "critical" }, db);
+
+    const stats = getTaskStats(undefined, db);
+    expect(stats.by_priority["low"]).toBe(1);
+    expect(stats.by_priority["high"]).toBe(2);
+    expect(stats.by_priority["critical"]).toBe(1);
+  });
+
+  it("should count by agent", () => {
+    createTask({ title: "Agent A task", assigned_to: "agent-a" }, db);
+    createTask({ title: "Agent A task 2", assigned_to: "agent-a" }, db);
+    createTask({ title: "Agent B task", assigned_to: "agent-b" }, db);
+    createTask({ title: "Unassigned" }, db);
+
+    const stats = getTaskStats(undefined, db);
+    expect(stats.by_agent["agent-a"]).toBe(2);
+    expect(stats.by_agent["agent-b"]).toBe(1);
+  });
+});
+
+describe("getTaskGraph", () => {
+  it("should return empty arrays for task with no dependencies", () => {
+    const task = createTask({ title: "Standalone" }, db);
+    const graph = getTaskGraph(task.id, "both", db);
+
+    expect(graph.task.id).toBe(task.id);
+    expect(graph.task.title).toBe("Standalone");
+    expect(graph.depends_on).toEqual([]);
+    expect(graph.blocks).toEqual([]);
+  });
+
+  it("should return one level of dependencies", () => {
+    const dep = createTask({ title: "Dependency" }, db);
+    const task = createTask({ title: "Main task" }, db);
+    addDependency(task.id, dep.id, db);
+
+    const graph = getTaskGraph(task.id, "both", db);
+
+    expect(graph.depends_on).toHaveLength(1);
+    expect(graph.depends_on[0]!.task.id).toBe(dep.id);
+    expect(graph.depends_on[0]!.task.title).toBe("Dependency");
+    expect(graph.blocks).toEqual([]);
+  });
+
+  it("should return multi-level chain (A depends on B depends on C)", () => {
+    const c = createTask({ title: "Task C" }, db);
+    const b = createTask({ title: "Task B" }, db);
+    const a = createTask({ title: "Task A" }, db);
+    addDependency(a.id, b.id, db);
+    addDependency(b.id, c.id, db);
+
+    const graph = getTaskGraph(a.id, "both", db);
+
+    expect(graph.depends_on).toHaveLength(1);
+    expect(graph.depends_on[0]!.task.id).toBe(b.id);
+    expect(graph.depends_on[0]!.depends_on).toHaveLength(1);
+    expect(graph.depends_on[0]!.depends_on[0]!.task.id).toBe(c.id);
+  });
+
+  it("should set is_blocked true when dependency is not completed", () => {
+    const dep = createTask({ title: "Blocker" }, db);
+    const task = createTask({ title: "Blocked task" }, db);
+    addDependency(task.id, dep.id, db);
+
+    const graph = getTaskGraph(task.id, "both", db);
+
+    expect(graph.task.is_blocked).toBe(true);
+    expect(graph.depends_on[0]!.task.is_blocked).toBe(false);
+  });
+
+  it("should set is_blocked false when all dependencies are completed", () => {
+    const dep = createTask({ title: "Done dep" }, db);
+    updateTask(dep.id, { status: "completed", version: dep.version }, db);
+    const task = createTask({ title: "Unblocked task" }, db);
+    addDependency(task.id, dep.id, db);
+
+    const graph = getTaskGraph(task.id, "both", db);
+
+    expect(graph.task.is_blocked).toBe(false);
+  });
+
+  it("should only return depends_on when direction is 'up'", () => {
+    const dep = createTask({ title: "Upstream" }, db);
+    const task = createTask({ title: "Middle" }, db);
+    const blocker = createTask({ title: "Downstream" }, db);
+    addDependency(task.id, dep.id, db);
+    addDependency(blocker.id, task.id, db);
+
+    const graph = getTaskGraph(task.id, "up", db);
+
+    expect(graph.depends_on).toHaveLength(1);
+    expect(graph.depends_on[0]!.task.id).toBe(dep.id);
+    expect(graph.blocks).toEqual([]);
+  });
+
+  it("should only return blocks when direction is 'down'", () => {
+    const dep = createTask({ title: "Upstream" }, db);
+    const task = createTask({ title: "Middle" }, db);
+    const blocker = createTask({ title: "Downstream" }, db);
+    addDependency(task.id, dep.id, db);
+    addDependency(blocker.id, task.id, db);
+
+    const graph = getTaskGraph(task.id, "down", db);
+
+    expect(graph.depends_on).toEqual([]);
+    expect(graph.blocks).toHaveLength(1);
+    expect(graph.blocks[0]!.task.id).toBe(blocker.id);
+  });
+});
+
+describe("bulkCreateTasks", () => {
+  it("should create multiple tasks at once", () => {
+    const result = bulkCreateTasks([
+      { title: "Task A" },
+      { title: "Task B" },
+      { title: "Task C" },
+    ], db);
+
+    expect(result.created).toHaveLength(3);
+    expect(result.created[0]!.title).toBe("Task A");
+    expect(result.created[1]!.title).toBe("Task B");
+    expect(result.created[2]!.title).toBe("Task C");
+
+    // Verify tasks exist in database
+    const tasks = listTasks({}, db);
+    expect(tasks).toHaveLength(3);
+  });
+
+  it("should wire up dependencies via temp_ids", () => {
+    const result = bulkCreateTasks([
+      { temp_id: "t1", title: "Foundation" },
+      { temp_id: "t2", title: "Walls", depends_on_temp_ids: ["t1"] },
+      { temp_id: "t3", title: "Roof", depends_on_temp_ids: ["t2"] },
+    ], db);
+
+    expect(result.created).toHaveLength(3);
+
+    // Verify dependency chain: t3 depends on t2, t2 depends on t1
+    const wallsRelations = getTaskWithRelations(result.created[1]!.id, db)!;
+    expect(wallsRelations.dependencies).toHaveLength(1);
+    expect(wallsRelations.dependencies[0]!.id).toBe(result.created[0]!.id);
+
+    const roofRelations = getTaskWithRelations(result.created[2]!.id, db)!;
+    expect(roofRelations.dependencies).toHaveLength(1);
+    expect(roofRelations.dependencies[0]!.id).toBe(result.created[1]!.id);
+  });
+
+  it("should apply shared project_id to all tasks", () => {
+    const project = createProject({ name: "Bulk Project", path: "/tmp/bulk" }, db);
+
+    const result = bulkCreateTasks([
+      { title: "Task A", project_id: project.id },
+      { title: "Task B", project_id: project.id },
+    ], db);
+
+    expect(result.created).toHaveLength(2);
+    // All tasks should have the project and short_ids
+    expect(result.created[0]!.short_id).not.toBeNull();
+    expect(result.created[1]!.short_id).not.toBeNull();
+
+    const taskA = getTask(result.created[0]!.id, db)!;
+    const taskB = getTask(result.created[1]!.id, db)!;
+    expect(taskA.project_id).toBe(project.id);
+    expect(taskB.project_id).toBe(project.id);
+  });
+
+  it("should return empty array for empty input", () => {
+    const result = bulkCreateTasks([], db);
+    expect(result.created).toHaveLength(0);
+  });
+
+  it("should return temp_id mappings in created results", () => {
+    const result = bulkCreateTasks([
+      { temp_id: "a", title: "Alpha" },
+      { title: "Beta" },
+      { temp_id: "c", title: "Gamma" },
+    ], db);
+
+    expect(result.created[0]!.temp_id).toBe("a");
+    expect(result.created[1]!.temp_id).toBeNull();
+    expect(result.created[2]!.temp_id).toBe("c");
+  });
+
+  it("should be atomic — roll back all on failure from cyclic deps", () => {
+    // Cyclic dependencies should cause the transaction to throw and roll back all task creations
+    expect(() => {
+      bulkCreateTasks([
+        { temp_id: "t1", title: "Task 1", depends_on_temp_ids: ["t2"] },
+        { temp_id: "t2", title: "Task 2", depends_on_temp_ids: ["t1"] },
+      ], db);
+    }).toThrow();
+
+    // All tasks should be rolled back — none should exist
+    const tasks = listTasks({}, db);
+    expect(tasks).toHaveLength(0);
+  });
+});
+
+describe("moveTask", () => {
+  it("should move task to a different task_list", () => {
+    const list1 = createTaskList({ name: "List A", slug: "list-a" }, db);
+    const list2 = createTaskList({ name: "List B", slug: "list-b" }, db);
+    const task = createTask({ title: "Movable", task_list_id: list1.id }, db);
+
+    const moved = moveTask(task.id, { task_list_id: list2.id }, db);
+    expect(moved.task_list_id).toBe(list2.id);
+
+    const list1Tasks = listTasks({ task_list_id: list1.id }, db);
+    expect(list1Tasks).toHaveLength(0);
+    const list2Tasks = listTasks({ task_list_id: list2.id }, db);
+    expect(list2Tasks).toHaveLength(1);
+  });
+
+  it("should move task to a different project", () => {
+    const p1 = createProject({ name: "Project A", path: "/pa" }, db);
+    const p2 = createProject({ name: "Project B", path: "/pb" }, db);
+    const task = createTask({ title: "Task", project_id: p1.id }, db);
+
+    const moved = moveTask(task.id, { project_id: p2.id }, db);
+    expect(moved.project_id).toBe(p2.id);
+  });
+
+  it("should move task to a different plan", () => {
+    const plan1 = createPlan({ name: "Plan A" }, db);
+    const plan2 = createPlan({ name: "Plan B" }, db);
+    const task = createTask({ title: "Task", plan_id: plan1.id }, db);
+
+    const moved = moveTask(task.id, { plan_id: plan2.id }, db);
+    expect(moved.plan_id).toBe(plan2.id);
+  });
+
+  it("should throw TaskNotFoundError for non-existent task", () => {
+    expect(() => moveTask("non-existent", { task_list_id: "some-id" }, db)).toThrow(TaskNotFoundError);
+  });
+
+  it("should unset project_id with null", () => {
+    const project = createProject({ name: "Test", path: "/test-move" }, db);
+    const task = createTask({ title: "Task", project_id: project.id }, db);
+
+    const moved = moveTask(task.id, { project_id: null }, db);
+    expect(moved.project_id).toBeNull();
+  });
+
+  it("should increment version after move", () => {
+    const list = createTaskList({ name: "Target", slug: "target" }, db);
+    const task = createTask({ title: "Task" }, db);
+    expect(task.version).toBe(1);
+
+    const moved = moveTask(task.id, { task_list_id: list.id }, db);
+    expect(moved.version).toBe(2);
   });
 });
