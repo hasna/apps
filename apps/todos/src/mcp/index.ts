@@ -21,6 +21,12 @@ import {
   getTaskStats,
   getTaskGraph,
   moveTask,
+  getNextTask,
+  claimNextTask,
+  getActiveWork,
+  getTasksChangedSince,
+  failTask,
+  getStaleTasks,
 } from "../db/tasks.js";
 import { addComment } from "../db/comments.js";
 import {
@@ -1248,6 +1254,34 @@ server.tool(
   },
 );
 
+// fail_task
+server.tool(
+  "fail_task",
+  "Mark a task as failed with structured reason and optional auto-retry.",
+  {
+    id: z.string().describe("Task ID or partial ID (first 8+ chars)"),
+    agent_id: z.string().optional().describe("Agent reporting the failure"),
+    reason: z.string().optional().describe("Why the task failed"),
+    error_code: z.string().optional().describe("Machine-readable error code, e.g. 'TIMEOUT', 'DEPENDENCY_MISSING'"),
+    retry: z.boolean().optional().describe("Auto-create a new pending copy for retry"),
+    retry_after: z.string().optional().describe("ISO date — don't retry before this time"),
+  },
+  async ({ id, agent_id, reason, error_code, retry, retry_after }) => {
+    try {
+      const resolvedId = resolveId(id);
+      const result = failTask(resolvedId, agent_id, reason, { retry, retry_after, error_code });
+      let text = `failed: ${formatTask(result.task)}`;
+      if (reason) text += `\nReason: ${reason}`;
+      if (result.retryTask) {
+        text += `\nRetry task created: ${formatTask(result.retryTask)}`;
+      }
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
 // get_my_tasks — agent discovery
 server.tool(
   "get_my_tasks",
@@ -1543,6 +1577,159 @@ server.tool(
   },
 );
 
+// get_next_task
+server.tool(
+  "get_next_task",
+  "Get the optimal next task to work on — filters pending, excludes blocked/locked, sorts by priority then age. Prefers tasks assigned to you.",
+  {
+    agent_id: z.string().optional().describe("Your agent ID — prefers tasks assigned to you"),
+    project_id: z.string().optional().describe("Filter to a specific project"),
+    task_list_id: z.string().optional().describe("Filter to a specific task list"),
+    plan_id: z.string().optional().describe("Filter to a specific plan"),
+    tags: z.array(z.string()).optional().describe("Filter by tags"),
+  },
+  async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+      if (plan_id) filters.plan_id = resolveId(plan_id, "plans");
+      if (tags) filters.tags = tags;
+
+      const task = getNextTask(agent_id, Object.keys(filters).length > 0 ? filters : undefined);
+      if (!task) {
+        return { content: [{ type: "text" as const, text: "No tasks available — all pending tasks are blocked, locked, or none exist." }] };
+      }
+      return { content: [{ type: "text" as const, text: `next: ${formatTask(task)}\n${formatTaskDetail(task)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_active_work
+server.tool(
+  "get_active_work",
+  "See all in-progress tasks and who's working on them — prevents duplicate work.",
+  {
+    project_id: z.string().optional().describe("Filter by project ID"),
+    task_list_id: z.string().optional().describe("Filter by task list ID"),
+  },
+  async ({ project_id, task_list_id }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+
+      const work = getActiveWork(Object.keys(filters).length > 0 ? filters : undefined);
+      if (work.length === 0) {
+        return { content: [{ type: "text" as const, text: "No active work — no tasks are currently in progress." }] };
+      }
+      const text = work.map(w => {
+        const id = w.short_id || w.id.slice(0, 8);
+        const agent = w.assigned_to || w.locked_by || "unassigned";
+        const since = w.updated_at;
+        return `${agent.padEnd(12)} | ${w.priority.padEnd(8)} | ${id} | ${w.title} (since ${since})`;
+      }).join("\n");
+      return { content: [{ type: "text" as const, text: `${work.length} active task(s):\n${text}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_tasks_changed_since
+server.tool(
+  "get_tasks_changed_since",
+  "Get tasks modified after a timestamp — incremental sync without re-listing everything.",
+  {
+    since: z.string().describe("ISO date string, e.g. '2026-03-14T10:00:00Z'. Returns tasks with updated_at > since."),
+    project_id: z.string().optional().describe("Filter by project ID"),
+    task_list_id: z.string().optional().describe("Filter by task list ID"),
+  },
+  async ({ since, project_id, task_list_id }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+
+      const tasks = getTasksChangedSince(since, Object.keys(filters).length > 0 ? filters : undefined);
+      if (tasks.length === 0) {
+        return { content: [{ type: "text" as const, text: `No tasks changed since ${since}.` }] };
+      }
+      const text = tasks.map(t => {
+        const assigned = t.assigned_to ? ` -> ${t.assigned_to}` : "";
+        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned} (updated: ${t.updated_at})`;
+      }).join("\n");
+      return { content: [{ type: "text" as const, text: `${tasks.length} task(s) changed since ${since}:\n${text}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// claim_next_task
+server.tool(
+  "claim_next_task",
+  "Atomically find the best pending task, lock it, and start it — one call instead of get_next_task + start_task. Eliminates race conditions.",
+  {
+    agent_id: z.string().describe("Your agent ID (required — used for lock and assignment)"),
+    project_id: z.string().optional().describe("Filter to a specific project"),
+    task_list_id: z.string().optional().describe("Filter to a specific task list"),
+    plan_id: z.string().optional().describe("Filter to a specific plan"),
+    tags: z.array(z.string()).optional().describe("Filter by tags"),
+  },
+  async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+      if (plan_id) filters.plan_id = resolveId(plan_id, "plans");
+      if (tags) filters.tags = tags;
+
+      const task = claimNextTask(agent_id, Object.keys(filters).length > 0 ? filters : undefined);
+      if (!task) {
+        return { content: [{ type: "text" as const, text: "No tasks available to claim." }] };
+      }
+      return { content: [{ type: "text" as const, text: `claimed: ${formatTask(task)}\n${formatTaskDetail(task)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
+// get_stale_tasks
+server.tool(
+  "get_stale_tasks",
+  "Find tasks stuck in_progress with no recent activity or expired locks — recover abandoned work.",
+  {
+    stale_minutes: z.number().optional().describe("Minutes of inactivity before a task is considered stale (default: 30)"),
+    project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+  },
+  async ({ stale_minutes, project_id, task_list_id }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+
+      const tasks = getStaleTasks(stale_minutes || 30, Object.keys(filters).length > 0 ? filters : undefined);
+      if (tasks.length === 0) {
+        return { content: [{ type: "text" as const, text: "No stale tasks found." }] };
+      }
+      const text = tasks.map(t => {
+        const id = t.short_id || t.id.slice(0, 8);
+        const agent = t.locked_by || t.assigned_to || "unknown";
+        const staleFor = Math.round((Date.now() - new Date(t.updated_at).getTime()) / 60000);
+        return `${id} | ${agent} | ${t.title} (stale ${staleFor}min)`;
+      }).join("\n");
+      return { content: [{ type: "text" as const, text: `${tasks.length} stale task(s):\n${text}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
 // === META TOOLS ===
 
 // search_tools
@@ -1553,18 +1740,19 @@ server.tool(
   async ({ query }) => {
     const all = [
       "create_task","list_tasks","get_task","update_task","delete_task",
-      "start_task","complete_task","lock_task","unlock_task","approve_task",
+      "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
       "add_dependency","remove_dependency","add_comment",
       "create_project","list_projects",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
       "register_agent","list_agents","get_agent","rename_agent","delete_agent",
       "get_my_tasks","get_org_chart","set_reports_to",
       "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-      "search_tasks","sync","clone_task","move_task",
+      "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
       "get_task_history","get_recent_activity",
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
+      "get_active_work","get_tasks_changed_since","get_stale_tasks",
       "search_tools","describe_tools",
     ];
     const q = query?.toLowerCase();
@@ -1593,6 +1781,7 @@ server.tool(
       lock_task: "Acquire exclusive lock on a task. Locks auto-expire after 30 min. Re-locking by same agent is idempotent.\n  Params: id(string, req), agent_id(string, req)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
       unlock_task: "Release exclusive lock on a task.\n  Params: id(string, req), agent_id(string, optional — omit to force-unlock)\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
       approve_task: "Approve a task with requires_approval=true. Must be approved before completion.\n  Params: id(string, req), agent_id(string, optional — defaults to 'system')\n  Example: {id: 'a1b2c3d4', agent_id: 'e5f6g7h8'}",
+      fail_task: "Mark a task as failed with structured reason and optional auto-retry. Stores failure info in metadata._failure, releases lock.\n  Params: id(string, req), agent_id(string, optional), reason(string), error_code(string — e.g. 'TIMEOUT'), retry(boolean — create new pending copy), retry_after(ISO date)\n  Example: {id: 'a1b2c3d4', reason: 'Build timeout', error_code: 'TIMEOUT', retry: true}",
 
       // Dependencies & comments
       add_dependency: "Add a dependency: task_id depends on depends_on. Prevents cycles via BFS.\n  Params: task_id(string, req), depends_on(string, req)\n  Example: {task_id: 'abc12345', depends_on: 'def67890'}",
@@ -1629,6 +1818,8 @@ server.tool(
 
       // Search & sync
       search_tasks: "Full-text search across task titles, descriptions, and tags. Supports filters.\n  Params: query(string, req), project_id(string), task_list_id(string), status(string|string[]), priority(string|string[]), assigned_to(string), agent_id(string), created_after(ISO date), updated_after(ISO date), has_dependencies(boolean), is_blocked(boolean)\n  Example: {query: 'auth bug', status: 'pending'}",
+      get_next_task: "Get the optimal next task to work on — finds highest-priority pending task that is not blocked or locked. Prefers tasks assigned to the given agent.\n  Params: agent_id(string — prefers your tasks), project_id(string), task_list_id(string), plan_id(string), tags(string[])\n  Example: {agent_id: 'a1b2c3d4', project_id: 'e5f6g7h8'}",
+      claim_next_task: "Atomically find the best pending task, lock it, and start it — one call instead of get_next_task + start_task. Eliminates race conditions between agents.\n  Params: agent_id(string, req — used for lock and assignment), project_id(string), task_list_id(string), plan_id(string), tags(string[])\n  Example: {agent_id: 'a1b2c3d4', project_id: 'e5f6g7h8'}",
       sync: "Sync tasks between local DB and agent task list (e.g. Claude Code).\n  Params: agent(string, default:'claude'), task_list_id(string), all_agents(boolean), project_id(string), direction(push|pull|both, default:both), prefer(local|remote, default:remote)\n  Example: {agent: 'claude', direction: 'push'}",
 
       // Bulk operations
@@ -1655,6 +1846,11 @@ server.tool(
       list_templates: "List all task templates. No params.",
       create_task_from_template: "Create a task from a template with optional overrides.\n  Params: template_id(string, req), title(string), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string)\n  Example: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}",
       delete_template: "Delete a task template.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+
+      // Active work
+      get_active_work: "See all in-progress tasks and who's working on them — prevents duplicate work.\n  Params: project_id(string, optional), task_list_id(string, optional)\n  Example: {project_id: 'a1b2c3d4'}",
+      get_tasks_changed_since: "Get tasks modified after a timestamp — incremental delta sync.\n  Params: since(string, req — ISO date), project_id(string, optional), task_list_id(string, optional)\n  Example: {since: '2026-03-14T10:00:00Z'}",
+      get_stale_tasks: "Find tasks stuck in_progress with no recent activity or expired locks — recover abandoned work.\n  Params: stale_minutes(number, default:30), project_id(string, optional), task_list_id(string, optional)\n  Example: {stale_minutes: 60, project_id: 'a1b2c3d4'}",
 
       // Meta
       search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",

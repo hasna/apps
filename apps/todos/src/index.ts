@@ -25,8 +25,14 @@ export {
   getTaskStats,
   getTaskGraph,
   moveTask,
+  getNextTask,
+  claimNextTask,
+  getActiveWork,
+  failTask,
+  getTasksChangedSince,
+  getStaleTasks,
 } from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem } from "./db/tasks.js";
 
 // Projects
 export {

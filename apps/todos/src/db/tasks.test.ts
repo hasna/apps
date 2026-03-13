@@ -21,6 +21,12 @@ import {
   getTaskStats,
   getTaskGraph,
   moveTask,
+  getNextTask,
+  claimNextTask,
+  getActiveWork,
+  failTask,
+  getTasksChangedSince,
+  getStaleTasks,
 } from "./tasks.js";
 import {
   VersionConflictError,
@@ -30,6 +36,7 @@ import {
 } from "../types/index.js";
 import { createTaskList, deleteTaskList } from "./task-lists.js";
 import { createProject } from "./projects.js";
+import { registerAgent } from "./agents.js";
 import { createPlan } from "./plans.js";
 
 let db: Database;
@@ -1142,5 +1149,466 @@ describe("recurring task auto-spawn", () => {
     const next = completed.metadata._next_recurrence as Record<string, unknown>;
     expect(next.id).toBeTruthy();
     expect(next.due_at).toBeTruthy();
+  });
+});
+
+describe("getNextTask", () => {
+  it("should return highest priority pending task", () => {
+    createTask({ title: "Low task", priority: "low" }, db);
+    createTask({ title: "Critical task", priority: "critical" }, db);
+    createTask({ title: "High task", priority: "high" }, db);
+
+    const next = getNextTask(undefined, undefined, db);
+    expect(next).not.toBeNull();
+    expect(next!.title).toBe("Critical task");
+  });
+
+  it("should skip blocked tasks (task with incomplete dependency)", () => {
+    const blocker = createTask({ title: "Blocker", priority: "low" }, db);
+    const blocked = createTask({ title: "Blocked critical", priority: "critical" }, db);
+    addDependency(blocked.id, blocker.id, db);
+
+    const next = getNextTask(undefined, undefined, db);
+    expect(next).not.toBeNull();
+    // Should return the blocker (low priority) since the critical task is blocked
+    expect(next!.title).toBe("Blocker");
+  });
+
+  it("should skip locked tasks", () => {
+    const locked = createTask({ title: "Locked task", priority: "critical" }, db);
+    lockTask(locked.id, "some-agent", db);
+    const unlocked = createTask({ title: "Unlocked task", priority: "low" }, db);
+
+    const next = getNextTask(undefined, undefined, db);
+    expect(next).not.toBeNull();
+    expect(next!.title).toBe("Unlocked task");
+  });
+
+  it("should return null when no tasks available", () => {
+    const next = getNextTask(undefined, undefined, db);
+    expect(next).toBeNull();
+  });
+
+  it("should return null when all pending tasks are blocked", () => {
+    const dep = createTask({ title: "Dep", status: "in_progress" }, db);
+    const blocked = createTask({ title: "Blocked", priority: "critical" }, db);
+    addDependency(blocked.id, dep.id, db);
+
+    const next = getNextTask(undefined, undefined, db);
+    // dep is in_progress (not pending), blocked is blocked — nothing available
+    expect(next).toBeNull();
+  });
+
+  it("should prefer tasks assigned to the given agent", () => {
+    const agent = registerAgent({ name: "test-agent" }, db);
+    createTask({ title: "Unassigned critical", priority: "critical" }, db);
+    createTask({ title: "Assigned medium", priority: "medium", assigned_to: agent.id }, db);
+
+    const next = getNextTask(agent.id, undefined, db);
+    expect(next).not.toBeNull();
+    // Assigned task should come first even though lower priority
+    expect(next!.title).toBe("Assigned medium");
+  });
+
+  it("should respect project_id filter", () => {
+    const projectA = createProject({ name: "Project A", path: "/tmp/next-a" }, db);
+    const projectB = createProject({ name: "Project B", path: "/tmp/next-b" }, db);
+    createTask({ title: "Task in A", project_id: projectA.id, priority: "low" }, db);
+    createTask({ title: "Task in B", project_id: projectB.id, priority: "critical" }, db);
+
+    const next = getNextTask(undefined, { project_id: projectA.id }, db);
+    expect(next).not.toBeNull();
+    expect(next!.title).toContain("Task in A");
+  });
+
+  it("should skip non-pending tasks", () => {
+    createTask({ title: "In progress", status: "in_progress", priority: "critical" }, db);
+    createTask({ title: "Completed", status: "completed", priority: "critical" }, db);
+    createTask({ title: "Pending low", priority: "low" }, db);
+
+    const next = getNextTask(undefined, undefined, db);
+    expect(next).not.toBeNull();
+    expect(next!.title).toBe("Pending low");
+  });
+
+  it("should return unblocked task when dependency is completed", () => {
+    const dep = createTask({ title: "Dep task", priority: "low", status: "in_progress" }, db);
+    const blocked = createTask({ title: "Was blocked", priority: "critical" }, db);
+    addDependency(blocked.id, dep.id, db);
+
+    // Initially blocked
+    let next = getNextTask(undefined, undefined, db);
+    expect(next).toBeNull(); // dep is in_progress, blocked is blocked
+
+    // Complete the dependency
+    completeTask(dep.id, undefined, db);
+
+    // Now the critical task should be available
+    next = getNextTask(undefined, undefined, db);
+    expect(next).not.toBeNull();
+    expect(next!.title).toBe("Was blocked");
+  });
+});
+
+describe("claimNextTask", () => {
+  it("should claim the highest priority available task", () => {
+    const agent = registerAgent({ name: "claimer" }, db);
+    createTask({ title: "Low task", priority: "low" }, db);
+    createTask({ title: "Critical task", priority: "critical" }, db);
+
+    const claimed = claimNextTask(agent.id, undefined, db);
+    expect(claimed).not.toBeNull();
+    expect(claimed!.title).toBe("Critical task");
+    expect(claimed!.status).toBe("in_progress");
+    expect(claimed!.locked_by).toBe(agent.id);
+    expect(claimed!.assigned_to).toBe(agent.id);
+  });
+
+  it("should return null when no tasks available", () => {
+    const agent = registerAgent({ name: "claimer-empty" }, db);
+    const claimed = claimNextTask(agent.id, undefined, db);
+    expect(claimed).toBeNull();
+  });
+
+  it("should not allow two agents to claim the same task", () => {
+    const agent1 = registerAgent({ name: "agent-one" }, db);
+    const agent2 = registerAgent({ name: "agent-two" }, db);
+    createTask({ title: "Only task", priority: "critical" }, db);
+
+    const claimed1 = claimNextTask(agent1.id, undefined, db);
+    expect(claimed1).not.toBeNull();
+    expect(claimed1!.title).toBe("Only task");
+    expect(claimed1!.locked_by).toBe(agent1.id);
+
+    // Second agent should get null — the only task is now in_progress and locked
+    const claimed2 = claimNextTask(agent2.id, undefined, db);
+    expect(claimed2).toBeNull();
+  });
+
+  it("should respect project_id filter", () => {
+    const agent = registerAgent({ name: "claimer-filter" }, db);
+    const projectA = createProject({ name: "Proj A", path: "/tmp/claim-a" }, db);
+    const projectB = createProject({ name: "Proj B", path: "/tmp/claim-b" }, db);
+    createTask({ title: "Task in A", project_id: projectA.id, priority: "low" }, db);
+    createTask({ title: "Task in B", project_id: projectB.id, priority: "critical" }, db);
+
+    const claimed = claimNextTask(agent.id, { project_id: projectA.id }, db);
+    expect(claimed).not.toBeNull();
+    expect(claimed!.title).toContain("Task in A");
+    expect(claimed!.status).toBe("in_progress");
+  });
+
+  it("should skip blocked tasks", () => {
+    const agent = registerAgent({ name: "claimer-blocked" }, db);
+    const blocker = createTask({ title: "Blocker", priority: "low" }, db);
+    const blocked = createTask({ title: "Blocked critical", priority: "critical" }, db);
+    addDependency(blocked.id, blocker.id, db);
+
+    const claimed = claimNextTask(agent.id, undefined, db);
+    expect(claimed).not.toBeNull();
+    // Should claim the blocker since the critical task is blocked
+    expect(claimed!.title).toBe("Blocker");
+    expect(claimed!.status).toBe("in_progress");
+  });
+});
+
+describe("getActiveWork", () => {
+  it("should return only in_progress tasks", () => {
+    createTask({ title: "Pending task" }, db);
+    const t2 = createTask({ title: "Active task", status: "in_progress" }, db);
+    createTask({ title: "Completed task", status: "completed" }, db);
+
+    const work = getActiveWork(undefined, db);
+    expect(work.length).toBe(1);
+    expect(work[0]!.title).toBe("Active task");
+    expect(work[0]!.id).toBe(t2.id);
+  });
+
+  it("should include assigned_to and locked_by info", () => {
+    const agent = registerAgent({ name: "testagent" }, db);
+    const task = createTask({ title: "Locked task", status: "in_progress", assigned_to: agent.id }, db);
+    lockTask(task.id, agent.id, db);
+
+    const work = getActiveWork(undefined, db);
+    expect(work.length).toBe(1);
+    expect(work[0]!.assigned_to).toBe(agent.id);
+    expect(work[0]!.locked_by).toBe(agent.id);
+    expect(work[0]!.locked_at).not.toBeNull();
+  });
+
+  it("should return empty when no active work", () => {
+    createTask({ title: "Pending task" }, db);
+    createTask({ title: "Done task", status: "completed" }, db);
+
+    const work = getActiveWork(undefined, db);
+    expect(work.length).toBe(0);
+  });
+
+  it("should respect project_id filter", () => {
+    const proj = createProject({ name: "FilterProj", path: "/tmp/filter" }, db);
+    createTask({ title: "Active in project", status: "in_progress", project_id: proj.id }, db);
+    createTask({ title: "Active elsewhere", status: "in_progress" }, db);
+
+    const work = getActiveWork({ project_id: proj.id }, db);
+    expect(work.length).toBe(1);
+    expect(work[0]!.title).toContain("Active in project");
+  });
+
+  it("should return only lightweight fields", () => {
+    createTask({ title: "Active task", status: "in_progress", description: "Full description here" }, db);
+
+    const work = getActiveWork(undefined, db);
+    expect(work.length).toBe(1);
+    // Should have the specified fields
+    expect(work[0]!.id).toBeDefined();
+    expect(work[0]!.title).toBeDefined();
+    expect(work[0]!.priority).toBeDefined();
+    expect(work[0]!.updated_at).toBeDefined();
+    // Should NOT have full task fields like description
+    expect((work[0] as any).description).toBeUndefined();
+    expect((work[0] as any).status).toBeUndefined();
+  });
+});
+
+describe("getTasksChangedSince", () => {
+  it("should return only tasks modified after the given timestamp", () => {
+    const pastTime = "2020-01-01T00:00:00Z";
+    const task1 = createTask({ title: "Old task" }, db);
+    const task2 = createTask({ title: "Another task" }, db);
+
+    // Both tasks were just created, so they should appear after pastTime
+    const results = getTasksChangedSince(pastTime, undefined, db);
+    expect(results.length).toBe(2);
+    expect(results.map(t => t.id)).toContain(task1.id);
+    expect(results.map(t => t.id)).toContain(task2.id);
+  });
+
+  it("should return empty array when nothing changed since the timestamp", () => {
+    createTask({ title: "Some task" }, db);
+    // Use a future timestamp
+    const futureTime = "2099-01-01T00:00:00Z";
+    const results = getTasksChangedSince(futureTime, undefined, db);
+    expect(results.length).toBe(0);
+  });
+
+  it("should respect project_id filter", () => {
+    const project = createProject({ name: "proj-a", path: "/proj-a" }, db);
+    const task1 = createTask({ title: "In project", project_id: project.id }, db);
+    createTask({ title: "No project" }, db);
+
+    const pastTime = "2020-01-01T00:00:00Z";
+    const results = getTasksChangedSince(pastTime, { project_id: project.id }, db);
+    expect(results.length).toBe(1);
+    expect(results[0]!.id).toBe(task1.id);
+  });
+
+  it("should include newly created tasks", () => {
+    const pastTime = "2020-01-01T00:00:00Z";
+    const task = createTask({ title: "Brand new" }, db);
+
+    const results = getTasksChangedSince(pastTime, undefined, db);
+    expect(results.some(t => t.id === task.id)).toBe(true);
+  });
+
+  it("should order by newest first", () => {
+    const pastTime = "2020-01-01T00:00:00Z";
+    const task1 = createTask({ title: "First" }, db);
+    // Update task1 to ensure it has a later updated_at
+    updateTask(task1.id, { title: "First updated", version: task1.version }, db);
+    const task2 = createTask({ title: "Second" }, db);
+
+    const results = getTasksChangedSince(pastTime, undefined, db);
+    expect(results.length).toBe(2);
+    // task1 was updated after task2 was created? Not necessarily — both happen fast.
+    // Just verify ordering is by updated_at DESC
+    const timestamps = results.map(t => t.updated_at);
+    expect(timestamps[0]! >= timestamps[1]!).toBe(true);
+  });
+
+  it("should respect task_list_id filter", () => {
+    const taskList = createTaskList({ name: "Sprint 1", slug: "sprint-1" }, db);
+    const task1 = createTask({ title: "In list", task_list_id: taskList.id }, db);
+    createTask({ title: "Not in list" }, db);
+
+    const pastTime = "2020-01-01T00:00:00Z";
+    const results = getTasksChangedSince(pastTime, { task_list_id: taskList.id }, db);
+    expect(results.length).toBe(1);
+    expect(results[0]!.id).toBe(task1.id);
+  });
+});
+
+describe("failTask", () => {
+  it("should mark a task as failed", () => {
+    const task = createTask({ title: "Doomed task" }, db);
+    const result = failTask(task.id, undefined, undefined, undefined, db);
+    expect(result.task.status).toBe("failed");
+  });
+
+  it("should store failure reason in metadata._failure", () => {
+    const task = createTask({ title: "Doomed task" }, db);
+    const result = failTask(task.id, "agent-1", "Build timed out", { error_code: "TIMEOUT" }, db);
+    const failure = result.task.metadata._failure as any;
+    expect(failure.reason).toBe("Build timed out");
+    expect(failure.error_code).toBe("TIMEOUT");
+    expect(failure.failed_by).toBe("agent-1");
+    expect(failure.failed_at).toBeDefined();
+    expect(failure.retry_requested).toBe(false);
+  });
+
+  it("should store default reason when none provided", () => {
+    const task = createTask({ title: "Doomed task" }, db);
+    const result = failTask(task.id, undefined, undefined, undefined, db);
+    const failure = result.task.metadata._failure as any;
+    expect(failure.reason).toBe("Unknown failure");
+  });
+
+  it("should release lock on failure", () => {
+    const agent = registerAgent({ name: "lock-agent" }, db);
+    const task = createTask({ title: "Locked task" }, db);
+    lockTask(task.id, agent.id, db);
+    const locked = getTask(task.id, db)!;
+    expect(locked.locked_by).toBe(agent.id);
+
+    const result = failTask(task.id, agent.id, "Failed", undefined, db);
+    expect(result.task.locked_by).toBeNull();
+    expect(result.task.locked_at).toBeNull();
+
+    // Verify in DB
+    const reloaded = getTask(task.id, db)!;
+    expect(reloaded.locked_by).toBeNull();
+    expect(reloaded.status).toBe("failed");
+  });
+
+  it("should create a retry task when retry=true", () => {
+    const task = createTask({ title: "Retryable task", priority: "high", description: "Important work" }, db);
+    const result = failTask(task.id, "agent-1", "Transient error", { retry: true }, db);
+    expect(result.retryTask).toBeDefined();
+    expect(result.retryTask!.status).toBe("pending");
+    expect(result.retryTask!.title).toBe("Retryable task");
+    expect(result.retryTask!.priority).toBe("high");
+    expect(result.retryTask!.description).toBe("Important work");
+  });
+
+  it("should store _retry metadata with original_id on retry task", () => {
+    const task = createTask({ title: "Retryable task" }, db);
+    const result = failTask(task.id, "agent-1", "Transient error", { retry: true, retry_after: "2026-04-01T00:00:00Z" }, db);
+    const retryMeta = result.retryTask!.metadata._retry as any;
+    expect(retryMeta.original_id).toBe(task.id);
+    expect(retryMeta.retry_after).toBe("2026-04-01T00:00:00Z");
+    expect(retryMeta.failure_reason).toBe("Transient error");
+  });
+
+  it("should strip short_id prefix from retry task title", () => {
+    const project = createProject({ name: "test-proj", path: "/tmp/test-fail-proj" }, db);
+    const task = createTask({ title: "My task", project_id: project.id }, db);
+    expect(task.short_id).toBeDefined();
+    expect(task.title).toContain(": My task");
+
+    const result = failTask(task.id, undefined, "fail", { retry: true }, db);
+    expect(result.retryTask!.title).toContain("My task");
+    // Should not contain the original short_id doubled up
+    expect(result.retryTask!.title).not.toContain(task.short_id + ": " + task.short_id);
+  });
+
+  it("should not create retry task when retry is false or omitted", () => {
+    const task = createTask({ title: "No retry" }, db);
+    const result = failTask(task.id, undefined, "fail", { retry: false }, db);
+    expect(result.retryTask).toBeUndefined();
+
+    const task2 = createTask({ title: "No retry 2" }, db);
+    const result2 = failTask(task2.id, undefined, "fail", undefined, db);
+    expect(result2.retryTask).toBeUndefined();
+  });
+
+  it("should throw TaskNotFoundError for non-existent task", () => {
+    expect(() => failTask("non-existent-id", undefined, undefined, undefined, db)).toThrow(TaskNotFoundError);
+  });
+
+  it("should record audit log for the failure", () => {
+    const { getTaskHistory } = require("./audit.js");
+    const task = createTask({ title: "Audited fail" }, db);
+    failTask(task.id, "agent-1", "Broke", undefined, db);
+    const history = getTaskHistory(task.id, db);
+    const failEntry = history.find((h: any) => h.action === "fail");
+    expect(failEntry).toBeDefined();
+    expect(failEntry.field).toBe("status");
+    expect(failEntry.new_value).toBe("failed");
+    expect(failEntry.agent_id).toBe("agent-1");
+  });
+
+  it("should increment version", () => {
+    const task = createTask({ title: "Version check" }, db);
+    const result = failTask(task.id, undefined, undefined, undefined, db);
+    expect(result.task.version).toBe(task.version + 1);
+  });
+});
+
+describe("getStaleTasks", () => {
+  it("finds stale in_progress tasks", () => {
+    const task = createTask({ title: "Stale task", status: "in_progress" }, db);
+    const oldTime = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, task.id]);
+
+    const stale = getStaleTasks(30, undefined, db);
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.id).toBe(task.id);
+  });
+
+  it("excludes fresh in_progress tasks", () => {
+    createTask({ title: "Fresh task", status: "in_progress" }, db);
+    const stale = getStaleTasks(30, undefined, db);
+    expect(stale.length).toBe(0);
+  });
+
+  it("excludes completed/pending tasks", () => {
+    const task = createTask({ title: "Done task", status: "completed" }, db);
+    const oldTime = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ? WHERE id = ?", [oldTime, task.id]);
+
+    const stale = getStaleTasks(30, undefined, db);
+    expect(stale.length).toBe(0);
+  });
+
+  it("respects stale_minutes threshold", () => {
+    const task = createTask({ title: "Medium stale", status: "in_progress" }, db);
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [tenMinAgo, tenMinAgo, task.id]);
+
+    // 5 min threshold — should find it
+    expect(getStaleTasks(5, undefined, db).length).toBe(1);
+    // 15 min threshold — should NOT find it
+    expect(getStaleTasks(15, undefined, db).length).toBe(0);
+  });
+
+  it("respects project_id filter", () => {
+    const project = createProject({ name: "stale-proj", path: "/tmp/stale-proj" }, db);
+    const taskInProject = createTask({ title: "In project", status: "in_progress", project_id: project.id }, db);
+    const taskOutside = createTask({ title: "Outside project", status: "in_progress" }, db);
+    const oldTime = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, taskInProject.id]);
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, taskOutside.id]);
+
+    const stale = getStaleTasks(30, { project_id: project.id }, db);
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.id).toBe(taskInProject.id);
+  });
+
+  it("respects task_list_id filter", () => {
+    const project = createProject({ name: "tl-proj", path: "/tmp/tl-proj" }, db);
+    const taskList = createTaskList({ name: "TL", project_id: project.id }, db);
+    const taskInList = createTask({ title: "In list", status: "in_progress", task_list_id: taskList.id }, db);
+    const taskOutside = createTask({ title: "Outside list", status: "in_progress" }, db);
+    const oldTime = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, taskInList.id]);
+    db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, taskOutside.id]);
+
+    const stale = getStaleTasks(30, { task_list_id: taskList.id }, db);
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.id).toBe(taskInList.id);
+  });
+
+  it("returns empty array when no stale tasks exist", () => {
+    const stale = getStaleTasks(30, undefined, db);
+    expect(stale.length).toBe(0);
   });
 });

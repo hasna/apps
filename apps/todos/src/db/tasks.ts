@@ -846,6 +846,204 @@ function spawnNextRecurrence(completedTask: Task, db: Database): Task {
   }, db);
 }
 
+export function claimNextTask(
+  agentId: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] },
+  db?: Database,
+): Task | null {
+  const d = db || getDatabase();
+
+  // Transaction: find next task + start it atomically
+  const tx = d.transaction(() => {
+    const task = getNextTask(agentId, filters, d);
+    if (!task) return null;
+    return startTask(task.id, agentId, d);
+  });
+
+  return tx();
+}
+
+export function getNextTask(
+  agentId?: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] },
+  db?: Database,
+): Task | null {
+  const d = db || getDatabase();
+  clearExpiredLocks(d);
+
+  const conditions: string[] = ["status = 'pending'", "(locked_by IS NULL OR locked_at < ?)"];
+  const params: SQLQueryBindings[] = [lockExpiryCutoff()];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+  if (filters?.plan_id) { conditions.push("plan_id = ?"); params.push(filters.plan_id); }
+  if (filters?.tags && filters.tags.length > 0) {
+    const placeholders = filters.tags.map(() => "?").join(",");
+    conditions.push(`id IN (SELECT task_id FROM task_tags WHERE tag IN (${placeholders}))`);
+    params.push(...filters.tags);
+  }
+
+  // Exclude blocked tasks (those with incomplete dependencies)
+  conditions.push("id NOT IN (SELECT td.task_id FROM task_dependencies td JOIN tasks dep ON dep.id = td.depends_on WHERE dep.status != 'completed')");
+
+  const where = conditions.join(" AND ");
+
+  let sql = `SELECT * FROM tasks WHERE ${where} ORDER BY `;
+  if (agentId) {
+    sql += `CASE WHEN assigned_to = ? THEN 0 WHEN assigned_to IS NULL THEN 1 ELSE 2 END, `;
+    params.push(agentId);
+  }
+  sql += `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END, created_at ASC LIMIT 1`;
+
+  const row = d.query(sql).get(...params) as TaskRow | null;
+  return row ? rowToTask(row) : null;
+}
+
+export interface ActiveWorkItem {
+  id: string;
+  short_id: string | null;
+  title: string;
+  priority: string;
+  assigned_to: string | null;
+  locked_by: string | null;
+  locked_at: string | null;
+  updated_at: string;
+}
+
+export function getActiveWork(
+  filters?: { project_id?: string; task_list_id?: string },
+  db?: Database,
+): ActiveWorkItem[] {
+  const d = db || getDatabase();
+  clearExpiredLocks(d);
+  const conditions: string[] = ["status = 'in_progress'"];
+  const params: SQLQueryBindings[] = [];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.query(
+    `SELECT id, short_id, title, priority, assigned_to, locked_by, locked_at, updated_at FROM tasks WHERE ${where} ORDER BY
+    CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
+    updated_at DESC`
+  ).all(...params) as ActiveWorkItem[];
+
+  return rows;
+}
+
+export function getTasksChangedSince(
+  since: string,
+  filters?: { project_id?: string; task_list_id?: string },
+  db?: Database,
+): Task[] {
+  const d = db || getDatabase();
+  const conditions: string[] = ["updated_at > ?"];
+  const params: SQLQueryBindings[] = [since];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.query(`SELECT * FROM tasks WHERE ${where} ORDER BY updated_at DESC`).all(...params) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
+export function failTask(
+  id: string,
+  agentId?: string,
+  reason?: string,
+  options?: { retry?: boolean; retry_after?: string; error_code?: string },
+  db?: Database,
+): { task: Task; retryTask?: Task } {
+  const d = db || getDatabase();
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+
+  // Store failure info in metadata
+  const meta: Record<string, unknown> = {
+    ...task.metadata,
+    _failure: {
+      reason: reason || "Unknown failure",
+      error_code: options?.error_code || null,
+      failed_by: agentId || null,
+      failed_at: now(),
+      retry_requested: options?.retry || false,
+    },
+  };
+
+  const timestamp = now();
+  d.run(
+    `UPDATE tasks SET status = 'failed', locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
+     WHERE id = ?`,
+    [JSON.stringify(meta), timestamp, id],
+  );
+
+  logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
+
+  const failedTask: Task = {
+    ...task,
+    status: "failed" as const,
+    locked_by: null,
+    locked_at: null,
+    metadata: meta,
+    version: task.version + 1,
+    updated_at: timestamp,
+  };
+
+  // Auto-retry: create a new pending copy
+  let retryTask: Task | undefined;
+  if (options?.retry) {
+    // Strip short_id prefix from title
+    let title = task.title;
+    if (task.short_id && title.startsWith(task.short_id + ": ")) {
+      title = title.slice(task.short_id.length + 2);
+    }
+
+    retryTask = createTask({
+      title,
+      description: task.description ?? undefined,
+      priority: task.priority,
+      project_id: task.project_id ?? undefined,
+      task_list_id: task.task_list_id ?? undefined,
+      plan_id: task.plan_id ?? undefined,
+      assigned_to: task.assigned_to ?? undefined,
+      tags: task.tags,
+      metadata: { ...task.metadata, _retry: { original_id: task.id, retry_after: options.retry_after || null, failure_reason: reason } },
+      estimated_minutes: task.estimated_minutes ?? undefined,
+      recurrence_rule: task.recurrence_rule ?? undefined,
+      due_at: options.retry_after || task.due_at || undefined,
+    }, d);
+  }
+
+  return { task: failedTask, retryTask };
+}
+
+export function getStaleTasks(
+  staleMinutes: number = 30,
+  filters?: { project_id?: string; task_list_id?: string },
+  db?: Database,
+): Task[] {
+  const d = db || getDatabase();
+  const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+
+  const conditions: string[] = [
+    "status = 'in_progress'",
+    "(updated_at < ? OR (locked_at IS NOT NULL AND locked_at < ?))",
+  ];
+  const params: SQLQueryBindings[] = [cutoff, cutoff];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.query(
+    `SELECT * FROM tasks WHERE ${where} ORDER BY updated_at ASC`
+  ).all(...params) as TaskRow[];
+
+  return rows.map(rowToTask);
+}
+
 function wouldCreateCycle(
   taskId: string,
   dependsOn: string,
