@@ -2702,6 +2702,260 @@ export const CONNECTORS: ConnectorMeta[] = [
     category: "Business Tools",
     tags: ["helpdesk", "support", "tickets", "customer-service"],
   },
+
+  // Productivity & Forms
+  {
+    name: "focuster",
+    displayName: "Focuster",
+    description: "AI-powered task scheduling and focus management",
+    category: "Business Tools",
+    tags: ["productivity", "tasks", "scheduling", "focus"],
+  },
+  {
+    name: "formcarry",
+    displayName: "Formcarry",
+    description: "Form backend for static sites and apps",
+    category: "Business Tools",
+    tags: ["forms", "backend", "submissions"],
+  },
+  {
+    name: "formdesk",
+    displayName: "Formdesk",
+    description: "Online form builder and data collection",
+    category: "Business Tools",
+    tags: ["forms", "surveys", "data-collection"],
+  },
+  {
+    name: "formsite",
+    displayName: "Formsite",
+    description: "Online form builder with workflows and integrations",
+    category: "Business Tools",
+    tags: ["forms", "workflows", "surveys"],
+  },
+  {
+    name: "formsonfire",
+    displayName: "Forms On Fire",
+    description: "Mobile forms and data collection platform",
+    category: "Business Tools",
+    tags: ["forms", "mobile", "data-collection"],
+  },
+  {
+    name: "formstackdocuments",
+    displayName: "Formstack Documents",
+    description: "Document generation and automation",
+    category: "Business Tools",
+    tags: ["documents", "automation", "generation"],
+  },
+
+  // Security & Networking
+  {
+    name: "fortinetfortigate",
+    displayName: "Fortinet FortiGate",
+    description: "Network security and firewall management",
+    category: "Developer Tools",
+    tags: ["security", "firewall", "network"],
+  },
+
+  // Location & Social
+  {
+    name: "foursquare",
+    displayName: "Foursquare",
+    description: "Location data and place discovery API",
+    category: "Social Media",
+    tags: ["location", "places", "discovery"],
+  },
+
+  // Reference
+  {
+    name: "freedictionary",
+    displayName: "Free Dictionary",
+    description: "Dictionary definitions, phonetics, and translations",
+    category: "Data & Analytics",
+    tags: ["dictionary", "language", "definitions"],
+  },
+
+  // Monitoring & IT
+  {
+    name: "freshping",
+    displayName: "Freshping",
+    description: "Website and server uptime monitoring",
+    category: "Developer Tools",
+    tags: ["monitoring", "uptime", "alerts"],
+  },
+  {
+    name: "freshservice",
+    displayName: "Freshservice",
+    description: "IT service management and helpdesk",
+    category: "Business Tools",
+    tags: ["itsm", "helpdesk", "it-management"],
+  },
+  {
+    name: "freshworkscrm",
+    displayName: "Freshworks CRM",
+    description: "Sales CRM with AI-powered lead scoring",
+    category: "Business Tools",
+    tags: ["crm", "sales", "leads"],
+  },
+
+  // Data Enrichment
+  {
+    name: "fullcontact",
+    displayName: "FullContact",
+    description: "Identity resolution and contact enrichment",
+    category: "Data & Analytics",
+    tags: ["enrichment", "identity", "contacts"],
+  },
+
+  // Business Tools
+  {
+    name: "fusioo",
+    displayName: "Fusioo",
+    description: "Custom business apps and database management",
+    category: "Business Tools",
+    tags: ["database", "custom-apps", "business"],
+  },
+  {
+    name: "gali",
+    displayName: "Gali",
+    description: "AI-powered chatbot and lead qualification",
+    category: "AI & ML",
+    tags: ["chatbot", "ai", "lead-generation"],
+  },
+  {
+    name: "gatekeeper",
+    displayName: "Gatekeeper",
+    description: "Vendor and contract management platform",
+    category: "Business Tools",
+    tags: ["vendor-management", "contracts", "procurement"],
+  },
+  {
+    name: "genderapi",
+    displayName: "Gender API",
+    description: "Gender detection from names",
+    category: "Data & Analytics",
+    tags: ["gender", "names", "demographics"],
+  },
+  {
+    name: "getresponse",
+    displayName: "GetResponse",
+    description: "Email marketing and automation platform",
+    category: "Communication",
+    tags: ["email", "marketing", "automation"],
+  },
+  {
+    name: "getscreenshot",
+    displayName: "GetScreenshot",
+    description: "Website screenshot capture API",
+    category: "Developer Tools",
+    tags: ["screenshot", "capture", "api"],
+  },
+  {
+    name: "ghost",
+    displayName: "Ghost",
+    description: "Headless CMS and publishing platform",
+    category: "Design & Content",
+    tags: ["cms", "blog", "publishing"],
+  },
+  {
+    name: "gitea",
+    displayName: "Gitea",
+    description: "Self-hosted Git service and DevOps platform",
+    category: "Developer Tools",
+    tags: ["git", "devops", "self-hosted"],
+  },
+  {
+    name: "gleap",
+    displayName: "Gleap",
+    description: "Bug reporting and customer feedback platform",
+    category: "Developer Tools",
+    tags: ["bug-reporting", "feedback", "support"],
+  },
+  {
+    name: "gocanvas",
+    displayName: "GoCanvas",
+    description: "Mobile forms and workflow automation",
+    category: "Business Tools",
+    tags: ["forms", "mobile", "workflow"],
+  },
+  {
+    name: "godaddy",
+    displayName: "GoDaddy",
+    description: "Domain registration and DNS management",
+    category: "Developer Tools",
+    tags: ["domains", "dns", "hosting"],
+  },
+  {
+    name: "gong",
+    displayName: "Gong",
+    description: "Revenue intelligence and conversation analytics",
+    category: "Business Tools",
+    tags: ["sales", "analytics", "conversations"],
+  },
+
+  // Google Services
+  {
+    name: "googleads",
+    displayName: "Google Ads",
+    description: "Campaigns, ad groups, ads, keywords, and reporting",
+    category: "Advertising",
+    tags: ["google", "ads", "ppc", "campaigns"],
+  },
+  {
+    name: "googleanalytics",
+    displayName: "Google Analytics",
+    description: "Website and app analytics reporting",
+    category: "Data & Analytics",
+    tags: ["google", "analytics", "web", "reporting"],
+  },
+  {
+    name: "googlebigquery",
+    displayName: "Google BigQuery",
+    description: "Serverless data warehouse and SQL analytics",
+    category: "Data & Analytics",
+    tags: ["google", "bigquery", "data-warehouse", "sql"],
+  },
+  {
+    name: "googlebooks",
+    displayName: "Google Books",
+    description: "Book search, metadata, and library management",
+    category: "Google Workspace",
+    tags: ["google", "books", "search", "library"],
+  },
+  {
+    name: "googlebusinessprofile",
+    displayName: "Google Business Profile",
+    description: "Business listings and local search management",
+    category: "Google Workspace",
+    tags: ["google", "business", "local", "listings"],
+  },
+  {
+    name: "googlechat",
+    displayName: "Google Chat",
+    description: "Team messaging and collaboration",
+    category: "Google Workspace",
+    tags: ["google", "chat", "messaging", "collaboration"],
+  },
+  {
+    name: "googleforms",
+    displayName: "Google Forms",
+    description: "Form creation and response collection",
+    category: "Google Workspace",
+    tags: ["google", "forms", "surveys", "responses"],
+  },
+  {
+    name: "googleperspective",
+    displayName: "Google Perspective",
+    description: "Content toxicity and abuse detection API",
+    category: "AI & ML",
+    tags: ["google", "moderation", "toxicity", "ai"],
+  },
+  {
+    name: "googlephotos",
+    displayName: "Google Photos",
+    description: "Photo and video library management",
+    category: "Google Workspace",
+    tags: ["google", "photos", "media", "albums"],
+  },
 ];
 
 export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
