@@ -49,15 +49,19 @@ export function markdownToHtml(markdown: string): string {
   html = html.replace(/^> (.+)$/gm, '<blockquote style="border-left:4px solid #ddd;margin:0;padding-left:16px;color:#666;">$1</blockquote>');
 
   // Unordered lists
-  html = html.replace(/^[\*\-] (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul style="margin:8px 0;">$&</ul>');
+  html = html.replace(/^[\*\-] (.+)$/gm, '<li style="margin:0;padding:0;">$1</li>');
+  html = html.replace(/(<li style[^>]*>.*?<\/li>\n?)+/g, '<ul style="margin:4px 0;padding-left:20px;">$&</ul>');
 
   // Ordered lists
-  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^\d+\. (.+)$/gm, '<li style="margin:0;padding:0;">$1</li>');
 
   // Paragraphs (double newlines)
   html = html.replace(/\n\n+/g, '</p><p>');
   html = `<p>${html}</p>`;
+
+  // Remove newlines between list items (prevent <br> between <li> elements)
+  html = html.replace(/<\/li>\n<li/g, '</li><li');
+  html = html.replace(/<\/li>\n<\/ul>/g, '</li></ul>');
 
   // Single line breaks to <br>
   html = html.replace(/\n/g, '<br>');
@@ -85,8 +89,13 @@ export function wrapInEmailTemplate(html: string): string {
 <html>
 <head>
   <meta charset="UTF-8">
+  <style>
+    ul, ol { margin: 4px 0; padding-left: 20px; }
+    li { margin: 0; padding: 0; line-height: 1.5; }
+    p { margin: 0 0 8px 0; }
+  </style>
 </head>
-<body>
+<body style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#202124;">
 ${html}
 </body>
 </html>`;
