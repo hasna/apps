@@ -13,7 +13,7 @@ export interface ProfileConfig {
 
 let profileOverride: string | undefined;
 
-const CONFIG_DIR = join(homedir(), '.connect', CONNECTOR_NAME);
+const CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
 

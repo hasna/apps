@@ -28,6 +28,7 @@ import {
 } from '../utils/auth.ts';
 import type { OutputFormat } from '../utils/output.ts';
 import { success, error, info, print, warn, formatBytes } from '../utils/output.ts';
+import { MIME_TYPES } from '../types/index.ts';
 import { writeFileSync } from 'fs';
 import { join, basename } from 'path';
 
@@ -737,9 +738,69 @@ foldersCmd
 foldersCmd
   .command('contents <folderId>')
   .description('List contents of a folder')
-  .action(async (folderId: string) => {
+  .option('-r, --recursive', 'List contents recursively (alias for "folders tree")')
+  .option('--depth <n>', 'Limit recursion depth when used with --recursive (default: unlimited)', '')
+  .action(async (folderId: string, opts) => {
     try {
       const drive = requireAuth();
+
+      if (opts.recursive) {
+        // Delegate to the tree rendering logic
+        const maxDepth = opts.depth ? parseInt(opts.depth) : Infinity;
+
+        interface TreeNode {
+          id: string;
+          name: string;
+          type: 'folder' | 'file';
+          size?: string;
+          children?: TreeNode[];
+        }
+
+        async function buildTree(id: string, depth: number): Promise<TreeNode[]> {
+          if (depth > maxDepth) return [];
+          const result = await drive.folders.listContents(id);
+          if (!result.files || result.files.length === 0) return [];
+
+          const nodes: TreeNode[] = [];
+          for (const f of result.files) {
+            const isFolder = f.mimeType === MIME_TYPES.FOLDER;
+            const node: TreeNode = {
+              id: f.id,
+              name: f.name,
+              type: isFolder ? 'folder' : 'file',
+              size: f.size ? formatBytes(f.size) : undefined,
+            };
+            if (isFolder) {
+              node.children = await buildTree(f.id, depth + 1);
+            }
+            nodes.push(node);
+          }
+          return nodes;
+        }
+
+        function renderTree(nodes: TreeNode[], indent: string): void {
+          for (const node of nodes) {
+            if (node.type === 'folder') {
+              console.log(indent + node.name + '/');
+              if (node.children && node.children.length > 0) {
+                renderTree(node.children, indent + '  ');
+              }
+            } else {
+              const sizeStr = node.size ? ' (' + node.size + ')' : '';
+              console.log(indent + node.name + sizeStr);
+            }
+          }
+        }
+
+        const tree = await buildTree(folderId, 1);
+        if (tree.length === 0) {
+          info('Folder is empty');
+          return;
+        }
+        renderTree(tree, '  ');
+        return;
+      }
+
       const result = await drive.folders.listContents(folderId);
 
       if (!result.files || result.files.length === 0) {
@@ -752,12 +813,105 @@ foldersCmd
       const items = result.files.map(f => ({
         id: f.id,
         name: f.name,
-        type: f.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file',
+        type: f.mimeType === MIME_TYPES.FOLDER ? 'folder' : 'file',
         size: f.size ? formatBytes(f.size) : '-',
         modified: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString() : '-',
       }));
 
       print(items, getFormat(foldersCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Folder Tree Command
+// ============================================
+
+interface FolderTreeNode {
+  id: string;
+  name: string;
+  type: 'folder' | 'file';
+  size?: string;
+  children?: FolderTreeNode[];
+}
+
+foldersCmd
+  .command('tree <folderId>')
+  .description('Show recursive folder tree with indentation')
+  .option('--depth <n>', 'Limit recursion depth (default: unlimited)')
+  .option('--json', 'Output structured JSON tree')
+  .action(async (folderId: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const maxDepth = opts.depth ? parseInt(opts.depth) : Infinity;
+
+      async function buildTree(id: string, depth: number): Promise<FolderTreeNode[]> {
+        if (depth > maxDepth) return [];
+        const result = await drive.folders.listContents(id);
+        if (!result.files || result.files.length === 0) return [];
+
+        const nodes: FolderTreeNode[] = [];
+        for (const f of result.files) {
+          const isFolder = f.mimeType === MIME_TYPES.FOLDER;
+          const node: FolderTreeNode = {
+            id: f.id,
+            name: f.name,
+            type: isFolder ? 'folder' : 'file',
+            size: f.size ? formatBytes(f.size) : undefined,
+          };
+          if (isFolder) {
+            node.children = await buildTree(f.id, depth + 1);
+          }
+          nodes.push(node);
+        }
+        return nodes;
+      }
+
+      function renderTree(nodes: FolderTreeNode[], indent: string): void {
+        for (const node of nodes) {
+          if (node.type === 'folder') {
+            console.log(indent + node.name + '/');
+            if (node.children && node.children.length > 0) {
+              renderTree(node.children, indent + '  ');
+            }
+          } else {
+            const sizeStr = node.size ? ' (' + node.size + ')' : '';
+            console.log(indent + node.name + sizeStr);
+          }
+        }
+      }
+
+      // Fetch the root folder name for display
+      let rootName = folderId;
+      try {
+        const rootFolder = await drive.folders.get(folderId);
+        rootName = rootFolder.name || folderId;
+      } catch {
+        // Fall back to using the ID if we can't fetch metadata
+      }
+
+      const tree = await buildTree(folderId, 1);
+
+      if (opts.json) {
+        const jsonTree: FolderTreeNode = {
+          id: folderId,
+          name: rootName,
+          type: 'folder',
+          children: tree,
+        };
+        console.log(JSON.stringify(jsonTree, null, 2));
+        return;
+      }
+
+      // Pretty tree output
+      console.log(rootName + '/');
+      if (tree.length === 0) {
+        console.log('  (empty)');
+      } else {
+        renderTree(tree, '  ');
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);

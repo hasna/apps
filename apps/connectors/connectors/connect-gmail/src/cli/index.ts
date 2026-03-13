@@ -46,8 +46,8 @@ import {
 } from '../utils/settings';
 import type { OutputFormat } from '../utils/output';
 import { success, error, info, print, warn } from '../utils/output';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { join, resolve, extname, basename } from 'path';
 
 const program = new Command();
 
@@ -126,46 +126,21 @@ authCmd
     if (result.success) {
       success('Successfully authenticated!');
 
-      // Get user profile and create/switch to profile named after email
+      // Save tokens to the currently active profile
+      if (result.tokens) {
+        saveTokens(result.tokens);
+      }
+
+      // Fetch user email and save it to the active profile
       try {
-        // Temporarily switch to default profile to avoid overwriting other profiles
-        setProfileOverride('default');
-
-        // Save tokens to default profile first so Gmail.create() can use them
-        if (result.tokens) {
-          saveTokens(result.tokens);
-        }
-
         const gmail = Gmail.create();
         const profile = await gmail.profile.get();
         const email = profile.emailAddress;
-
-        // Convert email to profile slug: user@example.com → andreihasnacom
-        const profileSlug = email.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-
-        // Create profile if it doesn't exist
-        if (!profileExists(profileSlug)) {
-          createProfile(profileSlug);
-          info(`Created profile: ${profileSlug}`);
-        }
-
-        // Switch to the profile and save credentials there
-        setCurrentProfile(profileSlug);
-        setProfileOverride(profileSlug);
-
-        // Save tokens and email to the new profile
         setUserEmail(email);
-
-        // Re-save tokens to the correct profile
-        if (result.tokens) {
-          saveTokens(result.tokens);
-        }
-
-        success(`Profile: ${profileSlug}`);
         info(`Email: ${email}`);
       } catch (err) {
-        // Profile fetch failed but auth succeeded
-        warn(`Could not auto-create profile: ${err}`);
+        // Email fetch failed but auth succeeded — tokens are saved
+        warn(`Could not fetch email address: ${err}`);
       }
     } else {
       error(`Authentication failed: ${result.error}`);
@@ -413,6 +388,53 @@ profilesCmd
   });
 
 // ============================================
+// Helpers
+// ============================================
+
+/**
+ * Detect MIME type from file extension (no external dependencies)
+ */
+function detectMimeType(filePath: string): string {
+  const ext = extname(filePath).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.txt': 'text/plain',
+    '.csv': 'text/csv',
+    '.html': 'text/html',
+    '.htm': 'text/html',
+    '.json': 'application/json',
+    '.xml': 'application/xml',
+    '.zip': 'application/zip',
+    '.gz': 'application/gzip',
+    '.tar': 'application/x-tar',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.mp3': 'audio/mpeg',
+    '.mp4': 'video/mp4',
+    '.mov': 'video/quicktime',
+    '.avi': 'video/x-msvideo',
+    '.ts': 'video/mp2t',
+    '.js': 'text/javascript',
+    '.css': 'text/css',
+    '.md': 'text/markdown',
+    '.sh': 'application/x-sh',
+    '.py': 'text/x-python',
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
+}
+
+// ============================================
 // Messages Commands
 // ============================================
 const messagesCmd = program
@@ -443,7 +465,7 @@ messagesCmd
 
       // Fetch details for each message
       const messages = await Promise.all(
-        result.messages.slice(0, 10).map(async (m) => {
+        result.messages.slice(0, parseInt(opts.max)).map(async (m) => {
           const msg = await gmail.messages.get(m.id, 'metadata');
           const headers = msg.payload?.headers || [];
           const getHeader = (name: string) =>
@@ -565,9 +587,30 @@ messagesCmd
   .option('--cc <emails>', 'CC recipients (comma-separated)')
   .option('--bcc <emails>', 'BCC recipients (comma-separated)')
   .option('--html', 'Send as HTML email')
+  .option('--attachment <path>', 'Attach a file (can be specified multiple times)', (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .action(async (opts) => {
     try {
       const gmail = requireAuth();
+
+      // Build attachments array from --attachment flags
+      type AttachmentEntry = { filename: string; mimeType: string; data: string };
+      const attachments: AttachmentEntry[] = [];
+      if (opts.attachment && (opts.attachment as string[]).length > 0) {
+        for (const attachPath of opts.attachment as string[]) {
+          const resolvedPath = resolve(attachPath);
+          if (!existsSync(resolvedPath)) {
+            error(`Attachment not found: ${attachPath}`);
+            process.exit(1);
+          }
+          const fileData = readFileSync(resolvedPath);
+          attachments.push({
+            filename: basename(resolvedPath),
+            mimeType: detectMimeType(resolvedPath),
+            data: fileData.toString('base64'),
+          });
+        }
+      }
+
       const result = await gmail.messages.send({
         to: opts.to,
         subject: opts.subject,
@@ -575,10 +618,14 @@ messagesCmd
         cc: opts.cc?.split(',').map((e: string) => e.trim()),
         bcc: opts.bcc?.split(',').map((e: string) => e.trim()),
         isHtml: opts.html,
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
 
       success(`Email sent successfully!`);
       info(`Message ID: ${result.id}`);
+      if (attachments.length > 0) {
+        info(`Attachments: ${attachments.map((a) => a.filename).join(', ')}`);
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);
@@ -1382,7 +1429,7 @@ program
       success(`Found ${result.messages.length} messages:`);
 
       const messages = await Promise.all(
-        result.messages.slice(0, 10).map(async (m) => {
+        result.messages.slice(0, parseInt(opts.max)).map(async (m) => {
           const msg = await gmail.messages.get(m.id, 'metadata');
           const headers = msg.payload?.headers || [];
           const getHeader = (name: string) =>
@@ -1933,6 +1980,9 @@ bulkCmd
   .option('-a, --add <labels>', 'Labels to add (comma-separated names or IDs)')
   .option('-r, --remove <labels>', 'Labels to remove (comma-separated names or IDs)')
   .option('-n, --max <number>', 'Maximum messages to process', '100')
+  .option('--all', 'Process all matching messages (paginates through entire result set)')
+  .option('--offset <number>', 'Skip first N results before processing', '0')
+  .option('--skip-labeled', 'Skip messages that already have the target label(s) applied')
   .option('--dry-run', 'Preview changes without applying them')
   .option('--batch', 'Use Gmail batch API for faster processing (recommended for large batches)')
   .action(async (query: string, opts) => {
@@ -1945,27 +1995,37 @@ bulkCmd
       const gmail = requireAuth();
       const addLabels = opts.add ? opts.add.split(',').map((l: string) => l.trim()) : [];
       const removeLabels = opts.remove ? opts.remove.split(',').map((l: string) => l.trim()) : [];
+      const maxResults = opts.all ? Infinity : parseInt(opts.max);
+      const offset = parseInt(opts.offset) || 0;
+      const skipIfLabeled = opts.skipLabeled === true;
 
       info(`${opts.dryRun ? '[DRY RUN] ' : ''}Modifying labels for messages matching: ${query}`);
       if (addLabels.length > 0) info(`  Adding: ${addLabels.join(', ')}`);
       if (removeLabels.length > 0) info(`  Removing: ${removeLabels.join(', ')}`);
+      if (opts.all) info(`  Mode: process ALL matching messages`);
+      if (offset > 0) info(`  Offset: skipping first ${offset} results`);
+      if (skipIfLabeled) info(`  Skipping already-labeled messages`);
 
       let result;
       if (opts.batch) {
         result = await gmail.bulk.batchModifyLabels({
           query,
-          maxResults: parseInt(opts.max),
+          maxResults,
           addLabels,
           removeLabels,
           dryRun: opts.dryRun,
+          skipIfLabeled,
+          offset,
         });
       } else {
         result = await gmail.bulk.modifyLabels({
           query,
-          maxResults: parseInt(opts.max),
+          maxResults,
           addLabels,
           removeLabels,
           dryRun: opts.dryRun,
+          skipIfLabeled,
+          offset,
           onProgress: (current, total) => {
             process.stdout.write(`\r  Progress: ${current}/${total}`);
           },
@@ -1976,6 +2036,7 @@ bulkCmd
       success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk label modification complete:`);
       info(`  Total: ${result.total}`);
       info(`  Success: ${result.success}`);
+      if (result.skipped > 0) info(`  Skipped (already labeled): ${result.skipped}`);
       if (result.failed > 0) {
         warn(`  Failed: ${result.failed}`);
         for (const err of result.errors.slice(0, 5)) {

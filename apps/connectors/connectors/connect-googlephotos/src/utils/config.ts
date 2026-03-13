@@ -10,9 +10,9 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override (set by CLI before commands run)
 let profileOverride: string | undefined;
 
-// Store config in ~/.connect/connect-googlephotos/ (always in home directory)
+// Store config in ~/.connectors/connect-googlephotos/ (always in home directory)
 function resolveBaseConfigDir(): string {
-  return join(homedir(), '.connect', 'connect-googlephotos');
+  return join(homedir(), '.connectors', 'connect-googlephotos');
 }
 
 const BASE_CONFIG_DIR = resolveBaseConfigDir();

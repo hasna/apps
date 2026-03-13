@@ -31,6 +31,10 @@ export interface BulkLabelOptions extends BulkOperationOptions {
   addLabels?: string[];
   /** Label names to remove (will be resolved to IDs) */
   removeLabels?: string[];
+  /** Skip messages that already have all the labels being added */
+  skipIfLabeled?: boolean;
+  /** Skip first N results (pagination offset) */
+  offset?: number;
 }
 
 export interface BulkMarkOptions extends BulkOperationOptions {
@@ -121,6 +125,8 @@ export class BulkApi {
       removeLabelIds = [],
       addLabels = [],
       removeLabels = [],
+      skipIfLabeled = false,
+      offset = 0,
       onProgress,
       onError,
     } = options;
@@ -150,7 +156,27 @@ export class BulkApi {
       throw new Error('At least one label to add or remove is required');
     }
 
-    const messages = await this.fetchMessages(query, maxResults);
+    // Fetch enough messages to account for the offset
+    const fetchLimit = maxResults === Infinity ? Number.MAX_SAFE_INTEGER : maxResults + offset;
+    let messages = await this.fetchMessages(query, fetchLimit);
+
+    // Apply offset: skip first N results
+    if (offset > 0) {
+      messages = messages.slice(offset);
+    }
+
+    // Trim to requested maxResults after offset
+    if (maxResults !== Infinity && messages.length > maxResults) {
+      messages = messages.slice(0, maxResults);
+    }
+
+    // Skip messages that already have all the labels being added
+    if (skipIfLabeled && resolvedAddIds.length > 0) {
+      messages = messages.filter((msg) => {
+        const existing = msg.labelIds || [];
+        return !resolvedAddIds.every(id => existing.includes(id));
+      });
+    }
 
     return this.executeBatch(messages, {
       dryRun,
@@ -370,6 +396,8 @@ export class BulkApi {
     addLabels?: string[];
     removeLabels?: string[];
     dryRun?: boolean;
+    skipIfLabeled?: boolean;
+    offset?: number;
   }): Promise<BulkOperationResult> {
     const {
       query,
@@ -379,6 +407,8 @@ export class BulkApi {
       addLabels = [],
       removeLabels = [],
       dryRun = false,
+      skipIfLabeled = false,
+      offset = 0,
     } = options;
 
     // Resolve label names to IDs
@@ -402,8 +432,30 @@ export class BulkApi {
       }
     }
 
-    // Fetch message IDs
-    const messages = await this.fetchMessageIds(query, maxResults);
+    // For skipIfLabeled, we need full metadata (label IDs), so use fetchMessages
+    // For plain offset/pagination without skip, fetchMessageIds is sufficient
+    let messageIds: string[];
+    if (skipIfLabeled && resolvedAddIds.length > 0) {
+      const fetchLimit = maxResults === Infinity ? Number.MAX_SAFE_INTEGER : maxResults + offset;
+      let msgs = await this.fetchMessages(query, fetchLimit);
+      if (offset > 0) msgs = msgs.slice(offset);
+      if (maxResults !== Infinity && msgs.length > maxResults) msgs = msgs.slice(0, maxResults);
+      msgs = msgs.filter((msg) => {
+        const existing = msg.labelIds || [];
+        return !resolvedAddIds.every(id => existing.includes(id));
+      });
+      messageIds = msgs.map(m => m.id);
+    } else {
+      // Fetch message IDs, accounting for offset
+      const fetchLimit = maxResults === Infinity ? Number.MAX_SAFE_INTEGER : maxResults + offset;
+      let ids = await this.fetchMessageIds(query, fetchLimit);
+      if (offset > 0) ids = ids.slice(offset);
+      if (maxResults !== Infinity && ids.length > maxResults) ids = ids.slice(0, maxResults);
+      messageIds = ids;
+    }
+
+    // Use local variable name to avoid conflict with outer scope
+    const messages = messageIds;
 
     const result: BulkOperationResult = {
       total: messages.length,

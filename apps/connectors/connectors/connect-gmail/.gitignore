@@ -30,3 +30,6 @@ bun.lockb
 
 # Local config (contains tokens)
 .connect/
+
+# Runtime data directories — never ship these
+profiles/

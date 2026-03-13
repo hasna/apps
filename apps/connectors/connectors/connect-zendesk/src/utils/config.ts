@@ -18,8 +18,8 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override
 let profileOverride: string | undefined;
 
-// Config directory: ~/.connect/connect-zendesk/
-const BASE_CONFIG_DIR = join(homedir(), '.connect', CONNECTOR_NAME);
+// Config directory: ~/.connectors/connect-zendesk/
+const BASE_CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
 
 // Old config directory for migration
 const OLD_CONFIG_DIR = join(homedir(), '.connect-zendesk');
@@ -208,7 +208,7 @@ export function needsMigration(): boolean {
 }
 
 /**
- * Migrate from old ~/.connect-zendesk/ to new ~/.connect/connect-zendesk/ structure
+ * Migrate from old ~/.connect-zendesk/ to new ~/.connectors/connect-zendesk/ structure
  */
 export function migrateFromOldConfig(): { migrated: boolean; message: string } {
   if (!needsMigration()) {
@@ -282,7 +282,7 @@ This directory contains configuration and data for the connect-zendesk CLI.
 ## Directory Structure
 
 \`\`\`
-~/.connect/connect-zendesk/
+~/.connectors/connect-zendesk/
 ├── current_profile      # Current active profile name
 ├── profiles/
 │   ├── default/
