@@ -95,11 +95,19 @@ export class AttachmentsApi {
   /**
    * Download a specific attachment to disk
    */
-  async download(messageId: string, attachmentId: string, filename: string, mimeType: string): Promise<DownloadedAttachment> {
+  async download(messageId: string, attachmentId: string, filename: string, mimeType: string, outputDir?: string): Promise<DownloadedAttachment> {
     // Normalize Unicode whitespace characters in filename (e.g. non-breaking spaces from Gmail)
     const cleanFilename = filename.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ');
     const data = await this.get(messageId, attachmentId);
-    const dir = this.getAttachmentsDir(messageId);
+    let dir: string;
+    if (outputDir) {
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
+      dir = outputDir;
+    } else {
+      dir = this.getAttachmentsDir(messageId);
+    }
     const filepath = join(dir, cleanFilename);
 
     // Decode base64url to buffer
@@ -117,7 +125,7 @@ export class AttachmentsApi {
   /**
    * Download all attachments from a message
    */
-  async downloadAll(messageId: string): Promise<DownloadedAttachment[]> {
+  async downloadAll(messageId: string, outputDir?: string): Promise<DownloadedAttachment[]> {
     const attachments = await this.list(messageId);
     const downloaded: DownloadedAttachment[] = [];
 
@@ -126,7 +134,8 @@ export class AttachmentsApi {
         messageId,
         attachment.attachmentId,
         attachment.filename,
-        attachment.mimeType
+        attachment.mimeType,
+        outputDir
       );
       downloaded.push(result);
     }

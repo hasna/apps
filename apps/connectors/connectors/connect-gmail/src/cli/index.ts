@@ -1227,9 +1227,11 @@ attachmentsCmd
   .command('download <messageId>')
   .description('Download all attachments from a message')
   .option('-a, --attachment-id <id>', 'Download specific attachment by ID')
+  .option('-d, --dir <path>', 'Directory to save attachments (default: connector storage dir)')
   .action(async (messageId: string, opts) => {
     try {
       const gmail = requireAuth();
+      const outputDir = opts.dir ? resolve(opts.dir) : undefined;
 
       if (opts.attachmentId) {
         // Download specific attachment
@@ -1246,7 +1248,8 @@ attachmentsCmd
           messageId,
           attachment.attachmentId,
           attachment.filename,
-          attachment.mimeType
+          attachment.mimeType,
+          outputDir
         );
 
         success(`Downloaded: ${result.filename}`);
@@ -1255,7 +1258,7 @@ attachmentsCmd
       } else {
         // Download all attachments
         info('Downloading all attachments...');
-        const results = await gmail.attachments.downloadAll(messageId);
+        const results = await gmail.attachments.downloadAll(messageId, outputDir);
 
         if (results.length === 0) {
           info('No attachments found in this message');
@@ -1266,7 +1269,8 @@ attachmentsCmd
         for (const result of results) {
           info(`  • ${result.filename} (${Math.round(result.size / 1024)} KB)`);
         }
-        info(`\nSaved to: ${gmail.attachments.getStoragePath(messageId)}`);
+        const savedDir = outputDir ?? gmail.attachments.getStoragePath(messageId);
+        info(`\nSaved to: ${savedDir}`);
       }
     } catch (err) {
       error(String(err));
