@@ -747,6 +747,7 @@ labelsCmd
         type: l.type,
         messagesTotal: l.messagesTotal,
         messagesUnread: l.messagesUnread,
+        ...(l.color ? { backgroundColor: l.color.backgroundColor, textColor: l.color.textColor } : {}),
       }));
 
       print(labels, getFormat(labelsCmd));
@@ -759,12 +760,52 @@ labelsCmd
 labelsCmd
   .command('create <name>')
   .description('Create a new label')
-  .action(async (name: string) => {
+  .option('--bg-color <hex>', 'Background color (e.g. #16a765)')
+  .option('--text-color <hex>', 'Text color (e.g. #ffffff)')
+  .action(async (name: string, opts: { bgColor?: string; textColor?: string }) => {
     try {
       const gmail = requireAuth();
-      const label = await gmail.labels.create({ name });
+      const label = await gmail.labels.create({
+        name,
+        backgroundColor: opts.bgColor,
+        textColor: opts.textColor,
+      });
       success(`Label "${name}" created`);
       info(`Label ID: ${label.id}`);
+      if (label.color) {
+        info(`Color: bg=${label.color.backgroundColor} text=${label.color.textColor}`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+labelsCmd
+  .command('update <labelId>')
+  .description('Update a label name and/or color')
+  .option('--name <name>', 'New label name')
+  .option('--bg-color <hex>', 'Background color (e.g. #16a765)')
+  .option('--text-color <hex>', 'Text color (e.g. #ffffff)')
+  .action(async (labelId: string, opts: { name?: string; bgColor?: string; textColor?: string }) => {
+    try {
+      if (!opts.name && !opts.bgColor && !opts.textColor) {
+        error('At least one of --name, --bg-color, or --text-color is required');
+        process.exit(1);
+      }
+      const gmail = requireAuth();
+      const label = await gmail.labels.update(labelId, {
+        name: opts.name,
+        backgroundColor: opts.bgColor,
+        textColor: opts.textColor,
+      });
+      success(`Label ${labelId} updated`);
+      if (label.name) {
+        info(`Name: ${label.name}`);
+      }
+      if (label.color) {
+        info(`Color: bg=${label.color.backgroundColor} text=${label.color.textColor}`);
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);
