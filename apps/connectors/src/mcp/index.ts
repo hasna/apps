@@ -30,7 +30,7 @@ loadConnectorVersions();
 
 const server = new McpServer({
   name: "connectors",
-  version: "1.1.5",
+  version: "1.1.6",
 });
 
 // --- Tool: search_connectors ---

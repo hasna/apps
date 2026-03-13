@@ -1,8 +1,6 @@
 # Source files (compiled to dist/ and bin/)
-src/
 
 # TypeScript config
-tsconfig.json
 
 # Development
 node_modules/

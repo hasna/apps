@@ -2,7 +2,6 @@
 node_modules/
 
 # Source (included via dist/ and bin/)
-src/
 
 # Environment
 .env
@@ -32,6 +31,5 @@ bun.lock
 .connect/
 
 # Dev files
-tsconfig.json
 CLAUDE.md
 .npmrc
