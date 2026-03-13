@@ -406,6 +406,8 @@ export interface CreateTemplateInput {
 
 // Version conflict error
 export class VersionConflictError extends Error {
+  static readonly code = "VERSION_CONFLICT";
+  static readonly suggestion = "Fetch the task with get_task to get the current version before updating.";
   constructor(
     public taskId: string,
     public expectedVersion: number,
@@ -419,6 +421,8 @@ export class VersionConflictError extends Error {
 }
 
 export class TaskNotFoundError extends Error {
+  static readonly code = "TASK_NOT_FOUND";
+  static readonly suggestion = "Verify the task ID. Use list_tasks or search_tasks to find the correct ID.";
   constructor(public taskId: string) {
     super(`Task not found: ${taskId}`);
     this.name = "TaskNotFoundError";
@@ -426,6 +430,8 @@ export class TaskNotFoundError extends Error {
 }
 
 export class ProjectNotFoundError extends Error {
+  static readonly code = "PROJECT_NOT_FOUND";
+  static readonly suggestion = "Use list_projects to see available projects.";
   constructor(public projectId: string) {
     super(`Project not found: ${projectId}`);
     this.name = "ProjectNotFoundError";
@@ -433,6 +439,8 @@ export class ProjectNotFoundError extends Error {
 }
 
 export class PlanNotFoundError extends Error {
+  static readonly code = "PLAN_NOT_FOUND";
+  static readonly suggestion = "Use list_plans to see available plans.";
   constructor(public planId: string) {
     super(`Plan not found: ${planId}`);
     this.name = "PlanNotFoundError";
@@ -440,6 +448,8 @@ export class PlanNotFoundError extends Error {
 }
 
 export class LockError extends Error {
+  static readonly code = "LOCK_ERROR";
+  static readonly suggestion = "Wait for the lock to expire (30 min) or contact the lock holder.";
   constructor(
     public taskId: string,
     public lockedBy: string,
@@ -450,6 +460,8 @@ export class LockError extends Error {
 }
 
 export class AgentNotFoundError extends Error {
+  static readonly code = "AGENT_NOT_FOUND";
+  static readonly suggestion = "Use register_agent to create the agent first, or list_agents to find existing ones.";
   constructor(public agentId: string) {
     super(`Agent not found: ${agentId}`);
     this.name = "AgentNotFoundError";
@@ -457,6 +469,8 @@ export class AgentNotFoundError extends Error {
 }
 
 export class TaskListNotFoundError extends Error {
+  static readonly code = "TASK_LIST_NOT_FOUND";
+  static readonly suggestion = "Use list_task_lists to see available lists.";
   constructor(public taskListId: string) {
     super(`Task list not found: ${taskListId}`);
     this.name = "TaskListNotFoundError";
@@ -464,6 +478,8 @@ export class TaskListNotFoundError extends Error {
 }
 
 export class DependencyCycleError extends Error {
+  static readonly code = "DEPENDENCY_CYCLE";
+  static readonly suggestion = "Check the dependency chain with get_task to avoid circular references.";
   constructor(
     public taskId: string,
     public dependsOn: string,
@@ -476,6 +492,8 @@ export class DependencyCycleError extends Error {
 }
 
 export class CompletionGuardError extends Error {
+  static readonly code = "COMPLETION_BLOCKED";
+  static readonly suggestion = "Wait for the cooldown period, then retry.";
   constructor(
     public reason: string,
     public retryAfterSeconds?: number,
