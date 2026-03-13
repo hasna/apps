@@ -160,14 +160,14 @@ async function main() {
       if (dryRun) {
         console.log(`🧪 DRY RUN: Would commit version bump`);
       } else {
-        await commitVersionBump(newVersion, pkg.name.replace('@hasnaxyz/', ''));
+        await commitVersionBump(newVersion, pkg.name.replace('@hasna/', ''));
       }
     }
 
     if (dryRun) {
       console.log(`🧪 DRY RUN: Would create tag ${pkg.name}@${newVersion}`);
     } else {
-      await createGitTag(newVersion, pkg.name.replace('@hasnaxyz/', ''));
+      await createGitTag(newVersion, pkg.name.replace('@hasna/', ''));
     }
   }
 
