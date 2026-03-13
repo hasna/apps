@@ -6,7 +6,8 @@ import { createProfile, deleteProfile, getProfile, getProfileConfigs, listProfil
 import { listSnapshots, createSnapshot } from "../db/snapshots.js";
 import { listMachines, registerMachine } from "../db/machines.js";
 import { applyConfig, applyConfigs } from "../lib/apply.js";
-import { syncFromDir, syncToDir } from "../lib/sync.js";
+import { syncKnown } from "../lib/sync.js";
+import { syncFromDir, syncToDir } from "../lib/sync-dir.js";
 import type { ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind } from "../types/index.js";
 
 const PORT = Number(process.env["CONFIGS_PORT"] ?? 3457);
@@ -198,7 +199,45 @@ app.post("/api/machines", async (c) => {
 });
 
 // ── Health ─────────────────────────────────────────────────────────────────────
-app.get("/health", (c) => c.json({ ok: true, version: "0.1.0" }));
+app.get("/health", (c) => c.json({ ok: true, version: "0.1.5" }));
 
-console.log(`configs-serve listening on http://localhost:${PORT}`);
+// ── Dashboard (serve static files from dashboard/dist/) ──────────────────────
+import { existsSync, readFileSync } from "node:fs";
+import { join, extname } from "node:path";
+
+const MIME: Record<string, string> = { ".html": "text/html", ".js": "application/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
+
+function findDashboardDir(): string | null {
+  // Try multiple locations: relative to script, installed package
+  const candidates = [
+    join(import.meta.dir, "../../dashboard/dist"),
+    join(import.meta.dir, "../dashboard/dist"),
+    join(import.meta.dir, "../../../dashboard/dist"),
+  ];
+  for (const dir of candidates) {
+    if (existsSync(join(dir, "index.html"))) return dir;
+  }
+  return null;
+}
+
+const dashDir = findDashboardDir();
+if (dashDir) {
+  app.get("/*", (c) => {
+    const url = new URL(c.req.url);
+    let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
+    let absPath = join(dashDir, filePath);
+
+    // If file doesn't exist, serve index.html (SPA routing)
+    if (!existsSync(absPath)) absPath = join(dashDir, "index.html");
+    if (!existsSync(absPath)) return c.json({ error: "Not found" }, 404);
+
+    const content = readFileSync(absPath);
+    const ext = extname(absPath);
+    return new Response(content, {
+      headers: { "Content-Type": MIME[ext] || "application/octet-stream" },
+    });
+  });
+}
+
+console.log(`configs-serve listening on http://localhost:${PORT}${dashDir ? " (dashboard: /" : " (no dashboard found)"}`);
 export default { port: PORT, fetch: app.fetch };

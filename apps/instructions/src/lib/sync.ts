@@ -58,6 +58,81 @@ export const KNOWN_CONFIGS: KnownConfig[] = [
   { path: "~/.bunfig.toml",              name: "bunfig",                   category: "tools",  agent: "global", format: "toml" },
 ];
 
+// ── Project-scoped config files ───────────────────────────────────────────────
+// These are files that live inside a project root, not in ~.
+export const PROJECT_CONFIG_FILES = [
+  { file: "CLAUDE.md",                 category: "rules" as ConfigCategory,  agent: "claude" as ConfigAgent, format: "markdown" as ConfigFormat },
+  { file: ".claude/settings.json",     category: "agent" as ConfigCategory,  agent: "claude" as ConfigAgent, format: "json" as ConfigFormat },
+  { file: ".claude/settings.local.json", category: "agent" as ConfigCategory, agent: "claude" as ConfigAgent, format: "json" as ConfigFormat },
+  { file: ".mcp.json",                 category: "mcp" as ConfigCategory,    agent: "claude" as ConfigAgent, format: "json" as ConfigFormat },
+  { file: "AGENTS.md",                 category: "rules" as ConfigCategory,  agent: "codex" as ConfigAgent,  format: "markdown" as ConfigFormat },
+  { file: ".codex/AGENTS.md",          category: "rules" as ConfigCategory,  agent: "codex" as ConfigAgent,  format: "markdown" as ConfigFormat },
+  { file: "GEMINI.md",                 category: "rules" as ConfigCategory,  agent: "gemini" as ConfigAgent, format: "markdown" as ConfigFormat },
+];
+
+export interface SyncProjectOptions {
+  db?: ReturnType<typeof getDatabase>;
+  dryRun?: boolean;
+  projectDir: string;
+}
+
+export async function syncProject(opts: SyncProjectOptions): Promise<SyncResult> {
+  const d = opts.db || getDatabase();
+  const absDir = expandPath(opts.projectDir);
+  const projectName = absDir.split("/").pop() || "project";
+  const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
+  const allConfigs = listConfigs(undefined, d);
+
+  // Sync project config files
+  for (const pf of PROJECT_CONFIG_FILES) {
+    const abs = join(absDir, pf.file);
+    if (!existsSync(abs)) continue;
+    try {
+      const rawContent = readFileSync(abs, "utf-8");
+      if (rawContent.length > 500_000) { result.skipped.push(pf.file); continue; }
+      const { content, isTemplate } = redactContent(rawContent, pf.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      const name = `${projectName}/${pf.file}`;
+      const targetPath = abs.replace(homedir(), "~");
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const existing = allConfigs.find((c) => c.target_path === targetPath || c.slug === slug);
+
+      if (!existing) {
+        if (!opts.dryRun) createConfig({ name, category: pf.category, agent: pf.agent, format: pf.format, content, target_path: targetPath, is_template: isTemplate }, d);
+        result.added++;
+      } else if (existing.content !== content) {
+        if (!opts.dryRun) updateConfig(existing.id, { content, is_template: isTemplate }, d);
+        result.updated++;
+      } else {
+        result.unchanged++;
+      }
+    } catch { result.skipped.push(pf.file); }
+  }
+
+  // Also sync .claude/rules/*.md if exists
+  const rulesDir = join(absDir, ".claude", "rules");
+  if (existsSync(rulesDir)) {
+    const mdFiles = readdirSync(rulesDir).filter((f) => f.endsWith(".md"));
+    for (const f of mdFiles) {
+      const abs = join(rulesDir, f);
+      const raw = readFileSync(abs, "utf-8");
+      const { content, isTemplate } = redactContent(raw, "markdown");
+      const name = `${projectName}/rules/${f}`;
+      const targetPath = abs.replace(homedir(), "~");
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const existing = allConfigs.find((c) => c.target_path === targetPath || c.slug === slug);
+      if (!existing) {
+        if (!opts.dryRun) createConfig({ name, category: "rules", agent: "claude", format: "markdown", content, target_path: targetPath, is_template: isTemplate }, d);
+        result.added++;
+      } else if (existing.content !== content) {
+        if (!opts.dryRun) updateConfig(existing.id, { content, is_template: isTemplate }, d);
+        result.updated++;
+      } else { result.unchanged++; }
+    }
+  }
+
+  return result;
+}
+
 export interface SyncKnownOptions {
   db?: ReturnType<typeof getDatabase>;
   dryRun?: boolean;

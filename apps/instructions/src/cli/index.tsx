@@ -7,9 +7,9 @@ import { join, resolve } from "node:path";
 import { createConfig, deleteConfig, getConfig, getConfigStats, listConfigs, updateConfig } from "../db/configs.js";
 import { createProfile, deleteProfile, getProfile, getProfileConfigs, listProfiles, updateProfile, addConfigToProfile, removeConfigFromProfile } from "../db/profiles.js";
 import { listSnapshots, getSnapshot } from "../db/snapshots.js";
-import { getDatabase } from "../db/database.js";
-import { applyConfig, applyConfigs } from "../lib/apply.js";
-import { diffConfig, syncKnown, syncToDisk, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
+import { getDatabase, resetDatabase } from "../db/database.js";
+import { applyConfig, applyConfigs, expandPath } from "../lib/apply.js";
+import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
 import { redactContent, scanSecrets } from "../lib/redact.js";
 import { exportConfigs } from "../lib/export.js";
@@ -44,7 +44,9 @@ program
   .option("-t, --tag <tag>", "filter by tag")
   .option("-s, --search <query>", "search name/description/content")
   .option("-f, --format <fmt>", "output format: table|json|compact", "table")
+  .option("--brief", "shorthand for --format compact")
   .action(async (opts) => {
+    const fmt = opts.brief ? "compact" : opts.format;
     const configs = listConfigs({
       category: opts.category as ConfigCategory,
       agent: opts.agent as ConfigAgent,
@@ -56,13 +58,13 @@ program
       console.log(chalk.dim("No configs found."));
       return;
     }
-    if (opts.format === "json") {
+    if (fmt === "json") {
       console.log(JSON.stringify(configs, null, 2));
       return;
     }
     for (const c of configs) {
-      console.log(fmtConfig(c, opts.format));
-      if (opts.format === "table") console.log();
+      console.log(fmtConfig(c, fmt));
+      if (fmt === "table") console.log();
     }
     console.log(chalk.dim(`${configs.length} config(s)`));
   });
@@ -147,13 +149,29 @@ program
 
 // ── diff ─────────────────────────────────────────────────────────────────────
 program
-  .command("diff <id>")
-  .description("Show diff between stored config and disk")
-  .action(async (id) => {
+  .command("diff [id]")
+  .description("Show diff between stored config and disk (omit id for --all)")
+  .option("--all", "diff every known config against disk")
+  .action(async (id, opts) => {
     try {
-      const config = getConfig(id);
-      const diff = diffConfig(config);
-      console.log(diff);
+      if (id) {
+        const config = getConfig(id);
+        console.log(diffConfig(config));
+        return;
+      }
+      // --all or no id: diff all known file-type configs
+      const configs = listConfigs({ kind: "file" });
+      let drifted = 0;
+      for (const c of configs) {
+        if (!c.target_path) continue;
+        const diff = diffConfig(c);
+        if (diff.includes("no diff") || diff.includes("not found")) continue;
+        drifted++;
+        console.log(chalk.bold(c.slug) + chalk.dim(` (${c.target_path})`));
+        console.log(diff);
+        console.log();
+      }
+      console.log(chalk.dim(`${drifted}/${configs.length} drifted`));
     } catch (e) {
       console.error(chalk.red(e instanceof Error ? e.message : String(e)));
       process.exit(1);
@@ -166,6 +184,7 @@ program
   .description("Sync known AI coding configs from disk into DB (claude, codex, gemini, zsh, git, npm)")
   .option("-a, --agent <agent>", "only sync configs for this agent (claude|codex|gemini|zsh|git|npm)")
   .option("-c, --category <cat>", "only sync configs in this category")
+  .option("-p, --project [dir]", "sync project-scoped configs (CLAUDE.md, .mcp.json, etc.) from a project dir")
   .option("--to-disk", "apply DB configs back to disk instead")
   .option("--dry-run", "preview without writing")
   .option("--list", "show which files would be synced without doing anything")
@@ -180,6 +199,12 @@ program
       for (const k of targets) {
         console.log(`  ${chalk.cyan(k.rulesDir ? k.rulesDir + "/*.md" : k.path)} ${chalk.dim(`[${k.category}/${k.agent}]`)}`);
       }
+      return;
+    }
+    if (opts.project) {
+      const dir = typeof opts.project === "string" ? opts.project : process.cwd();
+      const result = await syncProject({ projectDir: dir, dryRun: opts.dryRun });
+      console.log(chalk.green("✓") + ` Project sync: +${result.added} updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
       return;
     }
     if (opts.toDisk) {
@@ -251,10 +276,16 @@ program
 // ── profile ───────────────────────────────────────────────────────────────────
 const profileCmd = program.command("profile").description("Manage config profiles (named bundles)");
 
-profileCmd.command("list").description("List all profiles").action(async () => {
+profileCmd.command("list").description("List all profiles")
+  .option("--brief", "compact one-line output")
+  .option("-f, --format <fmt>", "table|json|compact", "table")
+  .action(async (opts) => {
+  const fmt = opts.brief ? "compact" : opts.format;
   const profiles = listProfiles();
   if (profiles.length === 0) { console.log(chalk.dim("No profiles.")); return; }
+  if (fmt === "json") { console.log(JSON.stringify(profiles, null, 2)); return; }
   for (const p of profiles) {
+    if (fmt === "compact") { console.log(`${p.slug} ${getProfileConfigs(p.id).length} configs`); continue; }
     const configs = getProfileConfigs(p.id);
     console.log(`${chalk.bold(p.name)} ${chalk.dim(`(${p.slug})`)} — ${configs.length} config(s)`);
     if (p.description) console.log(`  ${chalk.dim(p.description)}`);
@@ -415,6 +446,291 @@ program
       console.log(chalk.green("✓") + ` No secrets detected${opts.all ? "" : " (known configs). Use --all to scan entire DB"}.`);
     } else if (!opts.fix) {
       console.log(chalk.yellow(`\nRun with --fix to redact in-place.`));
+    }
+  });
+
+// ── mcp ───────────────────────────────────────────────────────────────────────
+const mcpCmd = program.command("mcp").description("Install/remove MCP server for AI agents");
+
+mcpCmd.command("install")
+  .alias("add")
+  .description("Install configs MCP server into an agent")
+  .option("--claude", "install into Claude Code")
+  .option("--codex", "install into Codex")
+  .option("--gemini", "install into Gemini")
+  .option("--all", "install into all agents")
+  .action(async (opts) => {
+    const targets = opts.all ? ["claude", "codex", "gemini"] : [
+      ...(opts.claude ? ["claude"] : []),
+      ...(opts.codex ? ["codex"] : []),
+      ...(opts.gemini ? ["gemini"] : []),
+    ];
+    if (targets.length === 0) {
+      console.log(chalk.dim("Specify --claude, --codex, --gemini, or --all"));
+      return;
+    }
+    for (const target of targets) {
+      try {
+        if (target === "claude") {
+          const proc = Bun.spawn(["claude", "mcp", "add", "--transport", "stdio", "--scope", "user", "configs", "--", "configs-mcp"], { stdout: "inherit", stderr: "inherit" });
+          await proc.exited;
+          console.log(chalk.green("✓") + " Installed into Claude Code");
+        } else if (target === "codex") {
+          const { appendFileSync, existsSync: ex } = await import("node:fs");
+          const { join: j } = await import("node:path");
+          const configPath = j(homedir(), ".codex", "config.toml");
+          const block = `\n[mcp_servers.configs]\ncommand = "configs-mcp"\nargs = []\n`;
+          if (ex(configPath)) {
+            const content = readFileSync(configPath, "utf-8");
+            if (content.includes("[mcp_servers.configs]")) {
+              console.log(chalk.dim("= Already installed in Codex"));
+              continue;
+            }
+          }
+          appendFileSync(configPath, block);
+          console.log(chalk.green("✓") + " Installed into Codex");
+        } else if (target === "gemini") {
+          const { readFileSync: rf, writeFileSync: wf, existsSync: ex } = await import("node:fs");
+          const { join: j } = await import("node:path");
+          const configPath = j(homedir(), ".gemini", "settings.json");
+          let settings: Record<string, unknown> = {};
+          if (ex(configPath)) {
+            try { settings = JSON.parse(rf(configPath, "utf-8")); } catch { /* empty */ }
+          }
+          const mcpServers = (settings["mcpServers"] ?? {}) as Record<string, unknown>;
+          mcpServers["configs"] = { command: "configs-mcp", args: [] };
+          settings["mcpServers"] = mcpServers;
+          wf(configPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+          console.log(chalk.green("✓") + " Installed into Gemini");
+        }
+      } catch (e) {
+        console.error(chalk.red(`✗ Failed to install into ${target}: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    }
+  });
+
+mcpCmd.command("uninstall")
+  .alias("remove")
+  .description("Remove configs MCP server from agents")
+  .option("--claude", "remove from Claude Code")
+  .option("--all", "remove from all agents")
+  .action(async (opts) => {
+    if (opts.claude || opts.all) {
+      const proc = Bun.spawn(["claude", "mcp", "remove", "configs"], { stdout: "inherit", stderr: "inherit" });
+      await proc.exited;
+      console.log(chalk.green("✓") + " Removed from Claude Code");
+    }
+  });
+
+// ── init ──────────────────────────────────────────────────────────────────────
+program
+  .command("init")
+  .description("First-time setup: sync all known configs, create default profile")
+  .option("--force", "delete existing DB and start fresh")
+  .action(async (opts) => {
+    const dbPath = join(homedir(), ".configs", "configs.db");
+    if (opts.force && existsSync(dbPath)) {
+      const { rmSync } = await import("node:fs");
+      rmSync(dbPath);
+      console.log(chalk.dim("Deleted existing DB."));
+      resetDatabase();
+    }
+    console.log(chalk.bold("@hasna/configs — initializing\n"));
+
+    // Sync known configs
+    const result = await syncKnown({});
+    console.log(chalk.green("✓") + ` Synced: +${result.added} updated:${result.updated} unchanged:${result.unchanged}`);
+    if (result.skipped.length > 0) {
+      console.log(chalk.dim("  skipped: " + result.skipped.join(", ")));
+    }
+
+    // Add reference docs
+    const refs = [
+      { slug: "workspace-structure", name: "Workspace Structure", category: "workspace" as const, content: "# Workspace Structure\n\nSee ~/.claude/rules/workspace.md for full conventions.", desc: "~/Workspace/ hierarchy and naming" },
+      { slug: "secrets-schema", name: "Secrets Schema", category: "secrets_schema" as const, content: "# .secrets Schema\n\nLocation: ~/.secrets (sourced by ~/.zshrc)\nFormat: export KEY_NAME=\"value\"\n\nKeys: ANTHROPIC_API_KEY, OPENAI_API_KEY, EXA_API_KEY, NPM_TOKEN, GITHUB_TOKEN", desc: "Shape of ~/.secrets (no values)" },
+    ];
+    for (const ref of refs) {
+      try { getConfig(ref.slug); } catch {
+        createConfig({ name: ref.name, category: ref.category, agent: "global", format: "markdown", content: ref.content, kind: "reference", description: ref.desc });
+      }
+    }
+
+    // Create default profile
+    try { getProfile("my-setup"); } catch {
+      const p = createProfile({ name: "my-setup", description: "Default profile with all known configs" });
+      const allConfigs = listConfigs();
+      for (const c of allConfigs) addConfigToProfile(p.id, c.id);
+      console.log(chalk.green("✓") + ` Created profile "my-setup" with ${allConfigs.length} configs`);
+    }
+
+    // Show summary
+    const stats = getConfigStats();
+    console.log(chalk.bold("\nDB stats:"));
+    for (const [key, count] of Object.entries(stats)) {
+      if (count > 0) console.log(`  ${key.padEnd(18)} ${count}`);
+    }
+    console.log(chalk.dim(`\nDB: ${dbPath}`));
+  });
+
+// ── status ────────────────────────────────────────────────────────────────────
+program
+  .command("status")
+  .description("Health check: total configs, drift from disk, unredacted secrets")
+  .action(async () => {
+    const dbPath = join(homedir(), ".configs", "configs.db");
+    const stats = getConfigStats();
+    const { statSync: st } = await import("node:fs");
+    const dbSize = existsSync(dbPath) ? st(dbPath).size : 0;
+
+    console.log(chalk.bold("@hasna/configs") + chalk.dim(` v${pkg.version}`));
+    console.log(chalk.cyan("DB:") + ` ${dbPath} (${(dbSize / 1024).toFixed(1)}KB)`);
+    console.log(chalk.cyan("Total:") + ` ${stats["total"] || 0} configs\n`);
+
+    // Check drift
+    const allKnown = listConfigs({ kind: "file" });
+    let drifted = 0;
+    let missing = 0;
+    let secrets = 0;
+    let templates = 0;
+
+    for (const c of allKnown) {
+      if (!c.target_path) continue;
+      const path = expandPath(c.target_path);
+      if (!existsSync(path)) { missing++; continue; }
+      const disk = readFileSync(path, "utf-8");
+      // Compare disk vs stored (but stored is redacted, so compare redacted version of disk)
+      const { content: redactedDisk } = redactContent(disk, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      if (redactedDisk !== c.content) drifted++;
+      if (c.is_template) templates++;
+      const found = scanSecrets(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      secrets += found.length;
+    }
+
+    console.log(chalk.cyan("Drifted:") + ` ${drifted === 0 ? chalk.green("0") : chalk.yellow(String(drifted))} (stored ≠ disk)`);
+    console.log(chalk.cyan("Missing:") + ` ${missing === 0 ? chalk.green("0") : chalk.yellow(String(missing))} (file not on disk)`);
+    console.log(chalk.cyan("Secrets:") + ` ${secrets === 0 ? chalk.green("0 ✓") : chalk.red(String(secrets) + " ⚠")} unredacted`);
+    console.log(chalk.cyan("Templates:") + ` ${templates} (with {{VAR}} placeholders)`);
+  });
+
+// ── diff --all ────────────────────────────────────────────────────────────────
+// Extend existing diff command to support --all
+
+// ── backup / restore ──────────────────────────────────────────────────────────
+program
+  .command("backup")
+  .description("Export configs to a timestamped backup file")
+  .action(async () => {
+    const { mkdirSync: mk } = await import("node:fs");
+    const backupDir = join(homedir(), ".configs", "backups");
+    mk(backupDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "-").slice(0, 19);
+    const outPath = join(backupDir, `configs-${ts}.tar.gz`);
+    const result = await exportConfigs(outPath);
+    const { statSync: st } = await import("node:fs");
+    const size = st(outPath).size;
+    console.log(chalk.green("✓") + ` Backup: ${result.count} configs → ${outPath} (${(size / 1024).toFixed(1)}KB)`);
+  });
+
+program
+  .command("restore <file>")
+  .description("Restore configs from a backup file")
+  .option("--overwrite", "overwrite existing configs (default: skip)")
+  .action(async (file, opts) => {
+    const result = await importConfigs(file, { conflict: opts.overwrite ? "overwrite" : "skip" });
+    console.log(chalk.green("✓") + ` Restored: +${result.created} updated:${result.updated} skipped:${result.skipped}`);
+    if (result.errors.length > 0) {
+      for (const e of result.errors) console.log(chalk.red("  " + e));
+    }
+  });
+
+// ── doctor ────────────────────────────────────────────────────────────────────
+program
+  .command("doctor")
+  .description("Validate configs: syntax, permissions, missing files, secrets")
+  .action(async () => {
+    let issues = 0;
+    const pass = (msg: string) => console.log(chalk.green("  ✓ ") + msg);
+    const fail = (msg: string) => { issues++; console.log(chalk.red("  ✗ ") + msg); };
+
+    console.log(chalk.bold("Config Doctor\n"));
+
+    // Check known files exist on disk
+    console.log(chalk.cyan("Known files on disk:"));
+    for (const k of KNOWN_CONFIGS) {
+      if (k.rulesDir) {
+        existsSync(expandPath(k.rulesDir)) ? pass(`${k.rulesDir}/ exists`) : fail(`${k.rulesDir}/ not found`);
+      } else {
+        existsSync(expandPath(k.path)) ? pass(k.path) : fail(`${k.path} not found`);
+      }
+    }
+
+    // Check DB configs
+    const allConfigs = listConfigs();
+    console.log(chalk.cyan(`\nStored configs (${allConfigs.length}):`));
+
+    // Validate JSON/TOML syntax
+    let validCount = 0;
+    for (const c of allConfigs) {
+      if (c.format === "json") {
+        try { JSON.parse(c.content); validCount++; } catch { fail(`${c.slug}: invalid JSON`); }
+      } else { validCount++; }
+    }
+    pass(`${validCount}/${allConfigs.length} valid syntax`);
+
+    // Secrets check
+    let secretCount = 0;
+    for (const c of allConfigs) {
+      const found = scanSecrets(c.content, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      secretCount += found.length;
+    }
+    secretCount === 0 ? pass("No unredacted secrets") : fail(`${secretCount} unredacted secret(s) — run \`configs scan --fix\``);
+
+    console.log(`\n${issues === 0 ? chalk.green("✓ All checks passed") : chalk.yellow(`${issues} issue(s) found`)}`);
+  });
+
+// ── completions ───────────────────────────────────────────────────────────────
+program
+  .command("completions [shell]")
+  .description("Output shell completion script (zsh or bash)")
+  .action(async (shell) => {
+    const sh = shell || "zsh";
+    if (sh === "zsh") {
+      console.log(`#compdef configs
+_configs() {
+  local -a commands
+  commands=(
+    'list:List stored configs'
+    'show:Show a config'
+    'add:Ingest a file into the DB'
+    'apply:Apply a config to disk'
+    'diff:Show diff stored vs disk'
+    'sync:Sync known configs from disk'
+    'export:Export as tar.gz'
+    'import:Import from tar.gz'
+    'whoami:Setup summary'
+    'status:Health check'
+    'init:First-time setup'
+    'scan:Scan for secrets'
+    'profile:Manage profiles'
+    'snapshot:Version history'
+    'template:Template operations'
+    'mcp:Install MCP server'
+    'backup:Export to timestamped backup'
+    'restore:Import from backup'
+    'doctor:Validate configs'
+    'completions:Output shell completions'
+  )
+  _describe 'command' commands
+}
+compdef _configs configs`);
+    } else {
+      console.log(`# bash completion for configs
+_configs_completions() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  local commands="list show add apply diff sync export import whoami status init scan profile snapshot template mcp backup restore doctor completions"
+  COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") )
+}
+complete -F _configs_completions configs`);
     }
   });
 
