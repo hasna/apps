@@ -96,16 +96,18 @@ export class AttachmentsApi {
    * Download a specific attachment to disk
    */
   async download(messageId: string, attachmentId: string, filename: string, mimeType: string): Promise<DownloadedAttachment> {
+    // Normalize Unicode whitespace characters in filename (e.g. non-breaking spaces from Gmail)
+    const cleanFilename = filename.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ');
     const data = await this.get(messageId, attachmentId);
     const dir = this.getAttachmentsDir(messageId);
-    const filepath = join(dir, filename);
+    const filepath = join(dir, cleanFilename);
 
     // Decode base64url to buffer
     const buffer = Buffer.from(data.data, 'base64url');
     writeFileSync(filepath, buffer);
 
     return {
-      filename,
+      filename: cleanFilename,
       path: filepath,
       size: buffer.length,
       mimeType,
