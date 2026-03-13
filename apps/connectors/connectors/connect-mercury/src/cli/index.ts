@@ -324,6 +324,74 @@ accountsCmd
   });
 
 accountsCmd
+  .command('balance-at [account]')
+  .description('Get account balance at a specific date (account: ID, name, or default)')
+  .requiredOption('-d, --date <YYYY-MM-DD>', 'Target date to compute balance for')
+  .action(async (account: string | undefined, opts) => {
+    try {
+      const client = getClient();
+      const accountId = resolveAccountId(account);
+
+      // Validate date format
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) {
+        error('Invalid date format. Use YYYY-MM-DD.');
+        process.exit(1);
+      }
+
+      // Get current balance
+      const { currentBalance } = await client.accounts.getBalance(accountId);
+
+      // Fetch all transactions posted after the target date by paginating
+      const PAGE_SIZE = 500;
+      const allTransactions: import('../types').Transaction[] = [];
+      let offset = 0;
+      let total = Infinity;
+
+      // The day after the target date is our start filter
+      const targetDate = new Date(opts.date + 'T00:00:00Z');
+      const dayAfter = new Date(targetDate.getTime() + 24 * 60 * 60 * 1000);
+      const startFilter = dayAfter.toISOString().split('T')[0];
+
+      while (allTransactions.length < total) {
+        const result = await client.transactions.list(accountId, {
+          limit: PAGE_SIZE,
+          offset,
+          start: startFilter,
+          status: 'sent',
+        });
+        total = result.total;
+        allTransactions.push(...result.transactions);
+        offset += result.transactions.length;
+        if (result.transactions.length === 0) break;
+      }
+
+      // Reverse transactions after target date: subtract each transaction's amount
+      // (positive = credit into account, negative = debit out of account)
+      const adjustment = allTransactions.reduce((sum, tx) => sum + tx.amount, 0);
+      const balanceAtDate = currentBalance - adjustment;
+
+      if (getFormat(accountsCmd) === 'json') {
+        print({
+          date: opts.date,
+          accountId,
+          balanceAtDate,
+          currentBalance,
+          transactionsAfterDate: allTransactions.length,
+          adjustment,
+        }, 'json');
+      } else {
+        console.log(chalk.bold(`Account Balance at ${opts.date}:`));
+        console.log(`  Balance at date: ${formatMoney(balanceAtDate)}`);
+        console.log(`  Current balance: ${formatMoney(currentBalance)}`);
+        console.log(chalk.gray(`  (Reversed ${allTransactions.length} transaction(s) after ${opts.date})`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+accountsCmd
   .command('statements [account]')
   .description('List account statements (account: ID, name, or default)')
   .option('-l, --limit <number>', 'Maximum results')
