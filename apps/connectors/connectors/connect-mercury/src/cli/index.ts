@@ -419,33 +419,73 @@ transactionsCmd
 transactionsCmd
   .command('list-all')
   .description('List transactions across all accounts')
-  .option('-l, --limit <number>', 'Maximum results', '20')
+  .option('-l, --limit <number>', 'Maximum results per page (or total without --all)', '20')
   .option('-s, --start <date>', 'Start date (YYYY-MM-DD)')
   .option('-e, --end <date>', 'End date (YYYY-MM-DD)')
   .option('--status <status>', 'Filter by status')
   .option('--search <query>', 'Search transactions')
+  .option('--all', 'Paginate through all results (ignores --limit)')
   .action(async (opts) => {
     try {
       const client = getClient();
-      const result = await client.transactions.listAll({
-        limit: parseInt(opts.limit),
-        start: opts.start,
-        end: opts.end,
-        status: opts.status,
-        search: opts.search,
-      });
 
-      if (getFormat(transactionsCmd) === 'json') {
-        print(result, 'json');
+      if (opts.all) {
+        // Paginate through all results using offset
+        const PAGE_SIZE = 500;
+        const allTransactions: import('../types').Transaction[] = [];
+        let offset = 0;
+        let total = Infinity;
+
+        while (allTransactions.length < total) {
+          const result = await client.transactions.listAll({
+            limit: PAGE_SIZE,
+            offset,
+            start: opts.start,
+            end: opts.end,
+            status: opts.status,
+            search: opts.search,
+          });
+
+          total = result.total;
+          allTransactions.push(...result.transactions);
+          offset += result.transactions.length;
+
+          if (result.transactions.length < PAGE_SIZE) break;
+        }
+
+        if (getFormat(transactionsCmd) === 'json') {
+          print({ transactions: allTransactions, total: allTransactions.length }, 'json');
+        } else {
+          success(`All Transactions (${allTransactions.length} of ${total} total):`);
+          allTransactions.forEach(tx => {
+            const amountColor = tx.amount >= 0 ? chalk.green : chalk.red;
+            console.log(`  ${chalk.gray(tx.createdAt.split('T')[0])} ${amountColor(formatMoney(tx.amount))} - ${tx.counterpartyName || tx.kind}`);
+            console.log(`    ID: ${tx.id} | Account: ${tx.accountId} | Status: ${tx.status}`);
+            if (tx.note) console.log(`    Note: ${tx.note}`);
+            console.log();
+          });
+        }
       } else {
-        success(`All Transactions (${result.total} total):`);
-        result.transactions.forEach(tx => {
-          const amountColor = tx.amount >= 0 ? chalk.green : chalk.red;
-          console.log(`  ${chalk.gray(tx.createdAt.split('T')[0])} ${amountColor(formatMoney(tx.amount))} - ${tx.counterpartyName || tx.kind}`);
-          console.log(`    ID: ${tx.id} | Account: ${tx.accountId} | Status: ${tx.status}`);
-          if (tx.note) console.log(`    Note: ${tx.note}`);
-          console.log();
+        const result = await client.transactions.listAll({
+          limit: parseInt(opts.limit),
+          start: opts.start,
+          end: opts.end,
+          status: opts.status,
+          search: opts.search,
         });
+
+        if (getFormat(transactionsCmd) === 'json') {
+          print(result, 'json');
+        } else {
+          success(`All Transactions (${result.transactions.length} of ${result.total} total):`);
+          result.transactions.forEach(tx => {
+            const amountColor = tx.amount >= 0 ? chalk.green : chalk.red;
+            console.log(`  ${chalk.gray(tx.createdAt.split('T')[0])} ${amountColor(formatMoney(tx.amount))} - ${tx.counterpartyName || tx.kind}`);
+            console.log(`    ID: ${tx.id} | Account: ${tx.accountId} | Status: ${tx.status}`);
+            if (tx.note) console.log(`    Note: ${tx.note}`);
+            console.log();
+          });
+        }
       }
     } catch (err) {
       error(String(err));
@@ -461,6 +501,94 @@ transactionsCmd
       const client = getClient();
       const result = await client.transactions.getById(transactionId);
       print(result, getFormat(transactionsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+transactionsCmd
+  .command('export [account]')
+  .description('Export transactions as CSV (account: ID, name, or default; omit for all accounts)')
+  .option('-s, --start <date>', 'Start date (YYYY-MM-DD)')
+  .option('-e, --end <date>', 'End date (YYYY-MM-DD)')
+  .option('--status <status>', 'Filter by status (pending, sent, cancelled, failed)')
+  .option('--search <query>', 'Search transactions')
+  .option('-o, --output <file>', 'Output file path (default: stdout)')
+  .option('--all', 'Paginate through all results (default fetches up to 500)')
+  .action(async (account: string | undefined, opts) => {
+    try {
+      const client = getClient();
+      const PAGE_SIZE = 500;
+
+      const allTransactions: import('../types').Transaction[] = [];
+      let offset = 0;
+      let total = Infinity;
+
+      if (account) {
+        // Export from a specific account
+        const accountId = resolveAccountId(account);
+        while (allTransactions.length < total) {
+          const result = await client.transactions.list(accountId, {
+            limit: PAGE_SIZE,
+            offset,
+            start: opts.start,
+            end: opts.end,
+            status: opts.status,
+            search: opts.search,
+          });
+          total = result.total;
+          allTransactions.push(...result.transactions);
+          offset += result.transactions.length;
+          if (!opts.all || result.transactions.length < PAGE_SIZE) break;
+        }
+      } else {
+        // Export across all accounts
+        while (allTransactions.length < total) {
+          const result = await client.transactions.listAll({
+            limit: PAGE_SIZE,
+            offset,
+            start: opts.start,
+            end: opts.end,
+            status: opts.status,
+            search: opts.search,
+          });
+          total = result.total;
+          allTransactions.push(...result.transactions);
+          offset += result.transactions.length;
+          if (!opts.all || result.transactions.length < PAGE_SIZE) break;
+        }
+      }
+
+      // Build CSV
+      function escapeCsv(val: string | number | undefined | null): string {
+        if (val === undefined || val === null) return '';
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+      }
+
+      const header = 'date,description,amount,status,counterparty';
+      const rows = allTransactions.map(tx => {
+        const date = tx.createdAt ? tx.createdAt.split('T')[0] : '';
+        const description = tx.bankDescription || tx.externalMemo || tx.kind || '';
+        const amount = (tx.amount / 100).toFixed(2);
+        const status = tx.status || '';
+        const counterparty = tx.counterpartyName || tx.counterpartyNickname || '';
+        return [date, description, amount, status, counterparty].map(escapeCsv).join(',');
+      });
+
+      const csv = [header, ...rows].join('\n') + '\n';
+
+      if (opts.output) {
+        const { writeFileSync } = await import('fs');
+        writeFileSync(opts.output, csv, 'utf8');
+        success(`Exported ${allTransactions.length} transactions to ${opts.output}`);
+      } else {
+        process.stdout.write(csv);
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);

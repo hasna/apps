@@ -513,18 +513,82 @@ filesCmd
 
 filesCmd
   .command('share <fileId>')
-  .description('Share a file with a user')
-  .requiredOption('--email <email>', 'Email address to share with')
+  .description('Share a file with a user, group, domain, or make it public')
+  .option('--email <email>', 'Email address to share with (required for user/group types)')
+  .option('--type <type>', 'Permission type (user, group, domain, anyone)', 'user')
+  .option('--domain <domain>', 'Domain to share with (required for domain type)')
   .option('--role <role>', 'Permission role (reader, writer, commenter, owner)', 'reader')
   .option('--no-notify', 'Do not send notification email')
+  .option('--allow-discovery', 'Allow file discovery (for anyone/domain types)')
   .action(async (fileId: string, opts) => {
     try {
       const drive = requireAuth();
-      const permission = await drive.files.share(fileId, opts.email, opts.role as 'reader' | 'writer' | 'commenter' | 'owner', {
-        sendNotificationEmail: opts.notify !== false,
-      });
-      success('Shared with: ' + opts.email);
-      info('Role: ' + opts.role);
+      const type = opts.type as 'user' | 'group' | 'domain' | 'anyone';
+
+      const validTypes = ['user', 'group', 'domain', 'anyone'];
+      if (!validTypes.includes(type)) {
+        error('Invalid type "' + type + '". Must be one of: user, group, domain, anyone');
+        process.exit(1);
+      }
+
+      if ((type === 'user' || type === 'group') && !opts.email) {
+        error('--email is required for type "' + type + '"');
+        process.exit(1);
+      }
+
+      if (type === 'domain' && !opts.domain) {
+        error('--domain is required for type "domain"');
+        process.exit(1);
+      }
+
+      if (type === 'anyone') {
+        // Create a public link permission directly
+        const permission: Record<string, unknown> = {
+          type: 'anyone',
+          role: opts.role,
+        };
+        if (opts.allowDiscovery) {
+          permission.allowFileDiscovery = true;
+        }
+        const params: Record<string, string | number | boolean | undefined> = {
+          supportsAllDrives: true,
+          sendNotificationEmail: false,
+        };
+        await drive.getClient().post(
+          '/files/' + fileId + '/permissions',
+          permission,
+          params
+        );
+        success('File is now publicly accessible');
+        info('Role: ' + opts.role);
+        info('Type: anyone');
+        if (opts.allowDiscovery) {
+          info('Allow discovery: yes');
+        }
+      } else if (type === 'domain') {
+        const permission: Record<string, unknown> = {
+          type: 'domain',
+          role: opts.role,
+          domain: opts.domain,
+        };
+        if (opts.allowDiscovery) {
+          permission.allowFileDiscovery = true;
+        }
+        const params: Record<string, string | number | boolean | undefined> = {
+          supportsAllDrives: true,
+          sendNotificationEmail: false,
+        };
+        await drive.getClient().post('/files/' + fileId + '/permissions', permission, params);
+        success('Shared with domain: ' + opts.domain);
+        info('Role: ' + opts.role);
+      } else {
+        await drive.files.share(fileId, opts.email, opts.role as 'reader' | 'writer' | 'commenter' | 'owner', {
+          sendNotificationEmail: opts.notify !== false,
+        });
+        success('Shared with: ' + opts.email);
+        info('Role: ' + opts.role);
+        info('Type: ' + type);
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);

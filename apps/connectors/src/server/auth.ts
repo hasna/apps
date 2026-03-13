@@ -250,6 +250,21 @@ export function saveApiKey(name: string, key: string, field?: string): void {
   // Determine which field to save the key as
   const keyField = field || guessKeyField(name);
 
+  // OAuth client credentials (clientId, clientSecret) belong in credentials.json
+  // at the connector root, not in a profile config. Gmail's loadBaseConfig() reads
+  // from there, and these are shared across all profiles.
+  if (keyField === "clientId" || keyField === "clientSecret") {
+    const credentialsFile = join(configDir, "credentials.json");
+    mkdirSync(configDir, { recursive: true });
+    let creds: Record<string, unknown> = {};
+    if (existsSync(credentialsFile)) {
+      try { creds = JSON.parse(readFileSync(credentialsFile, "utf-8")); } catch { /* use empty */ }
+    }
+    creds[keyField] = key;
+    writeFileSync(credentialsFile, JSON.stringify(creds, null, 2));
+    return;
+  }
+
   // Try pattern 1: profiles/<name>.json
   const profileFile = join(configDir, "profiles", `${profile}.json`);
   const profileDir = join(configDir, "profiles", profile);

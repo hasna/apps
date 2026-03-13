@@ -722,18 +722,43 @@ messagesCmd
   .requiredOption('-b, --body <body>', 'Reply body (supports markdown)')
   .option('--cc <emails>', 'CC recipients (comma-separated)')
   .option('--html', 'Send as HTML email')
+  .option('--attachment <path>', 'Attach a file (can be specified multiple times)', (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .action(async (messageId: string, opts) => {
     try {
       const gmail = requireAuth();
+
+      // Build attachments array from --attachment flags
+      type AttachmentEntry = { filename: string; mimeType: string; data: string };
+      const attachments: AttachmentEntry[] = [];
+      if (opts.attachment && (opts.attachment as string[]).length > 0) {
+        for (const attachPath of opts.attachment as string[]) {
+          const resolvedPath = resolve(attachPath);
+          if (!existsSync(resolvedPath)) {
+            error(`Attachment not found: ${attachPath}`);
+            process.exit(1);
+          }
+          const fileData = readFileSync(resolvedPath);
+          attachments.push({
+            filename: basename(resolvedPath),
+            mimeType: detectMimeType(resolvedPath),
+            data: fileData.toString('base64'),
+          });
+        }
+      }
+
       const result = await gmail.messages.reply(messageId, {
         body: opts.body,
         cc: opts.cc?.split(',').map((e: string) => e.trim()),
         isHtml: opts.html,
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
 
       success(`Reply sent!`);
       info(`Message ID: ${result.id}`);
       info(`Thread ID: ${result.threadId}`);
+      if (attachments.length > 0) {
+        info(`Attachments: ${attachments.map((a) => a.filename).join(', ')}`);
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);
