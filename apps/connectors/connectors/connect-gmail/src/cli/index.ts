@@ -46,6 +46,8 @@ import {
 } from '../utils/settings';
 import type { OutputFormat } from '../utils/output';
 import { success, error, info, print, warn } from '../utils/output';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join, resolve } from 'path';
 
 const program = new Command();
 
@@ -813,6 +815,20 @@ labelsCmd
   });
 
 labelsCmd
+  .command('rename <labelId> <newName>')
+  .description('Rename a label')
+  .action(async (labelId: string, newName: string) => {
+    try {
+      const gmail = requireAuth();
+      const label = await gmail.labels.update(labelId, { name: newName });
+      success(`Renamed to: ${label.name}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+labelsCmd
   .command('delete <labelId>')
   .description('Delete a label')
   .action(async (labelId: string) => {
@@ -1218,6 +1234,129 @@ attachmentsCmd
     const gmail = requireAuth();
     const path = gmail.attachments.getStoragePath(messageId);
     info(`Attachments path: ${path}`);
+  });
+
+
+attachmentsCmd
+  .command('bulk-download <query>')
+  .description('Bulk-download attachments from messages matching a Gmail search query')
+  .option('-o, --output <dir>', 'Output directory', './gmail-attachments')
+  .option('--organize-by-date', 'Organize files into subdirs by email date (YYYY/MM/)')
+  .option('-n, --max <number>', 'Maximum messages to process', '100')
+  .action(async (query: string, opts) => {
+    try {
+      const gmail = requireAuth();
+      const outputDir = resolve(opts.output);
+      const organizeByDate = !!opts.organizeByDate;
+      const maxMessages = parseInt(opts.max);
+
+      info(`Searching for messages matching: ${chalk.cyan(query)}`);
+      info(`Output directory: ${chalk.cyan(outputDir)}`);
+      if (organizeByDate) info('Organizing by date: enabled');
+
+      // Paginate through matching messages
+      const allMessageIds: string[] = [];
+      let pageToken: string | undefined;
+
+      do {
+        const result = await gmail.messages.list({
+          q: query,
+          maxResults: Math.min(maxMessages - allMessageIds.length, 500),
+          pageToken,
+        });
+
+        if (result.messages) {
+          for (const m of result.messages) {
+            if (m.id) allMessageIds.push(m.id);
+          }
+        }
+
+        pageToken = result.nextPageToken;
+      } while (pageToken && allMessageIds.length < maxMessages);
+
+      if (allMessageIds.length === 0) {
+        info('No messages found matching the query.');
+        return;
+      }
+
+      info(`Found ${allMessageIds.length} message(s). Scanning for attachments...`);
+
+      let totalDownloaded = 0;
+      let totalSkipped = 0;
+      let totalErrors = 0;
+
+      for (let i = 0; i < allMessageIds.length; i++) {
+        const messageId = allMessageIds[i];
+        const progress = `[${i + 1}/${allMessageIds.length}]`;
+
+        try {
+          const attachments = await gmail.attachments.list(messageId);
+
+          if (attachments.length === 0) continue;
+
+          // Determine destination directory
+          let destDir = outputDir;
+          if (organizeByDate) {
+            // Fetch minimal message metadata to get internalDate
+            const fullMsg = await (gmail as any).client.get(
+              `/users/me/messages/${messageId}`,
+              { format: 'minimal' }
+            );
+            const msgDate = fullMsg?.internalDate
+              ? new Date(parseInt(fullMsg.internalDate))
+              : new Date();
+            const year = msgDate.getFullYear().toString();
+            const month = (msgDate.getMonth() + 1).toString().padStart(2, '0');
+            destDir = join(outputDir, year, month);
+          }
+
+          if (!existsSync(destDir)) {
+            mkdirSync(destDir, { recursive: true });
+          }
+
+          for (const attachment of attachments) {
+            try {
+              const data = await gmail.attachments.get(messageId, attachment.attachmentId);
+              const cleanFilename = attachment.filename.replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ');
+
+              // Avoid overwriting existing files
+              let finalFilename = cleanFilename;
+              let destPath = join(destDir, finalFilename);
+              if (existsSync(destPath)) {
+                const dotIdx = cleanFilename.lastIndexOf('.');
+                const suffix = '_' + messageId.slice(-6);
+                finalFilename = dotIdx !== -1
+                  ? cleanFilename.slice(0, dotIdx) + suffix + cleanFilename.slice(dotIdx)
+                  : cleanFilename + suffix;
+                destPath = join(destDir, finalFilename);
+              }
+
+              const buffer = Buffer.from(data.data, 'base64url');
+              writeFileSync(destPath, buffer);
+
+              info(`${progress} ${chalk.green('✓')} ${finalFilename} (${(buffer.length / 1024).toFixed(1)} KB)`);
+              totalDownloaded++;
+            } catch (attachErr) {
+              warn(`${progress} ${chalk.red('✗')} ${attachment.filename}: ${String(attachErr)}`);
+              totalErrors++;
+            }
+          }
+        } catch (msgErr) {
+          warn(`${progress} ${chalk.yellow('!')} Message ${messageId}: ${String(msgErr)}`);
+          totalSkipped++;
+        }
+      }
+
+      info('');
+      success('Bulk download complete:');
+      info(`  Downloaded: ${totalDownloaded} attachment(s)`);
+      if (totalSkipped > 0) info(`  Skipped: ${totalSkipped} message(s) with errors`);
+      if (totalErrors > 0) info(`  Failed: ${totalErrors} attachment(s)`);
+      info(`  Saved to: ${outputDir}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
   });
 
 // ============================================

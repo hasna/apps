@@ -497,6 +497,20 @@ filesCmd
   });
 
 filesCmd
+  .command('rename <fileId> <newName>')
+  .description('Rename a file')
+  .action(async (fileId: string, newName: string) => {
+    try {
+      const drive = requireAuth();
+      const file = await drive.files.update(fileId, { name: newName });
+      success('Renamed to: ' + file.name);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+filesCmd
   .command('share <fileId>')
   .description('Share a file with a user')
   .requiredOption('--email <email>', 'Email address to share with')
@@ -515,6 +529,130 @@ filesCmd
       process.exit(1);
     }
   });
+
+filesCmd
+  .command('bulk-upload <directory>')
+  .description('Bulk-upload all files from a local directory to Google Drive')
+  .option('--folder <folderId>', 'Target Drive folder ID (uploads to root if omitted)')
+  .option('--recursive', 'Preserve subfolder structure (creates Drive folders for each subdir)')
+  .action(async (directory: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const { readdirSync, statSync } = await import('fs');
+      const { resolve: resolvePath, relative, join: joinPath } = await import('path');
+
+      const rootDir = resolvePath(directory);
+
+      // Verify directory exists
+      try {
+        const stat = statSync(rootDir);
+        if (!stat.isDirectory()) {
+          error('"' + rootDir + '" is not a directory');
+          process.exit(1);
+        }
+      } catch {
+        error('Directory not found: ' + rootDir);
+        process.exit(1);
+      }
+
+      const rootFolderId: string | undefined = opts.folder;
+      const recursive = !!opts.recursive;
+
+      info('Uploading from: ' + rootDir);
+      if (rootFolderId) info('Target folder ID: ' + rootFolderId);
+      if (recursive) info('Recursive: enabled (preserving subfolder structure)');
+
+      // Track Drive folder IDs for local subdirectories
+      const folderIdMap = new Map<string, string>();
+      if (rootFolderId) {
+        folderIdMap.set('', rootFolderId);
+      }
+
+      let totalUploaded = 0;
+      let totalErrors = 0;
+
+      /**
+       * Get or create a Drive folder for a given local relative path.
+       * e.g. 'images/2024' -> creates 'images' under root, then '2024' under that.
+       */
+      async function getDriveFolderId(relPath: string): Promise<string | undefined> {
+        if (!relPath) return rootFolderId;
+
+        if (folderIdMap.has(relPath)) return folderIdMap.get(relPath);
+
+        // Ensure parent exists first
+        const parts = relPath.split('/');
+        const parentRelPath = parts.slice(0, -1).join('/');
+        const folderName = parts[parts.length - 1];
+        const parentId = await getDriveFolderId(parentRelPath);
+
+        const folder = await drive.folders.create(folderName, parentId);
+        info('  Created folder: ' + relPath + ' (ID: ' + folder.id + ')');
+        const folderId = folder.id as string;
+        folderIdMap.set(relPath, folderId);
+        return folderId;
+      }
+
+      /**
+       * Upload all files in a directory, optionally recursing into subdirs.
+       */
+      async function uploadDir(localDir: string, relDir: string): Promise<void> {
+        let entries: string[];
+        try {
+          entries = readdirSync(localDir);
+        } catch (readErr) {
+          warn('Cannot read directory ' + localDir + ': ' + String(readErr));
+          return;
+        }
+
+        for (const entry of entries) {
+          const localPath = joinPath(localDir, entry);
+          const relPath = relDir ? relDir + '/' + entry : entry;
+
+          let stat;
+          try {
+            stat = statSync(localPath);
+          } catch {
+            warn('Cannot stat: ' + localPath);
+            continue;
+          }
+
+          if (stat.isDirectory()) {
+            if (recursive) {
+              await uploadDir(localPath, relPath);
+            }
+            // skip directories when not recursive
+          } else if (stat.isFile()) {
+            try {
+              const parentFolderId = await getDriveFolderId(relDir);
+              info('  Uploading: ' + relPath + ' (' + (stat.size / 1024).toFixed(1) + ' KB)...');
+
+              const file = await drive.files.upload(localPath, {
+                folderId: parentFolderId,
+              });
+
+              success('  ✓ ' + relPath + ' -> ' + file.name + ' (ID: ' + file.id + ')');
+              totalUploaded++;
+            } catch (uploadErr) {
+              warn('  ✗ ' + relPath + ': ' + String(uploadErr));
+              totalErrors++;
+            }
+          }
+        }
+      }
+
+      await uploadDir(rootDir, '');
+
+      info('');
+      success('Bulk upload complete:');
+      info('  Uploaded: ' + totalUploaded + ' file(s)');
+      if (totalErrors > 0) info('  Failed: ' + totalErrors + ' file(s)');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 
 // ============================================
 // Folders Commands
@@ -576,6 +714,20 @@ foldersCmd
       const drive = requireAuth();
       await drive.folders.delete(folderId, opts.permanent);
       success(opts.permanent ? 'Folder deleted permanently' : 'Folder moved to trash');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+foldersCmd
+  .command('rename <folderId> <newName>')
+  .description('Rename a folder')
+  .action(async (folderId: string, newName: string) => {
+    try {
+      const drive = requireAuth();
+      const folder = await drive.files.update(folderId, { name: newName });
+      success('Renamed to: ' + folder.name);
     } catch (err) {
       error(String(err));
       process.exit(1);

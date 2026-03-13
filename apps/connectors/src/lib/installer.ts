@@ -3,6 +3,7 @@
  */
 
 import { existsSync, cpSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from "fs";
+import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -98,6 +99,23 @@ export function installConnector(
 
     // Copy connector
     cpSync(sourcePath, destPath, { recursive: true });
+
+    // Copy credentials and profiles from ~/.connectors/ if they exist
+    // This prevents the local install from shadowing existing home credentials
+    const homeCredDir = join(homedir(), ".connectors", connectorName);
+    if (existsSync(homeCredDir)) {
+      const filesToCopy = ["credentials.json", "current_profile"];
+      for (const file of filesToCopy) {
+        const src = join(homeCredDir, file);
+        if (existsSync(src)) {
+          cpSync(src, join(destPath, file));
+        }
+      }
+      const profilesDir = join(homeCredDir, "profiles");
+      if (existsSync(profilesDir)) {
+        cpSync(profilesDir, join(destPath, "profiles"), { recursive: true });
+      }
+    }
 
     // Update or create .connectors/index.ts for easy imports
     updateConnectorsIndex(destDir);

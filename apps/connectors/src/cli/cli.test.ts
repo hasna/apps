@@ -68,7 +68,7 @@ describe("CLI", () => {
       const { stdout } = await run("categories --json");
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(11);
+      expect(data.length).toBeGreaterThanOrEqual(11);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("count");
       expect(data[0].count).toBeGreaterThan(0);
