@@ -21,9 +21,9 @@ export { applyConfig, applyConfigs, expandPath } from "./lib/apply.js";
 export type { ApplyOptions } from "./lib/apply.js";
 
 // Lib — sync
-export { syncKnown, syncToDisk, diffConfig, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "./lib/sync.js";
+export { syncKnown, syncToDisk, syncProject, diffConfig, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS, PROJECT_CONFIG_FILES } from "./lib/sync.js";
 export { syncFromDir, syncToDir } from "./lib/sync-dir.js";
-export type { SyncKnownOptions, SyncToDiskOptions } from "./lib/sync.js";
+export type { SyncKnownOptions, SyncToDiskOptions, SyncProjectOptions, KnownConfig } from "./lib/sync.js";
 export type { SyncFromDirOptions } from "./lib/sync-dir.js";
 
 // Lib — export/import
@@ -35,3 +35,7 @@ export type { ImportOptions, ImportResult } from "./lib/import.js";
 // Lib — template
 export { parseTemplateVars, extractTemplateVars, renderTemplate, isTemplate } from "./lib/template.js";
 export type { TemplateVar } from "./lib/template.js";
+
+// Lib — redact
+export { redactContent, scanSecrets, hasSecrets } from "./lib/redact.js";
+export type { RedactResult, RedactedVar, RedactFormat } from "./lib/redact.js";
