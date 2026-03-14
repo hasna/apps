@@ -734,5 +734,58 @@ complete -F _configs_completions configs`);
     }
   });
 
+// ── watch ─────────────────────────────────────────────────────────────────────
+program
+  .command("watch")
+  .description("Watch known config files for changes and auto-sync to DB")
+  .option("-i, --interval <ms>", "poll interval in milliseconds", "3000")
+  .action(async (opts) => {
+    const interval = Number(opts.interval);
+    const { statSync: st } = await import("node:fs");
+    const { expandPath } = await import("../lib/apply.js");
+
+    console.log(chalk.bold("@hasna/configs watch") + chalk.dim(` — polling every ${interval}ms`));
+    console.log(chalk.dim("Watching known config files for changes…\n"));
+
+    // Build file → mtime map
+    const mtimes = new Map<string, number>();
+    for (const k of KNOWN_CONFIGS) {
+      if (k.rulesDir) {
+        const absDir = expandPath(k.rulesDir);
+        if (!existsSync(absDir)) continue;
+        const { readdirSync } = await import("node:fs");
+        for (const f of readdirSync(absDir).filter((f: string) => f.endsWith(".md"))) {
+          const abs = join(absDir, f);
+          mtimes.set(abs, st(abs).mtimeMs);
+        }
+      } else {
+        const abs = expandPath(k.path);
+        if (existsSync(abs)) mtimes.set(abs, st(abs).mtimeMs);
+      }
+    }
+    console.log(chalk.dim(`Tracking ${mtimes.size} files`));
+
+    const tick = async () => {
+      let changed = 0;
+      for (const [abs, oldMtime] of mtimes) {
+        if (!existsSync(abs)) continue;
+        const newMtime = st(abs).mtimeMs;
+        if (newMtime !== oldMtime) {
+          changed++;
+          mtimes.set(abs, newMtime);
+        }
+      }
+      if (changed > 0) {
+        const result = await syncKnown({});
+        const ts = new Date().toLocaleTimeString();
+        console.log(`${chalk.dim(ts)} ${chalk.green("✓")} ${changed} file(s) changed → synced +${result.added} updated:${result.updated}`);
+      }
+    };
+
+    setInterval(tick, interval);
+    // Keep alive
+    await new Promise(() => {});
+  });
+
 program.version(pkg.version).name("configs");
 program.parse(process.argv);
