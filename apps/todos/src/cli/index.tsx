@@ -1961,6 +1961,97 @@ program
     }
   });
 
+// assign
+program
+  .command("assign <id> <agent>")
+  .description("Assign a task to an agent")
+  .option("--json", "Output as JSON")
+  .action((id: string, agent: string, opts) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const db = getDatabase();
+    const task = getTask(resolvedId, db);
+    if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+    try {
+      const updated = updateTask(resolvedId, { assigned_to: agent, version: task.version }, db);
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+      console.log(chalk.green(`Assigned to ${agent}: ${formatTaskLine(updated)}`));
+    } catch { handleError(new Error("Failed to assign")); }
+  });
+
+// unassign
+program
+  .command("unassign <id>")
+  .description("Remove task assignment")
+  .option("--json", "Output as JSON")
+  .action((id: string, opts) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const db = getDatabase();
+    const task = getTask(resolvedId, db);
+    if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+    try {
+      const updated = updateTask(resolvedId, { assigned_to: undefined, version: task.version }, db);
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+      console.log(chalk.green(`Unassigned: ${formatTaskLine(updated)}`));
+    } catch { handleError(new Error("Failed to unassign")); }
+  });
+
+// tag
+program
+  .command("tag <id> <tag>")
+  .description("Add a tag to a task")
+  .option("--json", "Output as JSON")
+  .action((id: string, tag: string, opts) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const db = getDatabase();
+    const task = getTask(resolvedId, db);
+    if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+    const newTags = [...new Set([...task.tags, tag])];
+    try {
+      const updated = updateTask(resolvedId, { tags: newTags, version: task.version }, db);
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+      console.log(chalk.green(`Tagged [${tag}]: ${formatTaskLine(updated)}`));
+    } catch { handleError(new Error("Failed to tag")); }
+  });
+
+// untag
+program
+  .command("untag <id> <tag>")
+  .description("Remove a tag from a task")
+  .option("--json", "Output as JSON")
+  .action((id: string, tag: string, opts) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const db = getDatabase();
+    const task = getTask(resolvedId, db);
+    if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+    const newTags = task.tags.filter(t => t !== tag);
+    try {
+      const updated = updateTask(resolvedId, { tags: newTags, version: task.version }, db);
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+      console.log(chalk.green(`Untagged [${tag}]: ${formatTaskLine(updated)}`));
+    } catch { handleError(new Error("Failed to untag")); }
+  });
+
+// pin
+program
+  .command("pin <id>")
+  .description("Escalate task to critical priority")
+  .option("--json", "Output as JSON")
+  .action((id: string, opts) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const db = getDatabase();
+    const { setTaskPriority } = require("../db/tasks.js") as any;
+    try {
+      const updated = setTaskPriority(resolvedId, "critical", undefined, db);
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+      console.log(chalk.red(`📌 Pinned (critical): ${formatTaskLine(updated)}`));
+    } catch { handleError(new Error("Failed to pin")); }
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
