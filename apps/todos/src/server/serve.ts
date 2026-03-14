@@ -492,6 +492,21 @@ export async function startServer(port: number, options?: { open?: boolean; host
         }
       }
 
+      // ── API: Fail task ──
+      const failMatch = path.match(/^\/api\/tasks\/([^/]+)\/fail$/);
+      if (failMatch && method === "POST") {
+        const id = failMatch[1]!;
+        try {
+          const body = await req.json().catch(() => ({})) as { reason?: string; agent_id?: string; retry?: boolean; error_code?: string };
+          const { failTask } = await import("../db/tasks.js");
+          const result = failTask(id, body.agent_id, body.reason, { retry: body.retry, error_code: body.error_code });
+          broadcastEvent({ type: "task", task_id: id, action: "failed", agent_id: body.agent_id || null });
+          return json({ task: taskToSummary(result.task), retry_task: result.retryTask ? taskToSummary(result.retryTask) : null }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to fail task" }, 500, port);
+        }
+      }
+
       // ── API: Complete task ──
       const completeMatch = path.match(/^\/api\/tasks\/([^/]+)\/complete$/);
       if (completeMatch && method === "POST") {
