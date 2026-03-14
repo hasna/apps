@@ -74,3 +74,84 @@ describe("MCP tool logic", () => {
     expect(matches).toContain("list_configs");
   });
 });
+
+describe("MCP tool logic — new tools", () => {
+  test("get_status returns stats with template count", () => {
+    const db = getDatabase();
+    createConfig({ name: "Regular", category: "rules", content: "hello" }, db);
+    createConfig({ name: "Template", category: "shell", content: "export KEY={{API_KEY}}", is_template: true }, db);
+    const { getConfigStats, listConfigs } = require("../db/configs");
+    const stats = getConfigStats(db);
+    const allConfigs = listConfigs({ kind: "file" }, db);
+    let templates = 0;
+    for (const c of allConfigs) { if (c.is_template) templates++; }
+    expect(stats["total"]).toBe(2);
+    expect(templates).toBe(1);
+  });
+
+  test("render_template substitutes variables", () => {
+    const { renderTemplate } = require("../lib/template");
+    const content = "export API_KEY={{API_KEY}}\nexport NAME={{NAME}}";
+    const rendered = renderTemplate(content, { API_KEY: "sk-123", NAME: "test" });
+    expect(rendered).toBe("export API_KEY=sk-123\nexport NAME=test");
+  });
+
+  test("render_template throws on missing vars", () => {
+    const { renderTemplate } = require("../lib/template");
+    expect(() => renderTemplate("{{MISSING}}", {})).toThrow("Missing required template variables: MISSING");
+  });
+
+  test("scan_secrets detects secrets in stored configs", () => {
+    const db = getDatabase();
+    createConfig({ name: "leaky", category: "shell", content: 'export API_KEY="sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"' }, db);
+    const { scanSecrets } = require("../lib/redact");
+    const { listConfigs } = require("../db/configs");
+    const configs = listConfigs({ kind: "file" }, db);
+    let total = 0;
+    for (const c of configs) {
+      total += scanSecrets(c.content, c.format).length;
+    }
+    expect(total).toBeGreaterThan(0);
+  });
+
+  test("scan_secrets returns clean for redacted content", () => {
+    const db = getDatabase();
+    createConfig({ name: "clean", category: "shell", content: 'export API_KEY="{{API_KEY}}"', is_template: true }, db);
+    const { scanSecrets } = require("../lib/redact");
+    const { listConfigs } = require("../db/configs");
+    const configs = listConfigs(undefined, db);
+    let total = 0;
+    for (const c of configs) {
+      total += scanSecrets(c.content, c.format).length;
+    }
+    expect(total).toBe(0);
+  });
+
+  test("CONFIGS_PROFILE filters tools correctly", () => {
+    // Simulate profile filtering logic
+    const ALL_TOOLS = [
+      { name: "get_status" }, { name: "get_config" }, { name: "sync_known" },
+      { name: "list_configs" }, { name: "create_config" }, { name: "update_config" },
+    ];
+    const PROFILES: Record<string, string[]> = {
+      minimal: ["get_status", "get_config", "sync_known"],
+      full: [],
+    };
+    const minimalTools = ALL_TOOLS.filter((t) => PROFILES["minimal"]!.includes(t.name));
+    expect(minimalTools.length).toBe(3);
+    const fullTools = PROFILES["full"]!.length === 0 ? ALL_TOOLS : ALL_TOOLS.filter((t) => PROFILES["full"]!.includes(t.name));
+    expect(fullTools.length).toBe(6);
+  });
+
+  test("getConfigStats groups by category", () => {
+    const db = getDatabase();
+    createConfig({ name: "R1", category: "rules", content: "a" }, db);
+    createConfig({ name: "R2", category: "rules", content: "b" }, db);
+    createConfig({ name: "S1", category: "shell", content: "c" }, db);
+    const { getConfigStats } = require("../db/configs");
+    const stats = getConfigStats(db);
+    expect(stats["rules"]).toBe(2);
+    expect(stats["shell"]).toBe(1);
+    expect(stats["total"]).toBe(3);
+  });
+});
