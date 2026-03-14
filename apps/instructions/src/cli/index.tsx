@@ -885,6 +885,7 @@ program
 
     const tick = async () => {
       let changed = 0;
+      // Check existing files for mtime changes
       for (const [abs, oldMtime] of mtimes) {
         if (!existsSync(abs)) continue;
         const newMtime = st(abs).mtimeMs;
@@ -893,16 +894,62 @@ program
           mtimes.set(abs, newMtime);
         }
       }
+      // Check for NEW files in watched directories (e.g. new rule added)
+      const { readdirSync: rd } = await import("node:fs");
+      for (const k of KNOWN_CONFIGS) {
+        if (k.rulesDir) {
+          const absDir = expandPath(k.rulesDir);
+          if (!existsSync(absDir)) continue;
+          for (const f of rd(absDir).filter((f: string) => f.endsWith(".md"))) {
+            const abs = join(absDir, f);
+            if (!mtimes.has(abs)) {
+              mtimes.set(abs, st(abs).mtimeMs);
+              changed++;
+            }
+          }
+        } else {
+          const abs = expandPath(k.path);
+          if (existsSync(abs) && !mtimes.has(abs)) {
+            mtimes.set(abs, st(abs).mtimeMs);
+            changed++;
+          }
+        }
+      }
       if (changed > 0) {
         const result = await syncKnown({});
         const ts = new Date().toLocaleTimeString();
-        console.log(`${chalk.dim(ts)} ${chalk.green("✓")} ${changed} file(s) changed → synced +${result.added} updated:${result.updated}`);
+        console.log(`${chalk.dim(ts)} ${chalk.green("✓")} ${changed} file(s) changed/new → synced +${result.added} updated:${result.updated}`);
       }
     };
 
     setInterval(tick, interval);
     // Keep alive
     await new Promise(() => {});
+  });
+
+// ── clean ─────────────────────────────────────────────────────────────────────
+program
+  .command("clean")
+  .description("Remove configs from DB whose target files no longer exist on disk")
+  .option("--dry-run", "show what would be removed")
+  .action(async (opts) => {
+    const configs = listConfigs({ kind: "file" });
+    let removed = 0;
+    for (const c of configs) {
+      if (!c.target_path) continue;
+      const abs = expandPath(c.target_path);
+      if (!existsSync(abs)) {
+        if (opts.dryRun) {
+          console.log(chalk.yellow("  would remove:") + ` ${c.slug} ${chalk.dim(`(${c.target_path})`)}`);
+        } else {
+          deleteConfig(c.id);
+          console.log(chalk.red("  removed:") + ` ${c.slug} ${chalk.dim(`(${c.target_path})`)}`);
+        }
+        removed++;
+      }
+    }
+    if (removed === 0) console.log(chalk.green("✓") + " All stored configs still exist on disk.");
+    else console.log(chalk.dim(`\n${removed} orphaned config(s) ${opts.dryRun ? "found" : "removed"}`));
   });
 
 // ── bootstrap ─────────────────────────────────────────────────────────────────
