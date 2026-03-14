@@ -121,3 +121,46 @@ describe("hasSecrets", () => {
     expect(hasSecrets("export NODE_ENV=production", "shell")).toBe(false);
   });
 });
+
+describe("redactContent — edge cases", () => {
+  test("handles empty content", () => {
+    const r = redactContent("", "shell");
+    expect(r.redacted).toHaveLength(0);
+    expect(r.content).toBe("");
+  });
+
+  test("handles content with only comments", () => {
+    const r = redactContent("# This is a comment\n# Another comment", "shell");
+    expect(r.redacted).toHaveLength(0);
+  });
+
+  test("redacts AWS access keys in any format", () => {
+    const r = redactContent("key = AKIAIOSFODNN7EXAMPLE", "toml");
+    expect(r.redacted.length).toBeGreaterThan(0);
+  });
+
+  test("redacts GitHub tokens with various prefixes", () => {
+    const ghp = redactContent("export TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn", "shell");
+    expect(ghp.redacted).toHaveLength(1);
+    const ghs = redactContent("export TOKEN=ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn", "shell");
+    expect(ghs.redacted).toHaveLength(1);
+  });
+
+  test("does not redact PATH-like values", () => {
+    const r = redactContent('export PATH="/usr/local/bin:/usr/bin:/bin"', "shell");
+    expect(r.redacted).toHaveLength(0);
+  });
+
+  test("handles multiline JSON with mixed secret and non-secret fields", () => {
+    const json = `{
+  "name": "my-project",
+  "api_key": "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  "version": "1.0.0",
+  "password": "supersecretpasswordthatislongenough"
+}`;
+    const r = redactContent(json, "json");
+    expect(r.redacted).toHaveLength(2); // api_key + password
+    expect(r.content).toContain('"name": "my-project"'); // preserved
+    expect(r.content).not.toContain("sk-ant"); // redacted
+  });
+});
