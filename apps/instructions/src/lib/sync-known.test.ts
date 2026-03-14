@@ -163,3 +163,50 @@ describe("syncToDisk", () => {
     expect(result.updated).toBe(0);
   });
 });
+
+describe("syncProject — update + unchanged paths", () => {
+  test("detects updated CLAUDE.md on second sync", async () => {
+    const db = getDatabase();
+    const projDir = join(tmpDir, "update-proj");
+    mkdirSync(projDir, { recursive: true });
+    writeFileSync(join(projDir, "CLAUDE.md"), "# Version 1");
+    await syncProject({ db, projectDir: projDir });
+    // Change content
+    writeFileSync(join(projDir, "CLAUDE.md"), "# Version 2 — updated");
+    const result = await syncProject({ db, projectDir: projDir });
+    expect(result.updated).toBe(1);
+  });
+
+  test("detects unchanged CLAUDE.md on second sync", async () => {
+    const db = getDatabase();
+    const projDir = join(tmpDir, "unchanged-proj");
+    mkdirSync(projDir, { recursive: true });
+    writeFileSync(join(projDir, "CLAUDE.md"), "# Same content");
+    await syncProject({ db, projectDir: projDir });
+    const result = await syncProject({ db, projectDir: projDir });
+    expect(result.unchanged).toBeGreaterThanOrEqual(1);
+    expect(result.added).toBe(0);
+    expect(result.updated).toBe(0);
+  });
+
+  test("detects updated rules/*.md on second sync", async () => {
+    const db = getDatabase();
+    const projDir = join(tmpDir, "rules-update-proj");
+    mkdirSync(join(projDir, ".claude", "rules"), { recursive: true });
+    writeFileSync(join(projDir, ".claude", "rules", "test.md"), "# Rule v1");
+    await syncProject({ db, projectDir: projDir });
+    writeFileSync(join(projDir, ".claude", "rules", "test.md"), "# Rule v2 — changed");
+    const result = await syncProject({ db, projectDir: projDir });
+    expect(result.updated).toBe(1);
+  });
+
+  test("detects unchanged rules/*.md on second sync", async () => {
+    const db = getDatabase();
+    const projDir = join(tmpDir, "rules-same-proj");
+    mkdirSync(join(projDir, ".claude", "rules"), { recursive: true });
+    writeFileSync(join(projDir, ".claude", "rules", "same.md"), "# Same rule");
+    await syncProject({ db, projectDir: projDir });
+    const result = await syncProject({ db, projectDir: projDir });
+    expect(result.unchanged).toBeGreaterThanOrEqual(1);
+  });
+});
