@@ -97,6 +97,10 @@ export class TodosClient {
     }
   }
 
+  async getHealth(): Promise<{ status: "ok" | "warn"; tasks: number; stale: number; overdue_recurring: number; timestamp: string }> {
+    return this.fetch("/api/health");
+  }
+
   async isAlive(): Promise<boolean> {
     try {
       await this.fetch("/api/stats");

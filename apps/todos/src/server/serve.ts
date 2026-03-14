@@ -225,6 +225,14 @@ export async function startServer(port: number, options?: { open?: boolean; host
         });
       }
 
+      // ── API: Health ──
+      if (path === "/api/health" && method === "GET") {
+        const all = listTasks({ limit: 10000 });
+        const stale = all.filter(t => t.status === "in_progress" && new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000);
+        const overdue = all.filter(t => t.recurrence_rule && t.status === "pending" && t.due_at && t.due_at < new Date().toISOString());
+        return json({ status: stale.length === 0 && overdue.length === 0 ? "ok" : "warn", tasks: all.length, stale: stale.length, overdue_recurring: overdue.length, timestamp: new Date().toISOString() }, 200, port);
+      }
+
       // ── API: Stats ──
       if (path === "/api/stats" && method === "GET") {
         const all = listTasks({ limit: 10000 });
