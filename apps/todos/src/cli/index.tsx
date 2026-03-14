@@ -1817,6 +1817,77 @@ program
     await new Promise(() => {});
   });
 
+// stream — SSE task event stream
+program
+  .command("stream")
+  .description("Subscribe to real-time task events via SSE (requires todos serve)")
+  .option("--agent <id>", "Filter to events for a specific agent")
+  .option("--events <list>", "Comma-separated event types (default: all)", "task.created,task.started,task.completed,task.failed,task.assigned,task.status_changed")
+  .option("--port <n>", "Server port", "3000")
+  .option("--json", "Output raw JSON events")
+  .action(async (opts) => {
+    const baseUrl = `http://localhost:${opts.port}`;
+    const params = new URLSearchParams();
+    if (opts.agent) params.set("agent_id", opts.agent);
+    if (opts.events) params.set("events", opts.events);
+    const url = `${baseUrl}/api/tasks/stream?${params}`;
+
+    const eventColors: Record<string, (s: string) => string> = {
+      "task.created": chalk.blue,
+      "task.started": chalk.cyan,
+      "task.completed": chalk.green,
+      "task.failed": chalk.red,
+      "task.assigned": chalk.yellow,
+      "task.status_changed": chalk.magenta,
+    };
+
+    console.log(chalk.dim(`Connecting to ${url} — Ctrl+C to stop\n`));
+
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok || !resp.body) {
+        console.error(chalk.red(`Failed to connect: ${resp.status}`));
+        process.exit(1);
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        let eventName = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventName = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "connected") continue;
+              if (opts.json) {
+                console.log(JSON.stringify({ event: eventName, ...data }));
+              } else {
+                const colorFn = eventColors[eventName] || chalk.white;
+                const ts = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+                const taskId = data.task_id ? data.task_id.slice(0, 8) : "";
+                const agentInfo = data.agent_id ? ` [${data.agent_id}]` : "";
+                console.log(`${chalk.dim(ts)} ${colorFn(eventName.padEnd(25))} ${taskId}${agentInfo}`);
+              }
+            } catch {}
+            eventName = "";
+          }
+        }
+      }
+    } catch (e) {
+      console.error(chalk.red(`Connection error: ${e instanceof Error ? e.message : e}`));
+      console.error(chalk.dim("Is `todos serve` running?"));
+      process.exit(1);
+    }
+  });
+
 // interactive (TUI)
 program
   .command("interactive")
