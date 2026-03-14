@@ -1880,7 +1880,7 @@ program
     const db = getDatabase();
     const filters: Record<string, string> = {};
     if (opts.project) filters.project_id = opts.project;
-    const s = getStatus(Object.keys(filters).length ? filters : undefined, opts.agent, db);
+    const s = getStatus(Object.keys(filters).length ? filters : undefined, opts.agent, undefined, db);
     if (opts.json) { console.log(JSON.stringify(s, null, 2)); return; }
     console.log(`Tasks: ${chalk.yellow(s.pending)} pending | ${chalk.blue(s.in_progress)} active | ${chalk.green(s.completed)} done | ${s.total} total`);
     if (s.stale_count > 0) console.log(chalk.red(`⚠️  ${s.stale_count} stale tasks (stuck in_progress)`));

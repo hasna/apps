@@ -1069,11 +1069,18 @@ export interface StatusSummary {
   next_task: Task | null;
   stale_count: number;
   overdue_recurring: number;
+  blocked_tasks?: {
+    id: string;
+    short_id: string | null;
+    title: string;
+    blocked_by: { id: string; short_id: string | null; title: string; status: string }[];
+  }[];
 }
 
 export function getStatus(
   filters?: { project_id?: string; task_list_id?: string },
   agentId?: string,
+  options?: { explain_blocked?: boolean },
   db?: Database,
 ): StatusSummary {
   const d = db || getDatabase();
@@ -1092,7 +1099,7 @@ export function getStatus(
   if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
   const overdueRow = d.query(`SELECT COUNT(*) as count FROM tasks WHERE ${conditions.join(" AND ")}`).get(...params) as { count: number };
 
-  return {
+  const summary: StatusSummary = {
     pending,
     in_progress,
     completed,
@@ -1102,6 +1109,25 @@ export function getStatus(
     stale_count: stale.length,
     overdue_recurring: overdueRow.count,
   };
+
+  if (options?.explain_blocked) {
+    const pendingTasks = listTasks({ ...filters, status: "pending" }, d);
+    const blockedTasks: NonNullable<StatusSummary["blocked_tasks"]> = [];
+    for (const t of pendingTasks) {
+      const blockingDeps = getBlockingDeps(t.id, d);
+      if (blockingDeps.length > 0) {
+        blockedTasks.push({
+          id: t.id,
+          short_id: t.short_id,
+          title: t.title,
+          blocked_by: blockingDeps.map(b => ({ id: b.id, short_id: b.short_id, title: b.title, status: b.status })),
+        });
+      }
+    }
+    summary.blocked_tasks = blockedTasks;
+  }
+
+  return summary;
 }
 
 export interface DecomposeSubtaskInput {

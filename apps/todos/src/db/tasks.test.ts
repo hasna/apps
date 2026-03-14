@@ -1691,7 +1691,7 @@ describe("getStatus", () => {
     startTask(t4.id, "agent1", db);
     completeTask(t4.id, "agent1", db);
 
-    const status = getStatus(undefined, undefined, db);
+    const status = getStatus(undefined, undefined, undefined, db);
     expect(status.pending).toBe(2);
     expect(status.in_progress).toBe(1);
     expect(status.completed).toBe(1);
@@ -1707,7 +1707,7 @@ describe("getStatus", () => {
     startTask(t1.id, "agent1", db);
     completeTask(t1.id, "agent1", db);
     // Now t2 is unblocked — next_task should be t2
-    const status1 = getStatus(undefined, undefined, db);
+    const status1 = getStatus(undefined, undefined, undefined, db);
     expect(status1.next_task).not.toBeNull();
     expect(status1.next_task!.id).toBe(t2.id);
 
@@ -1720,7 +1720,7 @@ describe("getStatus", () => {
     startTask(t2.id, "agent1", db);
     completeTask(t2.id, "agent1", db);
 
-    const status2 = getStatus(undefined, undefined, db);
+    const status2 = getStatus(undefined, undefined, undefined, db);
     // t3 is blocked by incomplete t4, but t4 itself is pending and not blocked
     expect(status2.next_task).not.toBeNull();
     expect(status2.next_task!.id).toBe(t4.id);
@@ -1732,7 +1732,7 @@ describe("getStatus", () => {
     const oldTime = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     db.run("UPDATE tasks SET updated_at = ?, locked_at = ? WHERE id = ?", [oldTime, oldTime, t1.id]);
 
-    const status = getStatus(undefined, undefined, db);
+    const status = getStatus(undefined, undefined, undefined, db);
     expect(status.stale_count).toBe(1);
   });
 
@@ -1742,7 +1742,7 @@ describe("getStatus", () => {
     createTask({ title: "Future recurring", recurrence_rule: "every day", due_at: new Date(Date.now() + 86400000).toISOString() }, db);
     createTask({ title: "Non-recurring", due_at: pastDate }, db);
 
-    const status = getStatus(undefined, undefined, db);
+    const status = getStatus(undefined, undefined, undefined, db);
     expect(status.overdue_recurring).toBe(1);
   });
 
@@ -1751,10 +1751,41 @@ describe("getStatus", () => {
     createTask({ title: "In project", project_id: project.id }, db);
     createTask({ title: "Not in project" }, db);
 
-    const status = getStatus({ project_id: project.id }, undefined, db);
+    const status = getStatus({ project_id: project.id }, undefined, undefined, db);
     // Only 1 task should be counted in the project
     expect(status.pending).toBe(1);
     expect(status.total).toBe(1);
+  });
+
+  it("explain_blocked shows blocked tasks with their blockers", () => {
+    const blocker = createTask({ title: "Blocker task" }, db);
+    const blocked = createTask({ title: "Blocked task" }, db);
+    addDependency(blocked.id, blocker.id, db);
+
+    const status = getStatus(undefined, undefined, { explain_blocked: true }, db);
+    expect(status.blocked_tasks).toBeDefined();
+    expect(status.blocked_tasks!.length).toBe(1);
+    expect(status.blocked_tasks![0]!.id).toBe(blocked.id);
+    expect(status.blocked_tasks![0]!.title).toBe("Blocked task");
+    expect(status.blocked_tasks![0]!.blocked_by.length).toBe(1);
+    expect(status.blocked_tasks![0]!.blocked_by[0]!.id).toBe(blocker.id);
+    expect(status.blocked_tasks![0]!.blocked_by[0]!.status).toBe("pending");
+  });
+
+  it("explain_blocked omits blocked_tasks when not requested", () => {
+    const blocker = createTask({ title: "Blocker" }, db);
+    const blocked = createTask({ title: "Blocked" }, db);
+    addDependency(blocked.id, blocker.id, db);
+
+    const status = getStatus(undefined, undefined, undefined, db);
+    expect(status.blocked_tasks).toBeUndefined();
+  });
+
+  it("explain_blocked returns empty array when no tasks are blocked", () => {
+    createTask({ title: "Free task" }, db);
+    const status = getStatus(undefined, undefined, { explain_blocked: true }, db);
+    expect(status.blocked_tasks).toBeDefined();
+    expect(status.blocked_tasks!.length).toBe(0);
   });
 });
 
