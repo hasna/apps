@@ -2,6 +2,41 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Recommended Agent Workflow
+
+When starting a work session as an AI agent:
+
+```bash
+# 1. Register yourself and claim a task
+todos claim <your-agent-name>              # Atomic: find + lock + start best pending task
+todos status                               # See full project health snapshot
+
+# 2. Work on the task
+todos log-progress <id> "Investigating..." # Record intermediate state (if OPE-00031 landed)
+
+# 3. Complete with evidence
+todos done <id> \
+  --attach-ids <attachment-id> \           # Link uploaded evidence files
+  --commit-hash <hash> \                   # Git commit reference
+  --notes "All tests pass"                 # Completion notes
+
+# 4. If you fail the task
+todos fail <id> --reason "Auth bug in middleware" --retry  # Auto-creates retry copy
+```
+
+**Agent coordination:**
+- `todos next` — what should I work on next?
+- `todos active` — what are other agents working on right now?
+- `todos stale` — are there any abandoned tasks to recover?
+- `GET /api/tasks/stream?agent_id=<name>` — subscribe to real-time task events (SSE)
+
+**MCP profile for minimal token cost:**
+```
+TODOS_PROFILE=minimal todos-mcp  # 8 tools: claim, complete, fail, status, get_task, start, add_comment, get_next_task
+TODOS_PROFILE=standard todos-mcp # ~47 tools (default for most workflows)
+TODOS_PROFILE=full todos-mcp     # All 60+ tools
+```
+
 ## Commands
 
 ```bash
