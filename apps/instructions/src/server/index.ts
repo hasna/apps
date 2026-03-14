@@ -22,8 +22,32 @@ function pickFields<T extends object>(obj: T, fields?: string): Partial<T> | T {
 const app = new Hono();
 app.use("*", cors());
 
-// ── Stats ─────────────────────────────────────────────────────────────────────
+// ── Status + Stats ────────────────────────────────────────────────────────────
 app.get("/api/stats", (c) => c.json(getConfigStats()));
+
+app.get("/api/status", (c) => {
+  const stats = getConfigStats();
+  const allConfigs = listConfigs({ kind: "file" });
+  let templates = 0;
+  for (const cfg of allConfigs) { if (cfg.is_template) templates++; }
+  return c.json({
+    total: stats["total"] || 0,
+    by_category: Object.fromEntries(Object.entries(stats).filter(([k]) => k !== "total")),
+    templates,
+    db_path: process.env["CONFIGS_DB_PATH"] || "~/.configs/configs.db",
+  });
+});
+
+// ── Sync known ────────────────────────────────────────────────────────────────
+app.post("/api/sync-known", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const result = await syncKnown({ agent: body.agent, category: body.category, dryRun: body.dry_run });
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
 
 // ── Configs ───────────────────────────────────────────────────────────────────
 app.get("/api/configs", (c) => {
