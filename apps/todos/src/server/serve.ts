@@ -765,6 +765,19 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── API: Activity feed (audit log) ──
+      // ── API: Doctor ──
+      if (path === "/api/doctor" && method === "GET") {
+        const issues: { severity: string; type: string; message: string; count?: number }[] = [];
+        const { getStaleTasks: getStaleDiag } = await import("../db/tasks.js");
+        const staleItems = getStaleDiag(30);
+        if (staleItems.length > 0) issues.push({ severity: "warn", type: "stale_tasks", message: `${staleItems.length} tasks stuck in_progress >30min`, count: staleItems.length });
+        // Check orphaned parents
+        const withParent = getDatabase().query("SELECT COUNT(*) as c FROM tasks t WHERE t.parent_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id = t.parent_id)").get() as { c: number };
+        if (withParent.c > 0) issues.push({ severity: "error", type: "orphaned_parents", message: `${withParent.c} tasks reference non-existent parent IDs`, count: withParent.c });
+        if (issues.length === 0) issues.push({ severity: "info", type: "healthy", message: "No issues found" });
+        return json({ ok: !issues.some(i => i.severity === "error"), issues }, 200, port);
+      }
+
       // ── API: Report ──
       if (path === "/api/report" && method === "GET") {
         const days = parseInt(url.searchParams.get("days") || "7", 10);
