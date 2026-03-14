@@ -76,6 +76,7 @@ export {
 // Agents
 export {
   registerAgent,
+  isAgentConflict,
   getAgent,
   getAgentByName,
   listAgents,

@@ -1,6 +1,9 @@
 import type { Database } from "bun:sqlite";
-import type { Agent, AgentRow, RegisterAgentInput } from "../types/index.js";
+import type { Agent, AgentConflictError, AgentRow, RegisterAgentInput } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
+
+/** How long (ms) before an agent is considered stale and its name can be taken over */
+const AGENT_ACTIVE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
 function shortUuid(): string {
   return crypto.randomUUID().slice(0, 8);
@@ -15,16 +18,57 @@ function rowToAgent(row: AgentRow): Agent {
 }
 
 /**
- * Register an agent. If an agent with the same name already exists,
- * return the existing agent (idempotent). This is the "init" operation.
+ * Register an agent. Returns the agent or a conflict descriptor.
+ *
+ * Conflict rules:
+ *  - Name free → create, bind session_id if provided
+ *  - Name taken, same session_id → heartbeat, return agent ✓
+ *  - Name taken, different session_id, agent ACTIVE (<30min) → CONFLICT error
+ *  - Name taken, different session_id, agent STALE (>30min) → takeover, update session_id
+ *  - Name taken, no session_id provided → heartbeat + return (backward compat, no block)
  */
-export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
+export function registerAgent(input: RegisterAgentInput, db?: Database): Agent | AgentConflictError {
   const d = db || getDatabase();
   const normalizedName = input.name.trim().toLowerCase();
 
   const existing = getAgentByName(normalizedName, d);
   if (existing) {
-    d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), existing.id]);
+    const lastSeenMs = new Date(existing.last_seen_at).getTime();
+    const isActive = Date.now() - lastSeenMs < AGENT_ACTIVE_WINDOW_MS;
+    const sameSession = input.session_id && existing.session_id && input.session_id === existing.session_id;
+    const differentSession = input.session_id && existing.session_id && input.session_id !== existing.session_id;
+
+    // Hard block: active agent with a different known session
+    if (isActive && differentSession) {
+      const minutesAgo = Math.round((Date.now() - lastSeenMs) / 60000);
+      return {
+        conflict: true,
+        existing_id: existing.id,
+        existing_name: existing.name,
+        last_seen_at: existing.last_seen_at,
+        session_hint: existing.session_id ? existing.session_id.slice(0, 8) : null,
+        working_dir: existing.working_dir,
+        message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago, session ${existing.session_id?.slice(0, 8)}…, dir: ${existing.working_dir ?? "unknown"}). Are you that agent? If so, pass session_id="${existing.session_id}" to reclaim it. Otherwise choose a different name.`,
+      };
+    }
+
+    // Takeover: stale agent with a different session — allowed, but update binding
+    const updates: string[] = ["last_seen_at = ?"];
+    const params: (string | null)[] = [now()];
+    if (input.session_id && !sameSession) {
+      updates.push("session_id = ?");
+      params.push(input.session_id);
+    }
+    if (input.working_dir) {
+      updates.push("working_dir = ?");
+      params.push(input.working_dir);
+    }
+    if (input.description) {
+      updates.push("description = ?");
+      params.push(input.description);
+    }
+    params.push(existing.id);
+    d.run(`UPDATE agents SET ${updates.join(", ")} WHERE id = ?`, params);
     return getAgent(existing.id, d)!;
   }
 
@@ -32,15 +76,20 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, org_id, metadata, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, normalizedName, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), input.reports_to || null,
-     input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp],
+     input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp,
+     input.session_id || null, input.working_dir || null],
   );
 
   return getAgent(id, d)!;
+}
+
+export function isAgentConflict(result: Agent | AgentConflictError): result is AgentConflictError {
+  return (result as AgentConflictError).conflict === true;
 }
 
 export function getAgent(id: string, db?: Database): Agent | null {

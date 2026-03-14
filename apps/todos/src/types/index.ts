@@ -102,6 +102,8 @@ export interface Agent {
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
+  session_id: string | null; // bound session — used to detect name conflicts
+  working_dir: string | null;
 }
 
 export interface AgentRow {
@@ -117,6 +119,8 @@ export interface AgentRow {
   metadata: string | null;
   created_at: string;
   last_seen_at: string;
+  session_id: string | null;
+  working_dir: string | null;
 }
 
 export interface RegisterAgentInput {
@@ -129,6 +133,18 @@ export interface RegisterAgentInput {
   reports_to?: string;
   org_id?: string;
   metadata?: Record<string, unknown>;
+  session_id?: string;
+  working_dir?: string;
+}
+
+export interface AgentConflictError {
+  conflict: true;
+  existing_id: string;
+  existing_name: string;
+  last_seen_at: string;
+  session_hint: string | null; // first 8 chars of session_id
+  working_dir: string | null;
+  message: string;
 }
 
 // Task List

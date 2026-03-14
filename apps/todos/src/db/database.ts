@@ -370,6 +370,12 @@ const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN spawns_template_id TEXT REFERENCES task_templates(id) ON DELETE SET NULL;
   INSERT OR IGNORE INTO _migrations (id) VALUES (16);
   `,
+  // Migration 17: Agent session binding — prevents name squatting across sessions
+  `
+  ALTER TABLE agents ADD COLUMN session_id TEXT;
+  ALTER TABLE agents ADD COLUMN working_dir TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (17);
+  `,
 ];
 
 let _db: Database | null = null;

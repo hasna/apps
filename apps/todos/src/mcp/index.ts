@@ -45,7 +45,7 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, getAgent, getAgentByName, listAgents, updateAgent, deleteAgent } from "../db/agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgent, deleteAgent } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
@@ -945,18 +945,27 @@ server.tool(
 if (shouldRegisterTool("register_agent")) {
 server.tool(
   "register_agent",
-  "Register an agent (idempotent by name). Updates last_seen_at.",
+  "Register an agent. Pass session_id (unique per coding session) to prevent name conflicts. Returns conflict error if name is taken by an active agent in a different session.",
   {
     name: z.string(),
     description: z.string().optional(),
+    session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
+    working_dir: z.string().optional().describe("Working directory of this session — helps identify who holds the name in a conflict"),
   },
-  async ({ name, description }) => {
+  async ({ name, description, session_id, working_dir }) => {
     try {
-      const agent = registerAgent({ name, description });
+      const result = registerAgent({ name, description, session_id, working_dir });
+      if (isAgentConflict(result)) {
+        return {
+          content: [{ type: "text" as const, text: `CONFLICT: ${result.message}` }],
+          isError: true,
+        };
+      }
+      const agent = result;
       return {
         content: [{
           type: "text" as const,
-          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
+          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
         }],
       };
     } catch (e) {
@@ -2302,7 +2311,7 @@ server.tool(
       delete_plan: "Delete a plan. Tasks in the plan are orphaned, not deleted.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
 
       // Agents
-      register_agent: "Register an agent (idempotent by name). Returns existing agent if name matches.\n  Params: name(string, req — e.g. 'maximus'), description(string)\n  Example: {name: 'maximus', description: 'Backend developer'}",
+      register_agent: "Register an agent. ALWAYS pass session_id (unique per session) to prevent name conflicts. Returns CONFLICT error if name is active in another session — pick a different name or reclaim with matching session_id.\n  Params: name(string, req), description(string), session_id(string — unique per session, e.g. PID+timestamp), working_dir(string)\n  Example: {name: 'maximus', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
       list_agents: "List all registered agents with IDs, names, and last seen timestamps. No params.",
       get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",
