@@ -310,6 +310,12 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_rule ON tasks(recurrence_rule) WHERE recurrence_rule IS NOT NULL;
   INSERT OR IGNORE INTO _migrations (id) VALUES (13);
   `,
+  // Migration 14: Progress tracking on comments
+  `
+  ALTER TABLE task_comments ADD COLUMN type TEXT DEFAULT 'comment' CHECK(type IN ('comment', 'progress', 'note'));
+  ALTER TABLE task_comments ADD COLUMN progress_pct INTEGER CHECK(progress_pct IS NULL OR (progress_pct >= 0 AND progress_pct <= 100));
+  INSERT OR IGNORE INTO _migrations (id) VALUES (14);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -487,6 +493,10 @@ function ensureSchema(db: Database): void {
   // Plans
   ensureColumn("plans", "task_list_id", "TEXT");
   ensureColumn("plans", "agent_id", "TEXT");
+
+  // Comments
+  ensureColumn("task_comments", "type", "TEXT DEFAULT 'comment'");
+  ensureColumn("task_comments", "progress_pct", "INTEGER");
 
   // ── Indexes ──
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id)");

@@ -66,6 +66,7 @@ export {
   getComment,
   listComments,
   deleteComment,
+  logProgress,
 } from "./db/comments.js";
 
 // Agents

@@ -19,19 +19,31 @@ export function addComment(
   const timestamp = now();
 
   d.run(
-    `INSERT INTO task_comments (id, task_id, agent_id, session_id, content, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO task_comments (id, task_id, agent_id, session_id, content, type, progress_pct, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.task_id,
       input.agent_id || null,
       input.session_id || null,
       input.content,
+      input.type || 'comment',
+      input.progress_pct ?? null,
       timestamp,
     ],
   );
 
   return getComment(id, d)!;
+}
+
+export function logProgress(
+  taskId: string,
+  message: string,
+  pct?: number,
+  agentId?: string,
+  db?: Database,
+): TaskComment {
+  return addComment({ task_id: taskId, content: message, type: 'progress', progress_pct: pct, agent_id: agentId }, db);
 }
 
 export function getComment(id: string, db?: Database): TaskComment | null {

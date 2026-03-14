@@ -6,6 +6,7 @@ import {
   getComment,
   listComments,
   deleteComment,
+  logProgress,
 } from "./comments.js";
 import { createTask, deleteTask } from "./tasks.js";
 import { TaskNotFoundError } from "../types/index.js";
@@ -139,6 +140,42 @@ describe("deleteComment", () => {
 
   it("should return false for non-existent comment", () => {
     expect(deleteComment("non-existent-id", db)).toBe(false);
+  });
+});
+
+describe("logProgress", () => {
+  it("should create a comment with type=progress", () => {
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = logProgress(task.id, "halfway done", undefined, undefined, db);
+    expect(comment.type).toBe("progress");
+    expect(comment.content).toBe("halfway done");
+    expect(comment.progress_pct).toBeNull();
+  });
+
+  it("should store progress_pct correctly", () => {
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = logProgress(task.id, "almost done", 75, undefined, db);
+    expect(comment.type).toBe("progress");
+    expect(comment.progress_pct).toBe(75);
+  });
+
+  it("should store agent_id when provided", () => {
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = logProgress(task.id, "started", 10, "agent-42", db);
+    expect(comment.agent_id).toBe("agent-42");
+  });
+
+  it("addComment with type=note stores correctly", () => {
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = addComment({ task_id: task.id, content: "A note", type: "note" }, db);
+    expect(comment.type).toBe("note");
+    expect(comment.progress_pct).toBeNull();
+  });
+
+  it("addComment defaults type to comment", () => {
+    const task = createTask({ title: "Test Task" }, db);
+    const comment = addComment({ task_id: task.id, content: "regular" }, db);
+    expect(comment.type).toBe("comment");
   });
 });
 

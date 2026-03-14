@@ -280,6 +280,8 @@ export interface TaskComment {
   agent_id: string | null;
   session_id: string | null;
   content: string;
+  type: 'comment' | 'progress' | 'note';
+  progress_pct: number | null;
   created_at: string;
 }
 
@@ -288,6 +290,8 @@ export interface CreateCommentInput {
   content: string;
   agent_id?: string;
   session_id?: string;
+  type?: 'comment' | 'progress' | 'note';
+  progress_pct?: number;
 }
 
 // Session

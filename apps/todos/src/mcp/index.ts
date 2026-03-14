@@ -32,7 +32,7 @@ import {
   setTaskStatus,
   setTaskPriority,
 } from "../db/tasks.js";
-import { addComment } from "../db/comments.js";
+import { addComment, logProgress } from "../db/comments.js";
 import {
   createProject,
   getProject,
@@ -548,6 +548,30 @@ server.tool(
       const resolvedId = resolveId(task_id);
       const comment = addComment({ task_id: resolvedId, ...rest });
       return { content: [{ type: "text" as const, text: `Comment added (${comment.id.slice(0, 8)}) at ${comment.created_at}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// 12b. log_progress
+if (shouldRegisterTool("log_progress")) {
+server.tool(
+  "log_progress",
+  "Record intermediate work progress on a task with optional percent complete.",
+  {
+    task_id: z.string(),
+    message: z.string(),
+    pct_complete: z.number().min(0).max(100).optional(),
+    agent_id: z.string().optional(),
+  },
+  async ({ task_id, message, pct_complete, agent_id }) => {
+    try {
+      const resolvedId = resolveId(task_id);
+      const comment = logProgress(resolvedId, message, pct_complete, agent_id);
+      const pct = pct_complete !== undefined ? ` (${pct_complete}%)` : "";
+      return { content: [{ type: "text" as const, text: `progress: ${comment.id.slice(0, 8)}${pct} — ${message}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1885,14 +1909,15 @@ server.tool(
     agent_id: z.string().optional(),
     project_id: z.string().optional(),
     task_list_id: z.string().optional(),
+    explain_blocked: z.boolean().optional().describe("When true, include details about which pending tasks are blocked and by what"),
   },
-  async ({ agent_id, project_id, task_list_id }) => {
+  async ({ agent_id, project_id, task_list_id, explain_blocked }) => {
     try {
       const filters: { project_id?: string; task_list_id?: string } = {};
       if (project_id) filters.project_id = resolveId(project_id, "projects");
       if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
 
-      const status = getStatus(Object.keys(filters).length > 0 ? filters : undefined, agent_id);
+      const status = getStatus(Object.keys(filters).length > 0 ? filters : undefined, agent_id, { explain_blocked });
 
       const lines = [
         `Tasks: ${status.pending} pending | ${status.in_progress} active | ${status.completed} done | ${status.total} total`,
@@ -1914,6 +1939,18 @@ server.tool(
         lines.push(`  ${formatTask(status.next_task)}`);
       } else {
         lines.push(`\nNo pending tasks available.`);
+      }
+
+      if (status.blocked_tasks && status.blocked_tasks.length > 0) {
+        lines.push(`\n⚡ ${status.blocked_tasks.length} task(s) blocked:`);
+        for (const bt of status.blocked_tasks) {
+          const id = bt.short_id || bt.id.slice(0, 8);
+          lines.push(`  ${id} | ${bt.title}`);
+          for (const dep of bt.blocked_by) {
+            const depId = dep.short_id || dep.id.slice(0, 8);
+            lines.push(`    <- blocked by ${depId} [${dep.status}] ${dep.title}`);
+          }
+        }
       }
 
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -2013,7 +2050,7 @@ server.tool(
     const all = [
       "create_task","list_tasks","get_task","update_task","delete_task",
       "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
-      "add_dependency","remove_dependency","add_comment",
+      "add_dependency","remove_dependency","add_comment","log_progress",
       "create_project","list_projects",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
       "register_agent","list_agents","get_agent","rename_agent","delete_agent",
@@ -2063,6 +2100,7 @@ server.tool(
       add_dependency: "Add a dependency: task_id depends on depends_on. Prevents cycles via BFS.\n  Params: task_id(string, req), depends_on(string, req)\n  Example: {task_id: 'abc12345', depends_on: 'def67890'}",
       remove_dependency: "Remove a dependency link between two tasks.\n  Params: task_id(string, req), depends_on(string, req)\n  Example: {task_id: 'abc12345', depends_on: 'def67890'}",
       add_comment: "Add a comment/note to a task. Comments are append-only.\n  Params: task_id(string, req), content(string, req), agent_id(string), session_id(string)\n  Example: {task_id: 'a1b2c3d4', content: 'Blocked by API rate limit'}",
+      log_progress: "Record intermediate work progress on a task with optional percent complete.\n  Params: task_id(string, req), message(string, req), pct_complete(number 0-100), agent_id(string)\n  Example: {task_id: 'a1b2c3d4', message: 'Completed DB schema', pct_complete: 40}",
 
       // Projects
       create_project: "Register a new project. Auto-generates task prefix for short IDs (e.g. APP-00001).\n  Params: name(string, req), path(string, req — unique absolute path), description(string), task_list_id(string)\n  Example: {name: 'my-app', path: '/Users/dev/my-app'}",
