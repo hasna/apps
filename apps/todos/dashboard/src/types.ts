@@ -17,6 +17,7 @@ export interface TaskSummary {
   updated_at: string;
   completed_at: string | null;
   due_at: string | null;
+  recurrence_rule?: string | null;
 }
 
 export interface ProjectSummary {
@@ -46,4 +47,7 @@ export interface DashboardStats {
   cancelled: number;
   projects: number;
   agents: number;
+  stale_count?: number;
+  overdue_recurring?: number;
+  recurring_tasks?: number;
 }

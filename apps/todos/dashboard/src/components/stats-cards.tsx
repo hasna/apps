@@ -6,6 +6,8 @@ import {
   XCircleIcon,
   FolderIcon,
   BotIcon,
+  AlertTriangleIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { DashboardStats } from "@/types";
@@ -19,6 +21,9 @@ export function StatsCards({ stats }: { stats: DashboardStats }) {
     { label: "Failed", value: stats.failed, icon: XCircleIcon, color: "text-red-500" },
     { label: "Projects", value: stats.projects, icon: FolderIcon, color: "text-purple-500" },
     { label: "Agents", value: stats.agents, icon: BotIcon, color: "text-orange-500" },
+    ...(stats.stale_count ? [{ label: "Stale", value: stats.stale_count, icon: AlertTriangleIcon, color: "text-orange-400" }] : []),
+    ...(stats.overdue_recurring ? [{ label: "Overdue Recurring", value: stats.overdue_recurring, icon: RefreshCwIcon, color: "text-red-400" }] : []),
+    ...(stats.recurring_tasks ? [{ label: "Recurring", value: stats.recurring_tasks, icon: RefreshCwIcon, color: "text-indigo-500" }] : []),
   ];
 
   return (

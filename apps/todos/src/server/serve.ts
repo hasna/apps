@@ -227,6 +227,11 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         const all = listTasks({ limit: 10000 });
         const projects = listProjects();
         const agents = listAgents();
+        const { getStaleTasks: getStaleForStats } = await import("../db/tasks.js");
+        const staleItems = getStaleForStats(30);
+        const nowStr = new Date().toISOString();
+        const overdueRecurring = all.filter(t => t.recurrence_rule && t.status === "pending" && t.due_at && t.due_at < nowStr).length;
+        const recurringTasks = all.filter(t => t.recurrence_rule).length;
         return json({
           total_tasks: all.length,
           pending: all.filter((t) => t.status === "pending").length,
@@ -236,6 +241,9 @@ export async function startServer(port: number, options?: { open?: boolean }): P
           cancelled: all.filter((t) => t.status === "cancelled").length,
           projects: projects.length,
           agents: agents.length,
+          stale_count: staleItems.length,
+          overdue_recurring: overdueRecurring,
+          recurring_tasks: recurringTasks,
         }, 200, port);
       }
 
