@@ -2194,6 +2194,83 @@ program
     console.log(lines.join("\n"));
   });
 
+// report
+program
+  .command("report")
+  .description("Analytics report: task activity, completion rates, agent breakdown")
+  .option("--days <n>", "Days to include in report", "7")
+  .option("--project <id>", "Filter to project")
+  .option("--markdown", "Output as markdown")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const days = parseInt(opts.days, 10);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const projectId = opts.project || autoProject(globalOpts);
+
+    const filter: Record<string, unknown> = {};
+    if (projectId) filter.project_id = projectId;
+
+    const { getTasksChangedSince, getTaskStats } = require("../db/tasks.js") as any;
+    const changed: any[] = getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db);
+    const completed = changed.filter((t: any) => t.status === "completed");
+    const failed = changed.filter((t: any) => t.status === "failed");
+    const all = listTasks(filter as any);
+    const stats = getTaskStats(Object.keys(filter).length ? filter : undefined, db) as any;
+
+    // By-day activity (count tasks updated per day)
+    const byDay: Record<string, number> = {};
+    for (const t of changed) {
+      const day = t.updated_at.slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + 1;
+    }
+    const dayValues = Object.values(byDay) as number[];
+    const maxDay = Math.max(...dayValues, 1);
+    const sparkline = dayValues.map(v => "▁▂▃▄▅▆▇█"[Math.min(7, Math.floor((v / maxDay) * 7))] || "▁").join("");
+
+    // By agent
+    const byAgent: Record<string, number> = {};
+    for (const t of completed) {
+      const agent = t.assigned_to || "unassigned";
+      byAgent[agent] = (byAgent[agent] || 0) + 1;
+    }
+
+    const completionRate = changed.length > 0 ? Math.round((completed.length / changed.length) * 100) : 0;
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ days, period_since: since, changed: changed.length, completed: completed.length, failed: failed.length, completion_rate: completionRate, total: all.length, stats, by_agent: byAgent, by_day: byDay }, null, 2));
+      return;
+    }
+
+    const lines: string[] = [];
+    if (opts.markdown) {
+      lines.push(`## Todos Report — last ${days} days`);
+      lines.push(`*${new Date().toLocaleDateString()}*\n`);
+      lines.push(`| Metric | Value |`);
+      lines.push(`|--------|-------|`);
+      lines.push(`| Active tasks | ${all.length} total (${stats.pending} pending, ${stats.in_progress} active) |`);
+      lines.push(`| Changed (${days}d) | ${changed.length} tasks |`);
+      lines.push(`| Completed (${days}d) | ${completed.length} (${completionRate}% rate) |`);
+      lines.push(`| Failed (${days}d) | ${failed.length} |`);
+      if (sparkline) lines.push(`| Activity | \`${sparkline}\` |`);
+    } else {
+      lines.push(chalk.bold(`todos report — last ${days} day${days !== 1 ? "s" : ""}`));
+      lines.push("");
+      lines.push(`  Total:      ${chalk.bold(String(all.length))} tasks (${chalk.yellow(String(stats.pending))} pending, ${chalk.blue(String(stats.in_progress))} active)`);
+      lines.push(`  Changed:    ${chalk.bold(String(changed.length))} in period`);
+      lines.push(`  Completed:  ${chalk.green(String(completed.length))} (${completionRate}% rate)`);
+      if (failed.length > 0) lines.push(`  Failed:     ${chalk.red(String(failed.length))}`);
+      if (sparkline) lines.push(`  Activity:   ${chalk.dim(sparkline)}`);
+      if (Object.keys(byAgent).length > 0) {
+        lines.push(`  By agent:   ${Object.entries(byAgent).map(([a, n]) => `${a}=${n}`).join(" ")}`);
+      }
+      if (stats.in_progress > 0) lines.push(`  Stale risk: check \`todos stale\` for stuck tasks`);
+    }
+
+    console.log(lines.join("\n"));
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
