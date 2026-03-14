@@ -107,7 +107,69 @@ describe("REST server", () => {
     const res = await app.request("/api/machines");
     expect(res.status).toBe(200);
   });
+  test("GET /api/status returns stats with total", async () => {
+    const db = getDatabase();
+    createConfig({ name: "X", category: "rules", content: "" }, db);
+    createConfig({ name: "Y", category: "agent", content: "", is_template: true }, db);
+    const app = makeTestApp();
+    // Need to add /api/status to test app
+    const { getConfigStats } = require("../db/configs");
+    app.get("/api/status", (c: any) => {
+      const stats = getConfigStats();
+      const configs = listConfigs({ kind: "file" });
+      let templates = 0;
+      for (const cfg of configs) if (cfg.is_template) templates++;
+      return c.json({ total: stats["total"] || 0, templates });
+    });
+    const res = await app.request("/api/status");
+    expect(res.status).toBe(200);
+    const body = await res.json() as { total: number; templates: number };
+    expect(body.total).toBe(2);
+    expect(body.templates).toBe(1);
+  });
+
+  test("POST /api/configs creates a config", async () => {
+    const app = makeTestApp();
+    const { createConfig: cc } = require("../db/configs");
+    app.post("/api/configs", async (c: any) => {
+      try {
+        const body = await c.req.json();
+        const config = cc({ name: body.name, content: body.content ?? "", category: body.category });
+        return c.json(config, 201);
+      } catch (e: any) { return c.json({ error: e.message }, 422); }
+    });
+    const res = await app.request("/api/configs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "New Config", content: "hello", category: "rules" }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json() as { slug: string };
+    expect(body.slug).toBe("new-config");
+  });
+
+  test("PUT /api/configs/:id updates content", async () => {
+    const db = getDatabase();
+    const c = createConfig({ name: "Updatable", category: "tools", content: "v1" }, db);
+    const app = makeTestApp();
+    const { updateConfig } = require("../db/configs");
+    app.put("/api/configs/:id", async (ctx: any) => {
+      try {
+        const body = await ctx.req.json();
+        return ctx.json(updateConfig(ctx.req.param("id"), body));
+      } catch (e: any) { return ctx.json({ error: e.message }, 422); }
+    });
+    const res = await app.request(`/api/configs/${c.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "v2" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { content: string; version: number };
+    expect(body.content).toBe("v2");
+    expect(body.version).toBe(2);
+  });
 });
 
-// Import listConfigs for use in DELETE test
+// Import listConfigs for use in tests
 import { listConfigs } from "../db/configs";
