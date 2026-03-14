@@ -22,7 +22,8 @@ const TOOL_DOCS: Record<string, string> = {
   list_profiles: "List all profiles. Returns array of profile objects.",
   apply_profile: "Apply all configs in a profile to disk. Params: id_or_slug, dry_run?. Returns array of apply results.",
   get_snapshot: "Get snapshot(s) for a config. Params: config_id_or_slug, version?. Returns latest snapshot or specific version.",
-  get_status: "Single-call orientation. Returns: total configs, counts by category, drifted count, unredacted secrets, templates, DB path.",
+  get_status: "Single-call orientation. Returns: total configs, counts by category, templates, DB path.",
+  scan_secrets: "Scan configs for unredacted secrets. Params: id_or_slug? (omit for all known), fix? (true to redact in-place). Returns findings.",
   sync_known: "Sync all known config files from disk into DB. Params: agent?, category?. Replaces sync_directory for standard use.",
   search_tools: "Search tool descriptions. Params: query. Returns matching tool names and descriptions.",
   describe_tools: "Get full descriptions for tools. Params: names? (array). Returns tool docs.",
@@ -31,7 +32,7 @@ const TOOL_DOCS: Record<string, string> = {
 // ── Agent profiles — CONFIGS_PROFILE env var controls which tools are exposed ─
 const PROFILES: Record<string, string[]> = {
   minimal: ["get_status", "get_config", "sync_known"],
-  standard: ["list_configs", "get_config", "create_config", "update_config", "apply_config", "sync_known", "get_status", "list_profiles", "apply_profile", "search_tools", "describe_tools"],
+  standard: ["list_configs", "get_config", "create_config", "update_config", "apply_config", "sync_known", "get_status", "scan_secrets", "list_profiles", "apply_profile", "search_tools", "describe_tools"],
   full: [], // empty = all tools
 };
 
@@ -51,6 +52,7 @@ const ALL_LEAN_TOOLS = [
   { name: "get_snapshot", inputSchema: { type: "object", properties: { config_id_or_slug: { type: "string" }, version: { type: "number" } }, required: ["config_id_or_slug"] } },
   { name: "get_status", inputSchema: { type: "object", properties: {} } },
   { name: "sync_known", inputSchema: { type: "object", properties: { agent: { type: "string" }, category: { type: "string" } } } },
+  { name: "scan_secrets", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, fix: { type: "boolean" } } } },
   { name: "search_tools", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
   { name: "describe_tools", inputSchema: { type: "object", properties: { names: { type: "array", items: { type: "string" } } } } },
 ];
@@ -168,6 +170,25 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           category: (args["category"] as ConfigCategory) || undefined,
         });
         return ok(result);
+      }
+      case "scan_secrets": {
+        const { scanSecrets, redactContent } = await import("../lib/redact.js");
+        const configs = args["id_or_slug"]
+          ? [getConfig(args["id_or_slug"] as string)]
+          : listConfigs({ kind: "file" });
+        const findings: Array<{ slug: string; secrets: number; vars: string[] }> = [];
+        for (const c of configs) {
+          const fmt = c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text";
+          const secrets = scanSecrets(c.content, fmt);
+          if (secrets.length > 0) {
+            findings.push({ slug: c.slug, secrets: secrets.length, vars: secrets.map((s) => s.varName) });
+            if (args["fix"]) {
+              const { content, isTemplate } = redactContent(c.content, fmt);
+              updateConfig(c.id, { content, is_template: isTemplate });
+            }
+          }
+        }
+        return ok({ clean: findings.length === 0, findings, fixed: !!args["fix"] });
       }
       case "search_tools": {
         const query = ((args["query"] as string) || "").toLowerCase();
