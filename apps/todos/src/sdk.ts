@@ -127,6 +127,10 @@ export class TodosClient {
     return this.fetch(`/api/tasks/${id}`);
   }
 
+  async getTaskAttachments(id: string): Promise<{ task_id: string; short_id: string | null; attachment_ids: string[]; count: number; files_changed?: string[]; commit_hash?: string; notes?: string }> {
+    return this.fetch(`/api/tasks/${id}/attachments`);
+  }
+
   async getTaskHistory(id: string): Promise<any[]> {
     return this.fetch(`/api/tasks/${id}/history`);
   }

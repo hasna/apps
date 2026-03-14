@@ -425,6 +425,17 @@ export async function startServer(port: number, options?: { open?: boolean; host
         }
       }
 
+      // ── API: Task attachments ──
+      const attachmentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/attachments$/);
+      if (attachmentsMatch && method === "GET") {
+        const id = attachmentsMatch[1]!;
+        const task = getTask(id);
+        if (!task) return json({ error: "Task not found" }, 404, port);
+        const evidence = (task.metadata as any)?._evidence || {};
+        const attachmentIds: string[] = evidence.attachments || [];
+        return json({ task_id: id, short_id: task.short_id, attachment_ids: attachmentIds, count: attachmentIds.length, files_changed: evidence.files_changed, commit_hash: evidence.commit_hash, notes: evidence.notes }, 200, port);
+      }
+
       // ── API: Single task operations ──
       // /api/tasks/:id/progress — GET (read) and POST (log)
       const progressMatch = path.match(/^\/api\/tasks\/([^/]+)\/progress$/);
