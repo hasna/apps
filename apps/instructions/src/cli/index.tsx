@@ -901,5 +901,31 @@ program
     console.log(chalk.green("✓") + ` Pushed: updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
   });
 
+// ── update ────────────────────────────────────────────────────────────────────
+program
+  .command("update")
+  .description("Check for updates and install latest version")
+  .option("--check", "only check, don't install")
+  .action(async (opts) => {
+    try {
+      const proc = Bun.spawn(["npm", "view", "@hasna/configs", "version"], { stdout: "pipe", stderr: "pipe" });
+      const latest = (await new Response(proc.stdout).text()).trim();
+      await proc.exited;
+      if (latest === pkg.version) {
+        console.log(chalk.green("✓") + ` Already on latest version (${pkg.version})`);
+      } else {
+        console.log(`Current: ${chalk.dim(pkg.version)} → Latest: ${chalk.green(latest)}`);
+        if (!opts.check) {
+          console.log(chalk.dim("Installing..."));
+          const install = Bun.spawn(["bun", "install", "-g", `@hasna/configs@${latest}`], { stdout: "inherit", stderr: "inherit" });
+          await install.exited;
+          console.log(chalk.green("✓") + ` Updated to ${latest}`);
+        }
+      }
+    } catch (e) {
+      console.error(chalk.red("Failed to check for updates: " + (e instanceof Error ? e.message : String(e))));
+    }
+  });
+
 program.version(pkg.version).name("configs");
 program.parse(process.argv);
