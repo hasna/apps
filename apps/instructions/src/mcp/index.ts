@@ -3,7 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { createConfig, getConfig, listConfigs, updateConfig } from "../db/configs.js";
+import { createConfig, getConfig, getConfigStats, listConfigs, updateConfig } from "../db/configs.js";
 import { applyConfig } from "../lib/apply.js";
 import { syncFromDir, syncToDir } from "../lib/sync.js";
 import { listProfiles, getProfileConfigs } from "../db/profiles.js";
@@ -22,6 +22,8 @@ const TOOL_DOCS: Record<string, string> = {
   list_profiles: "List all profiles. Returns array of profile objects.",
   apply_profile: "Apply all configs in a profile to disk. Params: id_or_slug, dry_run?. Returns array of apply results.",
   get_snapshot: "Get snapshot(s) for a config. Params: config_id_or_slug, version?. Returns latest snapshot or specific version.",
+  get_status: "Single-call orientation. Returns: total configs, counts by category, drifted count, unredacted secrets, templates, DB path.",
+  sync_known: "Sync all known config files from disk into DB. Params: agent?, category?. Replaces sync_directory for standard use.",
   search_tools: "Search tool descriptions. Params: query. Returns matching tool names and descriptions.",
   describe_tools: "Get full descriptions for tools. Params: names? (array). Returns tool docs.",
 };
@@ -37,6 +39,8 @@ const LEAN_TOOLS = [
   { name: "list_profiles", inputSchema: { type: "object", properties: {} } },
   { name: "apply_profile", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, dry_run: { type: "boolean" } }, required: ["id_or_slug"] } },
   { name: "get_snapshot", inputSchema: { type: "object", properties: { config_id_or_slug: { type: "string" }, version: { type: "number" } }, required: ["config_id_or_slug"] } },
+  { name: "get_status", inputSchema: { type: "object", properties: {} } },
+  { name: "sync_known", inputSchema: { type: "object", properties: { agent: { type: "string" }, category: { type: "string" } } } },
   { name: "search_tools", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
   { name: "describe_tools", inputSchema: { type: "object", properties: { names: { type: "array", items: { type: "string" } } } } },
 ];
@@ -128,6 +132,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         const snaps = listSnapshots(config.id);
         return ok(snaps[0] ?? null);
+      }
+      case "get_status": {
+        const stats = getConfigStats();
+        const allConfigs = listConfigs({ kind: "file" });
+        let drifted = 0, secrets = 0, templates = 0;
+        for (const c of allConfigs) {
+          if (c.is_template) templates++;
+        }
+        return ok({
+          total: stats["total"] || 0,
+          by_category: Object.fromEntries(Object.entries(stats).filter(([k]) => k !== "total")),
+          templates,
+          db_path: process.env["CONFIGS_DB_PATH"] || "~/.configs/configs.db",
+        });
+      }
+      case "sync_known": {
+        const { syncKnown } = await import("../lib/sync.js");
+        const result = await syncKnown({
+          agent: (args["agent"] as ConfigAgent) || undefined,
+          category: (args["category"] as ConfigCategory) || undefined,
+        });
+        return ok(result);
       }
       case "search_tools": {
         const query = ((args["query"] as string) || "").toLowerCase();
