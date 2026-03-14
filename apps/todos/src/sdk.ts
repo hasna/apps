@@ -228,6 +228,23 @@ export class TodosClient {
     return this.fetch("/api/projects");
   }
 
+  async getContext(options: { agentId?: string; projectId?: string; format?: "text" | "compact" | "json" } = {}): Promise<string | any> {
+    const params = new URLSearchParams();
+    if (options.agentId) params.set("agent_id", options.agentId);
+    if (options.projectId) params.set("project_id", options.projectId);
+    if (options.format) params.set("format", options.format);
+    const url = `${this.baseUrl}/api/tasks/context?${params}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) return options.format === "json" ? {} : "";
+      if (options.format === "json") return res.json();
+      return res.text();
+    } catch { return options.format === "json" ? {} : ""; }
+    finally { clearTimeout(timer); }
+  }
+
   async getReport(options: { days?: number; projectId?: string } = {}): Promise<{ days: number; period_since: string; total: number; changed: number; completed: number; failed: number; completion_rate: number; stats: any; by_day: Record<string, number> }> {
     const params = new URLSearchParams();
     if (options.days) params.set("days", String(options.days));
