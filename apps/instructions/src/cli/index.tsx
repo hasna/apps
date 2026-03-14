@@ -537,6 +537,7 @@ mcpCmd.command("install")
   .option("--codex", "install into Codex")
   .option("--gemini", "install into Gemini")
   .option("--all", "install into all agents")
+  .option("--profile <level>", "set CONFIGS_PROFILE (minimal|standard|full)", "standard")
   .action(async (opts) => {
     const targets = opts.all ? ["claude", "codex", "gemini"] : [
       ...(opts.claude ? ["claude"] : []),
@@ -550,7 +551,10 @@ mcpCmd.command("install")
     for (const target of targets) {
       try {
         if (target === "claude") {
-          const proc = Bun.spawn(["claude", "mcp", "add", "--transport", "stdio", "--scope", "user", "configs", "--", "configs-mcp"], { stdout: "inherit", stderr: "inherit" });
+          const cmd = opts.profile && opts.profile !== "full"
+            ? ["claude", "mcp", "add", "--transport", "stdio", "--scope", "user", "configs", "--", "env", `CONFIGS_PROFILE=${opts.profile}`, "configs-mcp"]
+            : ["claude", "mcp", "add", "--transport", "stdio", "--scope", "user", "configs", "--", "configs-mcp"];
+          const proc = Bun.spawn(cmd, { stdout: "inherit", stderr: "inherit" });
           await proc.exited;
           console.log(chalk.green("✓") + " Installed into Claude Code");
         } else if (target === "codex") {
