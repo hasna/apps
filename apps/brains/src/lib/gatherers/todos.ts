@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3'
+import { Database } from 'bun:sqlite'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { GatherResult, GathererOptions, TrainingExample } from './types.js'
@@ -72,7 +72,7 @@ function taskToSearchExample(tasks: Task[], query: string): TrainingExample {
 
 export async function gatherFromTodos(options: GathererOptions = {}): Promise<GatherResult> {
   const dbPath = join(homedir(), '.todos', 'todos.db')
-  const db = new Database(dbPath, { readonly: true })
+  const db = new Database(dbPath, { readonly: true, create: false })
 
   try {
     let query = 'SELECT * FROM tasks WHERE 1=1'
@@ -90,7 +90,7 @@ export async function gatherFromTodos(options: GathererOptions = {}): Promise<Ga
       params.push(options.limit * 2) // fetch more since we generate multiple examples per task
     }
 
-    const tasks = db.prepare(query).all(...params) as Task[]
+    const tasks = db.query(query).all(...params) as Task[]
     const examples: TrainingExample[] = []
 
     // Create examples from each task

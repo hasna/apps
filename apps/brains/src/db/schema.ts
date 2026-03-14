@@ -11,6 +11,10 @@ export const fineTunedModels = sqliteTable("fine_tuned_models", {
     .notNull()
     .default("pending"),
   fineTuneJobId: text("fine_tune_job_id"),
+  displayName: text("display_name"),
+  description: text("description"),
+  collection: text("collection"),
+  tags: text("tags"), // JSON array string e.g. '["coding","chat"]'
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });

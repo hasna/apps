@@ -1,5 +1,5 @@
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -13,7 +13,7 @@ function ensureDir(filePath: string) {
   mkdirSync(dirname(filePath), { recursive: true });
 }
 
-function createTables(sqlite: Database.Database) {
+function createTables(sqlite: Database) {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS fine_tuned_models (
       id TEXT PRIMARY KEY,
@@ -22,6 +22,10 @@ function createTables(sqlite: Database.Database) {
       provider TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       fine_tune_job_id TEXT,
+      display_name TEXT,
+      description TEXT,
+      collection TEXT,
+      tags TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -52,8 +56,8 @@ export function getDb(dbPath?: string) {
   const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
   ensureDir(resolvedPath);
   const sqlite = new Database(resolvedPath);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
+  sqlite.run("PRAGMA journal_mode = WAL");
+  sqlite.run("PRAGMA foreign_keys = ON");
   createTables(sqlite);
   return drizzle(sqlite, { schema });
 }

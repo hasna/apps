@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3'
+import { Database } from 'bun:sqlite'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { GatherResult, GathererOptions, TrainingExample } from './types.js'
@@ -48,7 +48,7 @@ function windowToExample(window: Message[]): TrainingExample | null {
 
 export async function gatherFromConversations(options: GathererOptions = {}): Promise<GatherResult> {
   const dbPath = join(homedir(), '.conversations', 'messages.db')
-  const db = new Database(dbPath, { readonly: true })
+  const db = new Database(dbPath, { readonly: true, create: false })
 
   try {
     let query = 'SELECT * FROM messages WHERE 1=1'
@@ -61,7 +61,7 @@ export async function gatherFromConversations(options: GathererOptions = {}): Pr
 
     query += ' ORDER BY session_id, created_at ASC'
 
-    const allMessages = db.prepare(query).all(...params) as Message[]
+    const allMessages = db.query(query).all(...params) as Message[]
 
     // Group messages by session
     const sessions = new Map<string, Message[]>()

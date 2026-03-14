@@ -2,7 +2,7 @@
 // brains CLI entry point
 
 import { Command } from "commander";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -11,6 +11,7 @@ import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../db/in
 import * as openaiProvider from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "./ui.js";
+import { gatherAll } from "../lib/gatherers/index.js";
 
 const program = new Command();
 
@@ -35,8 +36,15 @@ modelsCmd
         return;
       }
       printTable(
-        ["ID", "Name", "Provider", "Status", "Base Model"],
-        models.map((m) => [m.id, m.name, m.provider, printStatus(m.status), m.baseModel])
+        ["ID", "Display Name", "Provider", "Status", "Collection", "Base Model"],
+        models.map((m) => [
+          m.id,
+          m.displayName ?? m.name,
+          m.provider,
+          printStatus(m.status),
+          m.collection ?? "",
+          m.baseModel,
+        ])
       );
     } catch (err) {
       printError(err instanceof Error ? err.message : String(err));
@@ -59,8 +67,13 @@ modelsCmd
         process.exit(1);
       }
       console.log();
+      const tagsList = model.tags ? (JSON.parse(model.tags) as string[]).join(", ") : "(none)";
       console.log(`  ID:            ${model.id}`);
       console.log(`  Name:          ${model.name}`);
+      console.log(`  Display Name:  ${model.displayName ?? "(none)"}`);
+      console.log(`  Description:   ${model.description ?? "(none)"}`);
+      console.log(`  Collection:    ${model.collection ?? "(none)"}`);
+      console.log(`  Tags:          ${tagsList}`);
       console.log(`  Provider:      ${model.provider}`);
       console.log(`  Status:        ${printStatus(model.status)}`);
       console.log(`  Base Model:    ${model.baseModel}`);
@@ -68,6 +81,107 @@ modelsCmd
       console.log(`  Created:       ${new Date(model.createdAt).toISOString()}`);
       console.log(`  Updated:       ${new Date(model.updatedAt).toISOString()}`);
       console.log();
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+modelsCmd
+  .command("rename <id> <displayName>")
+  .description("Set the display name of a model")
+  .action(async (id: string, displayName: string) => {
+    try {
+      const db = getDb();
+      await db
+        .update(fineTunedModels)
+        .set({ displayName, updatedAt: Date.now() })
+        .where(eq(fineTunedModels.id, id));
+      printSuccess(`Display name set to "${displayName}"`);
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+modelsCmd
+  .command("describe <id> <description>")
+  .description("Set the description of a model")
+  .action(async (id: string, description: string) => {
+    try {
+      const db = getDb();
+      await db
+        .update(fineTunedModels)
+        .set({ description, updatedAt: Date.now() })
+        .where(eq(fineTunedModels.id, id));
+      printSuccess(`Description updated.`);
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+modelsCmd
+  .command("tag <id> <tag>")
+  .description("Add a tag to a model")
+  .action(async (id: string, tag: string) => {
+    try {
+      const db = getDb();
+      const [model] = await db.select().from(fineTunedModels).where(eq(fineTunedModels.id, id));
+      if (!model) {
+        printError(`Model not found: ${id}`);
+        process.exit(1);
+      }
+      const existing: string[] = model.tags ? (JSON.parse(model.tags) as string[]) : [];
+      if (!existing.includes(tag)) {
+        existing.push(tag);
+      }
+      await db
+        .update(fineTunedModels)
+        .set({ tags: JSON.stringify(existing), updatedAt: Date.now() })
+        .where(eq(fineTunedModels.id, id));
+      printSuccess(`Tag "${tag}" added. Tags: ${existing.join(", ")}`);
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+modelsCmd
+  .command("untag <id> <tag>")
+  .description("Remove a tag from a model")
+  .action(async (id: string, tag: string) => {
+    try {
+      const db = getDb();
+      const [model] = await db.select().from(fineTunedModels).where(eq(fineTunedModels.id, id));
+      if (!model) {
+        printError(`Model not found: ${id}`);
+        process.exit(1);
+      }
+      const existing: string[] = model.tags ? (JSON.parse(model.tags) as string[]) : [];
+      const updated = existing.filter((t) => t !== tag);
+      await db
+        .update(fineTunedModels)
+        .set({ tags: JSON.stringify(updated), updatedAt: Date.now() })
+        .where(eq(fineTunedModels.id, id));
+      printSuccess(`Tag "${tag}" removed. Tags: ${updated.join(", ") || "(none)"}`);
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+modelsCmd
+  .command("collection <id> <collectionName>")
+  .description("Set the collection of a model")
+  .action(async (id: string, collectionName: string) => {
+    try {
+      const db = getDb();
+      await db
+        .update(fineTunedModels)
+        .set({ collection: collectionName, updatedAt: Date.now() })
+        .where(eq(fineTunedModels.id, id));
+      printSuccess(`Collection set to "${collectionName}"`);
     } catch (err) {
       printError(err instanceof Error ? err.message : String(err));
       process.exit(1);
@@ -271,60 +385,49 @@ dataCmd
     try {
       mkdirSync(opts.output, { recursive: true });
 
-      // Dynamically import gatherers — they may depend on external MCPs
-      const sources = opts.source === "all"
-        ? ["todos", "mementos", "conversations", "sessions"]
-        : [opts.source];
+      const sources =
+        opts.source === "all"
+          ? ["todos", "mementos", "conversations", "sessions"]
+          : [opts.source];
 
-      let totalExamples = 0;
       const now = Date.now();
       const db = getDb();
 
-      for (const source of sources) {
-        printInfo(`Gathering from ${source} …`);
-        try {
-          const gathererPath = new URL(`../lib/gatherers/${source}.js`, import.meta.url);
-          const mod = await import(gathererPath.pathname).catch(() => null);
-          if (!mod || typeof mod.gather !== "function") {
-            printInfo(`  No gatherer found for source '${source}', skipping.`);
-            continue;
-          }
+      // Use gatherAll which correctly routes to gatherFromTodos, gatherFromMementos, etc.
+      const results = await gatherAll(sources, { limit });
 
-          const result = await mod.gather({ limit, outputDir: opts.output });
-          const count: number = result?.count ?? 0;
-          const examples: unknown[] = result?.examples ?? [];
-          totalExamples += count;
+      let totalExamples = 0;
+      for (const result of results) {
+        const { source, examples, count } = result;
+        printInfo(`Gathered from ${source} …`);
 
-          if (count === 0) {
-            printInfo(`  No examples gathered from ${source}.`);
-            continue;
-          }
-
-          // Write JSONL
-          const fileName = `${source}-${now}.jsonl`;
-          const filePath = join(opts.output, fileName);
-          writeFileSync(
-            filePath,
-            examples.map((e) => JSON.stringify(e)).join("\n") + "\n",
-            "utf8"
-          );
-
-          // Record in DB
-          const datasetId = randomUUID();
-          await db.insert(trainingDatasets).values({
-            id: datasetId,
-            source: source as "todos" | "mementos" | "conversations" | "sessions" | "mixed",
-            filePath,
-            exampleCount: count,
-            createdAt: now,
-          });
-
-          printSuccess(`  ${count} examples → ${filePath}`);
-        } catch (innerErr) {
-          printError(
-            `  Failed to gather from ${source}: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}`
-          );
+        if (count === 0) {
+          printInfo(`  No examples gathered from ${source}.`);
+          continue;
         }
+
+        totalExamples += count;
+
+        // Write JSONL
+        const fileName = `${source}-${now}.jsonl`;
+        const filePath = join(opts.output, fileName);
+        writeFileSync(
+          filePath,
+          examples.map((e) => JSON.stringify(e)).join('\n') + '\n',
+          'utf8'
+        );
+
+        // Record in DB
+        const datasetId = randomUUID();
+        await db.insert(trainingDatasets).values({
+          id: datasetId,
+          source: source as 'todos' | 'mementos' | 'conversations' | 'sessions' | 'mixed',
+          filePath,
+          exampleCount: count,
+          createdAt: now,
+        });
+
+        printSuccess(`  ${count} examples → ${filePath}`);
       }
 
       console.log();
@@ -400,6 +503,102 @@ dataCmd
           new Date(d.createdAt).toISOString().split("T")[0] ?? "",
         ])
       );
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+// ── collections ───────────────────────────────────────────────────────────────
+
+const collectionsCmd = program.command("collections").description("Manage model collections");
+
+// brains collections (no subcommand) → list
+collectionsCmd.action(async () => {
+  await listCollections();
+});
+
+async function listCollections() {
+  try {
+    const db = getDb();
+    const rows = await db
+      .select({
+        collection: fineTunedModels.collection,
+        count: sql<number>`count(*)`.as("count"),
+        names: sql<string>`group_concat(coalesce(${fineTunedModels.displayName}, ${fineTunedModels.name}), ', ')`.as("names"),
+      })
+      .from(fineTunedModels)
+      .groupBy(fineTunedModels.collection);
+
+    if (rows.length === 0) {
+      printInfo("No collections found. Set a collection with 'brains models set-collection'.");
+      return;
+    }
+
+    printTable(
+      ["Collection", "Model Count", "Models"],
+      rows.map((r) => [
+        r.collection ?? "(none)",
+        String(r.count),
+        r.names ?? "",
+      ])
+    );
+  } catch (err) {
+    printError(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
+collectionsCmd
+  .command("list")
+  .description("List all collections with model counts")
+  .action(async () => {
+    await listCollections();
+  });
+
+collectionsCmd
+  .command("show <name>")
+  .description("List all models in a collection")
+  .action(async (name: string) => {
+    try {
+      const db = getDb();
+      const models = await db
+        .select()
+        .from(fineTunedModels)
+        .where(eq(fineTunedModels.collection, name));
+
+      if (models.length === 0) {
+        printInfo(`No models found in collection '${name}'.`);
+        return;
+      }
+
+      printTable(
+        ["ID", "Name", "Provider", "Status", "Base Model"],
+        models.map((m) => [m.id, m.name, m.provider, printStatus(m.status), m.baseModel])
+      );
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+collectionsCmd
+  .command("rename <oldName> <newName>")
+  .description("Rename a collection across all models")
+  .action(async (oldName: string, newName: string) => {
+    try {
+      const db = getDb();
+      // Count first, then update
+      const affected = await db
+        .select({ id: fineTunedModels.id })
+        .from(fineTunedModels)
+        .where(eq(fineTunedModels.collection, oldName));
+      const count = affected.length;
+      await db
+        .update(fineTunedModels)
+        .set({ collection: newName, updatedAt: Date.now() })
+        .where(eq(fineTunedModels.collection, oldName));
+      printSuccess(`Renamed collection '${oldName}' → '${newName}' (${count} models updated)`);
     } catch (err) {
       printError(err instanceof Error ? err.message : String(err));
       process.exit(1);

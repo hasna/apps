@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3'
+import { Database } from 'bun:sqlite'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { GatherResult, GathererOptions, TrainingExample } from './types.js'
@@ -72,7 +72,7 @@ function memoryToSearchExample(memories: Memory[], category: string): TrainingEx
 
 export async function gatherFromMementos(options: GathererOptions = {}): Promise<GatherResult> {
   const dbPath = join(homedir(), '.mementos', 'mementos.db')
-  const db = new Database(dbPath, { readonly: true })
+  const db = new Database(dbPath, { readonly: true, create: false })
 
   try {
     let query = "SELECT * FROM memories WHERE status = 'active'"
@@ -90,7 +90,7 @@ export async function gatherFromMementos(options: GathererOptions = {}): Promise
       params.push(options.limit * 3)
     }
 
-    const memories = db.prepare(query).all(...params) as Memory[]
+    const memories = db.query(query).all(...params) as Memory[]
     const examples: TrainingExample[] = []
 
     for (const memory of memories) {
