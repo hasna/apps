@@ -2,11 +2,71 @@
  * @hasna/todos REST SDK Client
  * Zero-dependency HTTP client for the todos REST API (todos serve).
  * Use when you need to interact with todos from another machine or process.
+ *
+ * Default port: 19427
+ * Env var: TODOS_URL (e.g. http://localhost:19427)
  */
 
 export interface TodosClientOptions {
   baseUrl?: string;
   timeout?: number;
+}
+
+export interface TaskSummary {
+  id: string;
+  short_id: string | null;
+  title: string;
+  description: string | null;
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  priority: "low" | "medium" | "high" | "critical";
+  project_id: string | null;
+  plan_id: string | null;
+  task_list_id: string | null;
+  agent_id: string | null;
+  assigned_to: string | null;
+  locked_by: string | null;
+  tags: string[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  due_at: string | null;
+  recurrence_rule: string | null;
+}
+
+export interface StatusSummaryResponse {
+  pending: number;
+  in_progress: number;
+  completed: number;
+  total: number;
+  active_work: { id: string; short_id: string | null; title: string; priority: string; assigned_to: string | null; locked_by: string | null; updated_at: string }[];
+  next_task: TaskSummary | null;
+  stale_count: number;
+  overdue_recurring: number;
+}
+
+export interface ProgressEntry {
+  id: string;
+  task_id: string;
+  content: string;
+  type: "comment" | "progress" | "note";
+  progress_pct: number | null;
+  agent_id: string | null;
+  created_at: string;
+}
+
+export interface DashboardStats {
+  total_tasks: number;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  projects: number;
+  agents: number;
+  stale_count?: number;
+  overdue_recurring?: number;
+  recurring_tasks?: number;
 }
 
 export class TodosClient {
@@ -44,14 +104,14 @@ export class TodosClient {
     } catch { return false; }
   }
 
-  async getStatus(projectId?: string, agentId?: string): Promise<any> {
+  async getStatus(projectId?: string, agentId?: string): Promise<StatusSummaryResponse> {
     const params = new URLSearchParams();
     if (projectId) params.set("project_id", projectId);
     if (agentId) params.set("agent_id", agentId);
     return this.fetch(`/api/tasks/status?${params}`);
   }
 
-  async listTasks(filter: { status?: string; project_id?: string; assigned_to?: string; limit?: number; offset?: number; session_id?: string } = {}): Promise<any[]> {
+  async listTasks(filter: { status?: string; project_id?: string; assigned_to?: string; limit?: number; offset?: number; session_id?: string; due_today?: boolean; overdue?: boolean } = {}): Promise<TaskSummary[]> {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(filter)) {
       if (v !== undefined) params.set(k, String(v));
@@ -59,7 +119,7 @@ export class TodosClient {
     return this.fetch(`/api/tasks?${params}`);
   }
 
-  async getTask(id: string): Promise<any> {
+  async getTask(id: string): Promise<TaskSummary> {
     return this.fetch(`/api/tasks/${id}`);
   }
 
@@ -107,7 +167,7 @@ export class TodosClient {
     await this.fetch(`/api/tasks/${id}`, { method: "DELETE" });
   }
 
-  async getStats(): Promise<any> {
+  async getStats(): Promise<DashboardStats> {
     return this.fetch("/api/stats");
   }
 
