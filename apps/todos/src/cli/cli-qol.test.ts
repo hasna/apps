@@ -230,6 +230,33 @@ describe("CLI QoL commands", () => {
 
   // ── list --sort priority ───────────────────────────────────────
 
+  it("--help should show all expected subcommands (prevent holo-swan bug: registered but not accessible)", () => {
+    const help = run("--help");
+    // Core task commands
+    expect(help).toContain("add");
+    expect(help).toContain("list");
+    expect(help).toContain("done");
+    expect(help).toContain("start");
+    expect(help).toContain("fail");
+    // Agent coordination
+    expect(help).toContain("claim");
+    expect(help).toContain("next");
+    expect(help).toContain("status");
+    expect(help).toContain("active");
+    expect(help).toContain("stale");
+    // Analytics
+    expect(help).toContain("report");
+    expect(help).toContain("summary");
+    // CLI shorthands
+    expect(help).toContain("assign");
+    expect(help).toContain("pin");
+    expect(help).toContain("tag");
+    // Server
+    expect(help).toContain("serve");
+    expect(help).toContain("stream");
+    expect(help).toContain("mcp");
+  });
+
   it("list --sort priority should sort tasks by priority", () => {
     run("add 'Low prio task' --priority low --json");
     run("add 'High prio task' --priority high --json");
