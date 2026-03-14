@@ -154,14 +154,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "get_status": {
         const stats = getConfigStats();
         const allConfigs = listConfigs({ kind: "file" });
-        let drifted = 0, secrets = 0, templates = 0;
+        const { existsSync: ex, readFileSync: rf } = await import("node:fs");
+        const { expandPath } = await import("../lib/apply.js");
+        const { redactContent } = await import("../lib/redact.js");
+        let drifted = 0, missing = 0, templates = 0;
+        const driftedSlugs: string[] = [];
         for (const c of allConfigs) {
           if (c.is_template) templates++;
+          if (!c.target_path) continue;
+          const abs = expandPath(c.target_path);
+          if (!ex(abs)) { missing++; continue; }
+          // Compare redacted disk content vs stored (lightweight — only for known configs, ~30 files)
+          const disk = rf(abs, "utf-8");
+          const { content: redactedDisk } = redactContent(disk, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+          if (redactedDisk !== c.content) { drifted++; driftedSlugs.push(c.slug); }
         }
         return ok({
           total: stats["total"] || 0,
           by_category: Object.fromEntries(Object.entries(stats).filter(([k]) => k !== "total")),
           templates,
+          drifted,
+          drifted_configs: driftedSlugs.slice(0, 5),
+          missing,
           db_path: process.env["CONFIGS_DB_PATH"] || "~/.configs/configs.db",
         });
       }
