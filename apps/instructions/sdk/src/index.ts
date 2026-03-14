@@ -164,12 +164,28 @@ export class ConfigsClient {
     return this.req<Profile & { configs: Config[] }>("GET", `/api/profiles/${idOrSlug}`);
   }
 
+  async createProfile(name: string, description?: string): Promise<Profile> {
+    return this.req<Profile>("POST", "/api/profiles", { name, description });
+  }
+
+  async updateProfile(idOrSlug: string, input: { name?: string; description?: string }): Promise<Profile> {
+    return this.req<Profile>("PUT", `/api/profiles/${idOrSlug}`, input);
+  }
+
+  async deleteProfile(idOrSlug: string): Promise<void> {
+    await this.req<{ ok: boolean }>("DELETE", `/api/profiles/${idOrSlug}`);
+  }
+
   async applyProfile(idOrSlug: string, dryRun = false): Promise<ApplyResult[]> {
     return this.req<ApplyResult[]>("POST", `/api/profiles/${idOrSlug}/apply`, { dry_run: dryRun });
   }
 
   async listMachines(): Promise<Machine[]> {
     return this.req<Machine[]>("GET", "/api/machines");
+  }
+
+  async registerMachine(hostname?: string, os?: string): Promise<Machine> {
+    return this.req<Machine>("POST", "/api/machines", { hostname, os });
   }
 
   async getStats(): Promise<Record<string, number>> {
