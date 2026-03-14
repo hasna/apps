@@ -942,10 +942,23 @@ program
 program
   .command("search <query>")
   .description("Search tasks")
-  .action((query: string) => {
+  .option("--status <status>", "Filter by status")
+  .option("--priority <p>", "Filter by priority")
+  .option("--assigned <agent>", "Filter by assigned agent")
+  .option("--since <date>", "Only tasks updated after this date (ISO)")
+  .option("--blocked", "Only blocked tasks (incomplete dependencies)")
+  .option("--has-deps", "Only tasks with dependencies")
+  .action((query: string, opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
-    const tasks = searchTasks(query, projectId);
+    const searchOpts: any = { query, project_id: projectId };
+    if (opts.status) searchOpts.status = opts.status;
+    if (opts.priority) searchOpts.priority = opts.priority;
+    if (opts.assigned) searchOpts.assigned_to = opts.assigned;
+    if (opts.since) searchOpts.updated_after = opts.since;
+    if (opts.blocked) searchOpts.is_blocked = true;
+    if (opts.hasDeps) searchOpts.has_dependencies = true;
+    const tasks = searchTasks(searchOpts);
 
     if (globalOpts.json) {
       output(tasks, true);
