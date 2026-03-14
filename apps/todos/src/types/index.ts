@@ -216,6 +216,9 @@ export interface Task {
   recurrence_rule: string | null;
   recurrence_parent_id: string | null;
   spawns_template_id: string | null;
+  confidence: number | null;
+  reason: string | null;
+  spawned_from_session: string | null;
 }
 
 // Task with relations loaded
@@ -248,6 +251,8 @@ export interface CreateTaskInput {
   recurrence_rule?: string;
   recurrence_parent_id?: string;
   spawns_template_id?: string;
+  reason?: string;
+  spawned_from_session?: string;
 }
 
 export interface UpdateTaskInput {
@@ -364,6 +369,9 @@ export interface TaskRow {
   recurrence_rule: string | null;
   recurrence_parent_id: string | null;
   spawns_template_id: string | null;
+  confidence: number | null;
+  reason: string | null;
+  spawned_from_session: string | null;
 }
 
 export interface SessionRow {

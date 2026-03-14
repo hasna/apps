@@ -25,6 +25,7 @@ import {
   failTask,
   getActiveWork,
   getStaleTasks,
+  redistributeStaleTasks,
 } from "../db/tasks.js";
 import {
   createProject,
@@ -173,6 +174,7 @@ program
   .option("--approval", "Require approval before completion")
   .option("--recurrence <rule>", "Recurrence rule, e.g. 'every day', 'every weekday', 'every 2 weeks'")
   .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
+  .option("--reason <text>", "Why this task exists")
   .action((title: string, opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
@@ -213,6 +215,7 @@ program
       requires_approval: opts.approval || false,
       recurrence_rule: opts.recurrence,
       due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
+      reason: opts.reason,
     });
 
     if (globalOpts.json) {
@@ -545,17 +548,19 @@ program
   .option("--test-results <results>", "Test results summary")
   .option("--commit-hash <hash>", "Git commit hash")
   .option("--notes <notes>", "Completion notes")
-  .action((id: string, opts: { attachIds?: string; filesChanged?: string; testResults?: string; commitHash?: string; notes?: string }) => {
+  .option("--confidence <0-1>", "Agent's confidence 0.0-1.0 that the task is fully complete (default: 1.0, <0.7 flagged for review)")
+  .action((id: string, opts: { attachIds?: string; filesChanged?: string; testResults?: string; commitHash?: string; notes?: string; confidence?: string }) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
     const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()) : undefined;
     const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()) : undefined;
+    const confidence = opts.confidence !== undefined ? parseFloat(opts.confidence) : undefined;
     const evidence = (attachmentIds || filesChanged || opts.testResults || opts.commitHash || opts.notes)
       ? { attachment_ids: attachmentIds, files_changed: filesChanged, test_results: opts.testResults, commit_hash: opts.commitHash, notes: opts.notes }
       : undefined;
     let task;
     try {
-      task = completeTask(resolvedId, globalOpts.agent, undefined, evidence);
+      task = completeTask(resolvedId, globalOpts.agent, undefined, { ...evidence, confidence });
     } catch (e) {
       handleError(e);
     }
@@ -2148,6 +2153,37 @@ program
       const id = t.short_id || t.id.slice(0, 8);
       const staleMin = Math.round((Date.now() - new Date(t.updated_at).getTime()) / 60000);
       console.log(`  ${chalk.cyan(id)} | ${t.locked_by || t.assigned_to || '?'} | ${t.title} ${chalk.dim(`(${staleMin}min stale)`)}`);
+    }
+  });
+
+// redistribute
+program
+  .command("redistribute <agent>")
+  .description("Release stale in-progress tasks and claim the best one (work-stealing)")
+  .option("--max-age <minutes>", "Stale threshold in minutes", "60")
+  .option("--project <id>", "Limit to a specific project")
+  .option("--limit <n>", "Max stale tasks to release")
+  .option("--json", "Output as JSON")
+  .action(async (agent: string, opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const projectId = opts.project ? resolveTaskId(opts.project) : autoProject(globalOpts) ?? undefined;
+    const result = redistributeStaleTasks(agent, {
+      max_age_minutes: parseInt(opts.maxAge, 10),
+      project_id: projectId,
+      limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
+    }, db);
+    if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    console.log(chalk.bold(`Released ${result.released.length} stale task(s).`));
+    for (const t of result.released) {
+      const id = t.short_id || t.id.slice(0, 8);
+      console.log(`  ${chalk.yellow("released")} ${chalk.cyan(id)} ${t.title}`);
+    }
+    if (result.claimed) {
+      const id = result.claimed.short_id || result.claimed.id.slice(0, 8);
+      console.log(chalk.green(`\nClaimed: ${chalk.cyan(id)} ${result.claimed.title}`));
+    } else {
+      console.log(chalk.dim("\nNo task claimed (nothing available)."));
     }
   });
 

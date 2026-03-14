@@ -376,6 +376,17 @@ const MIGRATIONS = [
   ALTER TABLE agents ADD COLUMN working_dir TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (17);
   `,
+  // Migration 18: Confidence scores on task completion
+  `
+  ALTER TABLE tasks ADD COLUMN confidence REAL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (18);
+  `,
+  // Migration 19: Task provenance — reason and spawned_from_session
+  `
+  ALTER TABLE tasks ADD COLUMN reason TEXT;
+  ALTER TABLE tasks ADD COLUMN spawned_from_session TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (19);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -538,6 +549,9 @@ function ensureSchema(db: Database): void {
   ensureColumn("tasks", "approved_at", "TEXT");
   ensureColumn("tasks", "recurrence_rule", "TEXT");
   ensureColumn("tasks", "recurrence_parent_id", "TEXT REFERENCES tasks(id) ON DELETE SET NULL");
+  ensureColumn("tasks", "confidence", "REAL");
+  ensureColumn("tasks", "reason", "TEXT");
+  ensureColumn("tasks", "spawned_from_session", "TEXT");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");

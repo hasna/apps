@@ -395,6 +395,26 @@ describe("completeTask", () => {
     const completed = completeTask(task.id, undefined, db);
     expect(completed.metadata._evidence).toBeUndefined();
   });
+
+  it("should store confidence in metadata._completion.confidence and task.confidence column", () => {
+    const task = createTask({ title: "With confidence" }, db);
+    const completed = completeTask(task.id, undefined, db, { confidence: 0.6 });
+    expect(completed.status).toBe("completed");
+    expect(completed.confidence).toBe(0.6);
+    const completion = completed.metadata._completion as Record<string, unknown>;
+    expect(completion).toBeDefined();
+    expect(completion.confidence).toBe(0.6);
+    // Verify persisted in DB
+    const fetched = getTask(completed.id, db);
+    expect(fetched?.confidence).toBe(0.6);
+  });
+
+  it("should leave confidence null when not provided", () => {
+    const task = createTask({ title: "No confidence" }, db);
+    const completed = completeTask(task.id, undefined, db);
+    expect(completed.confidence).toBeNull();
+    expect(completed.metadata._completion).toBeUndefined();
+  });
 });
 
 describe("lockTask / unlockTask", () => {

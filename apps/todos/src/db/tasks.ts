@@ -62,8 +62,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -91,6 +91,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       input.recurrence_rule || null,
       input.recurrence_parent_id || null,
       input.spawns_template_id || null,
+      input.reason || null,
+      input.spawned_from_session || null,
     ],
   );
 
@@ -550,7 +552,7 @@ export function completeTask(
   id: string,
   agentId?: string,
   db?: Database,
-  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean },
+  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number },
 ): Task {
   const d = db || getDatabase();
   const task = getTask(id, d);
@@ -569,21 +571,28 @@ export function completeTask(
   // Completion guard: rate limit, min work time, cooldown
   checkCompletionGuard(task, agentId || null, d);
 
-  // Extract evidence fields (everything except skip_recurrence)
+  // Extract evidence fields (everything except skip_recurrence and confidence)
   const evidence = options ? { files_changed: options.files_changed, test_results: options.test_results, commit_hash: options.commit_hash, notes: options.notes, attachment_ids: options.attachment_ids } : undefined;
   const hasEvidence = evidence && (evidence.files_changed || evidence.test_results || evidence.commit_hash || evidence.notes || evidence.attachment_ids);
 
-  // Store evidence in metadata if provided
-  if (hasEvidence) {
-    const meta = { ...task.metadata, _evidence: evidence };
+  // Build completion metadata (evidence + confidence)
+  const completionMeta: Record<string, unknown> = {};
+  if (hasEvidence) completionMeta._evidence = evidence;
+  if (options?.confidence !== undefined) {
+    completionMeta._completion = { confidence: options.confidence };
+  }
+  const hasMeta = Object.keys(completionMeta).length > 0;
+  if (hasMeta) {
+    const meta = { ...task.metadata, ...completionMeta };
     d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [JSON.stringify(meta), id]);
   }
 
   const timestamp = now();
+  const confidence = options?.confidence !== undefined ? options.confidence : null;
   d.run(
-    `UPDATE tasks SET status = 'completed', locked_by = NULL, locked_at = NULL, completed_at = ?, version = version + 1, updated_at = ?
+    `UPDATE tasks SET status = 'completed', locked_by = NULL, locked_at = NULL, completed_at = ?, confidence = ?, version = version + 1, updated_at = ?
      WHERE id = ?`,
-    [timestamp, timestamp, id],
+    [timestamp, confidence, timestamp, id],
   );
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
@@ -612,14 +621,14 @@ export function completeTask(
   }
 
   // Return constructed result — no re-fetch
-  const meta = hasEvidence ? { ...task.metadata, _evidence: evidence } : task.metadata;
+  const meta = hasMeta ? { ...task.metadata, ...completionMeta } : task.metadata;
   if (spawnedTask) {
     (meta as Record<string, unknown>)._next_recurrence = { id: spawnedTask.id, short_id: spawnedTask.short_id, due_at: spawnedTask.due_at };
   }
   if (spawnedFromTemplate) {
     (meta as Record<string, unknown>)._spawned_task = { id: spawnedFromTemplate.id, short_id: spawnedFromTemplate.short_id, title: spawnedFromTemplate.title };
   }
-  return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, version: task.version + 1, updated_at: timestamp, metadata: meta };
+  return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, confidence, version: task.version + 1, updated_at: timestamp, metadata: meta };
 }
 
 export function lockTask(
@@ -1268,6 +1277,36 @@ export function setTaskPriority(
     }
   }
   throw new Error(`Failed to set priority after 3 attempts`);
+}
+
+export function redistributeStaleTasks(
+  agentId: string,
+  options?: { max_age_minutes?: number; project_id?: string; limit?: number },
+  db?: Database,
+): { released: Task[]; claimed: Task | null } {
+  const d = db || getDatabase();
+  const maxAge = options?.max_age_minutes ?? 60;
+  const stale = getStaleTasks(maxAge, options?.project_id ? { project_id: options.project_id } : undefined, d);
+  const limited = options?.limit ? stale.slice(0, options.limit) : stale;
+
+  // Release locks on all stale tasks
+  const timestamp = now();
+  const released: Task[] = [];
+  for (const t of limited) {
+    d.run(
+      `UPDATE tasks SET locked_by = NULL, locked_at = NULL, status = 'pending', version = version + 1, updated_at = ? WHERE id = ?`,
+      [timestamp, t.id],
+    );
+    released.push({ ...t, locked_by: null, locked_at: null, status: "pending" as const });
+  }
+
+  // Optionally claim the highest-priority one
+  const claimed =
+    released.length > 0
+      ? claimNextTask(agentId, options?.project_id ? { project_id: options.project_id } : undefined, d)
+      : null;
+
+  return { released, claimed };
 }
 
 function wouldCreateCycle(

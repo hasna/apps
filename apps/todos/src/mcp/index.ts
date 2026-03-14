@@ -31,6 +31,7 @@ import {
   decomposeTasks,
   setTaskStatus,
   setTaskPriority,
+  redistributeStaleTasks,
 } from "../db/tasks.js";
 import { addComment, logProgress } from "../db/comments.js";
 import {
@@ -226,6 +227,8 @@ server.tool(
     requires_approval: z.boolean().optional(),
     recurrence_rule: z.string().optional(),
     spawns_template_id: z.string().optional().describe("Template ID to auto-create as next task when this task is completed (pipeline/handoff chains)"),
+    reason: z.string().optional().describe("Why this task exists — context for agents picking it up"),
+    spawned_from_session: z.string().optional().describe("Session ID that created this task (for tracing task lineage)"),
   },
   async (params) => {
     try {
@@ -468,14 +471,15 @@ server.tool(
     commit_hash: z.string().optional().describe("Git commit hash associated with this completion"),
     notes: z.string().optional().describe("Notes about the completion"),
     attachment_ids: z.array(z.string()).optional().describe("IDs of attachments uploaded via @hasna/attachments to link as evidence"),
+    confidence: z.number().min(0).max(1).optional().describe("Agent's confidence 0.0-1.0 that the task is fully complete. Default: 1.0. Low confidence (<0.7) is flagged as a signal for review."),
   },
-  async ({ id, agent_id, skip_recurrence, files_changed, test_results, commit_hash, notes, attachment_ids }) => {
+  async ({ id, agent_id, skip_recurrence, files_changed, test_results, commit_hash, notes, attachment_ids, confidence }) => {
     try {
       const resolvedId = resolveId(id);
       const evidence = (files_changed || test_results || commit_hash || notes || attachment_ids)
         ? { files_changed, test_results, commit_hash, notes, attachment_ids }
         : undefined;
-      const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence, ...evidence });
+      const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence, confidence, ...evidence });
       let text = `completed: ${formatTask(task)}`;
       if (task.metadata._next_recurrence) {
         const next = task.metadata._next_recurrence as { id: string; short_id?: string; due_at?: string };
@@ -2239,6 +2243,32 @@ server.tool(
 );
 }
 
+// redistribute_stale_tasks
+if (shouldRegisterTool("redistribute_stale_tasks")) {
+server.tool(
+  "redistribute_stale_tasks",
+  "Release stale in-progress tasks and optionally claim the best one. Work-stealing for multi-agent.",
+  {
+    agent_id: z.string().describe("Agent ID claiming the next task after releasing stale ones"),
+    max_age_minutes: z.number().optional().describe("Tasks idle longer than this (default: 60) are released"),
+    project_id: z.string().optional().describe("Limit to a specific project"),
+    limit: z.number().optional().describe("Max number of stale tasks to release"),
+  },
+  async ({ agent_id, max_age_minutes, project_id, limit }) => {
+    try {
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const result = redistributeStaleTasks(agent_id, { max_age_minutes, project_id: resolvedProjectId, limit });
+      const lines = [`Released ${result.released.length} stale task(s).`];
+      for (const t of result.released) lines.push(`  ${formatTask(t)}`);
+      if (result.claimed) lines.push(`\nClaimed: ${formatTask(result.claimed)}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
@@ -2265,6 +2295,7 @@ server.tool(
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health","bootstrap",
       "decompose_task",
       "set_task_status","set_task_priority",
+      "redistribute_stale_tasks",
       "search_tools","describe_tools",
     ].filter(name => shouldRegisterTool(name));
     const q = query?.toLowerCase();
@@ -2375,6 +2406,9 @@ server.tool(
       // Version-free shortcuts
       set_task_status: "Set task status without needing version. Auto-retries on conflict (up to 3 attempts). Use instead of update_task when you only need to change status.\n  Params: id(string, req), status(pending|in_progress|completed|failed|cancelled, req), agent_id(string)\n  Example: {id: 'a1b2c3d4', status: 'completed'}",
       set_task_priority: "Set task priority without needing version. Auto-retries on conflict (up to 3 attempts). Use instead of update_task when you only need to change priority.\n  Params: id(string, req), priority(low|medium|high|critical, req)\n  Example: {id: 'a1b2c3d4', priority: 'high'}",
+
+      // Work-stealing
+      redistribute_stale_tasks: "Release stale in-progress tasks and optionally claim the best one. Multi-agent work-stealing.\n  Params: agent_id(string, req), max_age_minutes(number, default:60), project_id(string, optional), limit(number, optional)\n  Example: {agent_id: 'a1b2c3d4', max_age_minutes: 30}",
 
       // Meta
       search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",
