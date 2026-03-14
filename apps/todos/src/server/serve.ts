@@ -200,13 +200,19 @@ export async function startServer(port: number, options?: { open?: boolean }): P
       if (path === "/api/tasks" && method === "GET") {
         const status = url.searchParams.get("status") || undefined;
         const projectId = url.searchParams.get("project_id") || undefined;
+        const sessionId = url.searchParams.get("session_id") || undefined;
+        const agentId = url.searchParams.get("agent_id") || undefined;
         const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get("offset");
         const fieldsParam = url.searchParams.get("fields");
         const fields = fieldsParam ? fieldsParam.split(",").map(f => f.trim()).filter(Boolean) : undefined;
         const tasks = listTasks({
           status: status as Task["status"] | undefined,
           project_id: projectId,
+          session_id: sessionId,
+          agent_id: agentId,
           limit: limitParam ? parseInt(limitParam, 10) : undefined,
+          offset: offsetParam ? parseInt(offsetParam, 10) : undefined,
         });
         return json(tasks.map(t => taskToSummary(t, fields)), 200, port);
       }
