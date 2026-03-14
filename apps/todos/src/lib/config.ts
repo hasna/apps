@@ -34,7 +34,9 @@ export interface TodosConfig {
   project_overrides?: Record<string, ProjectOverrideConfig>;
 }
 
-const CONFIG_PATH = join(HOME, ".todos", "config.json");
+function getConfigPath(): string {
+  return join(process.env["HOME"] || HOME, ".todos", "config.json");
+}
 let cached: TodosConfig | null = null;
 
 function normalizeAgent(agent: string): string {
@@ -43,11 +45,11 @@ function normalizeAgent(agent: string): string {
 
 export function loadConfig(): TodosConfig {
   if (cached) return cached;
-  if (!existsSync(CONFIG_PATH)) {
+  if (!existsSync(getConfigPath())) {
     cached = {};
     return cached;
   }
-  const config = readJsonFile<TodosConfig>(CONFIG_PATH) || {};
+  const config = readJsonFile<TodosConfig>(getConfigPath()) || {};
   if (typeof config.sync_agents === "string") {
     config.sync_agents = config.sync_agents.split(",").map((a) => a.trim()).filter(Boolean);
   }
