@@ -1612,3 +1612,37 @@ describe("getStaleTasks", () => {
     expect(stale.length).toBe(0);
   });
 });
+
+describe("webhook dispatch on task lifecycle", () => {
+  it("createTask completes without errors when no webhooks registered", () => {
+    const task = createTask({ title: "Webhook test" }, db);
+    expect(task.id).toBeTruthy();
+    expect(task.title).toBe("Webhook test");
+  });
+
+  it("task lifecycle (start → complete) completes without webhook errors", () => {
+    const task = createTask({ title: "Lifecycle test", status: "pending" }, db);
+    const started = startTask(task.id, "agent1", db);
+    expect(started.status).toBe("in_progress");
+    const completed = completeTask(task.id, "agent1", db);
+    expect(completed.status).toBe("completed");
+  });
+
+  it("failTask completes without webhook errors when no webhooks registered", () => {
+    const task = createTask({ title: "Fail test" }, db);
+    const { task: failed } = failTask(task.id, "agent1", "test failure", undefined, db);
+    expect(failed.status).toBe("failed");
+  });
+
+  it("updateTask with assigned_to change completes without webhook errors", () => {
+    const task = createTask({ title: "Assignment test" }, db);
+    const updated = updateTask(task.id, { assigned_to: "agent-xyz", version: task.version }, db);
+    expect(updated.assigned_to).toBe("agent-xyz");
+  });
+
+  it("updateTask with status change completes without webhook errors", () => {
+    const task = createTask({ title: "Status change test" }, db);
+    const updated = updateTask(task.id, { status: "in_progress", version: task.version }, db);
+    expect(updated.status).toBe("in_progress");
+  });
+});

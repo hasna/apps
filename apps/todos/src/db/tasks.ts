@@ -20,6 +20,7 @@ import { nextTaskShortId } from "./projects.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
+import { dispatchWebhook } from "./webhooks.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -93,7 +94,9 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
     insertTaskTags(id, tags, d);
   }
 
-  return getTask(id, d)!;
+  const task = getTask(id, d)!;
+  dispatchWebhook("task.created", { id: task.id, short_id: task.short_id, title: task.title, status: task.status, priority: task.priority, project_id: task.project_id, assigned_to: task.assigned_to }, d).catch(() => {});
+  return task;
 }
 
 export function getTask(id: string, db?: Database): Task | null {
@@ -448,6 +451,14 @@ export function updateTask(
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
+  // Webhook dispatch for assignment and status changes
+  if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) {
+    dispatchWebhook("task.assigned", { id, assigned_to: input.assigned_to, title: task.title }, d).catch(() => {});
+  }
+  if (input.status !== undefined && input.status !== task.status) {
+    dispatchWebhook("task.status_changed", { id, old_status: task.status, new_status: input.status, title: task.title }, d).catch(() => {});
+  }
+
   // Return updated task without re-fetching from DB
   return {
     ...task,
@@ -512,6 +523,7 @@ export function startTask(
   }
 
   logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
+  dispatchWebhook("task.started", { id, agent_id: agentId, title: task.title }, d).catch(() => {});
 
   // Return constructed result — no re-fetch
   return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, version: task.version + 1, updated_at: timestamp };
@@ -558,6 +570,7 @@ export function completeTask(
   );
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
+  dispatchWebhook("task.completed", { id, agent_id: agentId, title: task.title, completed_at: timestamp }, d).catch(() => {});
 
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
@@ -980,6 +993,7 @@ export function failTask(
   );
 
   logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
+  dispatchWebhook("task.failed", { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title }, d).catch(() => {});
 
   const failedTask: Task = {
     ...task,
