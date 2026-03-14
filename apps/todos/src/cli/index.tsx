@@ -1739,6 +1739,7 @@ program
   .command("serve")
   .description("Start the web dashboard")
   .option("--port <port>", "Port number", "19427")
+  .option("--host <host>", "Host to bind (default: 127.0.0.1 localhost only, use 0.0.0.0 for all interfaces)")
   .option("--no-open", "Don't open browser automatically")
   .action(async (opts) => {
     const { startServer } = await import("../server/serve.js");
@@ -1756,7 +1757,7 @@ program
     if (port !== requestedPort) {
       console.log(`Port ${requestedPort} in use, using ${port}`);
     }
-    await startServer(port, { open: opts.open !== false });
+    await startServer(port, { open: opts.open !== false, host: opts.host });
   });
 
 // watch

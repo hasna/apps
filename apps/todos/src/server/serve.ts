@@ -114,7 +114,7 @@ function taskToSummary(task: Task, fields?: string[]) {
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
-export async function startServer(port: number, options?: { open?: boolean }): Promise<void> {
+export async function startServer(port: number, options?: { open?: boolean; host?: string }): Promise<void> {
   const shouldOpen = options?.open ?? true;
 
   // Initialize database
@@ -158,8 +158,10 @@ export async function startServer(port: number, options?: { open?: boolean }): P
     console.error(`  cd dashboard && bun install && bun run build\n`);
   }
 
+  const hostname = options?.host || "127.0.0.1";
   const server = Bun.serve({
     port,
+    hostname,
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
