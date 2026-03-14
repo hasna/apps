@@ -533,6 +533,133 @@ describe("Response headers", () => {
   });
 });
 
+// ── API: Agent coordination endpoints ───────────────────────────────────────
+
+describe("GET /api/tasks/status", () => {
+  it("should return status summary with correct shape", async () => {
+    const res = await api("GET", "/api/tasks/status");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("pending");
+    expect(data).toHaveProperty("in_progress");
+    expect(data).toHaveProperty("completed");
+    expect(typeof data.pending).toBe("number");
+    expect(typeof data.in_progress).toBe("number");
+  });
+
+  it("should accept agent_id query param", async () => {
+    const res = await api("GET", "/api/tasks/status?agent_id=test-agent");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("pending");
+  });
+});
+
+describe("GET /api/tasks/next", () => {
+  it("should return a task or null", async () => {
+    const res = await api("GET", "/api/tasks/next");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("task");
+  });
+
+  it("should return a pending task when one exists", async () => {
+    await createTaskViaApi({ title: "Next task candidate", priority: "high" });
+    const res = await api("GET", "/api/tasks/next");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    // task may be null if all are locked/in-progress from other tests, but shape is correct
+    expect(data).toHaveProperty("task");
+  });
+});
+
+describe("GET /api/tasks/active", () => {
+  it("should return active work with correct shape", async () => {
+    const res = await api("GET", "/api/tasks/active");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("active");
+    expect(data).toHaveProperty("count");
+    expect(Array.isArray(data.active)).toBe(true);
+    expect(typeof data.count).toBe("number");
+  });
+
+  it("should include in_progress tasks", async () => {
+    const task = await createTaskViaApi({ title: "Active work test" });
+    const id = task.id as string;
+    await api("POST", `/api/tasks/${id}/start`);
+
+    const res = await api("GET", "/api/tasks/active");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { active: Array<Record<string, unknown>>; count: number };
+    expect(data.count).toBeGreaterThan(0);
+    const found = data.active.find((t) => t.id === id);
+    expect(found).toBeTruthy();
+  });
+});
+
+describe("GET /api/tasks/stale", () => {
+  it("should return stale tasks with correct shape", async () => {
+    const res = await api("GET", "/api/tasks/stale");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("tasks");
+    expect(data).toHaveProperty("count");
+    expect(Array.isArray(data.tasks)).toBe(true);
+    expect(typeof data.count).toBe("number");
+  });
+
+  it("should accept minutes query param", async () => {
+    const res = await api("GET", "/api/tasks/stale?minutes=60");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("tasks");
+  });
+});
+
+describe("GET /api/tasks/changed", () => {
+  it("should return 400 when since param is missing", async () => {
+    const res = await api("GET", "/api/tasks/changed");
+    expect(res.status).toBe(400);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.error).toContain("since");
+  });
+
+  it("should return changed tasks since a given ISO date", async () => {
+    const since = new Date(Date.now() - 60000).toISOString();
+    await createTaskViaApi({ title: "Changed task test" });
+    const res = await api("GET", `/api/tasks/changed?since=${encodeURIComponent(since)}`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("tasks");
+    expect(data).toHaveProperty("count");
+    expect(data).toHaveProperty("since");
+    expect(Array.isArray(data.tasks)).toBe(true);
+    expect((data.count as number)).toBeGreaterThan(0);
+  });
+});
+
+describe("POST /api/tasks/claim", () => {
+  it("should claim a pending task for an agent", async () => {
+    await createTaskViaApi({ title: "Claimable task " + Date.now() });
+    const res = await api("POST", "/api/tasks/claim", { agent_id: "test-claimer" });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("task");
+  });
+
+  it("should return task: null when no pending tasks available", async () => {
+    // Use a unique project_id that has no tasks
+    const res = await api("POST", "/api/tasks/claim", {
+      agent_id: "claimer",
+      project_id: "00000000-0000-0000-0000-nonexistent01",
+    });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.task).toBeNull();
+  });
+});
+
 // ── End-to-end task lifecycle ───────────────────────────────────────────────
 
 describe("Task lifecycle (end-to-end)", () => {

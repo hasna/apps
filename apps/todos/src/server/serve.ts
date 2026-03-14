@@ -292,6 +292,71 @@ export async function startServer(port: number, options?: { open?: boolean }): P
         }
       }
 
+      // ── API: Task status summary ──
+      if (path === "/api/tasks/status" && method === "GET") {
+        try {
+          const projectId = url.searchParams.get("project_id") || undefined;
+          const agentId = url.searchParams.get("agent_id") || undefined;
+          const { getStatus } = await import("../db/tasks.js");
+          const status = getStatus(projectId ? { project_id: projectId } : undefined, agentId);
+          return json(status, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // ── API: Next task ──
+      if (path === "/api/tasks/next" && method === "GET") {
+        try {
+          const projectId = url.searchParams.get("project_id") || undefined;
+          const agentId = url.searchParams.get("agent_id") || undefined;
+          const { getNextTask } = await import("../db/tasks.js");
+          const task = getNextTask(agentId, projectId ? { project_id: projectId } : undefined);
+          return json({ task: task ? taskToSummary(task) : null }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // ── API: Active work ──
+      if (path === "/api/tasks/active" && method === "GET") {
+        try {
+          const projectId = url.searchParams.get("project_id") || undefined;
+          const { getActiveWork } = await import("../db/tasks.js");
+          const work = getActiveWork(projectId ? { project_id: projectId } : undefined);
+          return json({ active: work, count: work.length }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // ── API: Stale tasks ──
+      if (path === "/api/tasks/stale" && method === "GET") {
+        try {
+          const projectId = url.searchParams.get("project_id") || undefined;
+          const minutes = parseInt(url.searchParams.get("minutes") || "30", 10);
+          const { getStaleTasks } = await import("../db/tasks.js");
+          const tasks = getStaleTasks(minutes, projectId ? { project_id: projectId } : undefined);
+          return json({ tasks: tasks.map(t => taskToSummary(t)), count: tasks.length }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // ── API: Changed tasks ──
+      if (path === "/api/tasks/changed" && method === "GET") {
+        try {
+          const since = url.searchParams.get("since");
+          if (!since) return json({ error: "since parameter required (ISO date string)" }, 400, port);
+          const projectId = url.searchParams.get("project_id") || undefined;
+          const { getTasksChangedSince } = await import("../db/tasks.js");
+          const tasks = getTasksChangedSince(since, projectId ? { project_id: projectId } : undefined);
+          return json({ tasks: tasks.map(t => taskToSummary(t)), count: tasks.length, since }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
       // ── API: Single task operations ──
       const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) {
@@ -403,28 +468,11 @@ export async function startServer(port: number, options?: { open?: boolean }): P
       // ── API: Claim next task ──
       if (path === "/api/tasks/claim" && method === "POST") {
         try {
-          const body = await req.json() as { agent_id?: string; project_id?: string; priority?: string; tags?: string[] };
+          const body = await req.json() as { agent_id?: string; project_id?: string };
           const agentId = body.agent_id || "anonymous";
-          const pending = listTasks({ status: "pending" as any, project_id: body.project_id });
-          const available = pending.filter(t => !t.locked_by);
-          if (available.length === 0) return json({ task: null }, 200, port);
-          // Pick highest priority
-          const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-          available.sort((a, b) => (order[a.priority] ?? 4) - (order[b.priority] ?? 4));
-          const target = available[0]!;
-          try {
-            const claimed = startTask(target.id, agentId);
-            return json({ task: taskToSummary(claimed) }, 200, port);
-          } catch (e) {
-            // Lock conflict — suggest next
-            const next = available[1] || null;
-            return json({
-              task: null,
-              locked_by: target.locked_by,
-              locked_since: target.locked_at,
-              suggested_task: next ? taskToSummary(next) : null,
-            }, 200, port);
-          }
+          const { claimNextTask } = await import("../db/tasks.js");
+          const task = claimNextTask(agentId, body.project_id ? { project_id: body.project_id } : undefined);
+          return json({ task: task ? taskToSummary(task) : null }, 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to claim" }, 500, port);
         }
