@@ -2215,7 +2215,7 @@ program
       const dbPath = process.env["TODOS_DB_PATH"] || require("node:path").join(process.env["HOME"] || "~", ".todos", "todos.db");
       let size = "unknown";
       try { size = `${(statSync(dbPath).size / 1024 / 1024).toFixed(1)} MB`; } catch {}
-      checks.push({ name: "Database", ok: true, message: `${row.count} tasks · ${size}` });
+      checks.push({ name: "Database", ok: true, message: `${row.count} tasks · ${size} · ${chalk.dim(dbPath)}` });
     } catch (e) {
       checks.push({ name: "Database", ok: false, message: e instanceof Error ? e.message : "Failed" });
     }
@@ -2248,6 +2248,9 @@ program
     } catch (e) {
       checks.push({ name: "Tasks", ok: false, message: "Failed to read tasks" });
     }
+
+    // Version check
+    checks.push({ name: "Version", ok: true, message: `v${getPackageVersion()} · todos-mcp, todos-serve` });
 
     if (opts.json || globalOpts.json) {
       const ok = checks.every(c => c.ok);
