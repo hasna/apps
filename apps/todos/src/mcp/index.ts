@@ -1446,8 +1446,12 @@ server.tool(
   async ({ agent_name }) => {
     try {
       const agent = registerAgent({ name: agent_name });
-      const tasks = listTasks({});
-      const myTasks = tasks.filter(t => t.assigned_to === agent_name || t.assigned_to === agent.id || t.agent_id === agent.id || t.agent_id === agent_name);
+      // Use DB-level filtering for efficiency — query by both name and agent ID
+      const byName = listTasks({ assigned_to: agent_name });
+      const byId = listTasks({ agent_id: agent.id });
+      // Deduplicate
+      const seen = new Set<string>();
+      const myTasks = [...byName, ...byId].filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true; });
       const pending = myTasks.filter(t => t.status === "pending");
       const inProgress = myTasks.filter(t => t.status === "in_progress");
       const completed = myTasks.filter(t => t.status === "completed");
