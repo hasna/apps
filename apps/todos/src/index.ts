@@ -39,6 +39,7 @@ export {
   decomposeTasks,
   setTaskStatus,
   setTaskPriority,
+  redistributeStaleTasks,
 } from "./db/tasks.js";
 export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput } from "./db/tasks.js";
 
