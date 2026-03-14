@@ -28,8 +28,18 @@ const TOOL_DOCS: Record<string, string> = {
   describe_tools: "Get full descriptions for tools. Params: names? (array). Returns tool docs.",
 };
 
+// ── Agent profiles — CONFIGS_PROFILE env var controls which tools are exposed ─
+const PROFILES: Record<string, string[]> = {
+  minimal: ["get_status", "get_config", "sync_known"],
+  standard: ["list_configs", "get_config", "create_config", "update_config", "apply_config", "sync_known", "get_status", "list_profiles", "apply_profile", "search_tools", "describe_tools"],
+  full: [], // empty = all tools
+};
+
+const activeProfile = process.env["CONFIGS_PROFILE"] || "full";
+const profileFilter = PROFILES[activeProfile];
+
 // ── Lean stubs (minimal schema, no descriptions) ─────────────────────────────
-const LEAN_TOOLS = [
+const ALL_LEAN_TOOLS = [
   { name: "list_configs", inputSchema: { type: "object", properties: { category: { type: "string" }, agent: { type: "string" }, kind: { type: "string" }, search: { type: "string" } } } },
   { name: "get_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" } }, required: ["id_or_slug"] } },
   { name: "create_config", inputSchema: { type: "object", properties: { name: { type: "string" }, content: { type: "string" }, category: { type: "string" }, agent: { type: "string" }, target_path: { type: "string" }, kind: { type: "string" }, format: { type: "string" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" }, is_template: { type: "boolean" } }, required: ["name", "content", "category"] } },
@@ -56,6 +66,10 @@ const server = new Server(
   { name: "configs", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
+
+const LEAN_TOOLS = profileFilter && profileFilter.length > 0
+  ? ALL_LEAN_TOOLS.filter((t) => profileFilter.includes(t.name))
+  : ALL_LEAN_TOOLS;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: LEAN_TOOLS }));
 
