@@ -5,7 +5,7 @@
  */
 
 import { existsSync } from "fs";
-import { join, dirname, extname } from "path";
+import { join, dirname, extname, resolve, sep } from "path";
 import { fileURLToPath } from "url";
 import {
   createTask,
@@ -800,7 +800,13 @@ export async function startServer(port: number, options?: { open?: boolean }): P
       // ── Static Files (Vite dashboard) ──
       if (dashboardExists && (method === "GET" || method === "HEAD")) {
         if (path !== "/") {
+          // Prevent path traversal: resolved path must stay within dashboardDir
           const filePath = join(dashboardDir, path);
+          const resolvedFile = resolve(filePath);
+          const resolvedBase = resolve(dashboardDir);
+          if (!resolvedFile.startsWith(resolvedBase + sep) && resolvedFile !== resolvedBase) {
+            return json({ error: "Forbidden" }, 403, port);
+          }
           const res = serveStaticFile(filePath);
           if (res) return res;
         }
