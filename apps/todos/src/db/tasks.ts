@@ -1058,6 +1058,50 @@ export function getStaleTasks(
   return rows.map(rowToTask);
 }
 
+export interface StatusSummary {
+  pending: number;
+  in_progress: number;
+  completed: number;
+  total: number;
+  active_work: ActiveWorkItem[];
+  next_task: Task | null;
+  stale_count: number;
+  overdue_recurring: number;
+}
+
+export function getStatus(
+  filters?: { project_id?: string; task_list_id?: string },
+  agentId?: string,
+  db?: Database,
+): StatusSummary {
+  const d = db || getDatabase();
+
+  const pending = countTasks({ ...filters, status: "pending" }, d);
+  const in_progress = countTasks({ ...filters, status: "in_progress" }, d);
+  const completed = countTasks({ ...filters, status: "completed" }, d);
+  const total = countTasks(filters || {}, d);
+  const active_work = getActiveWork(filters, d);
+  const next_task = getNextTask(agentId, filters, d);
+  const stale = getStaleTasks(30, filters, d);
+
+  const conditions: string[] = ["recurrence_rule IS NOT NULL", "status = 'pending'", "due_at < ?"];
+  const params: SQLQueryBindings[] = [now()];
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+  const overdueRow = d.query(`SELECT COUNT(*) as count FROM tasks WHERE ${conditions.join(" AND ")}`).get(...params) as { count: number };
+
+  return {
+    pending,
+    in_progress,
+    completed,
+    total,
+    active_work,
+    next_task,
+    stale_count: stale.length,
+    overdue_recurring: overdueRow.count,
+  };
+}
+
 function wouldCreateCycle(
   taskId: string,
   dependsOn: string,

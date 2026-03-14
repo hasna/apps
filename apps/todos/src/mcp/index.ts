@@ -27,6 +27,7 @@ import {
   getTasksChangedSince,
   failTask,
   getStaleTasks,
+  getStatus,
 } from "../db/tasks.js";
 import { addComment } from "../db/comments.js";
 import {
@@ -1730,6 +1731,52 @@ server.tool(
   },
 );
 
+// get_status
+server.tool(
+  "get_status",
+  "Get a full project health snapshot — counts, active work, next task, stale/overdue summary.",
+  {
+    agent_id: z.string().optional(),
+    project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+  },
+  async ({ agent_id, project_id, task_list_id }) => {
+    try {
+      const filters: { project_id?: string; task_list_id?: string } = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+
+      const status = getStatus(Object.keys(filters).length > 0 ? filters : undefined, agent_id);
+
+      const lines = [
+        `Tasks: ${status.pending} pending | ${status.in_progress} active | ${status.completed} done | ${status.total} total`,
+      ];
+
+      if (status.stale_count > 0) lines.push(`⚠️  ${status.stale_count} stale (stuck in_progress)`);
+      if (status.overdue_recurring > 0) lines.push(`🔁 ${status.overdue_recurring} overdue recurring`);
+
+      if (status.active_work.length > 0) {
+        lines.push(`\nActive (${status.active_work.length}):`);
+        for (const w of status.active_work.slice(0, 5)) {
+          const id = w.short_id || w.id.slice(0, 8);
+          lines.push(`  ${id} | ${w.assigned_to || w.locked_by || '?'} | ${w.title}`);
+        }
+      }
+
+      if (status.next_task) {
+        lines.push(`\nNext up:`);
+        lines.push(`  ${formatTask(status.next_task)}`);
+      } else {
+        lines.push(`\nNo pending tasks available.`);
+      }
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+
 // === META TOOLS ===
 
 // search_tools
@@ -1752,7 +1799,7 @@ server.tool(
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-      "get_active_work","get_tasks_changed_since","get_stale_tasks",
+      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
       "search_tools","describe_tools",
     ];
     const q = query?.toLowerCase();
@@ -1851,6 +1898,7 @@ server.tool(
       get_active_work: "See all in-progress tasks and who is working on them.\n  Params: project_id(string, optional), task_list_id(string, optional)\n  Example: {project_id: 'a1b2c3d4'}",
       get_tasks_changed_since: "Get tasks modified after a timestamp — incremental delta sync.\n  Params: since(string, req — ISO date), project_id(string, optional), task_list_id(string, optional)\n  Example: {since: '2026-03-14T10:00:00Z'}",
       get_stale_tasks: "Find stale in_progress tasks with no recent activity.\n  Params: stale_minutes(number, default:30), project_id(string, optional), task_list_id(string, optional)\n  Example: {stale_minutes: 60, project_id: 'a1b2c3d4'}",
+      get_status: "Get a full project health snapshot — pending/in_progress/completed counts, active work, next recommended task, stale task count, overdue recurring tasks. Saves 4+ round trips at session start.\n  Params: agent_id(string, optional — prefers tasks assigned to this agent for next_task), project_id(string, optional), task_list_id(string, optional)\n  Example: {agent_id: 'a1b2c3d4', project_id: 'e5f6g7h8'}",
 
       // Meta
       search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",
