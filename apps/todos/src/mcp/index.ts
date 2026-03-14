@@ -1494,7 +1494,11 @@ server.tool(
   },
   async ({ agent_name }) => {
     try {
-      const agent = registerAgent({ name: agent_name });
+      const agentResult = registerAgent({ name: agent_name });
+      if (isAgentConflict(agentResult)) {
+        return { content: [{ type: "text" as const, text: `CONFLICT: ${agentResult.message}` }], isError: true };
+      }
+      const agent = agentResult;
       // Use DB-level filtering for efficiency — query by both name and agent ID
       const byName = listTasks({ assigned_to: agent_name });
       const byId = listTasks({ agent_id: agent.id });

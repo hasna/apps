@@ -576,8 +576,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
       if (path === "/api/agents/me" && method === "GET") {
         const name = url.searchParams.get("name");
         if (!name) return json({ error: "Missing name param" }, 400, port);
-        const { registerAgent } = await import("../db/agents.js");
-        const agent = registerAgent({ name });
+        const { registerAgent, isAgentConflict } = await import("../db/agents.js");
+        const agentResult = registerAgent({ name });
+        if (isAgentConflict(agentResult)) return json({ error: agentResult.message, conflict: true }, 409, port);
+        const agent = agentResult;
         const tasks = listTasks({ assigned_to: name });
         const agentIdTasks = listTasks({ agent_id: agent.id });
         const allTasks = [...tasks, ...agentIdTasks.filter(t => !tasks.some(tt => tt.id === t.id))];
@@ -707,9 +709,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
         try {
           const body = await req.json() as { name: string; description?: string };
           if (!body.name) return json({ error: "Missing name" }, 400, port);
-          const { registerAgent } = await import("../db/agents.js");
-          const agent = registerAgent({ name: body.name, description: body.description });
-          return json(agent, 201, port);
+          const { registerAgent, isAgentConflict } = await import("../db/agents.js");
+          const result = registerAgent({ name: body.name, description: body.description, session_id: (body as any).session_id, working_dir: (body as any).working_dir });
+          if (isAgentConflict(result)) return json({ error: result.message, conflict: true }, 409, port);
+          return json(result, 201, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to register agent" }, 500, port);
         }

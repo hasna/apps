@@ -33,7 +33,7 @@ import {
   ensureProject,
   getProjectByPath,
 } from "../db/projects.js";
-import { registerAgent, listAgents } from "../db/agents.js";
+import { registerAgent, isAgentConflict, listAgents } from "../db/agents.js";
 import { createTaskList, listTaskLists, deleteTaskList } from "../db/task-lists.js";
 import {
   createPlan,
@@ -1501,14 +1501,18 @@ program
   .action((name: string, opts) => {
     const globalOpts = program.opts();
     try {
-      const agent = registerAgent({ name, description: opts.description });
+      const result = registerAgent({ name, description: opts.description });
+      if (isAgentConflict(result)) {
+        console.error(chalk.red("CONFLICT:"), result.message);
+        process.exit(1);
+      }
       if (globalOpts.json) {
-        output(agent, true);
+        output(result, true);
       } else {
         console.log(chalk.green("Agent registered:"));
-        console.log(`  ${chalk.dim("ID:")}   ${agent.id}`);
-        console.log(`  ${chalk.dim("Name:")} ${agent.name}`);
-        console.log(`\nUse ${chalk.cyan(`--agent ${agent.id}`)} on future commands.`);
+        console.log(`  ${chalk.dim("ID:")}   ${result.id}`);
+        console.log(`  ${chalk.dim("Name:")} ${result.name}`);
+        console.log(`\nUse ${chalk.cyan(`--agent ${result.id}`)} on future commands.`);
       }
     } catch (e) {
       handleError(e);
