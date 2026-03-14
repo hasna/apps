@@ -2064,6 +2064,37 @@ server.tool(
 );
 }
 
+// get_health — MCP health check (no REST server needed)
+if (shouldRegisterTool("get_health")) {
+server.tool(
+  "get_health",
+  "Check todos DB health. Returns status and issue summary.",
+  {
+    project_id: z.string().optional(),
+  },
+  async ({ project_id }) => {
+    try {
+      const checks: { name: string; status: "ok" | "warn" | "error"; value: string }[] = [];
+      // Task count
+      const all = listTasks({});
+      checks.push({ name: "tasks", status: "ok", value: `${all.length} total` });
+      // Stale
+      const stale = getStaleTasks(30, project_id ? { project_id: resolveId(project_id, "projects") } : undefined);
+      checks.push({ name: "stale", status: stale.length > 0 ? "warn" : "ok", value: `${stale.length} stuck in_progress >30min` });
+      // Overdue recurring
+      const nowStr = new Date().toISOString();
+      const overdue = all.filter(t => (t as any).recurrence_rule && t.status === "pending" && t.due_at && t.due_at < nowStr);
+      checks.push({ name: "overdue_recurring", status: overdue.length > 0 ? "warn" : "ok", value: `${overdue.length} overdue` });
+      const status = checks.some(c => c.status === "error") ? "error" : checks.some(c => c.status === "warn") ? "warn" : "ok";
+      const text = `Status: ${status}\n${checks.map(c => `  ${c.status === "ok" ? "✓" : "⚠"} ${c.name}: ${c.value}`).join("\n")}`;
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // get_context — compact text for agent prompt injection
 if (shouldRegisterTool("get_context")) {
 server.tool(
@@ -2120,7 +2151,7 @@ server.tool(
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context",
+      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health",
       "decompose_task",
       "set_task_status","set_task_priority",
       "search_tools","describe_tools",
