@@ -86,7 +86,7 @@ const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
 
 const MINIMAL_TOOLS = new Set([
   "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
-  "get_task", "start_task", "add_comment", "get_next_task",
+  "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
 ]);
 
 const STANDARD_EXCLUDED = new Set([
@@ -2132,6 +2132,72 @@ server.tool(
 );
 }
 
+// bootstrap — single session-start call
+if (shouldRegisterTool("bootstrap")) {
+server.tool(
+  "bootstrap",
+  "Single call for session start. Returns agent's in-progress task (if resuming), next claimable task, and project health — no side effects. Replaces 3-4 round trips at cold start.",
+  {
+    agent_id: z.string().optional().describe("Your agent ID — used to find your active tasks and preferred next task"),
+    project_id: z.string().optional(),
+  },
+  async ({ agent_id, project_id }) => {
+    try {
+      const filters: any = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      const f = Object.keys(filters).length > 0 ? filters : undefined;
+
+      const status = getStatus(f, agent_id);
+      const next = getNextTask(agent_id, f);
+
+      const lines: string[] = [];
+
+      // 1. Agent's own in-progress task (resuming context)
+      const myActive = agent_id
+        ? status.active_work.filter(w => w.assigned_to === agent_id || w.locked_by === agent_id)
+        : [];
+      if (myActive.length > 0) {
+        lines.push(`## Resuming`);
+        for (const w of myActive) {
+          lines.push(`[${w.short_id || w.id.slice(0, 8)}] ${w.priority} — ${w.title}`);
+        }
+        lines.push("");
+      }
+
+      // 2. Next claimable task
+      if (next) {
+        lines.push(`## Next task to claim`);
+        lines.push(`[${next.short_id || next.id.slice(0, 8)}] ${next.priority} — ${next.title}`);
+        if (next.description) lines.push(next.description.slice(0, 300) + (next.description.length > 300 ? "…" : ""));
+        lines.push(`  call: claim_next_task(agent_id: "${agent_id || "<your-id>"}")`);
+        lines.push("");
+      } else {
+        lines.push(`## No tasks available to claim`);
+        lines.push("");
+      }
+
+      // 3. Project health (3 lines)
+      lines.push(`## Health`);
+      lines.push(`${status.pending} pending | ${status.in_progress} active | ${status.completed} done`);
+      if (status.stale_count > 0) lines.push(`⚠ ${status.stale_count} stale task(s)`);
+      if (status.overdue_recurring > 0) lines.push(`🔁 ${status.overdue_recurring} overdue recurring`);
+      if (status.active_work.length > 0) {
+        const others = agent_id
+          ? status.active_work.filter(w => w.assigned_to !== agent_id && w.locked_by !== agent_id)
+          : status.active_work;
+        if (others.length > 0) {
+          lines.push(`Other agents active: ${others.slice(0, 3).map(w => `${w.short_id || w.id.slice(0, 8)} (${w.assigned_to || '?'})`).join(", ")}`);
+        }
+      }
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
@@ -2155,7 +2221,7 @@ server.tool(
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health",
+      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health","bootstrap",
       "decompose_task",
       "set_task_status","set_task_priority",
       "search_tools","describe_tools",
@@ -2260,6 +2326,7 @@ server.tool(
       get_tasks_changed_since: "Get tasks modified after a timestamp — incremental delta sync.\n  Params: since(string, req — ISO date), project_id(string, optional), task_list_id(string, optional)\n  Example: {since: '2026-03-14T10:00:00Z'}",
       get_stale_tasks: "Find stale in_progress tasks with no recent activity.\n  Params: stale_minutes(number, default:30), project_id(string, optional), task_list_id(string, optional)\n  Example: {stale_minutes: 60, project_id: 'a1b2c3d4'}",
       get_status: "Get a full project health snapshot — pending/in_progress/completed counts, active work, next recommended task, stale task count, overdue recurring tasks. Saves 4+ round trips at session start.\n  Params: agent_id(string, optional — prefers tasks assigned to this agent for next_task), project_id(string, optional), task_list_id(string, optional)\n  Example: {agent_id: 'a1b2c3d4', project_id: 'e5f6g7h8'}",
+      bootstrap: "CALL THIS FIRST at session start. Returns your in-progress task (if resuming), next claimable task with description, and project health — all in one call, no side effects. Eliminates 3-4 round trips.\n  Params: agent_id(string, optional but recommended), project_id(string, optional)\n  Example: {agent_id: 'a1b2c3d4'}",
 
       // Decompose
       decompose_task: "Break a task into subtasks in one call. Subtasks inherit project/plan/list from parent.\n  Params: parent_id(string, req), subtasks(array, req — [{title, description, priority, assigned_to, estimated_minutes, tags}]), depends_on_prev(boolean — chain subtasks sequentially)\n  Example: {parent_id: 'a1b2c3d4', subtasks: [{title: 'Research'}, {title: 'Implement'}, {title: 'Test'}], depends_on_prev: true}",
