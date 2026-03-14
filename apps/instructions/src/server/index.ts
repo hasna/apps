@@ -146,6 +146,13 @@ app.post("/api/sync", async (c) => {
   try {
     const body = await c.req.json();
     const dir = body.dir || "~/.claude";
+    // SECURITY: restrict to home directory paths only
+    const { resolve } = require("node:path");
+    const { homedir: hd } = require("node:os");
+    const absDir = dir.startsWith("~/") ? resolve(hd(), dir.slice(2)) : resolve(dir);
+    if (!absDir.startsWith(hd())) {
+      return c.json({ error: "Sync restricted to home directory paths" }, 403);
+    }
     const direction = body.direction || "from_disk";
     const result = direction === "to_disk"
       ? await syncToDir(dir, { dryRun: body.dry_run })
@@ -246,10 +253,14 @@ function findDashboardDir(): string | null {
 
 const dashDir = findDashboardDir();
 if (dashDir) {
+  const resolvedDashDir = require("node:path").resolve(dashDir);
   app.get("/*", (c) => {
     const url = new URL(c.req.url);
     let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
-    let absPath = join(dashDir, filePath);
+    let absPath = require("node:path").resolve(join(dashDir, filePath));
+
+    // SECURITY: prevent path traversal — resolved path must stay within dashboard dir
+    if (!absPath.startsWith(resolvedDashDir)) return c.json({ error: "Forbidden" }, 403);
 
     // If file doesn't exist, serve index.html (SPA routing)
     if (!existsSync(absPath)) absPath = join(dashDir, "index.html");
