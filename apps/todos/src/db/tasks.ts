@@ -23,6 +23,7 @@ import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
 import { dispatchWebhook } from "./webhooks.js";
+import { taskFromTemplate } from "./templates.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -61,8 +62,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -89,6 +90,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       null,
       input.recurrence_rule || null,
       input.recurrence_parent_id || null,
+      input.spawns_template_id || null,
     ],
   );
 
@@ -241,13 +243,28 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     conditions.push("recurrence_rule IS NULL");
   }
 
+  const PRIORITY_RANK = `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`;
+
+  // Cursor-based pagination: decode cursor and add compound WHERE condition
+  if (filter.cursor) {
+    try {
+      const decoded = JSON.parse(Buffer.from(filter.cursor, "base64").toString("utf8")) as { p: number; c: string; i: string };
+      conditions.push(
+        `(${PRIORITY_RANK} > ? OR (${PRIORITY_RANK} = ? AND created_at < ?) OR (${PRIORITY_RANK} = ? AND created_at = ? AND id > ?))`
+      );
+      params.push(decoded.p, decoded.p, decoded.c, decoded.p, decoded.c, decoded.i);
+    } catch {
+      // Invalid cursor — ignore and return from beginning
+    }
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   let limitClause = "";
   if (filter.limit) {
     limitClause = " LIMIT ?";
     params.push(filter.limit);
-    if (filter.offset) {
+    if (!filter.cursor && filter.offset) {
       limitClause += " OFFSET ?";
       params.push(filter.offset);
     }
@@ -255,9 +272,7 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
 
   const rows = d
     .query(
-      `SELECT * FROM tasks ${where} ORDER BY
-       CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
-       created_at DESC${limitClause}`,
+      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC${limitClause}`,
     )
     .all(...params) as TaskRow[];
 
@@ -580,10 +595,29 @@ export function completeTask(
     spawnedTask = spawnNextRecurrence(task, d);
   }
 
+  // Auto-spawn next task from template (pipeline/handoff chains)
+  let spawnedFromTemplate: Task | null = null;
+  if (task.spawns_template_id) {
+    try {
+      const input = taskFromTemplate(task.spawns_template_id, {
+        project_id: task.project_id ?? undefined,
+        plan_id: task.plan_id ?? undefined,
+        task_list_id: task.task_list_id ?? undefined,
+        assigned_to: task.assigned_to ?? undefined,
+      }, d);
+      spawnedFromTemplate = createTask(input, d);
+    } catch {
+      // Template may have been deleted; skip silently
+    }
+  }
+
   // Return constructed result — no re-fetch
   const meta = hasEvidence ? { ...task.metadata, _evidence: evidence } : task.metadata;
   if (spawnedTask) {
     (meta as Record<string, unknown>)._next_recurrence = { id: spawnedTask.id, short_id: spawnedTask.short_id, due_at: spawnedTask.due_at };
+  }
+  if (spawnedFromTemplate) {
+    (meta as Record<string, unknown>)._spawned_task = { id: spawnedFromTemplate.id, short_id: spawnedFromTemplate.short_id, title: spawnedFromTemplate.title };
   }
   return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, version: task.version + 1, updated_at: timestamp, metadata: meta };
 }
@@ -903,10 +937,24 @@ export function getNextTask(
 
   const where = conditions.join(" AND ");
 
+  // Agent affinity: boost tasks in projects where agent recently completed work
+  let recentProjectIds: string[] = [];
+  if (agentId) {
+    const recentRows = d.query(
+      `SELECT DISTINCT project_id FROM tasks WHERE assigned_to = ? AND status = 'completed' AND project_id IS NOT NULL ORDER BY completed_at DESC LIMIT 3`
+    ).all(agentId) as { project_id: string }[];
+    recentProjectIds = recentRows.map(r => r.project_id);
+  }
+
   let sql = `SELECT * FROM tasks WHERE ${where} ORDER BY `;
   if (agentId) {
     sql += `CASE WHEN assigned_to = ? THEN 0 WHEN assigned_to IS NULL THEN 1 ELSE 2 END, `;
     params.push(agentId);
+  }
+  if (recentProjectIds.length > 0) {
+    const placeholders = recentProjectIds.map(() => "?").join(",");
+    sql += `CASE WHEN project_id IN (${placeholders}) THEN 0 ELSE 1 END, `;
+    params.push(...recentProjectIds);
   }
   sql += `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END, created_at ASC LIMIT 1`;
 

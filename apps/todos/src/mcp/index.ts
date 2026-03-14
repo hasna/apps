@@ -225,6 +225,7 @@ server.tool(
     estimated_minutes: z.number().optional(),
     requires_approval: z.boolean().optional(),
     recurrence_rule: z.string().optional(),
+    spawns_template_id: z.string().optional().describe("Template ID to auto-create as next task when this task is completed (pipeline/handoff chains)"),
   },
   async (params) => {
     try {
@@ -267,6 +268,7 @@ server.tool(
     limit: z.number().optional(),
     offset: z.number().optional(),
     summary_only: z.boolean().optional().describe("When true, return only id, short_id, title, status, priority — minimal tokens for navigation"),
+    cursor: z.string().optional().describe("Opaque cursor from a prior response for stable pagination. Use next_cursor from the previous page. Mutually exclusive with offset."),
   },
   async (params) => {
     try {
@@ -300,9 +302,21 @@ server.tool(
         return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}${due}${recur}`;
       }).join("\n");
       const currentOffset = resolved.offset || 0;
-      const hasMore = total > currentOffset + tasks.length;
-      const pagination = `\n(showing ${tasks.length} of ${total}, offset: ${currentOffset}${hasMore ? ` — use offset: ${currentOffset + tasks.length} to get next page` : ""})`;
-      return { content: [{ type: "text" as const, text: `${tasks.length} task(s):\n${text}${pagination}` }] };
+      const hasMore = total > (resolved.cursor ? tasks.length : currentOffset + tasks.length);
+      let paginationNote = `\n(showing ${tasks.length} of ${total}`;
+      if (hasMore) {
+        if (resolved.cursor || tasks.length > 0) {
+          // Emit next_cursor from last task's sort key
+          const last = tasks[tasks.length - 1]!;
+          const priorityRank = { critical: 0, high: 1, medium: 2, low: 3 }[last.priority] ?? 3;
+          const cursorPayload = Buffer.from(JSON.stringify({ p: priorityRank, c: last.created_at, i: last.id })).toString("base64");
+          paginationNote += ` — next_cursor: ${cursorPayload}`;
+        } else {
+          paginationNote += ` — use offset: ${currentOffset + tasks.length} to get next page`;
+        }
+      }
+      paginationNote += ")";
+      return { content: [{ type: "text" as const, text: `${tasks.length} task(s):\n${text}${paginationNote}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }

@@ -199,6 +199,7 @@ export interface Task {
   approved_at: string | null;
   recurrence_rule: string | null;
   recurrence_parent_id: string | null;
+  spawns_template_id: string | null;
 }
 
 // Task with relations loaded
@@ -230,6 +231,7 @@ export interface CreateTaskInput {
   requires_approval?: boolean;
   recurrence_rule?: string;
   recurrence_parent_id?: string;
+  spawns_template_id?: string;
 }
 
 export interface UpdateTaskInput {
@@ -265,6 +267,8 @@ export interface TaskFilter {
   include_subtasks?: boolean;
   limit?: number;
   offset?: number;
+  /** Opaque cursor from a prior list_tasks response — stable pagination that survives concurrent mutations */
+  cursor?: string;
 }
 
 // Task dependency
@@ -343,6 +347,7 @@ export interface TaskRow {
   approved_at: string | null;
   recurrence_rule: string | null;
   recurrence_parent_id: string | null;
+  spawns_template_id: string | null;
 }
 
 export interface SessionRow {

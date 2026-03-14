@@ -365,6 +365,11 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (15);
   `,
+  // Migration 16: Task spawning — completing a task auto-creates next task from a template
+  `
+  ALTER TABLE tasks ADD COLUMN spawns_template_id TEXT REFERENCES task_templates(id) ON DELETE SET NULL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (16);
+  `,
 ];
 
 let _db: Database | null = null;
