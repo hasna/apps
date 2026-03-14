@@ -28,6 +28,7 @@ import {
   failTask,
   getStaleTasks,
   getStatus,
+  decomposeTasks,
 } from "../db/tasks.js";
 import { addComment } from "../db/comments.js";
 import {
@@ -1921,6 +1922,40 @@ server.tool(
 );
 }
 
+// decompose_task
+if (shouldRegisterTool("decompose_task")) {
+server.tool(
+  "decompose_task",
+  "Break a task into subtasks in one call. Optionally chain them sequentially with depends_on_prev.",
+  {
+    parent_id: z.string(),
+    subtasks: z.array(z.object({
+      title: z.string(),
+      description: z.string().optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      assigned_to: z.string().optional(),
+      estimated_minutes: z.number().optional(),
+      tags: z.array(z.string()).optional(),
+    })),
+    depends_on_prev: z.boolean().optional(),
+  },
+  async ({ parent_id, subtasks, depends_on_prev }) => {
+    try {
+      const resolvedId = resolveId(parent_id);
+      const result = decomposeTasks(resolvedId, subtasks, { depends_on_prev }, undefined);
+      const lines = [
+        `Decomposed: ${formatTask(result.parent)}`,
+        `Created ${result.subtasks.length} subtask(s)${depends_on_prev ? " (chained)" : ""}:`,
+        ...result.subtasks.map((t, i) => `  ${i + 1}. ${formatTask(t)}`),
+      ];
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
@@ -1945,6 +1980,7 @@ server.tool(
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
+      "decompose_task",
       "search_tools","describe_tools",
     ].filter(name => shouldRegisterTool(name));
     const q = query?.toLowerCase();
@@ -2046,6 +2082,9 @@ server.tool(
       get_tasks_changed_since: "Get tasks modified after a timestamp — incremental delta sync.\n  Params: since(string, req — ISO date), project_id(string, optional), task_list_id(string, optional)\n  Example: {since: '2026-03-14T10:00:00Z'}",
       get_stale_tasks: "Find stale in_progress tasks with no recent activity.\n  Params: stale_minutes(number, default:30), project_id(string, optional), task_list_id(string, optional)\n  Example: {stale_minutes: 60, project_id: 'a1b2c3d4'}",
       get_status: "Get a full project health snapshot — pending/in_progress/completed counts, active work, next recommended task, stale task count, overdue recurring tasks. Saves 4+ round trips at session start.\n  Params: agent_id(string, optional — prefers tasks assigned to this agent for next_task), project_id(string, optional), task_list_id(string, optional)\n  Example: {agent_id: 'a1b2c3d4', project_id: 'e5f6g7h8'}",
+
+      // Decompose
+      decompose_task: "Break a task into subtasks in one call. Subtasks inherit project/plan/list from parent.\n  Params: parent_id(string, req), subtasks(array, req — [{title, description, priority, assigned_to, estimated_minutes, tags}]), depends_on_prev(boolean — chain subtasks sequentially)\n  Example: {parent_id: 'a1b2c3d4', subtasks: [{title: 'Research'}, {title: 'Implement'}, {title: 'Test'}], depends_on_prev: true}",
 
       // Meta
       search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",

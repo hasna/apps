@@ -1102,6 +1102,56 @@ export function getStatus(
   };
 }
 
+export interface DecomposeSubtaskInput {
+  title: string;
+  description?: string;
+  priority?: Task["priority"];
+  assigned_to?: string;
+  estimated_minutes?: number;
+  tags?: string[];
+}
+
+export function decomposeTasks(
+  parentId: string,
+  subtasks: DecomposeSubtaskInput[],
+  options?: { depends_on_prev?: boolean },
+  db?: Database,
+): { parent: Task; subtasks: Task[] } {
+  const d = db || getDatabase();
+  const parent = getTask(parentId, d);
+  if (!parent) throw new TaskNotFoundError(parentId);
+
+  const created: Task[] = [];
+
+  const tx = d.transaction(() => {
+    for (const input of subtasks) {
+      const task = createTask({
+        title: input.title,
+        description: input.description,
+        priority: input.priority || parent.priority,
+        parent_id: parentId,
+        project_id: parent.project_id || undefined,
+        plan_id: parent.plan_id || undefined,
+        task_list_id: parent.task_list_id || undefined,
+        assigned_to: input.assigned_to || parent.assigned_to || undefined,
+        estimated_minutes: input.estimated_minutes,
+        tags: input.tags,
+      }, d);
+
+      // Chain dependencies: each subtask depends on the previous
+      if (options?.depends_on_prev && created.length > 0) {
+        const prev = created[created.length - 1]!;
+        addDependency(task.id, prev.id, d);
+      }
+
+      created.push(task);
+    }
+  });
+  tx();
+
+  return { parent, subtasks: created };
+}
+
 function wouldCreateCycle(
   taskId: string,
   dependsOn: string,

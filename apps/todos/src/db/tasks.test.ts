@@ -28,6 +28,7 @@ import {
   getTasksChangedSince,
   getStaleTasks,
   getStatus,
+  decomposeTasks,
 } from "./tasks.js";
 import {
   VersionConflictError,
@@ -1752,5 +1753,61 @@ describe("getStatus", () => {
     // Only 1 task should be counted in the project
     expect(status.pending).toBe(1);
     expect(status.total).toBe(1);
+  });
+});
+
+describe("decomposeTasks", () => {
+  it("should create subtasks with correct parent_id", () => {
+    const parent = createTask({ title: "Parent task" }, db);
+    const result = decomposeTasks(parent.id, [
+      { title: "Subtask A" },
+      { title: "Subtask B" },
+    ], {}, db);
+
+    expect(result.parent.id).toBe(parent.id);
+    expect(result.subtasks).toHaveLength(2);
+    expect(result.subtasks[0]!.parent_id).toBe(parent.id);
+    expect(result.subtasks[1]!.parent_id).toBe(parent.id);
+    expect(result.subtasks[0]!.title).toContain("Subtask A");
+    expect(result.subtasks[1]!.title).toContain("Subtask B");
+  });
+
+  it("should inherit project_id from parent", () => {
+    const project = createProject({ name: "Test Project", path: "/tmp/test-decompose" }, db);
+    const parent = createTask({ title: "Parent", project_id: project.id }, db);
+    const result = decomposeTasks(parent.id, [{ title: "Child" }], {}, db);
+
+    expect(result.subtasks[0]!.project_id).toBe(project.id);
+  });
+
+  it("should chain subtasks with depends_on_prev", () => {
+    const parent = createTask({ title: "Parent" }, db);
+    const result = decomposeTasks(parent.id, [
+      { title: "Step 1" },
+      { title: "Step 2" },
+      { title: "Step 3" },
+    ], { depends_on_prev: true }, db);
+
+    expect(result.subtasks).toHaveLength(3);
+    // Step 2 depends on Step 1 (step2.dependencies contains step1)
+    const step2 = getTaskWithRelations(result.subtasks[1]!.id, db);
+    expect(step2!.dependencies.some(t => t.id === result.subtasks[0]!.id)).toBe(true);
+    // Step 3 depends on Step 2 (step3.dependencies contains step2)
+    const step3 = getTaskWithRelations(result.subtasks[2]!.id, db);
+    expect(step3!.dependencies.some(t => t.id === result.subtasks[1]!.id)).toBe(true);
+  });
+
+  it("should return empty subtasks array when no subtasks given", () => {
+    const parent = createTask({ title: "Parent" }, db);
+    const result = decomposeTasks(parent.id, [], {}, db);
+
+    expect(result.subtasks).toHaveLength(0);
+    expect(result.parent.id).toBe(parent.id);
+  });
+
+  it("should throw TaskNotFoundError for non-existent parent", () => {
+    expect(() => {
+      decomposeTasks("non-existent-id", [{ title: "orphan" }], {}, db);
+    }).toThrow(TaskNotFoundError);
   });
 });
