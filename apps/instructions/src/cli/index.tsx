@@ -733,12 +733,13 @@ program
     console.log(chalk.bold("Config Doctor\n"));
 
     // Check known files exist on disk
+    const skip = (msg: string) => console.log(chalk.dim("  - ") + chalk.dim(msg));
     console.log(chalk.cyan("Known files on disk:"));
     for (const k of KNOWN_CONFIGS) {
       if (k.rulesDir) {
-        existsSync(expandPath(k.rulesDir)) ? pass(`${k.rulesDir}/ exists`) : fail(`${k.rulesDir}/ not found`);
+        existsSync(expandPath(k.rulesDir)) ? pass(`${k.rulesDir}/ exists`) : (k.optional ? skip(`${k.rulesDir}/ (optional)`) : fail(`${k.rulesDir}/ not found`));
       } else {
-        existsSync(expandPath(k.path)) ? pass(k.path) : fail(`${k.path} not found`);
+        existsSync(expandPath(k.path)) ? pass(k.path) : (k.optional ? skip(`${k.path} (optional)`) : fail(`${k.path} not found`));
       }
     }
 
@@ -902,6 +903,66 @@ program
     setInterval(tick, interval);
     // Keep alive
     await new Promise(() => {});
+  });
+
+// ── bootstrap ─────────────────────────────────────────────────────────────────
+program
+  .command("bootstrap")
+  .description("Install the full @hasna ecosystem: CLI tools + MCP servers + configs")
+  .option("--dry-run", "show what would be installed without doing it")
+  .option("--skip-mcp", "skip MCP server registration")
+  .action(async (opts) => {
+    const packages = [
+      { name: "@hasna/todos", bin: "todos", mcp: "todos-mcp" },
+      { name: "@hasna/mementos", bin: "mementos", mcp: "mementos-mcp" },
+      { name: "@hasna/conversations", bin: "conversations", mcp: "conversations-mcp" },
+      { name: "@hasna/skills", bin: "skills", mcp: "skills-mcp" },
+      { name: "@hasna/economy", bin: "economy", mcp: "economy-mcp" },
+      { name: "@hasna/attachments", bin: "attachments", mcp: "attachments-mcp" },
+      { name: "@hasna/sessions", bin: "sessions", mcp: "sessions-mcp" },
+      { name: "@hasna/emails", bin: "emails", mcp: "emails-mcp" },
+      { name: "@hasna/recordings", bin: "recordings", mcp: "recordings-mcp" },
+      { name: "@hasna/testers", bin: "testers", mcp: "testers-mcp" },
+    ];
+
+    console.log(chalk.bold("@hasna/configs bootstrap") + chalk.dim(` — installing ${packages.length} ecosystem packages\n`));
+
+    // 1. Install global packages
+    console.log(chalk.cyan("Installing CLI tools:"));
+    for (const pkg of packages) {
+      if (opts.dryRun) { console.log(chalk.dim(`  would install: ${pkg.name}`)); continue; }
+      try {
+        const proc = Bun.spawn(["bun", "install", "-g", pkg.name], { stdout: "pipe", stderr: "pipe" });
+        const code = await proc.exited;
+        if (code === 0) console.log(chalk.green("  ✓ ") + pkg.name);
+        else console.log(chalk.yellow("  ⚠ ") + pkg.name + chalk.dim(" (may already be installed)"));
+      } catch { console.log(chalk.yellow("  ⚠ ") + pkg.name + chalk.dim(" (skipped)")); }
+    }
+
+    // 2. Register MCP servers in Claude Code
+    if (!opts.skipMcp) {
+      console.log(chalk.cyan("\nRegistering MCP servers in Claude Code:"));
+      for (const pkg of packages) {
+        if (opts.dryRun) { console.log(chalk.dim(`  would register: ${pkg.mcp}`)); continue; }
+        try {
+          const proc = Bun.spawn(["claude", "mcp", "add", "--transport", "stdio", "--scope", "user", pkg.bin, "--", pkg.mcp], { stdout: "pipe", stderr: "pipe" });
+          const code = await proc.exited;
+          if (code === 0) console.log(chalk.green("  ✓ ") + pkg.bin);
+          else console.log(chalk.dim("  = ") + pkg.bin + chalk.dim(" (already registered)"));
+        } catch { console.log(chalk.yellow("  ⚠ ") + pkg.bin + chalk.dim(" (skipped)")); }
+      }
+    }
+
+    // 3. Run configs init
+    console.log(chalk.cyan("\nInitializing configs:"));
+    if (!opts.dryRun) {
+      const result = await syncKnown({});
+      console.log(chalk.green("  ✓ ") + `Synced ${result.added + result.updated + result.unchanged} known configs`);
+    } else {
+      console.log(chalk.dim("  would run: configs init"));
+    }
+
+    console.log(chalk.bold("\n✓ Bootstrap complete.") + chalk.dim(" Restart Claude Code for MCP servers to activate."));
   });
 
 // ── pull / push aliases ───────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ export interface KnownConfig {
   format?: ConfigFormat;
   kind?: "file" | "reference";
   description?: string;
+  optional?: boolean; // if true, missing file is not an issue in doctor
   // If set, read all *.md files from this dir instead of a single file
   rulesDir?: string;
 }
@@ -28,7 +29,7 @@ export const KNOWN_CONFIGS: KnownConfig[] = [
   { path: "~/.claude/CLAUDE.md",         name: "claude-claude-md",         category: "rules",  agent: "claude", format: "markdown" },
   { path: "~/.claude/settings.json",     name: "claude-settings",          category: "agent",  agent: "claude", format: "json" },
   { path: "~/.claude/settings.local.json", name: "claude-settings-local",  category: "agent",  agent: "claude", format: "json" },
-  { path: "~/.claude/keybindings.json",  name: "claude-keybindings",       category: "agent",  agent: "claude", format: "json" },
+  { path: "~/.claude/keybindings.json",  name: "claude-keybindings",       category: "agent",  agent: "claude", format: "json", optional: true },
   // rules/*.md — handled specially via rulesDir
   { path: "~/.claude/rules",             name: "claude-rules",             category: "rules",  agent: "claude", rulesDir: "~/.claude/rules" },
 
@@ -38,24 +39,24 @@ export const KNOWN_CONFIGS: KnownConfig[] = [
 
   // ── Gemini ─────────────────────────────────────────────────────────────────
   { path: "~/.gemini/settings.json",     name: "gemini-settings",          category: "agent",  agent: "gemini", format: "json" },
-  { path: "~/.gemini/GEMINI.md",         name: "gemini-gemini-md",         category: "rules",  agent: "gemini", format: "markdown" },
+  { path: "~/.gemini/GEMINI.md",         name: "gemini-gemini-md",         category: "rules",  agent: "gemini", format: "markdown", optional: true },
 
   // ── MCP ────────────────────────────────────────────────────────────────────
   { path: "~/.claude.json",              name: "claude-json",              category: "mcp",    agent: "claude", format: "json", description: "Claude Code global config (includes MCP server entries)" },
 
   // ── Shell ──────────────────────────────────────────────────────────────────
   { path: "~/.zshrc",                    name: "zshrc",                    category: "shell",  agent: "zsh" },
-  { path: "~/.zprofile",                 name: "zprofile",                 category: "shell",  agent: "zsh" },
-  { path: "~/.bashrc",                   name: "bashrc",                   category: "shell",  agent: "zsh" },
-  { path: "~/.bash_profile",             name: "bash-profile",             category: "shell",  agent: "zsh" },
+  { path: "~/.zprofile",                 name: "zprofile",                 category: "shell",  agent: "zsh", optional: true },
+  { path: "~/.bashrc",                   name: "bashrc",                   category: "shell",  agent: "zsh", optional: true },
+  { path: "~/.bash_profile",             name: "bash-profile",             category: "shell",  agent: "zsh", optional: true },
 
   // ── Git ────────────────────────────────────────────────────────────────────
   { path: "~/.gitconfig",                name: "gitconfig",                category: "git",    agent: "git",    format: "ini" },
-  { path: "~/.gitignore_global",         name: "gitignore-global",         category: "git",    agent: "git" },
+  { path: "~/.gitignore_global",         name: "gitignore-global",         category: "git",    agent: "git", optional: true },
 
   // ── Tools ──────────────────────────────────────────────────────────────────
   { path: "~/.npmrc",                    name: "npmrc",                    category: "tools",  agent: "npm",    format: "ini" },
-  { path: "~/.bunfig.toml",              name: "bunfig",                   category: "tools",  agent: "global", format: "toml" },
+  { path: "~/.bunfig.toml",              name: "bunfig",                   category: "tools",  agent: "global", format: "toml", optional: true },
 ];
 
 // ── Project-scoped config files ───────────────────────────────────────────────
