@@ -507,7 +507,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: Projects ──
       if (path === "/api/projects" && method === "GET") {
-        return json(listProjects(), 200, port);
+        const pFieldsParam = url.searchParams.get("fields");
+        const pFields = pFieldsParam ? pFieldsParam.split(",").map(f => f.trim()).filter(Boolean) : undefined;
+        const projects = listProjects();
+        return json(pFields ? projects.map(p => Object.fromEntries(pFields.map(f => [f, (p as any)[f] ?? null]))) : projects, 200, port);
       }
 
       // ── API: Agent discovery ──
@@ -611,7 +614,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: Agents ──
       if (path === "/api/agents" && method === "GET") {
-        return json(listAgents(), 200, port);
+        const aFieldsParam = url.searchParams.get("fields");
+        const aFields = aFieldsParam ? aFieldsParam.split(",").map(f => f.trim()).filter(Boolean) : undefined;
+        const agents = listAgents();
+        return json(aFields ? agents.map(a => Object.fromEntries(aFields.map(f => [f, (a as any)[f] ?? null]))) : agents, 200, port);
       }
 
       // ── API: Create project ──
