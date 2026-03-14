@@ -245,16 +245,25 @@ server.tool(
     plan_id: z.string().optional(),
     task_list_id: z.string().optional(),
     has_recurrence: z.boolean().optional(),
+    due_today: z.boolean().optional(),
+    overdue: z.boolean().optional(),
     limit: z.number().optional(),
     offset: z.number().optional(),
   },
   async (params) => {
     try {
-      const resolved = { ...params };
+      const { due_today, overdue, ...rest } = params as any;
+      const resolved = { ...rest };
       if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
       if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
-      const tasks = listTasks(resolved);
+      let tasks = listTasks(resolved);
+      // Filter by due_today / overdue after fetching
+      const today = new Date(); today.setHours(23, 59, 59, 999);
+      const todayStr = today.toISOString();
+      const nowStr = new Date().toISOString();
+      if (due_today) tasks = tasks.filter(t => t.due_at && t.due_at <= todayStr);
+      if (overdue) tasks = tasks.filter(t => t.due_at && t.due_at < nowStr && t.status !== "completed");
       const { limit: _limit, offset: _offset, ...countFilter } = resolved;
       const total = countTasks(countFilter);
       if (tasks.length === 0) {
@@ -263,7 +272,9 @@ server.tool(
       const text = tasks.map((t) => {
         const lock = t.locked_by ? ` [locked by ${t.locked_by}]` : "";
         const assigned = t.assigned_to ? ` -> ${t.assigned_to}` : "";
-        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}`;
+        const due = t.due_at ? ` due:${t.due_at.slice(0, 10)}` : "";
+        const recur = t.recurrence_rule ? " [↻]" : "";
+        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}${due}${recur}`;
       }).join("\n");
       const pagination = resolved.limit ? `\n(showing ${tasks.length} of ${total}, offset: ${resolved.offset || 0})` : "";
       return { content: [{ type: "text" as const, text: `${tasks.length} task(s):\n${text}${pagination}` }] };
