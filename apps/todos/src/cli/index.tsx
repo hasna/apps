@@ -1304,44 +1304,31 @@ function writeTomlFile(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-// --- Claude Code: .mcp.json at project root (mcpServers wrapper) ---
+// --- Claude Code: use `claude mcp add` (correct approach, not .mcp.json) ---
 
 function registerClaude(binPath: string, global?: boolean): void {
-  const configPath = global
-    ? join(HOME, ".claude", ".mcp.json")
-    : join(process.cwd(), ".mcp.json");
-  const config = readJsonFile(configPath);
-
-  if (!config["mcpServers"]) {
-    config["mcpServers"] = {};
+  const scope = global ? "user" : "project";
+  const cmd = `claude mcp add --transport stdio --scope ${scope} todos -- ${binPath}`;
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    execSync(cmd, { stdio: "pipe" });
+    console.log(chalk.green(`Claude Code (${scope}): registered via 'claude mcp add'`));
+  } catch {
+    // claude CLI not found — print the command for the user to run manually
+    console.log(chalk.yellow(`Claude Code: could not auto-register. Run this command manually:`));
+    console.log(chalk.cyan(`  ${cmd}`));
   }
-  const servers = config["mcpServers"] as Record<string, unknown>;
-  servers["todos"] = {
-    command: binPath,
-    args: [] as string[],
-  };
-
-  writeJsonFile(configPath, config);
-  const scope = global ? "global" : "project";
-  console.log(chalk.green(`Claude Code (${scope}): registered in ${configPath}`));
 }
 
-function unregisterClaude(global?: boolean): void {
-  const configPath = global
-    ? join(HOME, ".claude", ".mcp.json")
-    : join(process.cwd(), ".mcp.json");
-  const config = readJsonFile(configPath);
-  const servers = config["mcpServers"] as Record<string, unknown> | undefined;
-
-  if (!servers || !("todos" in servers)) {
-    console.log(chalk.dim(`Claude Code: todos not found in ${configPath}`));
-    return;
+function unregisterClaude(_global?: boolean): void {
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    execSync("claude mcp remove todos", { stdio: "pipe" });
+    console.log(chalk.green(`Claude Code: removed todos MCP server`));
+  } catch {
+    console.log(chalk.yellow(`Claude Code: could not auto-remove. Run manually:`));
+    console.log(chalk.cyan("  claude mcp remove todos"));
   }
-
-  delete servers["todos"];
-  writeJsonFile(configPath, config);
-  const scope = global ? "global" : "project";
-  console.log(chalk.green(`Claude Code (${scope}): unregistered from ${configPath}`));
 }
 
 // --- Codex CLI: ~/.codex/config.toml (TOML, [mcp_servers.todos]) ---
