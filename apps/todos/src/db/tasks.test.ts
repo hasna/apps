@@ -362,6 +362,36 @@ describe("completeTask", () => {
     startTask(task.id, "claude", db);
     expect(() => completeTask(task.id, "codex", db)).toThrow(LockError);
   });
+
+  it("should store attachment_ids in metadata._evidence.attachment_ids", () => {
+    const task = createTask({ title: "With attachments" }, db);
+    const completed = completeTask(task.id, undefined, db, { attachment_ids: ["att-001", "att-002"] });
+    expect(completed.status).toBe("completed");
+    const evidence = completed.metadata._evidence as Record<string, unknown>;
+    expect(evidence).toBeDefined();
+    expect(evidence.attachment_ids).toEqual(["att-001", "att-002"]);
+  });
+
+  it("should store all evidence fields including attachment_ids together", () => {
+    const task = createTask({ title: "Full evidence" }, db);
+    const completed = completeTask(task.id, undefined, db, {
+      files_changed: ["src/foo.ts"],
+      test_results: "10 passed",
+      commit_hash: "abc1234",
+      notes: "done",
+      attachment_ids: ["att-xyz"],
+    });
+    const evidence = completed.metadata._evidence as Record<string, unknown>;
+    expect(evidence.attachment_ids).toEqual(["att-xyz"]);
+    expect(evidence.files_changed).toEqual(["src/foo.ts"]);
+    expect(evidence.commit_hash).toBe("abc1234");
+  });
+
+  it("should not set _evidence when no evidence fields provided", () => {
+    const task = createTask({ title: "No evidence" }, db);
+    const completed = completeTask(task.id, undefined, db);
+    expect(completed.metadata._evidence).toBeUndefined();
+  });
 });
 
 describe("lockTask / unlockTask", () => {

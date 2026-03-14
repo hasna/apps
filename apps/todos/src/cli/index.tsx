@@ -522,12 +522,22 @@ program
 program
   .command("done <id>")
   .description("Mark a task as completed")
-  .action((id: string) => {
+  .option("--attach-ids <ids>", "Comma-separated @hasna/attachments IDs to link as evidence")
+  .option("--files-changed <files>", "Comma-separated list of files changed")
+  .option("--test-results <results>", "Test results summary")
+  .option("--commit-hash <hash>", "Git commit hash")
+  .option("--notes <notes>", "Completion notes")
+  .action((id: string, opts: { attachIds?: string; filesChanged?: string; testResults?: string; commitHash?: string; notes?: string }) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
+    const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()) : undefined;
+    const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()) : undefined;
+    const evidence = (attachmentIds || filesChanged || opts.testResults || opts.commitHash || opts.notes)
+      ? { attachment_ids: attachmentIds, files_changed: filesChanged, test_results: opts.testResults, commit_hash: opts.commitHash, notes: opts.notes }
+      : undefined;
     let task;
     try {
-      task = completeTask(resolvedId, globalOpts.agent);
+      task = completeTask(resolvedId, globalOpts.agent, undefined, evidence);
     } catch (e) {
       handleError(e);
     }

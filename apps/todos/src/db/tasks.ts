@@ -533,7 +533,7 @@ export function completeTask(
   id: string,
   agentId?: string,
   db?: Database,
-  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; skip_recurrence?: boolean },
+  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean },
 ): Task {
   const d = db || getDatabase();
   const task = getTask(id, d);
@@ -553,8 +553,8 @@ export function completeTask(
   checkCompletionGuard(task, agentId || null, d);
 
   // Extract evidence fields (everything except skip_recurrence)
-  const evidence = options ? { files_changed: options.files_changed, test_results: options.test_results, commit_hash: options.commit_hash, notes: options.notes } : undefined;
-  const hasEvidence = evidence && (evidence.files_changed || evidence.test_results || evidence.commit_hash || evidence.notes);
+  const evidence = options ? { files_changed: options.files_changed, test_results: options.test_results, commit_hash: options.commit_hash, notes: options.notes, attachment_ids: options.attachment_ids } : undefined;
+  const hasEvidence = evidence && (evidence.files_changed || evidence.test_results || evidence.commit_hash || evidence.notes || evidence.attachment_ids);
 
   // Store evidence in metadata if provided
   if (hasEvidence) {

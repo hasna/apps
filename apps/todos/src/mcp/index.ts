@@ -374,11 +374,19 @@ server.tool(
     id: z.string(),
     agent_id: z.string().optional(),
     skip_recurrence: z.boolean().optional(),
+    files_changed: z.array(z.string()).optional().describe("List of files changed as part of completing this task"),
+    test_results: z.string().optional().describe("Summary of test results"),
+    commit_hash: z.string().optional().describe("Git commit hash associated with this completion"),
+    notes: z.string().optional().describe("Notes about the completion"),
+    attachment_ids: z.array(z.string()).optional().describe("IDs of attachments uploaded via @hasna/attachments to link as evidence"),
   },
-  async ({ id, agent_id, skip_recurrence }) => {
+  async ({ id, agent_id, skip_recurrence, files_changed, test_results, commit_hash, notes, attachment_ids }) => {
     try {
       const resolvedId = resolveId(id);
-      const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence });
+      const evidence = (files_changed || test_results || commit_hash || notes || attachment_ids)
+        ? { files_changed, test_results, commit_hash, notes, attachment_ids }
+        : undefined;
+      const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence, ...evidence });
       let text = `completed: ${formatTask(task)}`;
       if (task.metadata._next_recurrence) {
         const next = task.metadata._next_recurrence as { id: string; short_id?: string; due_at?: string };
