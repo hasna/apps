@@ -29,6 +29,8 @@ import {
   getStaleTasks,
   getStatus,
   decomposeTasks,
+  setTaskStatus,
+  setTaskPriority,
 } from "../db/tasks.js";
 import { addComment } from "../db/comments.js";
 import {
@@ -1956,6 +1958,49 @@ server.tool(
 );
 }
 
+// set_task_status
+if (shouldRegisterTool("set_task_status")) {
+server.tool(
+  "set_task_status",
+  "Set task status without needing version. Auto-retries on conflict.",
+  {
+    id: z.string(),
+    status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]),
+    agent_id: z.string().optional(),
+  },
+  async ({ id, status, agent_id }) => {
+    try {
+      const resolvedId = resolveId(id);
+      const task = setTaskStatus(resolvedId, status, agent_id);
+      return { content: [{ type: "text" as const, text: `set: ${formatTask(task)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// set_task_priority
+if (shouldRegisterTool("set_task_priority")) {
+server.tool(
+  "set_task_priority",
+  "Set task priority without needing version. Auto-retries on conflict.",
+  {
+    id: z.string(),
+    priority: z.enum(["low", "medium", "high", "critical"]),
+  },
+  async ({ id, priority }) => {
+    try {
+      const resolvedId = resolveId(id);
+      const task = setTaskPriority(resolvedId, priority);
+      return { content: [{ type: "text" as const, text: `set: ${formatTask(task)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
@@ -1981,6 +2026,7 @@ server.tool(
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
       "decompose_task",
+      "set_task_status","set_task_priority",
       "search_tools","describe_tools",
     ].filter(name => shouldRegisterTool(name));
     const q = query?.toLowerCase();
@@ -2085,6 +2131,10 @@ server.tool(
 
       // Decompose
       decompose_task: "Break a task into subtasks in one call. Subtasks inherit project/plan/list from parent.\n  Params: parent_id(string, req), subtasks(array, req — [{title, description, priority, assigned_to, estimated_minutes, tags}]), depends_on_prev(boolean — chain subtasks sequentially)\n  Example: {parent_id: 'a1b2c3d4', subtasks: [{title: 'Research'}, {title: 'Implement'}, {title: 'Test'}], depends_on_prev: true}",
+
+      // Version-free shortcuts
+      set_task_status: "Set task status without needing version. Auto-retries on conflict (up to 3 attempts). Use instead of update_task when you only need to change status.\n  Params: id(string, req), status(pending|in_progress|completed|failed|cancelled, req), agent_id(string)\n  Example: {id: 'a1b2c3d4', status: 'completed'}",
+      set_task_priority: "Set task priority without needing version. Auto-retries on conflict (up to 3 attempts). Use instead of update_task when you only need to change priority.\n  Params: id(string, req), priority(low|medium|high|critical, req)\n  Example: {id: 'a1b2c3d4', priority: 'high'}",
 
       // Meta
       search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",

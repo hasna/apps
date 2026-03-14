@@ -5,7 +5,9 @@ import type {
   Task,
   TaskDependency,
   TaskFilter,
+  TaskPriority,
   TaskRow,
+  TaskStatus,
   TaskWithRelations,
   UpdateTaskInput,
 } from "../types/index.js";
@@ -1150,6 +1152,48 @@ export function decomposeTasks(
   tx();
 
   return { parent, subtasks: created };
+}
+
+export function setTaskStatus(
+  id: string,
+  status: TaskStatus,
+  _agentId?: string,
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const task = getTask(id, d);
+    if (!task) throw new TaskNotFoundError(id);
+    if (task.status === status) return task; // already set, no-op
+    try {
+      return updateTask(id, { status, version: task.version }, d);
+    } catch (e) {
+      if (e instanceof VersionConflictError && attempt < 2) continue;
+      throw e;
+    }
+  }
+  throw new Error(`Failed to set status after 3 attempts`);
+}
+
+export function setTaskPriority(
+  id: string,
+  priority: TaskPriority,
+  _agentId?: string,
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const task = getTask(id, d);
+    if (!task) throw new TaskNotFoundError(id);
+    if (task.priority === priority) return task;
+    try {
+      return updateTask(id, { priority, version: task.version }, d);
+    } catch (e) {
+      if (e instanceof VersionConflictError && attempt < 2) continue;
+      throw e;
+    }
+  }
+  throw new Error(`Failed to set priority after 3 attempts`);
 }
 
 function wouldCreateCycle(

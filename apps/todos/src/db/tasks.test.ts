@@ -29,6 +29,8 @@ import {
   getStaleTasks,
   getStatus,
   decomposeTasks,
+  setTaskStatus,
+  setTaskPriority,
 } from "./tasks.js";
 import {
   VersionConflictError,
@@ -1809,5 +1811,53 @@ describe("decomposeTasks", () => {
     expect(() => {
       decomposeTasks("non-existent-id", [{ title: "orphan" }], {}, db);
     }).toThrow(TaskNotFoundError);
+  });
+});
+
+describe("setTaskStatus", () => {
+  it("should change task status", () => {
+    const task = createTask({ title: "Status test" }, db);
+    expect(task.status).toBe("pending");
+
+    const updated = setTaskStatus(task.id, "in_progress", undefined, db);
+    expect(updated.status).toBe("in_progress");
+    expect(updated.version).toBe(2);
+  });
+
+  it("should be a no-op if already at target status", () => {
+    const task = createTask({ title: "Already pending" }, db);
+    expect(task.status).toBe("pending");
+
+    const result = setTaskStatus(task.id, "pending", undefined, db);
+    expect(result.status).toBe("pending");
+    expect(result.version).toBe(1); // version unchanged
+  });
+
+  it("should throw TaskNotFoundError for non-existent task", () => {
+    expect(() => setTaskStatus("non-existent-id", "completed", undefined, db)).toThrow(TaskNotFoundError);
+  });
+});
+
+describe("setTaskPriority", () => {
+  it("should change task priority", () => {
+    const task = createTask({ title: "Priority test" }, db);
+    expect(task.priority).toBe("medium");
+
+    const updated = setTaskPriority(task.id, "high", undefined, db);
+    expect(updated.priority).toBe("high");
+    expect(updated.version).toBe(2);
+  });
+
+  it("should be a no-op if already at target priority", () => {
+    const task = createTask({ title: "Already medium" }, db);
+    expect(task.priority).toBe("medium");
+
+    const result = setTaskPriority(task.id, "medium", undefined, db);
+    expect(result.priority).toBe("medium");
+    expect(result.version).toBe(1); // version unchanged
+  });
+
+  it("should throw TaskNotFoundError for non-existent task", () => {
+    expect(() => setTaskPriority("non-existent-id", "critical", undefined, db)).toThrow(TaskNotFoundError);
   });
 });
