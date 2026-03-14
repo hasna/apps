@@ -123,11 +123,29 @@ export async function startServer(port: number, options?: { open?: boolean }): P
   // SSE event stream — clients subscribe to /api/events
   const sseClients = new Set<ReadableStreamDefaultController>();
 
+  // Filtered SSE clients for /api/tasks/stream
+  interface FilteredClient {
+    controller: ReadableStreamDefaultController;
+    agentId?: string;
+    projectId?: string;
+    events?: Set<string>;
+  }
+  const filteredSseClients = new Set<FilteredClient>();
+
   function broadcastEvent(event: { type: string; task_id?: string; action: string; agent_id?: string | null }) {
     const data = JSON.stringify({ ...event, timestamp: new Date().toISOString() });
+    // Broadcast to dashboard clients
     for (const controller of sseClients) {
       try { controller.enqueue(`data: ${data}\n\n`); }
       catch { sseClients.delete(controller); }
+    }
+    // Broadcast to filtered agent stream clients
+    const eventName = `task.${event.action}`;
+    for (const client of filteredSseClients) {
+      if (client.events && !client.events.has(eventName) && !client.events.has("*")) continue;
+      if (client.agentId && event.agent_id !== client.agentId) continue;
+      try { client.controller.enqueue(`event: ${eventName}\ndata: ${data}\n\n`); }
+      catch { filteredSseClients.delete(client); }
     }
   }
 
@@ -175,6 +193,31 @@ export async function startServer(port: number, options?: { open?: boolean }): P
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": `http://localhost:${port}`,
+          },
+        });
+      }
+
+      // ── SSE Agent Task Stream ──
+      if (path === "/api/tasks/stream" && method === "GET") {
+        const agentId = url.searchParams.get("agent_id") || undefined;
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const eventsParam = url.searchParams.get("events");
+        const eventFilter = eventsParam ? new Set(eventsParam.split(",").map(e => e.trim())) : undefined;
+        const client: FilteredClient = { controller: null as any, agentId, projectId, events: eventFilter };
+        const stream = new ReadableStream({
+          start(controller) {
+            client.controller = controller;
+            filteredSseClients.add(client);
+            controller.enqueue(`: connected\n\ndata: ${JSON.stringify({ type: "connected", agent_id: agentId, timestamp: new Date().toISOString() })}\n\n`);
+          },
+          cancel() { filteredSseClients.delete(client); },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
           },
         });
       }
