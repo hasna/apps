@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 bun install                       # Install dependencies
-bun test                          # Run all 295 tests
+bun test                          # Run all 628 tests
 bun test src/db/tasks.test.ts     # Run a single test file
 bun run typecheck                 # TypeScript type checking (tsc --noEmit)
 bun run build                     # Build all three entry points to dist/
@@ -89,7 +89,7 @@ Three separate `bun build` invocations produce independent entry points:
 
 bun:sqlite with WAL mode, foreign keys enabled, 5-second busy timeout.
 
-**Schema migrations** (6 total) are version-tracked in a `_migrations` table with forward-only upgrades applied in `getDatabase()`. Migration 5+ uses `ensureTableMigrations()` for backward compatibility with databases that had old SaaS migration IDs.
+**Schema migrations** (13 total) are version-tracked in a `_migrations` table with forward-only upgrades applied in `getDatabase()`. Migration 5+ uses `ensureTableMigrations()` for backward compatibility with databases that had old SaaS migration IDs.
 
 **Location priority**: `TODOS_DB_PATH` env var → `.todos/todos.db` in cwd → `~/.todos/todos.db` global.
 
@@ -97,23 +97,53 @@ bun:sqlite with WAL mode, foreign keys enabled, 5-second busy timeout.
 
 ## Testing
 
-295 tests across 14 files. Tests use `TODOS_DB_PATH=:memory:` with `resetDatabase()` + `getDatabase()` in `beforeEach` and `closeDatabase()` in `afterEach` for full isolation. CLI integration tests spawn subprocesses with temp DB files created via `mkdtemp`.
+628 tests across 23 files. Tests use `TODOS_DB_PATH=:memory:` with `resetDatabase()` + `getDatabase()` in `beforeEach` and `closeDatabase()` in `afterEach` for full isolation. CLI integration tests spawn subprocesses with temp DB files created via `mkdtemp`.
 
-Test files: `tasks.test.ts` (49), `projects.test.ts` (17), `agents.test.ts` (12), `task-lists.test.ts` (16), `plans.test.ts` (16), `comments.test.ts` (12), `sessions.test.ts` (13), `database.test.ts` (14), `search.test.ts` (9), `mcp.test.ts` (11), `cli.test.ts` (4), `completion-guard.test.ts`, `cli-qol.test.ts`, `serve.test.ts`.
+Test files: `tasks.test.ts`, `projects.test.ts`, `agents.test.ts`, `task-lists.test.ts`, `plans.test.ts`, `comments.test.ts`, `sessions.test.ts`, `database.test.ts`, `search.test.ts`, `recurrence.test.ts`, `mcp.test.ts`, `errors.test.ts`, `describe.test.ts`, `cli.test.ts`, `completion-guard.test.ts`, `cli-qol.test.ts`, `serve.test.ts`, `agentic.test.ts`.
 
-## MCP Tools (29)
+## MCP Tools (59)
 
-Tasks: `create_task`, `list_tasks`, `get_task`, `update_task`, `delete_task`, `start_task`, `complete_task`, `lock_task`, `unlock_task`
-Dependencies: `add_dependency`, `remove_dependency`
-Comments: `add_comment`
-Projects: `create_project`, `list_projects`
-Plans: `create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`
-Agents: `register_agent`, `list_agents`, `get_agent`
-Task Lists: `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`, `delete_task_list`
-Search: `search_tasks`
-Sync: `sync`
+Use `TODOS_PROFILE=minimal|standard|full` to control which tools are registered (reduces cold-start tokens).
+
+**Task CRUD**: `create_task`, `list_tasks`, `get_task`, `update_task`, `delete_task`
+**Task Workflow**: `start_task`, `complete_task`, `lock_task`, `unlock_task`, `approve_task`, `fail_task`
+**Bulk Ops**: `bulk_update_tasks`, `bulk_create_tasks`
+**Agent Coordination**: `get_next_task`, `claim_next_task`, `get_status`, `get_active_work`, `get_tasks_changed_since`, `get_stale_tasks`
+**Dependencies**: `add_dependency`, `remove_dependency`
+**Comments**: `add_comment`
+**Projects**: `create_project`, `list_projects`
+**Plans**: `create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`
+**Agents**: `register_agent`, `list_agents`, `get_agent`, `rename_agent`, `delete_agent`, `get_my_tasks`, `get_org_chart`, `set_reports_to`
+**Task Lists**: `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`, `delete_task_list`
+**Search**: `search_tasks` (supports status, priority, date, dependency, assignment filters)
+**Analytics**: `get_task_stats`, `get_task_graph`, `clone_task`, `move_task`
+**Audit**: `get_task_history`, `get_recent_activity`
+**Webhooks**: `create_webhook`, `list_webhooks`, `delete_webhook`
+**Templates**: `create_template`, `list_templates`, `create_task_from_template`, `delete_template`
+**Sync**: `sync`
+**Meta**: `search_tools`, `describe_tools`
 
 Resources: `todos://tasks`, `todos://projects`, `todos://agents`, `todos://task-lists`
+
+## Recurring Tasks
+
+Tasks can have a `recurrence_rule` (e.g. "every day", "every weekday", "every monday", "every 2 weeks"). Completing a recurring task auto-creates the next instance with the correct `due_at`. Pass `skip_recurrence: true` to `complete_task` to stop the chain.
+
+## Webhook Events
+
+`dispatchWebhook` fires on: `task.created`, `task.started`, `task.completed`, `task.failed`, `task.assigned`, `task.status_changed`. HMAC-signed. Register via `create_webhook`.
+
+## CLI Agent Commands
+
+```bash
+todos next [--agent <id>]        # Best pending task
+todos claim <agent>              # Atomic pick + lock + start
+todos status [--project <id>]   # Full health snapshot
+todos fail <id> [--reason] [--retry]
+todos active                     # All in-progress tasks
+todos stale [--minutes <n>]     # Stuck tasks
+todos done <id> --attach-ids a,b --commit-hash abc --notes "..."
+```
 
 ## Validation
 
