@@ -31,6 +31,7 @@ import {
   decomposeTasks,
   setTaskStatus,
   setTaskPriority,
+  redistributeStaleTasks,
 } from "./tasks.js";
 import {
   VersionConflictError,
@@ -1910,5 +1911,27 @@ describe("setTaskPriority", () => {
 
   it("should throw TaskNotFoundError for non-existent task", () => {
     expect(() => setTaskPriority("non-existent-id", "critical", undefined, db)).toThrow(TaskNotFoundError);
+  });
+});
+
+describe("reason and spawned_from_session fields", () => {
+  it("should store and retrieve reason field", () => {
+    const task = createTask({ title: "Task with reason", reason: "This task exists because we need to fix the auth flow" }, db);
+    expect(task.reason).toBe("This task exists because we need to fix the auth flow");
+    const retrieved = getTask(task.id, db)!;
+    expect(retrieved.reason).toBe("This task exists because we need to fix the auth flow");
+  });
+
+  it("should store and retrieve spawned_from_session field", () => {
+    const task = createTask({ title: "Spawned task", spawned_from_session: "session-abc-123" }, db);
+    expect(task.spawned_from_session).toBe("session-abc-123");
+    const retrieved = getTask(task.id, db)!;
+    expect(retrieved.spawned_from_session).toBe("session-abc-123");
+  });
+
+  it("should default reason and spawned_from_session to null when not provided", () => {
+    const task = createTask({ title: "Plain task" }, db);
+    expect(task.reason).toBeNull();
+    expect(task.spawned_from_session).toBeNull();
   });
 });
