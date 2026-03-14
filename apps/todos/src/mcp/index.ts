@@ -66,6 +66,28 @@ const server = new McpServer({
   version: "0.9.35",
 });
 
+// === PROFILE FILTERING ===
+
+const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
+
+const MINIMAL_TOOLS = new Set([
+  "claim_next_task", "complete_task", "fail_task", "get_status",
+  "get_task", "start_task", "add_comment", "get_next_task",
+]);
+
+const STANDARD_EXCLUDED = new Set([
+  "get_org_chart", "set_reports_to", "rename_agent", "delete_agent",
+  "create_webhook", "list_webhooks", "delete_webhook",
+  "create_template", "list_templates", "create_task_from_template", "delete_template",
+  "approve_task",
+]);
+
+function shouldRegisterTool(name: string): boolean {
+  if (TODOS_PROFILE === "minimal") return MINIMAL_TOOLS.has(name);
+  if (TODOS_PROFILE === "standard") return !STANDARD_EXCLUDED.has(name);
+  return true; // "full" or any unknown value = all tools
+}
+
 function formatError(error: unknown): string {
   if (error instanceof VersionConflictError) {
     return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
@@ -161,6 +183,7 @@ function formatTaskDetail(task: Task): string {
 // === TOOLS ===
 
 // 1. create_task
+if (shouldRegisterTool("create_task")) {
 server.tool(
   "create_task",
   "Create a new task",
@@ -197,8 +220,10 @@ server.tool(
     }
   },
 );
+}
 
 // 2. list_tasks
+if (shouldRegisterTool("list_tasks")) {
 server.tool(
   "list_tasks",
   "List tasks with optional filters and pagination.",
@@ -244,8 +269,10 @@ server.tool(
     }
   },
 );
+}
 
 // 3. get_task
+if (shouldRegisterTool("get_task")) {
 server.tool(
   "get_task",
   "Get full task details with subtasks, deps, and comments.",
@@ -295,8 +322,10 @@ server.tool(
     }
   },
 );
+}
 
 // 4. update_task
+if (shouldRegisterTool("update_task")) {
 server.tool(
   "update_task",
   "Update task fields. Version required for optimistic locking.",
@@ -323,8 +352,10 @@ server.tool(
     }
   },
 );
+}
 
 // 5. delete_task
+if (shouldRegisterTool("delete_task")) {
 server.tool(
   "delete_task",
   "Delete a task permanently. Subtasks cascade-deleted.",
@@ -346,8 +377,10 @@ server.tool(
     }
   },
 );
+}
 
 // 6. start_task
+if (shouldRegisterTool("start_task")) {
 server.tool(
   "start_task",
   "Claim, lock, and set task to in_progress.",
@@ -365,8 +398,10 @@ server.tool(
     }
   },
 );
+}
 
 // 7. complete_task
+if (shouldRegisterTool("complete_task")) {
 server.tool(
   "complete_task",
   "Complete a task. For recurring tasks, auto-spawns next instance.",
@@ -398,8 +433,10 @@ server.tool(
     }
   },
 );
+}
 
 // 8. lock_task
+if (shouldRegisterTool("lock_task")) {
 server.tool(
   "lock_task",
   "Acquire exclusive lock. Expires after 30 min. Idempotent per agent.",
@@ -420,8 +457,10 @@ server.tool(
     }
   },
 );
+}
 
 // 9. unlock_task
+if (shouldRegisterTool("unlock_task")) {
 server.tool(
   "unlock_task",
   "Release exclusive lock on a task.",
@@ -439,8 +478,10 @@ server.tool(
     }
   },
 );
+}
 
 // 10. add_dependency
+if (shouldRegisterTool("add_dependency")) {
 server.tool(
   "add_dependency",
   "Add a dependency. Prevents cycles via BFS detection.",
@@ -459,8 +500,10 @@ server.tool(
     }
   },
 );
+}
 
 // 11. remove_dependency
+if (shouldRegisterTool("remove_dependency")) {
 server.tool(
   "remove_dependency",
   "Remove a dependency link between two tasks.",
@@ -484,8 +527,10 @@ server.tool(
     }
   },
 );
+}
 
 // 12. add_comment
+if (shouldRegisterTool("add_comment")) {
 server.tool(
   "add_comment",
   "Add a comment or note to a task. Comments are append-only.",
@@ -505,8 +550,10 @@ server.tool(
     }
   },
 );
+}
 
 // 13. list_projects
+if (shouldRegisterTool("list_projects")) {
 server.tool(
   "list_projects",
   "List all registered projects",
@@ -527,8 +574,10 @@ server.tool(
     }
   },
 );
+}
 
 // 14. create_project
+if (shouldRegisterTool("create_project")) {
 server.tool(
   "create_project",
   "Register a new project with auto-generated task prefix.",
@@ -553,8 +602,10 @@ server.tool(
     }
   },
 );
+}
 
 // create_plan
+if (shouldRegisterTool("create_plan")) {
 server.tool(
   "create_plan",
   "Create a plan to group related tasks.",
@@ -583,8 +634,10 @@ server.tool(
     }
   },
 );
+}
 
 // list_plans
+if (shouldRegisterTool("list_plans")) {
 server.tool(
   "list_plans",
   "List all plans, optionally filtered by project.",
@@ -608,8 +661,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_plan
+if (shouldRegisterTool("get_plan")) {
 server.tool(
   "get_plan",
   "Get plan details including status and timestamps.",
@@ -636,8 +691,10 @@ server.tool(
     }
   },
 );
+}
 
 // update_plan
+if (shouldRegisterTool("update_plan")) {
 server.tool(
   "update_plan",
   "Update plan fields (name, description, status).",
@@ -666,8 +723,10 @@ server.tool(
     }
   },
 );
+}
 
 // delete_plan
+if (shouldRegisterTool("delete_plan")) {
 server.tool(
   "delete_plan",
   "Delete a plan. Tasks in the plan are orphaned (not deleted).",
@@ -689,8 +748,10 @@ server.tool(
     }
   },
 );
+}
 
 // 15. search_tasks
+if (shouldRegisterTool("search_tasks")) {
 server.tool(
   "search_tasks",
   "Full-text search across tasks with filters.",
@@ -735,8 +796,10 @@ server.tool(
     }
   },
 );
+}
 
 // 16. sync
+if (shouldRegisterTool("sync")) {
 server.tool(
   "sync",
   "Sync tasks between local DB and agent task list.",
@@ -796,10 +859,12 @@ server.tool(
     }
   },
 );
+}
 
 // === AGENT TOOLS ===
 
 // register_agent
+if (shouldRegisterTool("register_agent")) {
 server.tool(
   "register_agent",
   "Register an agent (idempotent by name). Updates last_seen_at.",
@@ -821,8 +886,10 @@ server.tool(
     }
   },
 );
+}
 
 // list_agents
+if (shouldRegisterTool("list_agents")) {
 server.tool(
   "list_agents",
   "List all registered agents",
@@ -842,8 +909,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_agent
+if (shouldRegisterTool("get_agent")) {
 server.tool(
   "get_agent",
   "Get agent details by ID or name. Provide one of id or name.",
@@ -874,8 +943,10 @@ server.tool(
     }
   },
 );
+}
 
 // rename_agent
+if (shouldRegisterTool("rename_agent")) {
 server.tool(
   "rename_agent",
   "Rename an agent. Resolve by id or current name.",
@@ -905,8 +976,10 @@ server.tool(
     }
   },
 );
+}
 
 // delete_agent
+if (shouldRegisterTool("delete_agent")) {
 server.tool(
   "delete_agent",
   "Delete an agent permanently. Resolve by id or name.",
@@ -936,10 +1009,12 @@ server.tool(
     }
   },
 );
+}
 
 // === TASK LIST TOOLS ===
 
 // create_task_list
+if (shouldRegisterTool("create_task_list")) {
 server.tool(
   "create_task_list",
   "Create a task list container for organizing tasks.",
@@ -965,8 +1040,10 @@ server.tool(
     }
   },
 );
+}
 
 // list_task_lists
+if (shouldRegisterTool("list_task_lists")) {
 server.tool(
   "list_task_lists",
   "List all task lists, optionally filtered by project.",
@@ -990,8 +1067,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_task_list
+if (shouldRegisterTool("get_task_list")) {
 server.tool(
   "get_task_list",
   "Get task list details including slug and metadata.",
@@ -1021,8 +1100,10 @@ server.tool(
     }
   },
 );
+}
 
 // update_task_list
+if (shouldRegisterTool("update_task_list")) {
 server.tool(
   "update_task_list",
   "Update a task list's name or description.",
@@ -1046,8 +1127,10 @@ server.tool(
     }
   },
 );
+}
 
 // delete_task_list
+if (shouldRegisterTool("delete_task_list")) {
 server.tool(
   "delete_task_list",
   "Delete a task list. Tasks are orphaned, not deleted.",
@@ -1069,10 +1152,12 @@ server.tool(
     }
   },
 );
+}
 
 // === AUDIT LOG TOOLS ===
 
 // get_task_history
+if (shouldRegisterTool("get_task_history")) {
 server.tool(
   "get_task_history",
   "Get audit log — field changes with timestamps and actors.",
@@ -1090,8 +1175,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // get_recent_activity
+if (shouldRegisterTool("get_recent_activity")) {
 server.tool(
   "get_recent_activity",
   "Get recent task changes — global activity feed.",
@@ -1108,10 +1195,12 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // === WEBHOOK TOOLS ===
 
 // create_webhook
+if (shouldRegisterTool("create_webhook")) {
 server.tool(
   "create_webhook",
   "Register a webhook for task change events.",
@@ -1128,8 +1217,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // list_webhooks
+if (shouldRegisterTool("list_webhooks")) {
 server.tool(
   "list_webhooks",
   "List all registered webhooks",
@@ -1144,8 +1235,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // delete_webhook
+if (shouldRegisterTool("delete_webhook")) {
 server.tool(
   "delete_webhook",
   "Delete a webhook by ID.",
@@ -1160,10 +1253,12 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // === TEMPLATE TOOLS ===
 
 // create_template
+if (shouldRegisterTool("create_template")) {
 server.tool(
   "create_template",
   "Create a reusable task template.",
@@ -1184,8 +1279,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // list_templates
+if (shouldRegisterTool("list_templates")) {
 server.tool(
   "list_templates",
   "List all task templates",
@@ -1200,8 +1297,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // create_task_from_template
+if (shouldRegisterTool("create_task_from_template")) {
 server.tool(
   "create_task_from_template",
   "Create a task from a template with optional overrides.",
@@ -1225,8 +1324,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // delete_template
+if (shouldRegisterTool("delete_template")) {
 server.tool(
   "delete_template",
   "Delete a task template by ID.",
@@ -1239,10 +1340,12 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // === APPROVAL TOOLS ===
 
 // approve_task
+if (shouldRegisterTool("approve_task")) {
 server.tool(
   "approve_task",
   "Approve a task with requires_approval=true.",
@@ -1262,8 +1365,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // fail_task
+if (shouldRegisterTool("fail_task")) {
 server.tool(
   "fail_task",
   "Mark a task as failed with structured reason and optional auto-retry.",
@@ -1290,8 +1395,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_my_tasks — agent discovery
+if (shouldRegisterTool("get_my_tasks")) {
 server.tool(
   "get_my_tasks",
   "Get tasks assigned to/created by an agent with stats.",
@@ -1323,8 +1430,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // get_org_chart — org hierarchy
+if (shouldRegisterTool("get_org_chart")) {
 server.tool(
   "get_org_chart",
   "Get agent org chart showing reporting hierarchy.",
@@ -1348,8 +1457,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // set_reports_to — set agent hierarchy
+if (shouldRegisterTool("set_reports_to")) {
 server.tool(
   "set_reports_to",
   "Set agent reporting relationship in org chart.",
@@ -1374,8 +1485,10 @@ server.tool(
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
+}
 
 // bulk_update_tasks
+if (shouldRegisterTool("bulk_update_tasks")) {
 server.tool(
   "bulk_update_tasks",
   "Update multiple tasks at once with the same changes.",
@@ -1401,8 +1514,10 @@ server.tool(
     }
   },
 );
+}
 
 // clone_task
+if (shouldRegisterTool("clone_task")) {
 server.tool(
   "clone_task",
   "Duplicate a task with optional field overrides.",
@@ -1433,8 +1548,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_task_stats
+if (shouldRegisterTool("get_task_stats")) {
 server.tool(
   "get_task_stats",
   "Get task analytics: counts by status, priority, agent.",
@@ -1456,8 +1573,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_task_graph
+if (shouldRegisterTool("get_task_graph")) {
 server.tool(
   "get_task_graph",
   "Get full dependency tree for a task.",
@@ -1510,8 +1629,10 @@ server.tool(
     }
   },
 );
+}
 
 // bulk_create_tasks
+if (shouldRegisterTool("bulk_create_tasks")) {
 server.tool(
   "bulk_create_tasks",
   "Create multiple tasks atomically with dependency support.",
@@ -1560,8 +1681,10 @@ server.tool(
     }
   },
 );
+}
 
 // move_task
+if (shouldRegisterTool("move_task")) {
 server.tool(
   "move_task",
   "Move a task to a different list, project, or plan.",
@@ -1585,8 +1708,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_next_task
+if (shouldRegisterTool("get_next_task")) {
 server.tool(
   "get_next_task",
   "Get the best pending task to work on next.",
@@ -1615,8 +1740,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_active_work
+if (shouldRegisterTool("get_active_work")) {
 server.tool(
   "get_active_work",
   "See all in-progress tasks and who is working on them.",
@@ -1646,8 +1773,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_tasks_changed_since
+if (shouldRegisterTool("get_tasks_changed_since")) {
 server.tool(
   "get_tasks_changed_since",
   "Get tasks modified after a timestamp for incremental sync.",
@@ -1676,8 +1805,10 @@ server.tool(
     }
   },
 );
+}
 
 // claim_next_task
+if (shouldRegisterTool("claim_next_task")) {
 server.tool(
   "claim_next_task",
   "Atomically claim, lock, and start the best pending task.",
@@ -1706,8 +1837,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_stale_tasks
+if (shouldRegisterTool("get_stale_tasks")) {
 server.tool(
   "get_stale_tasks",
   "Find stale in_progress tasks with no recent activity.",
@@ -1738,8 +1871,10 @@ server.tool(
     }
   },
 );
+}
 
 // get_status
+if (shouldRegisterTool("get_status")) {
 server.tool(
   "get_status",
   "Get a full project health snapshot — counts, active work, next task, stale/overdue summary.",
@@ -1784,10 +1919,12 @@ server.tool(
     }
   },
 );
+}
 
 // === META TOOLS ===
 
 // search_tools
+if (shouldRegisterTool("search_tools")) {
 server.tool(
   "search_tools",
   "List all tool names, optionally filtered by substring.",
@@ -1809,14 +1946,16 @@ server.tool(
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
       "search_tools","describe_tools",
-    ];
+    ].filter(name => shouldRegisterTool(name));
     const q = query?.toLowerCase();
     const matches = q ? all.filter(n => n.includes(q)) : all;
     return { content: [{ type: "text" as const, text: matches.join(", ") }] };
   },
 );
+}
 
 // describe_tools
+if (shouldRegisterTool("describe_tools")) {
 server.tool(
   "describe_tools",
   "Get detailed parameter info for specific tools by name.",
@@ -1912,10 +2051,14 @@ server.tool(
       search_tools: "List all tool names or filter by substring.\n  Params: query(string, optional)\n  Example: {query: 'task'}",
       describe_tools: "Get detailed descriptions and parameter info for tools by name.\n  Params: names(string[], req)\n  Example: {names: ['create_task', 'update_task']}",
     };
+    const allToolNames = Object.keys(descriptions);
+    const registeredCount = allToolNames.filter(n => shouldRegisterTool(n)).length;
+    const profileLine = `Profile: ${TODOS_PROFILE} (${registeredCount} tools active)\n\n`;
     const result = names.map(n => `${n}: ${descriptions[n] || "Unknown tool. Use search_tools to list available tools."}`).join("\n\n");
-    return { content: [{ type: "text" as const, text: result }] };
+    return { content: [{ type: "text" as const, text: profileLine + result }] };
   },
 );
+}
 
 // === RESOURCES ===
 
