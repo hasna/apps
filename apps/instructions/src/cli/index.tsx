@@ -393,6 +393,60 @@ templateCmd.command("vars <id>").description("Show template variables").action(a
   } catch (e) { console.error(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
 });
 
+templateCmd.command("render <id>")
+  .description("Render a template config with variables and optionally apply to disk")
+  .option("--var <vars...>", "set variables as KEY=VALUE pairs")
+  .option("--env", "use environment variables to fill template vars")
+  .option("--apply", "write rendered output to target_path")
+  .option("--dry-run", "preview rendered output without writing")
+  .action(async (id, opts) => {
+    try {
+      const { renderTemplate } = await import("../lib/template.js");
+      const c = getConfig(id);
+      const vars: Record<string, string> = {};
+
+      // Collect vars from --var KEY=VALUE
+      if (opts.var) {
+        for (const kv of opts.var) {
+          const eq = kv.indexOf("=");
+          if (eq === -1) { console.error(chalk.red(`Invalid --var: ${kv} (expected KEY=VALUE)`)); process.exit(1); }
+          vars[kv.slice(0, eq)] = kv.slice(eq + 1);
+        }
+      }
+      // Fill from env if --env
+      if (opts.env) {
+        const { extractTemplateVars } = await import("../lib/template.js");
+        for (const v of extractTemplateVars(c.content)) {
+          if (!(v.name in vars) && process.env[v.name]) {
+            vars[v.name] = process.env[v.name]!;
+          }
+        }
+      }
+
+      const rendered = renderTemplate(c.content, vars);
+
+      if (opts.apply || opts.dryRun) {
+        if (!c.target_path) { console.error(chalk.red("No target_path — cannot apply reference configs")); process.exit(1); }
+        if (opts.dryRun) {
+          console.log(chalk.yellow("[dry-run]") + ` Would write to ${expandPath(c.target_path)}`);
+          console.log(rendered);
+        } else {
+          const { writeFileSync, mkdirSync } = await import("node:fs");
+          const { dirname } = await import("node:path");
+          const path = expandPath(c.target_path);
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, rendered, "utf-8");
+          console.log(chalk.green("✓") + ` Rendered and applied to ${path}`);
+        }
+      } else {
+        console.log(rendered);
+      }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
 // ── scan ──────────────────────────────────────────────────────────────────────
 program
   .command("scan [id]")
