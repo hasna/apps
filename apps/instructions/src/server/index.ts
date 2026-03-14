@@ -274,5 +274,6 @@ if (dashDir) {
   });
 }
 
-console.log(`configs-serve listening on http://localhost:${PORT}${dashDir ? " (dashboard: /" : " (no dashboard found)"}`);
-export default { port: PORT, fetch: app.fetch };
+const HOST = process.env["CONFIGS_HOST"] ?? "localhost";
+console.log(`configs-serve listening on http://${HOST}:${PORT}${dashDir ? " (dashboard: /" : " (no dashboard found)"}`);
+export default { port: PORT, hostname: HOST, fetch: app.fetch };
