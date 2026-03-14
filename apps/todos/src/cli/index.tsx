@@ -19,6 +19,12 @@ import {
   unlockTask,
   addDependency,
   removeDependency,
+  getNextTask,
+  claimNextTask,
+  getStatus,
+  failTask,
+  getActiveWork,
+  getStaleTasks,
 } from "../db/tasks.js";
 import {
   createProject,
@@ -1810,6 +1816,139 @@ program
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
     renderApp(projectId);
+  });
+
+// next
+program
+  .command("next")
+  .description("Show the best pending task to work on next")
+  .option("--agent <id>", "Prefer tasks assigned to this agent")
+  .option("--project <id>", "Filter to project")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const db = getDatabase();
+    const filters: Record<string, string> = {};
+    if (opts.project) filters.project_id = opts.project;
+    const task = getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
+    if (!task) {
+      console.log(chalk.dim("No tasks available."));
+      return;
+    }
+    if (opts.json) { console.log(JSON.stringify(task, null, 2)); return; }
+    console.log(chalk.bold("Next task:"));
+    console.log(`  ${chalk.cyan(task.short_id || task.id.slice(0, 8))} ${chalk.yellow(task.priority)} ${task.title}`);
+    if (task.description) console.log(chalk.dim(`  ${task.description.slice(0, 100)}`));
+  });
+
+// claim
+program
+  .command("claim <agent>")
+  .description("Atomically claim the best pending task for an agent")
+  .option("--project <id>", "Filter to project")
+  .option("--json", "Output as JSON")
+  .action(async (agent, opts) => {
+    const db = getDatabase();
+    const filters: Record<string, string> = {};
+    if (opts.project) filters.project_id = opts.project;
+    const task = claimNextTask(agent, Object.keys(filters).length ? filters : undefined, db);
+    if (!task) {
+      console.log(chalk.dim("No tasks available to claim."));
+      return;
+    }
+    if (opts.json) { console.log(JSON.stringify(task, null, 2)); return; }
+    console.log(chalk.green(`Claimed: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
+  });
+
+// status
+program
+  .command("status")
+  .description("Show full project health snapshot")
+  .option("--agent <id>", "Include next task for this agent")
+  .option("--project <id>", "Filter to project")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const db = getDatabase();
+    const filters: Record<string, string> = {};
+    if (opts.project) filters.project_id = opts.project;
+    const s = getStatus(Object.keys(filters).length ? filters : undefined, opts.agent, db);
+    if (opts.json) { console.log(JSON.stringify(s, null, 2)); return; }
+    console.log(`Tasks: ${chalk.yellow(s.pending)} pending | ${chalk.blue(s.in_progress)} active | ${chalk.green(s.completed)} done | ${s.total} total`);
+    if (s.stale_count > 0) console.log(chalk.red(`⚠️  ${s.stale_count} stale tasks (stuck in_progress)`));
+    if (s.overdue_recurring > 0) console.log(chalk.yellow(`🔁 ${s.overdue_recurring} overdue recurring`));
+    if (s.active_work.length > 0) {
+      console.log(chalk.bold("\nActive:"));
+      for (const w of s.active_work.slice(0, 5)) {
+        const id = w.short_id || w.id.slice(0, 8);
+        console.log(`  ${chalk.cyan(id)} | ${w.assigned_to || w.locked_by || '?'} | ${w.title}`);
+      }
+    }
+    if (s.next_task) {
+      console.log(chalk.bold("\nNext up:"));
+      const t = s.next_task;
+      console.log(`  ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${chalk.yellow(t.priority)} ${t.title}`);
+    }
+  });
+
+// fail
+program
+  .command("fail <id>")
+  .description("Mark a task as failed with optional reason and retry")
+  .option("--reason <text>", "Why it failed")
+  .option("--agent <id>", "Agent reporting the failure")
+  .option("--retry", "Auto-create a retry copy")
+  .option("--json", "Output as JSON")
+  .action(async (id, opts) => {
+    const db = getDatabase();
+    const resolvedId = resolvePartialId(db, "tasks", id);
+    if (!resolvedId) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+    const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
+    if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
+    if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));
+    if (result.retryTask) console.log(chalk.yellow(`Retry created: ${result.retryTask.short_id || result.retryTask.id.slice(0, 8)} | ${result.retryTask.title}`));
+  });
+
+// active
+program
+  .command("active")
+  .description("Show all currently in-progress tasks")
+  .option("--project <id>", "Filter to project")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const db = getDatabase();
+    const filters: Record<string, string> = {};
+    if (opts.project) filters.project_id = opts.project;
+    const work = getActiveWork(Object.keys(filters).length ? filters : undefined, db);
+    if (opts.json) { console.log(JSON.stringify(work, null, 2)); return; }
+    if (work.length === 0) { console.log(chalk.dim("No active work.")); return; }
+    console.log(chalk.bold(`Active work (${work.length}):`));
+    for (const w of work) {
+      const id = w.short_id || w.id.slice(0, 8);
+      const agent = w.assigned_to || w.locked_by || 'unassigned';
+      console.log(`  ${chalk.cyan(id)} | ${chalk.yellow(w.priority)} | ${agent.padEnd(12)} | ${w.title}`);
+    }
+  });
+
+// stale
+program
+  .command("stale")
+  .description("Find tasks stuck in_progress with no recent activity")
+  .option("--minutes <n>", "Stale threshold in minutes", "30")
+  .option("--project <id>", "Filter to project")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const db = getDatabase();
+    const filters: Record<string, string> = {};
+    if (opts.project) filters.project_id = opts.project;
+    const tasks = getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, db);
+    if (opts.json) { console.log(JSON.stringify(tasks, null, 2)); return; }
+    if (tasks.length === 0) { console.log(chalk.dim("No stale tasks.")); return; }
+    console.log(chalk.bold(`Stale tasks (${tasks.length}):`));
+    for (const t of tasks) {
+      const id = t.short_id || t.id.slice(0, 8);
+      const staleMin = Math.round((Date.now() - new Date(t.updated_at).getTime()) / 60000);
+      console.log(`  ${chalk.cyan(id)} | ${t.locked_by || t.assigned_to || '?'} | ${t.title} ${chalk.dim(`(${staleMin}min stale)`)}`);
+    }
   });
 
 // Default action: help or TUI
