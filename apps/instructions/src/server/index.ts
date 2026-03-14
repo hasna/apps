@@ -240,7 +240,9 @@ app.post("/api/machines", async (c) => {
 });
 
 // ── Health ─────────────────────────────────────────────────────────────────────
-app.get("/health", (c) => c.json({ ok: true, version: "0.1.5" }));
+import { createRequire } from "node:module";
+const serverPkg = createRequire(import.meta.url)("../../package.json") as { version: string };
+app.get("/health", (c) => c.json({ ok: true, version: serverPkg.version }));
 
 // ── Dashboard (serve static files from dashboard/dist/) ──────────────────────
 import { existsSync, readFileSync } from "node:fs";
