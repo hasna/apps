@@ -69,7 +69,7 @@ function err(msg: string) {
 }
 
 const server = new Server(
-  { name: "configs", version: "0.1.0" },
+  { name: "configs", version: require("../../package.json").version },
   { capabilities: { tools: {} } }
 );
 
