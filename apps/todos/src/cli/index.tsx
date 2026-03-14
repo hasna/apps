@@ -1543,6 +1543,102 @@ program
     }
   });
 
+// agent <name> — rich single-agent view
+program
+  .command("agent <name>")
+  .description("Show all info about an agent: tasks, status, last seen, stats")
+  .option("--json", "Output as JSON")
+  .action((name: string, opts) => {
+    const globalOpts = program.opts();
+    // Find agent by name or partial ID
+    const { getAgentByName: findByName } = require("../db/agents.js") as any;
+    const agent = findByName(name);
+
+    if (!agent) {
+      console.error(chalk.red(`Agent not found: ${name}`));
+      process.exit(1);
+    }
+
+    // Get their tasks
+    const byAssigned = listTasks({ assigned_to: agent.name });
+    const byId = listTasks({ agent_id: agent.id });
+    const seen = new Set<string>();
+    const allTasks = [...byAssigned, ...byId].filter(t => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id); return true;
+    });
+
+    const pending = allTasks.filter(t => t.status === "pending");
+    const inProgress = allTasks.filter(t => t.status === "in_progress");
+    const completed = allTasks.filter(t => t.status === "completed");
+    const failed = allTasks.filter(t => t.status === "failed");
+    const rate = allTasks.length > 0 ? Math.round((completed.length / allTasks.length) * 100) : 0;
+
+    // Last seen — how long ago
+    const lastSeenMs = Date.now() - new Date(agent.last_seen_at).getTime();
+    const lastSeenMins = Math.floor(lastSeenMs / 60000);
+    const lastSeenStr = lastSeenMins < 2 ? chalk.green("just now")
+      : lastSeenMins < 60 ? chalk.yellow(`${lastSeenMins}m ago`)
+      : lastSeenMins < 1440 ? chalk.yellow(`${Math.floor(lastSeenMins / 60)}h ago`)
+      : chalk.dim(`${Math.floor(lastSeenMins / 1440)}d ago`);
+
+    const isOnline = lastSeenMins < 5;
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ agent, tasks: { pending: pending.length, in_progress: inProgress.length, completed: completed.length, failed: failed.length, total: allTasks.length, completion_rate: rate }, all_tasks: allTasks }, null, 2));
+      return;
+    }
+
+    // Header
+    console.log(`\n${isOnline ? chalk.green("●") : chalk.dim("○")} ${chalk.bold(agent.name)} ${chalk.dim(`(${agent.id})`)}  ${lastSeenStr}`);
+    if (agent.description) console.log(chalk.dim(`  ${agent.description}`));
+    if (agent.role) console.log(chalk.dim(`  Role: ${agent.role}`));
+    console.log();
+
+    // Stats bar
+    console.log(`  ${chalk.yellow(String(pending.length))} pending  ${chalk.blue(String(inProgress.length))} active  ${chalk.green(String(completed.length))} done  ${chalk.dim(`${rate}% rate`)}`);
+    console.log();
+
+    // Active tasks
+    if (inProgress.length > 0) {
+      console.log(chalk.bold("  In progress:"));
+      for (const t of inProgress) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const staleFlag = new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000 ? chalk.red(" [stale]") : "";
+        console.log(`    ${chalk.cyan(id)} ${chalk.yellow(t.priority)} ${t.title}${staleFlag}`);
+      }
+      console.log();
+    }
+
+    // Pending tasks (up to 5)
+    if (pending.length > 0) {
+      console.log(chalk.bold(`  Pending (${pending.length}):`));
+      for (const t of pending.slice(0, 5)) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const due = t.due_at ? chalk.dim(` due:${t.due_at.slice(0, 10)}`) : "";
+        console.log(`    ${chalk.dim(id)} ${t.priority.padEnd(8)} ${t.title}${due}`);
+      }
+      if (pending.length > 5) console.log(chalk.dim(`    ... and ${pending.length - 5} more`));
+      console.log();
+    }
+
+    // Recent completions (up to 3)
+    const recentDone = completed.filter(t => t.completed_at).sort((a, b) => new Date(b.completed_at!).getTime() - new Date(a.completed_at!).getTime()).slice(0, 3);
+    if (recentDone.length > 0) {
+      console.log(chalk.bold("  Recently completed:"));
+      for (const t of recentDone) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const when = t.completed_at ? chalk.dim(new Date(t.completed_at).toLocaleDateString()) : "";
+        console.log(`    ${chalk.green("✓")} ${chalk.dim(id)} ${t.title} ${when}`);
+      }
+      console.log();
+    }
+
+    if (allTasks.length === 0) {
+      console.log(chalk.dim("  No tasks assigned to this agent."));
+    }
+  });
+
 // org
 program
   .command("org")
