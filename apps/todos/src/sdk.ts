@@ -87,6 +87,26 @@ export class TodosClient {
     });
   }
 
+  async createTask(data: { title: string; description?: string; priority?: string; project_id?: string; assigned_to?: string; tags?: string[]; recurrence_rule?: string; due_at?: string }): Promise<any> {
+    return this.fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTask(id: string, data: Record<string, unknown>): Promise<any> {
+    return this.fetch(`/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await this.fetch(`/api/tasks/${id}`, { method: "DELETE" });
+  }
+
   async getStats(): Promise<any> {
     return this.fetch("/api/stats");
   }
