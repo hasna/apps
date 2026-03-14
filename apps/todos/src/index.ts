@@ -1,3 +1,7 @@
+// REST SDK Client (for cross-process/cross-machine use)
+export { TodosClient, createClient } from "./sdk.js";
+export type { TodosClientOptions } from "./sdk.js";
+
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 
