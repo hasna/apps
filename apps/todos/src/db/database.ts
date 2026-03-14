@@ -316,6 +316,55 @@ const MIGRATIONS = [
   ALTER TABLE task_comments ADD COLUMN progress_pct INTEGER CHECK(progress_pct IS NULL OR (progress_pct >= 0 AND progress_pct <= 100));
   INSERT OR IGNORE INTO _migrations (id) VALUES (14);
   `,
+  // Migration 15: FTS5 full-text search index
+  `
+  CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+    task_id UNINDEXED,
+    title,
+    description,
+    tags,
+    tokenize='unicode61 remove_diacritics 2'
+  );
+
+  INSERT INTO tasks_fts(rowid, task_id, title, description, tags)
+  SELECT t.rowid, t.id, t.title, COALESCE(t.description, ''),
+    COALESCE((SELECT GROUP_CONCAT(tag, ' ') FROM task_tags WHERE task_id = t.id), '')
+  FROM tasks t;
+
+  CREATE TRIGGER IF NOT EXISTS tasks_fts_ai AFTER INSERT ON tasks BEGIN
+    INSERT INTO tasks_fts(rowid, task_id, title, description, tags)
+    VALUES (new.rowid, new.id, new.title, COALESCE(new.description, ''), '');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS tasks_fts_ad AFTER DELETE ON tasks BEGIN
+    DELETE FROM tasks_fts WHERE rowid = old.rowid;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS tasks_fts_au AFTER UPDATE OF title, description ON tasks BEGIN
+    DELETE FROM tasks_fts WHERE rowid = old.rowid;
+    INSERT INTO tasks_fts(rowid, task_id, title, description, tags)
+    SELECT new.rowid, new.id, new.title, COALESCE(new.description, ''),
+      COALESCE((SELECT GROUP_CONCAT(tag, ' ') FROM task_tags WHERE task_id = new.id), '');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS task_tags_fts_ai AFTER INSERT ON task_tags BEGIN
+    DELETE FROM tasks_fts WHERE rowid = (SELECT rowid FROM tasks WHERE id = new.task_id);
+    INSERT INTO tasks_fts(rowid, task_id, title, description, tags)
+    SELECT t.rowid, t.id, t.title, COALESCE(t.description, ''),
+      COALESCE((SELECT GROUP_CONCAT(tag, ' ') FROM task_tags WHERE task_id = t.id), '')
+    FROM tasks t WHERE t.id = new.task_id;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS task_tags_fts_ad AFTER DELETE ON task_tags BEGIN
+    DELETE FROM tasks_fts WHERE rowid = (SELECT rowid FROM tasks WHERE id = old.task_id);
+    INSERT INTO tasks_fts(rowid, task_id, title, description, tags)
+    SELECT t.rowid, t.id, t.title, COALESCE(t.description, ''),
+      COALESCE((SELECT GROUP_CONCAT(tag, ' ') FROM task_tags WHERE task_id = t.id), '')
+    FROM tasks t WHERE t.id = old.task_id;
+  END;
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (15);
+  `,
 ];
 
 let _db: Database | null = null;

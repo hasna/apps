@@ -87,6 +87,7 @@ const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
 const MINIMAL_TOOLS = new Set([
   "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
   "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
+  "get_tasks_changed_since",
 ]);
 
 const STANDARD_EXCLUDED = new Set([
@@ -171,14 +172,19 @@ function formatTask(task: Task): string {
 }
 
 /** Full multi-line task detail for get_task responses. */
-function formatTaskDetail(task: Task): string {
+function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
   const parts = [
     `ID: ${task.id}`,
     `Title: ${task.title}`,
     `Status: ${task.status}`,
     `Priority: ${task.priority}`,
   ];
-  if (task.description) parts.push(`Description: ${task.description}`);
+  if (task.description) {
+    const desc = maxDescriptionChars && task.description.length > maxDescriptionChars
+      ? task.description.slice(0, maxDescriptionChars) + "…"
+      : task.description;
+    parts.push(`Description: ${desc}`);
+  }
   if (task.assigned_to) parts.push(`Assigned to: ${task.assigned_to}`);
   if (task.agent_id) parts.push(`Agent: ${task.agent_id}`);
   if (task.locked_by) parts.push(`Locked by: ${task.locked_by}`);
@@ -260,10 +266,11 @@ server.tool(
     overdue: z.boolean().optional(),
     limit: z.number().optional(),
     offset: z.number().optional(),
+    summary_only: z.boolean().optional().describe("When true, return only id, short_id, title, status, priority — minimal tokens for navigation"),
   },
   async (params) => {
     try {
-      const { due_today, overdue, ...rest } = params as any;
+      const { due_today, overdue, summary_only, ...rest } = params as any;
       const resolved = { ...rest };
       // Default limit of 50 to prevent context overflow when there are many tasks
       if (resolved.limit === undefined) resolved.limit = 50;
@@ -283,6 +290,9 @@ server.tool(
         return { content: [{ type: "text" as const, text: total > 0 ? `No tasks in this page (total: ${total}).` : "No tasks found." }] };
       }
       const text = tasks.map((t) => {
+        if (summary_only) {
+          return `${t.short_id || t.id.slice(0, 8)} [${t.status}] ${t.priority} ${t.title}`;
+        }
         const lock = t.locked_by ? ` [locked by ${t.locked_by}]` : "";
         const assigned = t.assigned_to ? ` -> ${t.assigned_to}` : "";
         const due = t.due_at ? ` due:${t.due_at.slice(0, 10)}` : "";
@@ -307,14 +317,15 @@ server.tool(
   "Get full task details with subtasks, deps, and comments.",
   {
     id: z.string(),
+    max_description_chars: z.number().optional().describe("Truncate description to this many characters (default: unlimited). Use 300-500 for quick checks."),
   },
-  async ({ id }) => {
+  async ({ id, max_description_chars }) => {
     try {
       const resolvedId = resolveId(id);
       const task = getTaskWithRelations(resolvedId);
       if (!task) return { content: [{ type: "text" as const, text: `Task not found: ${id}` }], isError: true };
 
-      const parts = [formatTaskDetail(task)];
+      const parts = [formatTaskDetail(task, max_description_chars)];
 
       if (task.subtasks.length > 0) {
         parts.push(`\nSubtasks (${task.subtasks.length}):`);
@@ -1791,7 +1802,7 @@ server.tool(
       if (!task) {
         return { content: [{ type: "text" as const, text: "No tasks available — all pending tasks are blocked, locked, or none exist." }] };
       }
-      return { content: [{ type: "text" as const, text: `next: ${formatTask(task)}\n${formatTaskDetail(task)}` }] };
+      return { content: [{ type: "text" as const, text: `next: ${formatTask(task)}\n${formatTaskDetail(task, 300)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1888,7 +1899,7 @@ server.tool(
       if (!task) {
         return { content: [{ type: "text" as const, text: "No tasks available to claim." }] };
       }
-      return { content: [{ type: "text" as const, text: `claimed: ${formatTask(task)}\n${formatTaskDetail(task)}` }] };
+      return { content: [{ type: "text" as const, text: `claimed: ${formatTask(task)}\n${formatTaskDetail(task, 300)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1983,6 +1994,7 @@ server.tool(
         }
       }
 
+      lines.push(`\nas_of: ${new Date().toISOString()} (pass to get_tasks_changed_since for incremental polling)`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -2124,6 +2136,8 @@ server.tool(
         lines.push(`Active: ${active}`);
       }
       if (next) lines.push(`Next up: ${next.short_id || next.id.slice(0, 8)} [${next.priority}] ${next.title}`);
+      // Include timestamp so agents can use get_tasks_changed_since for incremental polling
+      lines.push(`as_of: ${new Date().toISOString()}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -2323,7 +2337,7 @@ server.tool(
 
       // Active work
       get_active_work: "See all in-progress tasks and who is working on them.\n  Params: project_id(string, optional), task_list_id(string, optional)\n  Example: {project_id: 'a1b2c3d4'}",
-      get_tasks_changed_since: "Get tasks modified after a timestamp — incremental delta sync.\n  Params: since(string, req — ISO date), project_id(string, optional), task_list_id(string, optional)\n  Example: {since: '2026-03-14T10:00:00Z'}",
+      get_tasks_changed_since: "PREFERRED POLLING PATTERN: Get only tasks modified after a timestamp — much cheaper than re-fetching everything. Save the as_of timestamp from bootstrap/get_status/get_context and pass it here on your next check.\n  Params: since(string, req — ISO date from prior as_of), project_id(string, optional), task_list_id(string, optional)\n  Example: {since: '2026-03-14T10:00:00Z'}",
       get_stale_tasks: "Find stale in_progress tasks with no recent activity.\n  Params: stale_minutes(number, default:30), project_id(string, optional), task_list_id(string, optional)\n  Example: {stale_minutes: 60, project_id: 'a1b2c3d4'}",
       get_status: "Get a full project health snapshot — pending/in_progress/completed counts, active work, next recommended task, stale task count, overdue recurring tasks. Saves 4+ round trips at session start.\n  Params: agent_id(string, optional — prefers tasks assigned to this agent for next_task), project_id(string, optional), task_list_id(string, optional)\n  Example: {agent_id: 'a1b2c3d4', project_id: 'e5f6g7h8'}",
       bootstrap: "CALL THIS FIRST at session start. Returns your in-progress task (if resuming), next claimable task with description, and project health — all in one call, no side effects. Eliminates 3-4 round trips.\n  Params: agent_id(string, optional but recommended), project_id(string, optional)\n  Example: {agent_id: 'a1b2c3d4'}",

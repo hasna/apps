@@ -32,9 +32,21 @@ todos fail <id> --reason "Auth bug in middleware" --retry  # Auto-creates retry 
 - `todos stale` — are there any abandoned tasks to recover?
 - `GET /api/tasks/stream?agent_id=<name>` — subscribe to real-time task events (SSE)
 
+**MCP session start (one call instead of four):**
+```
+bootstrap(agent_id: "your-id")   # Returns: your active task, next claimable, health summary + as_of timestamp
+```
+
+**MCP incremental polling (preferred over re-fetching everything):**
+```
+# 1. Save as_of timestamp from bootstrap/get_status/get_context response
+# 2. On next check, only fetch what changed:
+get_tasks_changed_since(since: "<as_of timestamp>")   # Only returns tasks modified since last check
+```
+
 **MCP profile for minimal token cost:**
 ```
-TODOS_PROFILE=minimal todos-mcp  # 8 tools: claim, complete, fail, status, get_task, start, add_comment, get_next_task
+TODOS_PROFILE=minimal todos-mcp  # 11 tools: bootstrap, claim, complete, fail, status, get_context, get_task, start, add_comment, get_next_task, get_tasks_changed_since
 TODOS_PROFILE=standard todos-mcp # ~47 tools (default for most workflows)
 TODOS_PROFILE=full todos-mcp     # All 60+ tools
 ```
