@@ -185,6 +185,7 @@ program
   .option("-a, --agent <agent>", "only sync configs for this agent (claude|codex|gemini|zsh|git|npm)")
   .option("-c, --category <cat>", "only sync configs in this category")
   .option("-p, --project [dir]", "sync project-scoped configs (CLAUDE.md, .mcp.json, etc.) from a project dir")
+  .option("--all", "with --project: scan all subdirs for projects to sync")
   .option("--to-disk", "apply DB configs back to disk instead")
   .option("--dry-run", "preview without writing")
   .option("--list", "show which files would be synced without doing anything")
@@ -203,6 +204,29 @@ program
     }
     if (opts.project) {
       const dir = typeof opts.project === "string" ? opts.project : process.cwd();
+
+      // --project --all: find all project dirs with CLAUDE.md and sync each
+      if (opts.all) {
+        const { readdirSync, statSync: st } = await import("node:fs");
+        const absDir = expandPath(dir);
+        const entries = readdirSync(absDir, { withFileTypes: true });
+        let totalAdded = 0, totalUpdated = 0, totalUnchanged = 0, projects = 0;
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const projDir = join(absDir, entry.name);
+          // Only sync dirs that have CLAUDE.md, .mcp.json, or .claude/
+          const hasClaude = existsSync(join(projDir, "CLAUDE.md")) || existsSync(join(projDir, ".mcp.json")) || existsSync(join(projDir, ".claude"));
+          if (!hasClaude) continue;
+          const result = await syncProject({ projectDir: projDir, dryRun: opts.dryRun });
+          if (result.added + result.updated > 0) {
+            console.log(`  ${chalk.green("✓")} ${entry.name}: +${result.added} updated:${result.updated}`);
+          }
+          totalAdded += result.added; totalUpdated += result.updated; totalUnchanged += result.unchanged; projects++;
+        }
+        console.log(chalk.green("✓") + ` Synced ${projects} projects: +${totalAdded} updated:${totalUpdated} unchanged:${totalUnchanged}`);
+        return;
+      }
+
       const result = await syncProject({ projectDir: dir, dryRun: opts.dryRun });
       console.log(chalk.green("✓") + ` Project sync: +${result.added} updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
       return;
