@@ -220,6 +220,13 @@ export class TodosClient {
     return this.fetch("/api/projects");
   }
 
+  async getReport(options: { days?: number; projectId?: string } = {}): Promise<{ days: number; period_since: string; total: number; changed: number; completed: number; failed: number; completion_rate: number; stats: any; by_day: Record<string, number> }> {
+    const params = new URLSearchParams();
+    if (options.days) params.set("days", String(options.days));
+    if (options.projectId) params.set("project_id", options.projectId);
+    return this.fetch(`/api/report?${params}`);
+  }
+
   /**
    * Subscribe to task events via SSE. Returns an AsyncGenerator that yields events.
    * Events: task.created, task.started, task.completed, task.failed, task.assigned, task.status_changed
