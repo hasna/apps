@@ -91,6 +91,19 @@ export function requireIdentity(explicit?: string): string {
 }
 
 /**
+ * Update the cached auto name after a successful rename.
+ */
+export function updateCachedAutoName(newName: string): void {
+  cachedAutoName = newName;
+  try {
+    mkdirSync(dirname(AGENT_ID_FILE), { recursive: true });
+    writeFileSync(AGENT_ID_FILE, newName + "\n", "utf-8");
+  } catch {
+    // Non-fatal
+  }
+}
+
+/**
  * Reset the cached auto name (for testing).
  */
 export function _resetAutoName(): void {

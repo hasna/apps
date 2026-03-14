@@ -15,7 +15,7 @@ import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, sea
 import { listSessions } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
-import { resolveIdentity } from "../lib/identity.js";
+import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
 import { heartbeat, listAgents, removePresence, renameAgent } from "../lib/presence.js";
 
 import pkg from "../../package.json";
@@ -816,6 +816,11 @@ server.registerTool("rename_agent", {
         content: [{ type: "text", text: `agent "${oldName}" not found` }],
         isError: true,
       };
+    }
+
+    // Update cached identity so subsequent calls resolve to the new name
+    if (!fromParam) {
+      updateCachedAutoName(newName);
     }
 
     return {
