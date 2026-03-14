@@ -240,7 +240,7 @@ server.tool(
 if (shouldRegisterTool("list_tasks")) {
 server.tool(
   "list_tasks",
-  "List tasks with optional filters and pagination.",
+  "List tasks with optional filters and pagination. Default limit is 50 — use offset to page through results.",
   {
     project_id: z.string().optional(),
     status: z.union([
@@ -265,6 +265,8 @@ server.tool(
     try {
       const { due_today, overdue, ...rest } = params as any;
       const resolved = { ...rest };
+      // Default limit of 50 to prevent context overflow when there are many tasks
+      if (resolved.limit === undefined) resolved.limit = 50;
       if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
       if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
@@ -287,7 +289,9 @@ server.tool(
         const recur = t.recurrence_rule ? " [↻]" : "";
         return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}${due}${recur}`;
       }).join("\n");
-      const pagination = resolved.limit ? `\n(showing ${tasks.length} of ${total}, offset: ${resolved.offset || 0})` : "";
+      const currentOffset = resolved.offset || 0;
+      const hasMore = total > currentOffset + tasks.length;
+      const pagination = `\n(showing ${tasks.length} of ${total}, offset: ${currentOffset}${hasMore ? ` — use offset: ${currentOffset + tasks.length} to get next page` : ""})`;
       return { content: [{ type: "text" as const, text: `${tasks.length} task(s):\n${text}${pagination}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -2173,7 +2177,7 @@ server.tool(
     const descriptions: Record<string, string> = {
       // Task CRUD
       create_task: "Create a new task.\n  Params: title(string, req), description(string), priority(low|medium|high|critical, default:medium), status(pending|in_progress|completed|failed|cancelled, default:pending), project_id(string), parent_id(string — creates subtask), plan_id(string), task_list_id(string), agent_id(string), assigned_to(string), tags(string[]), metadata(object), estimated_minutes(number), requires_approval(boolean), recurrence_rule(string — e.g. 'every day', 'every weekday', 'every 2 weeks', 'every monday'), session_id(string), working_dir(string)\n  Example: {title: 'Daily standup', recurrence_rule: 'every weekday', priority: 'medium'}",
-      list_tasks: "List tasks with optional filters. Supports pagination.\n  Params: status(string|string[]), priority(string|string[]), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), has_recurrence(boolean — true=only recurring, false=only non-recurring), limit(number), offset(number)\n  Example: {status: ['pending', 'in_progress'], has_recurrence: true, limit: 20}",
+      list_tasks: "List tasks with optional filters. Default limit is 50 to avoid context overflow — always paginate with offset for large lists.\n  Params: status(string|string[]), priority(string|string[]), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), has_recurrence(boolean — true=only recurring, false=only non-recurring), limit(number, default 50), offset(number)\n  Example: {status: ['pending', 'in_progress'], limit: 50, offset: 0}",
       get_task: "Get full task details with subtasks, deps, and comments.\n  Params: id(string, req — task ID, short_id like 'APP-00001', or partial ID)\n  Example: {id: 'a1b2c3d4'}",
       update_task: "Update task fields. Requires version for optimistic locking (get it from get_task first).\n  Params: id(string, req), version(number, req), title(string), description(string), status(pending|in_progress|completed|failed|cancelled), priority(low|medium|high|critical), assigned_to(string), tags(string[]), metadata(object), plan_id(string), task_list_id(string)\n  Example: {id: 'a1b2c3d4', version: 3, status: 'completed'}",
       delete_task: "Delete a task permanently. Subtasks cascade-delete. Dependencies removed.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
