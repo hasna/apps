@@ -1,9 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabase, resetDatabase } from "../db/database";
-import { listConfigs } from "../db/configs";
+import { createConfig, listConfigs } from "../db/configs";
 import { syncKnown, KNOWN_CONFIGS, syncProject, PROJECT_CONFIG_FILES } from "./sync";
 
 let tmpDir: string;
@@ -119,5 +119,47 @@ describe("PROJECT_CONFIG_FILES", () => {
     expect(files).toContain(".mcp.json");
     expect(files).toContain("AGENTS.md");
     expect(files).toContain("GEMINI.md");
+  });
+});
+
+describe("syncToDisk", () => {
+  test("applies file configs to disk", async () => {
+    const db = getDatabase();
+    const target = join(tmpDir, "sync-to-disk.txt");
+    createConfig({ name: "ToDisk", category: "tools", content: "written by syncToDisk", target_path: target }, db);
+    const { syncToDisk } = await import("./sync");
+    const result = await syncToDisk({ db });
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, "utf-8")).toBe("written by syncToDisk");
+  });
+
+  test("filters by agent", async () => {
+    const db = getDatabase();
+    const target1 = join(tmpDir, "claude-config.txt");
+    const target2 = join(tmpDir, "codex-config.txt");
+    createConfig({ name: "Claude", category: "agent", agent: "claude", content: "claude", target_path: target1 }, db);
+    createConfig({ name: "Codex", category: "agent", agent: "codex", content: "codex", target_path: target2 }, db);
+    const { syncToDisk } = await import("./sync");
+    const result = await syncToDisk({ db, agent: "claude" });
+    expect(existsSync(target1)).toBe(true);
+    expect(existsSync(target2)).toBe(false);
+  });
+
+  test("dry-run does not write", async () => {
+    const db = getDatabase();
+    const target = join(tmpDir, "no-write.txt");
+    createConfig({ name: "NoWrite", category: "tools", content: "nope", target_path: target }, db);
+    const { syncToDisk } = await import("./sync");
+    await syncToDisk({ db, dryRun: true });
+    expect(existsSync(target)).toBe(false);
+  });
+
+  test("skips configs without target_path", async () => {
+    const db = getDatabase();
+    createConfig({ name: "NoPath", category: "workspace", content: "ref", kind: "reference" }, db);
+    const { syncToDisk } = await import("./sync");
+    const result = await syncToDisk({ db });
+    expect(result.skipped.length).toBe(0);
+    expect(result.updated).toBe(0);
   });
 });
