@@ -85,7 +85,7 @@ const server = new McpServer({
 const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
 
 const MINIMAL_TOOLS = new Set([
-  "claim_next_task", "complete_task", "fail_task", "get_status",
+  "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
   "get_task", "start_task", "add_comment", "get_next_task",
 ]);
 
@@ -2064,6 +2064,39 @@ server.tool(
 );
 }
 
+// get_context — compact text for agent prompt injection
+if (shouldRegisterTool("get_context")) {
+server.tool(
+  "get_context",
+  "Get a compact task summary for agent prompt injection. Returns formatted text.",
+  {
+    agent_id: z.string().optional(),
+    project_id: z.string().optional(),
+    format: z.enum(["text", "compact"]).optional(),
+  },
+  async ({ agent_id, project_id, format: _format }) => {
+    try {
+      const filters: any = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      const status = getStatus(Object.keys(filters).length > 0 ? filters : undefined, agent_id);
+      const next = getNextTask(agent_id, Object.keys(filters).length > 0 ? filters : undefined);
+      const lines: string[] = [];
+      lines.push(`Tasks: ${status.pending} pending | ${status.in_progress} active | ${status.completed} done`);
+      if (status.stale_count > 0) lines.push(`⚠ ${status.stale_count} stale tasks`);
+      if (status.overdue_recurring > 0) lines.push(`🔁 ${status.overdue_recurring} overdue recurring`);
+      if (status.active_work.length > 0) {
+        const active = status.active_work.slice(0, 3).map(w => `${w.short_id || w.id.slice(0, 8)} (${w.assigned_to || '?'})`).join(", ");
+        lines.push(`Active: ${active}`);
+      }
+      if (next) lines.push(`Next up: ${next.short_id || next.id.slice(0, 8)} [${next.priority}] ${next.title}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
@@ -2087,7 +2120,7 @@ server.tool(
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
+      "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context",
       "decompose_task",
       "set_task_status","set_task_priority",
       "search_tools","describe_tools",
