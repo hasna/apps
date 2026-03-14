@@ -2198,6 +2198,72 @@ program
     console.log(lines.join("\n"));
   });
 
+// health
+program
+  .command("health")
+  .description("Check todos system health — database, config, connectivity")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const checks: { name: string; ok: boolean; message: string }[] = [];
+
+    // 1. Database check
+    try {
+      const db = getDatabase();
+      const row = db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
+      const { statSync } = require("node:fs") as typeof import("node:fs");
+      const dbPath = process.env["TODOS_DB_PATH"] || require("node:path").join(process.env["HOME"] || "~", ".todos", "todos.db");
+      let size = "unknown";
+      try { size = `${(statSync(dbPath).size / 1024 / 1024).toFixed(1)} MB`; } catch {}
+      checks.push({ name: "Database", ok: true, message: `${row.count} tasks · ${size}` });
+    } catch (e) {
+      checks.push({ name: "Database", ok: false, message: e instanceof Error ? e.message : "Failed" });
+    }
+
+    // 2. Migration check
+    try {
+      const db = getDatabase();
+      const row = db.query("SELECT MAX(id) as max_id FROM _migrations").get() as { max_id: number };
+      checks.push({ name: "Migrations", ok: true, message: `Schema at migration ${row.max_id}` });
+    } catch {
+      checks.push({ name: "Migrations", ok: false, message: "Could not read migration version" });
+    }
+
+    // 3. Config check
+    try {
+      const { loadConfig } = require("../lib/config.js") as any;
+      loadConfig();
+      checks.push({ name: "Config", ok: true, message: "Loaded successfully" });
+    } catch (e) {
+      checks.push({ name: "Config", ok: false, message: e instanceof Error ? e.message : "Failed" });
+    }
+
+    // 4. Task stats
+    try {
+      const allTasks = listTasks({});
+      const stale = allTasks.filter(t => t.status === "in_progress" && new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000);
+      const overdue = allTasks.filter(t => t.recurrence_rule && t.status === "pending" && t.due_at && t.due_at < new Date().toISOString());
+      const msg = `${allTasks.length} tasks${stale.length > 0 ? ` · ${stale.length} stale` : ""}${overdue.length > 0 ? ` · ${overdue.length} overdue recurring` : ""}`;
+      checks.push({ name: "Tasks", ok: stale.length === 0 && overdue.length === 0, message: msg });
+    } catch (e) {
+      checks.push({ name: "Tasks", ok: false, message: "Failed to read tasks" });
+    }
+
+    if (opts.json || globalOpts.json) {
+      const ok = checks.every(c => c.ok);
+      console.log(JSON.stringify({ ok, checks }));
+      return;
+    }
+
+    console.log(chalk.bold("todos health\n"));
+    for (const c of checks) {
+      const icon = c.ok ? chalk.green("✓") : chalk.yellow("⚠");
+      console.log(`  ${icon} ${c.name.padEnd(14)} ${c.message}`);
+    }
+    const allOk = checks.every(c => c.ok);
+    console.log(`\n  ${allOk ? chalk.green("All checks passed.") : chalk.yellow("Some checks need attention.")}`);
+  });
+
 // report
 program
   .command("report")
