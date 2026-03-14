@@ -122,6 +122,35 @@ export class TodosClient {
     if (projectId) params.set("project_id", projectId);
     return this.fetch(`/api/tasks/changed?${params}`);
   }
+
+  async startTask(id: string, agentId: string): Promise<any> {
+    return this.fetch(`/api/tasks/${id}/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: agentId }),
+    });
+  }
+
+  async logProgress(taskId: string, message: string, pctComplete?: number, agentId?: string): Promise<any> {
+    return this.fetch(`/api/tasks/${taskId}/progress`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, pct_complete: pctComplete, agent_id: agentId }),
+    });
+  }
+
+  async exportTasks(filter: { status?: string; project_id?: string; format?: "json" | "csv" } = {}): Promise<any> {
+    const params = new URLSearchParams();
+    if (filter.status) params.set("status", filter.status);
+    if (filter.project_id) params.set("project_id", filter.project_id);
+    const fmt = filter.format || "json";
+    if (fmt === "csv") params.set("format", "csv");
+    return this.fetch(`/api/tasks/export?${params}`);
+  }
+
+  async getProjects(): Promise<any[]> {
+    return this.fetch("/api/projects");
+  }
 }
 
 export function createClient(options?: TodosClientOptions): TodosClient {

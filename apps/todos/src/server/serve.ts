@@ -418,17 +418,30 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── API: Single task operations ──
-      // GET /api/tasks/:id/progress — latest progress log entries
+      // /api/tasks/:id/progress — GET (read) and POST (log)
       const progressMatch = path.match(/^\/api\/tasks\/([^/]+)\/progress$/);
-      if (progressMatch && method === "GET") {
+      if (progressMatch) {
         const id = progressMatch[1]!;
         const task = getTask(id);
         if (!task) return json({ error: "Task not found" }, 404, port);
-        const { listComments } = await import("../db/comments.js");
-        const all = listComments(id);
-        const progress = all.filter((c: any) => c.type === "progress");
-        const latest = progress[progress.length - 1] || null;
-        return json({ task_id: id, progress_entries: progress, latest, count: progress.length }, 200, port);
+        if (method === "GET") {
+          const { listComments } = await import("../db/comments.js");
+          const all = listComments(id);
+          const progress = all.filter((c: any) => c.type === "progress");
+          const latest = progress[progress.length - 1] || null;
+          return json({ task_id: id, progress_entries: progress, latest, count: progress.length }, 200, port);
+        }
+        if (method === "POST") {
+          try {
+            const body = await req.json() as { message: string; pct_complete?: number; agent_id?: string };
+            if (!body.message) return json({ error: "message required" }, 400, port);
+            const { logProgress } = await import("../db/comments.js");
+            const comment = logProgress(id, body.message, body.pct_complete, body.agent_id);
+            return json(comment, 201, port);
+          } catch (e) {
+            return json({ error: e instanceof Error ? e.message : "Failed to log progress" }, 500, port);
+          }
+        }
       }
 
       const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
