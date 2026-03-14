@@ -171,6 +171,8 @@ program
   .option("--task-list <id>", "Task list ID (alias for --list)")
   .option("--estimated <minutes>", "Estimated time in minutes")
   .option("--approval", "Require approval before completion")
+  .option("--recurrence <rule>", "Recurrence rule, e.g. 'every day', 'every weekday', 'every 2 weeks'")
+  .option("--due <date>", "Due date (ISO string or YYYY-MM-DD)")
   .action((title: string, opts) => {
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
@@ -209,6 +211,8 @@ program
       working_dir: process.cwd(),
       estimated_minutes: opts.estimated ? parseInt(opts.estimated, 10) : undefined,
       requires_approval: opts.approval || false,
+      recurrence_rule: opts.recurrence,
+      due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
     });
 
     if (globalOpts.json) {
