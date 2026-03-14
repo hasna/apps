@@ -235,6 +235,10 @@ program
   .option("--agent-name <name>", "Filter by agent name/assigned")
   .option("--sort <field>", "Sort by: updated, created, priority, status")
   .option("--format <fmt>", "Output format: table (default), compact, csv, json")
+  .option("--due-today", "Only tasks due today or earlier")
+  .option("--overdue", "Only overdue tasks (past due_at)")
+  .option("--recurring", "Only recurring tasks")
+  .option("--limit <n>", "Max tasks to return")
   .action((opts) => {
     const globalOpts = program.opts();
     opts.tags = opts.tags || opts.tag;
@@ -275,9 +279,19 @@ program
     if (opts.agentName) {
       filter["assigned_to"] = opts.agentName;
     }
+    if (opts.recurring) filter["has_recurrence"] = true;
+    if (opts.limit) filter["limit"] = parseInt(opts.limit, 10);
 
-    const tasks = listTasks(filter as any);
-
+    let tasks = listTasks(filter as any);
+    // Post-filter for due-today and overdue (not in TaskFilter directly)
+    if (opts.dueToday) {
+      const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+      tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());
+    }
+    if (opts.overdue) {
+      const now = new Date().toISOString();
+      tasks = tasks.filter(t => t.due_at && t.due_at < now && t.status !== "completed");
+    }
     if (opts.sort) {
       const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
       tasks.sort((a: Task, b: Task) => {
