@@ -734,6 +734,45 @@ complete -F _configs_completions configs`);
     }
   });
 
+// ── compare ───────────────────────────────────────────────────────────────────
+program
+  .command("compare <a> <b>")
+  .description("Diff two stored configs against each other")
+  .action(async (a, b) => {
+    try {
+      const configA = getConfig(a);
+      const configB = getConfig(b);
+      console.log(chalk.bold(`${configA.slug}`) + chalk.dim(` (${configA.category}/${configA.agent})`));
+      console.log(chalk.bold(`${configB.slug}`) + chalk.dim(` (${configB.category}/${configB.agent})`));
+      console.log();
+
+      const linesA = configA.content.split("\n");
+      const linesB = configB.content.split("\n");
+      const maxLen = Math.max(linesA.length, linesB.length);
+      const lines: string[] = [`--- ${configA.slug}`, `+++ ${configB.slug}`];
+      let diffs = 0;
+      for (let i = 0; i < maxLen; i++) {
+        const la = linesA[i];
+        const lb = linesB[i];
+        if (la === lb) { if (la !== undefined) lines.push(` ${la}`); }
+        else {
+          diffs++;
+          if (la !== undefined) lines.push(chalk.red(`-${la}`));
+          if (lb !== undefined) lines.push(chalk.green(`+${lb}`));
+        }
+      }
+      if (diffs === 0) {
+        console.log(chalk.green("✓") + " Identical content");
+      } else {
+        console.log(lines.join("\n"));
+        console.log(chalk.dim(`\n${diffs} difference(s)`));
+      }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
 // ── watch ─────────────────────────────────────────────────────────────────────
 program
   .command("watch")
@@ -785,6 +824,27 @@ program
     setInterval(tick, interval);
     // Keep alive
     await new Promise(() => {});
+  });
+
+// ── pull / push aliases ───────────────────────────────────────────────────────
+program
+  .command("pull")
+  .description("Alias for sync (read from disk into DB)")
+  .option("-a, --agent <agent>", "only sync this agent")
+  .option("--dry-run", "preview without writing")
+  .action(async (opts) => {
+    const result = await syncKnown({ dryRun: opts.dryRun, agent: opts.agent });
+    console.log(chalk.green("✓") + ` Pulled: +${result.added} updated:${result.updated} unchanged:${result.unchanged}`);
+  });
+
+program
+  .command("push")
+  .description("Alias for sync --to-disk (write DB configs to disk)")
+  .option("-a, --agent <agent>", "only push this agent")
+  .option("--dry-run", "preview without writing")
+  .action(async (opts) => {
+    const result = await syncToDisk({ dryRun: opts.dryRun, agent: opts.agent });
+    console.log(chalk.green("✓") + ` Pushed: updated:${result.updated} unchanged:${result.unchanged} skipped:${result.skipped.length}`);
   });
 
 program.version(pkg.version).name("configs");
