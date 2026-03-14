@@ -49,6 +49,58 @@ app.post("/api/sync-known", async (c) => {
   }
 });
 
+app.post("/api/sync-project", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { syncProject } = await import("../lib/sync.js");
+    const result = await syncProject({ projectDir: body.project_dir || process.cwd() });
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.post("/api/render-template", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { renderTemplate } = await import("../lib/template.js");
+    const config = getConfig(body.id_or_slug);
+    const vars: Record<string, string> = body.vars || {};
+    if (body.use_env) {
+      const { extractTemplateVars } = await import("../lib/template.js");
+      for (const v of extractTemplateVars(config.content)) {
+        if (!(v.name in vars) && process.env[v.name]) vars[v.name] = process.env[v.name]!;
+      }
+    }
+    return c.json({ rendered: renderTemplate(config.content, vars), config_id: config.id, slug: config.slug });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
+app.post("/api/scan-secrets", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { scanSecrets, redactContent } = await import("../lib/redact.js");
+    const configs = body.id_or_slug ? [getConfig(body.id_or_slug)] : listConfigs({ kind: "file" });
+    const findings: Array<{ slug: string; secrets: number; vars: string[] }> = [];
+    for (const cfg of configs) {
+      const fmt = cfg.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text";
+      const secrets = scanSecrets(cfg.content, fmt);
+      if (secrets.length > 0) {
+        findings.push({ slug: cfg.slug, secrets: secrets.length, vars: secrets.map((s) => s.varName) });
+        if (body.fix) {
+          const { content, isTemplate } = redactContent(cfg.content, fmt);
+          updateConfig(cfg.id, { content, is_template: isTemplate });
+        }
+      }
+    }
+    return c.json({ clean: findings.length === 0, findings, fixed: !!body.fix });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+  }
+});
+
 // ── Configs ───────────────────────────────────────────────────────────────────
 app.get("/api/configs", (c) => {
   const { category, agent, kind, search, fields } = c.req.query();

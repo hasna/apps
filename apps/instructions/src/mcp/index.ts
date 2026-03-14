@@ -47,6 +47,7 @@ const ALL_LEAN_TOOLS = [
   { name: "get_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" } }, required: ["id_or_slug"] } },
   { name: "create_config", inputSchema: { type: "object", properties: { name: { type: "string" }, content: { type: "string" }, category: { type: "string" }, agent: { type: "string" }, target_path: { type: "string" }, kind: { type: "string" }, format: { type: "string" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" }, is_template: { type: "boolean" } }, required: ["name", "content", "category"] } },
   { name: "update_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, content: { type: "string" }, name: { type: "string" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" }, category: { type: "string" }, agent: { type: "string" }, target_path: { type: "string" } }, required: ["id_or_slug"] } },
+  { name: "delete_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" } }, required: ["id_or_slug"] } },
   { name: "apply_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, dry_run: { type: "boolean" } }, required: ["id_or_slug"] } },
   { name: "sync_directory", inputSchema: { type: "object", properties: { dir: { type: "string" }, direction: { type: "string" } }, required: ["dir"] } },
   { name: "list_profiles", inputSchema: { type: "object", properties: {} } },
@@ -122,6 +123,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           target_path: args["target_path"] as string | undefined,
         });
         return ok({ id: c.id, slug: c.slug, version: c.version });
+      }
+      case "delete_config": {
+        const { deleteConfig } = await import("../db/configs.js");
+        deleteConfig(args["id_or_slug"] as string);
+        return ok({ deleted: true });
       }
       case "apply_config": {
         const config = getConfig(args["id_or_slug"] as string);
