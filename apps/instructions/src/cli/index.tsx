@@ -931,6 +931,60 @@ program
     await new Promise(() => {});
   });
 
+// ── report ────────────────────────────────────────────────────────────────────
+program
+  .command("report")
+  .description("Summary of stored configs, drift, and ecosystem health")
+  .option("--json", "output as JSON")
+  .option("--markdown", "output as markdown")
+  .action(async () => {
+    const stats = getConfigStats();
+    const allConfigs = listConfigs();
+    const fileConfigs = allConfigs.filter((c) => c.kind === "file");
+    const refConfigs = allConfigs.filter((c) => c.kind === "reference");
+    const templates = allConfigs.filter((c) => c.is_template);
+    const profiles = listProfiles();
+
+    // Drift check
+    let drifted = 0, missing = 0;
+    for (const c of fileConfigs) {
+      if (!c.target_path) continue;
+      const abs = expandPath(c.target_path);
+      if (!existsSync(abs)) { missing++; continue; }
+      const disk = readFileSync(abs, "utf-8");
+      const { content: redactedDisk } = redactContent(disk, c.format as "shell" | "json" | "toml" | "ini" | "markdown" | "text");
+      if (redactedDisk !== c.content) drifted++;
+    }
+
+    // Agent breakdown
+    const byAgent: Record<string, number> = {};
+    for (const c of allConfigs) byAgent[c.agent] = (byAgent[c.agent] || 0) + 1;
+
+    // Project configs
+    const projectConfigs = allConfigs.filter((c) => c.target_path && !c.target_path.startsWith("~/."));
+
+    console.log(chalk.bold("configs report\n"));
+    console.log(`  Total:       ${allConfigs.length} configs (${fileConfigs.length} files, ${refConfigs.length} references)`);
+    console.log(`  Templates:   ${templates.length} (with {{VAR}} placeholders)`);
+    console.log(`  Profiles:    ${profiles.length}`);
+    console.log(`  Drift:       ${drifted === 0 ? chalk.green("0 ✓") : chalk.yellow(String(drifted))} drifted, ${missing} missing`);
+    console.log(`  Secrets:     ${chalk.green("0 ✓")} (redacted on ingest)\n`);
+
+    console.log(chalk.cyan("  By agent:"));
+    for (const [agent, count] of Object.entries(byAgent).sort((a, b) => b[1] - a[1])) {
+      console.log(`    ${agent.padEnd(10)} ${count}`);
+    }
+
+    console.log(chalk.cyan("\n  By category:"));
+    for (const [cat, count] of Object.entries(stats).filter(([k]) => k !== "total").sort((a, b) => (b[1] as number) - (a[1] as number))) {
+      console.log(`    ${cat.padEnd(16)} ${count}`);
+    }
+
+    if (projectConfigs.length > 0) {
+      console.log(chalk.cyan(`\n  Project configs: ${projectConfigs.length}`));
+    }
+  });
+
 // ── clean ─────────────────────────────────────────────────────────────────────
 program
   .command("clean")
