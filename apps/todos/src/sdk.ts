@@ -191,6 +191,14 @@ export class TodosClient {
     });
   }
 
+  async failTask(id: string, options: { reason?: string; agent_id?: string; retry?: boolean; error_code?: string } = {}): Promise<{ task: TaskSummary; retry_task: TaskSummary | null }> {
+    return this.fetch(`/api/tasks/${id}/fail`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    });
+  }
+
   async logProgress(taskId: string, message: string, pctComplete?: number, agentId?: string): Promise<any> {
     return this.fetch(`/api/tasks/${taskId}/progress`, {
       method: "POST",
