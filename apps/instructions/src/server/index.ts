@@ -134,8 +134,10 @@ app.post("/api/configs/:id/snapshot", async (c) => {
 
 app.get("/api/configs/:id/snapshots", (c) => {
   try {
+    const { fields } = c.req.query();
     const config = getConfig(c.req.param("id"));
-    return c.json(listSnapshots(config.id));
+    const snaps = listSnapshots(config.id);
+    return c.json(fields ? snaps.map((s) => pickFields(s, fields)) : snaps);
   } catch {
     return c.json({ error: "Not found" }, 404);
   }
@@ -164,7 +166,11 @@ app.post("/api/sync", async (c) => {
 });
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
-app.get("/api/profiles", (c) => c.json(listProfiles()));
+app.get("/api/profiles", (c) => {
+  const { fields } = c.req.query();
+  const profiles = listProfiles();
+  return c.json(fields ? profiles.map((p) => pickFields(p, fields)) : profiles);
+});
 
 app.post("/api/profiles", async (c) => {
   try {
@@ -217,7 +223,11 @@ app.post("/api/profiles/:id/apply", async (c) => {
 });
 
 // ── Machines ──────────────────────────────────────────────────────────────────
-app.get("/api/machines", (c) => c.json(listMachines()));
+app.get("/api/machines", (c) => {
+  const { fields } = c.req.query();
+  const machines = listMachines();
+  return c.json(fields ? machines.map((m) => pickFields(m, fields)) : machines);
+});
 
 app.post("/api/machines", async (c) => {
   try {
