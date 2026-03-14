@@ -6,9 +6,10 @@ AI coding agent configuration manager — store, version, apply, and share all y
 
 ```bash
 bun install -g @hasna/configs
-configs sync --dir ~/.claude     # ingest all Claude Code configs
-configs whoami                   # see what's stored
-configs apply claude-claude-md   # write a config back to disk
+configs init                     # first-time setup: sync all known configs + create profile
+configs status                   # health check: drifted, secrets, templates
+configs pull                     # re-sync from disk → DB
+configs push                     # apply DB → disk
 ```
 
 ## What It Stores
@@ -84,22 +85,35 @@ configs add <path>        ingest a file into the DB
 configs apply <id>        write config to its target_path
   --dry-run               preview without writing
 
-configs diff <id>         show diff: stored vs disk
+configs diff [id]         show diff: stored vs disk (omit id for all)
+configs compare <a> <b>   diff two stored configs against each other
 
-configs sync              bulk sync a directory
-  -d, --dir <dir>         directory (default: ~/.claude)
-  --from-disk             read files from disk into DB (default)
-  --to-disk               apply DB configs back to disk
+configs sync              sync known AI coding configs from disk
+  -a, --agent <agent>     only sync this agent
+  -p, --project [dir]     sync project-scoped configs (CLAUDE.md, .mcp.json)
+  --to-disk               apply DB → disk instead
   --dry-run               preview
+  --list                  show which files would be synced
+
+configs pull              alias for sync (disk → DB)
+configs push              alias for sync --to-disk (DB → disk)
 
 configs export            export as tar.gz bundle
-  -o, --output <path>     output file (default: ./configs-export.tar.gz)
-  -c, --category <cat>    filter by category
+configs import <file>     import from tar.gz bundle (--overwrite)
+configs backup            timestamped export to ~/.configs/backups/
+configs restore <file>    import from backup (--overwrite)
 
-configs import <file>     import from tar.gz bundle
-  --overwrite             overwrite existing configs
+configs init              first-time setup: sync + seed + create profile
+configs status            health check: drifted, secrets, templates
+configs whoami            setup summary: DB path, counts by category
+configs doctor            validate syntax, permissions, missing files, secrets
+configs scan [id]         scan for unredacted secrets (--fix to redact)
+configs watch             auto-sync on file changes (polls every 3s)
+configs update            check for + install latest version
+configs completions       output zsh/bash completion script
 
-configs whoami            setup summary (DB path, counts by category)
+configs mcp install       install MCP server (--claude, --codex, --gemini, --all)
+configs mcp uninstall     remove MCP server
 ```
 
 ### Profiles
@@ -127,12 +141,26 @@ configs snapshot show <snapshot-id>       # view content
 configs snapshot restore <config> <id>    # restore to that version
 ```
 
-### Templates
+### Templates & Secret Redaction
 
-Configs with `{{VAR_NAME}}` placeholders are templates.
+Secrets are automatically redacted when ingesting configs. Values matching API keys, tokens, passwords etc. are replaced with `{{VAR_NAME}}` placeholders.
 
 ```bash
-configs template vars my-zshrc-template   # show required variables
+configs template vars npmrc              # show: {{NPM_AUTH_TOKEN}}
+configs template render npmrc --env --apply  # fill from env vars, write to disk
+configs template render npmrc --var NPM_AUTH_TOKEN=xxx --dry-run  # preview
+configs scan                             # check for unredacted secrets
+configs scan --fix                       # redact any that slipped through
+```
+
+### Agent Profiles (Token Optimization)
+
+Control which MCP tools are exposed via `CONFIGS_PROFILE` env var:
+
+```bash
+CONFIGS_PROFILE=minimal configs-mcp   # 3 tools: get_status, get_config, sync_known
+CONFIGS_PROFILE=standard configs-mcp  # 11 tools: CRUD + sync + profiles
+CONFIGS_PROFILE=full configs-mcp      # 13 tools (default)
 ```
 
 ## MCP Server
