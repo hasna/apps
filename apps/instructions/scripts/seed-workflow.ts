@@ -20,8 +20,8 @@ const WORKFLOW_TEMPLATE = `# Agent Workflow — @hasna Ecosystem Standard
    todos claim {{AGENT_NAME}}
    # or: todos next --agent {{AGENT_NAME}}
 
-3. Load project context
-   mementos recall --project {{PROJECT_NAME}} --scope shared
+3. Load project context (use compact format for 60% token savings)
+   mementos inject --project {{PROJECT_NAME}} --format compact
    mementos recall --scope global --min-importance 8
 
 4. Check messages
@@ -60,8 +60,9 @@ const WORKFLOW_TEMPLATE = `# Agent Workflow — @hasna Ecosystem Standard
 3. Post completion to space
    conversations send --space {{PROJECT_SPACE}} --content "shipped: description of changes"
 
-4. Sync configs if any changed
-   configs pull
+4. Clean up
+   attachments health-check --fix   # regenerate any expired evidence links
+   configs pull                     # sync any config changes
 \`\`\`
 
 ## MCP Server Configuration
@@ -94,9 +95,12 @@ configs init         # syncs all known configs from disk
 \`\`\`
 `;
 
+import { updateConfig } from "../src/db/configs";
+
 try {
-  getConfig("agent-workflow", db);
-  console.log("= agent-workflow already exists");
+  const existing = getConfig("agent-workflow-template", db);
+  updateConfig(existing.id, { content: WORKFLOW_TEMPLATE }, db);
+  console.log(`= agent-workflow-template updated (v${existing.version + 1})`);
 } catch {
   const c = createConfig({
     name: "Agent Workflow Template",
