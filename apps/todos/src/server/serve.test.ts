@@ -699,3 +699,32 @@ describe("Task lifecycle (end-to-end)", () => {
     expect(checkRes.status).toBe(404);
   });
 });
+
+describe("GET /api/tasks/:id/progress", () => {
+  it("should return empty progress for task with no log entries", async () => {
+    const task = await createTaskViaApi({ title: "No progress yet" });
+    const res = await api("GET", `/api/tasks/${task.id}/progress`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data).toHaveProperty("count");
+    expect(data.count).toBe(0);
+    expect(Array.isArray(data.progress_entries)).toBe(true);
+  });
+
+  it("should return 404 for non-existent task progress", async () => {
+    const res = await api("GET", "/api/tasks/nonexistent-id/progress");
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("Security: path traversal prevention", () => {
+  it("should not serve /etc/passwd contents via path traversal", async () => {
+    // In test env, dashboard/dist doesn't exist so request falls through to API 404 ({"error":"Not found"})
+    // In prod with dashboard, path traversal guard returns 403
+    // Either way: traversal MUST NOT return /etc/passwd file contents
+    const res = await api("GET", "/../../etc/passwd");
+    const text = await res.text();
+    expect(text).not.toContain("root:x:"); // not /etc/passwd content
+    expect(text).not.toContain("/bin/bash"); // not /etc/passwd content
+  });
+});
