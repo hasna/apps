@@ -23,6 +23,7 @@ const TOOL_DOCS: Record<string, string> = {
   apply_profile: "Apply all configs in a profile to disk. Params: id_or_slug, dry_run?. Returns array of apply results.",
   get_snapshot: "Get snapshot(s) for a config. Params: config_id_or_slug, version?. Returns latest snapshot or specific version.",
   get_status: "Single-call orientation. Returns: total configs, counts by category, templates, DB path.",
+  render_template: "Render a template config with variable substitution. Params: id_or_slug, vars? (object of KEY:VALUE), use_env? (fill from env vars). Returns rendered content.",
   scan_secrets: "Scan configs for unredacted secrets. Params: id_or_slug? (omit for all known), fix? (true to redact in-place). Returns findings.",
   sync_known: "Sync all known config files from disk into DB. Params: agent?, category?. Replaces sync_directory for standard use.",
   search_tools: "Search tool descriptions. Params: query. Returns matching tool names and descriptions.",
@@ -32,7 +33,7 @@ const TOOL_DOCS: Record<string, string> = {
 // ── Agent profiles — CONFIGS_PROFILE env var controls which tools are exposed ─
 const PROFILES: Record<string, string[]> = {
   minimal: ["get_status", "get_config", "sync_known"],
-  standard: ["list_configs", "get_config", "create_config", "update_config", "apply_config", "sync_known", "get_status", "scan_secrets", "list_profiles", "apply_profile", "search_tools", "describe_tools"],
+  standard: ["list_configs", "get_config", "create_config", "update_config", "apply_config", "sync_known", "get_status", "render_template", "scan_secrets", "list_profiles", "apply_profile", "search_tools", "describe_tools"],
   full: [], // empty = all tools
 };
 
@@ -52,6 +53,7 @@ const ALL_LEAN_TOOLS = [
   { name: "get_snapshot", inputSchema: { type: "object", properties: { config_id_or_slug: { type: "string" }, version: { type: "number" } }, required: ["config_id_or_slug"] } },
   { name: "get_status", inputSchema: { type: "object", properties: {} } },
   { name: "sync_known", inputSchema: { type: "object", properties: { agent: { type: "string" }, category: { type: "string" } } } },
+  { name: "render_template", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, vars: { type: "object" }, use_env: { type: "boolean" } }, required: ["id_or_slug"] } },
   { name: "scan_secrets", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, fix: { type: "boolean" } } } },
   { name: "search_tools", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
   { name: "describe_tools", inputSchema: { type: "object", properties: { names: { type: "array", items: { type: "string" } } } } },
@@ -170,6 +172,22 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           category: (args["category"] as ConfigCategory) || undefined,
         });
         return ok(result);
+      }
+      case "render_template": {
+        const { renderTemplate } = await import("../lib/template.js");
+        const config = getConfig(args["id_or_slug"] as string);
+        const vars: Record<string, string> = (args["vars"] as Record<string, string>) || {};
+        // Fill from env if requested
+        if (args["use_env"]) {
+          const { extractTemplateVars } = await import("../lib/template.js");
+          for (const v of extractTemplateVars(config.content)) {
+            if (!(v.name in vars) && process.env[v.name]) {
+              vars[v.name] = process.env[v.name]!;
+            }
+          }
+        }
+        const rendered = renderTemplate(config.content, vars);
+        return ok({ rendered, config_id: config.id, slug: config.slug });
       }
       case "scan_secrets": {
         const { scanSecrets, redactContent } = await import("../lib/redact.js");
