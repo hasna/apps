@@ -176,6 +176,22 @@ export class ConfigsClient {
     return this.req<Record<string, number>>("GET", "/api/stats");
   }
 
+  async getStatus(): Promise<{ total: number; by_category: Record<string, number>; templates: number; db_path: string }> {
+    return this.req("GET", "/api/status");
+  }
+
+  async syncKnown(opts?: { agent?: string; category?: string; dry_run?: boolean }): Promise<SyncResult> {
+    return this.req<SyncResult>("POST", "/api/sync-known", opts);
+  }
+
+  async createSnapshot(configId: string): Promise<{ id: string; config_id: string; version: number; created_at: string }> {
+    return this.req("POST", `/api/configs/${configId}/snapshot`);
+  }
+
+  async getSnapshots(configId: string): Promise<Array<{ id: string; config_id: string; content: string; version: number; created_at: string }>> {
+    return this.req("GET", `/api/configs/${configId}/snapshots`);
+  }
+
   async health(): Promise<{ ok: boolean; version: string }> {
     return this.req<{ ok: boolean; version: string }>("GET", "/health");
   }
