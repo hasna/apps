@@ -721,6 +721,24 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── API: Activity feed (audit log) ──
+      // ── API: Report ──
+      if (path === "/api/report" && method === "GET") {
+        const days = parseInt(url.searchParams.get("days") || "7", 10);
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const { getTasksChangedSince, getTaskStats } = await import("../db/tasks.js");
+        const filters = projectId ? { project_id: projectId } : undefined;
+        const changed = getTasksChangedSince(since, filters);
+        const all = listTasks(filters || {});
+        const stats = getTaskStats(filters);
+        const completed = changed.filter((t: any) => t.status === "completed");
+        const failed = changed.filter((t: any) => t.status === "failed");
+        const byDay: Record<string, number> = {};
+        for (const t of changed) { const day = t.updated_at.slice(0, 10); byDay[day] = (byDay[day] || 0) + 1; }
+        const completionRate = changed.length > 0 ? Math.round((completed.length / changed.length) * 100) : 0;
+        return json({ days, period_since: since, total: all.length, stats, changed: changed.length, completed: completed.length, failed: failed.length, completion_rate: completionRate, by_day: byDay }, 200, port);
+      }
+
       if (path === "/api/activity" && method === "GET") {
         const limit = parseInt(url.searchParams.get("limit") || "50", 10);
         const { getRecentActivity } = await import("../db/audit.js");
