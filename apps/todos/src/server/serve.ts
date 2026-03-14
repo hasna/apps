@@ -109,6 +109,7 @@ function taskToSummary(task: Task, fields?: string[]) {
     updated_at: task.updated_at,
     completed_at: task.completed_at,
     due_at: task.due_at,
+    recurrence_rule: task.recurrence_rule,
   };
   if (!fields || fields.length === 0) return full;
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
@@ -417,6 +418,19 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── API: Single task operations ──
+      // GET /api/tasks/:id/progress — latest progress log entries
+      const progressMatch = path.match(/^\/api\/tasks\/([^/]+)\/progress$/);
+      if (progressMatch && method === "GET") {
+        const id = progressMatch[1]!;
+        const task = getTask(id);
+        if (!task) return json({ error: "Task not found" }, 404, port);
+        const { listComments } = await import("../db/comments.js");
+        const all = listComments(id);
+        const progress = all.filter((c: any) => c.type === "progress");
+        const latest = progress[progress.length - 1] || null;
+        return json({ task_id: id, progress_entries: progress, latest, count: progress.length }, 200, port);
+      }
+
       const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
       if (taskMatch) {
         const id = taskMatch[1]!;
