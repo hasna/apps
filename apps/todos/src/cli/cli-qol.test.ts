@@ -258,6 +258,9 @@ describe("CLI QoL commands", () => {
     // Diagnostics
     expect(help).toContain("doctor");
     expect(help).toContain("health");
+    // Daily activity
+    expect(help).toContain("today");
+    expect(help).toContain("yesterday");
   });
 
   it("list --sort priority should sort tasks by priority", () => {

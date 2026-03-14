@@ -2510,6 +2510,67 @@ program
     console.log(lines.join("\n"));
   });
 
+// today
+program
+  .command("today")
+  .description("Show task activity from today")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { getTasksChangedSince } = require("../db/tasks.js") as any;
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const tasks: any[] = getTasksChangedSince(start.toISOString(), undefined, db);
+    const completed = tasks.filter((t: any) => t.status === "completed");
+    const started = tasks.filter((t: any) => t.status === "in_progress");
+    const other = tasks.filter((t: any) => t.status !== "completed" && t.status !== "in_progress");
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ date: start.toISOString().slice(0, 10), completed, started, changed: other }));
+      return;
+    }
+    console.log(chalk.bold(`Today — ${start.toISOString().slice(0, 10)}\n`));
+    if (completed.length > 0) {
+      console.log(chalk.green(`  ✓ Completed (${completed.length}):`));
+      for (const t of completed) console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
+    }
+    if (started.length > 0) {
+      console.log(chalk.blue(`\n  ▶ Started (${started.length}):`));
+      for (const t of started) console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
+    }
+    if (completed.length === 0 && started.length === 0) console.log(chalk.dim("  No activity today."));
+  });
+
+// yesterday
+program
+  .command("yesterday")
+  .description("Show task activity from yesterday")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { getTasksChangedSince } = require("../db/tasks.js") as any;
+    const start = new Date(); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setHours(23, 59, 59, 999);
+    const allChanged: any[] = getTasksChangedSince(start.toISOString(), undefined, db);
+    const tasks = allChanged.filter((t: any) => t.updated_at <= end.toISOString());
+    const completed = tasks.filter((t: any) => t.status === "completed");
+    const started = tasks.filter((t: any) => t.status === "in_progress");
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ date: start.toISOString().slice(0, 10), completed, started }));
+      return;
+    }
+    console.log(chalk.bold(`Yesterday — ${start.toISOString().slice(0, 10)}\n`));
+    if (completed.length > 0) {
+      console.log(chalk.green(`  ✓ Completed (${completed.length}):`));
+      for (const t of completed) console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
+    }
+    if (started.length > 0) {
+      console.log(chalk.blue(`\n  ▶ Started (${started.length}):`));
+      for (const t of started) console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}`);
+    }
+    if (completed.length === 0 && started.length === 0) console.log(chalk.dim("  No activity yesterday."));
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
