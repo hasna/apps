@@ -63,10 +63,21 @@ import {
   CompletionGuardError,
 } from "../types/index.js";
 import type { Task } from "../types/index.js";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+function getMcpVersion(): string {
+  try {
+    const __dir = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(__dir, "..", "package.json");
+    return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
+  } catch { return "0.0.0"; }
+}
 
 const server = new McpServer({
   name: "todos",
-  version: "0.9.35",
+  version: getMcpVersion(),
 });
 
 // === PROFILE FILTERING ===
