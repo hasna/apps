@@ -26,6 +26,7 @@ const TOOL_DOCS: Record<string, string> = {
   render_template: "Render a template config with variable substitution. Params: id_or_slug, vars? (object of KEY:VALUE), use_env? (fill from env vars). Returns rendered content.",
   scan_secrets: "Scan configs for unredacted secrets. Params: id_or_slug? (omit for all known), fix? (true to redact in-place). Returns findings.",
   sync_known: "Sync all known config files from disk into DB. Params: agent?, category?. Replaces sync_directory for standard use.",
+  sync_project: "Sync project-scoped configs (CLAUDE.md, .mcp.json, AGENTS.md, rules/*.md) from a project dir. Params: project_dir (default: cwd).",
   search_tools: "Search tool descriptions. Params: query. Returns matching tool names and descriptions.",
   describe_tools: "Get full descriptions for tools. Params: names? (array). Returns tool docs.",
 };
@@ -53,6 +54,7 @@ const ALL_LEAN_TOOLS = [
   { name: "get_snapshot", inputSchema: { type: "object", properties: { config_id_or_slug: { type: "string" }, version: { type: "number" } }, required: ["config_id_or_slug"] } },
   { name: "get_status", inputSchema: { type: "object", properties: {} } },
   { name: "sync_known", inputSchema: { type: "object", properties: { agent: { type: "string" }, category: { type: "string" } } } },
+  { name: "sync_project", inputSchema: { type: "object", properties: { project_dir: { type: "string" } } } },
   { name: "render_template", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, vars: { type: "object" }, use_env: { type: "boolean" } }, required: ["id_or_slug"] } },
   { name: "scan_secrets", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, fix: { type: "boolean" } } } },
   { name: "search_tools", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
@@ -185,6 +187,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           agent: (args["agent"] as ConfigAgent) || undefined,
           category: (args["category"] as ConfigCategory) || undefined,
         });
+        return ok(result);
+      }
+      case "sync_project": {
+        const { syncProject } = await import("../lib/sync.js");
+        const dir = (args["project_dir"] as string) || process.cwd();
+        const result = await syncProject({ projectDir: dir });
         return ok(result);
       }
       case "render_template": {
