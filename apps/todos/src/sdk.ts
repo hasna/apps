@@ -219,6 +219,47 @@ export class TodosClient {
   async getProjects(): Promise<any[]> {
     return this.fetch("/api/projects");
   }
+
+  /**
+   * Subscribe to task events via SSE. Returns an AsyncGenerator that yields events.
+   * Events: task.created, task.started, task.completed, task.failed, task.assigned, task.status_changed
+   *
+   * @example
+   * for await (const event of client.subscribeToStream({ agentId: "aurelius" })) {
+   *   console.log(event.action, event.task_id);
+   * }
+   */
+  async *subscribeToStream(options: {
+    agentId?: string;
+    projectId?: string;
+    events?: string[];
+  } = {}): AsyncGenerator<{ type: string; action: string; task_id?: string; agent_id?: string | null; timestamp: string }, void, unknown> {
+    const params = new URLSearchParams();
+    if (options.agentId) params.set("agent_id", options.agentId);
+    if (options.projectId) params.set("project_id", options.projectId);
+    if (options.events) params.set("events", options.events.join(","));
+    const url = `${this.baseUrl}/api/tasks/stream?${params}`;
+    const resp = await fetch(url);
+    if (!resp.ok || !resp.body) throw new Error(`SSE connection failed: ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type !== "connected") yield data;
+          } catch {}
+        }
+      }
+    }
+  }
 }
 
 export function createClient(options?: TodosClientOptions): TodosClient {
