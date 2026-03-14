@@ -425,6 +425,31 @@ export async function startServer(port: number, options?: { open?: boolean; host
         }
       }
 
+      // ── API: Task Context (for agent prompt injection) ──
+      if (path === "/api/tasks/context" && method === "GET") {
+        const agentId = url.searchParams.get("agent_id") || undefined;
+        const projectId = url.searchParams.get("project_id") || undefined;
+        const format = url.searchParams.get("format") || "text"; // text | compact | json
+        const { getStatus, getNextTask } = await import("../db/tasks.js");
+        const filters = projectId ? { project_id: projectId } : undefined;
+        const status = getStatus(filters, agentId);
+        const next = getNextTask(agentId, filters);
+        if (format === "json") {
+          return json({ status, next_task: next ? taskToSummary(next) : null }, 200, port);
+        }
+        // Text format for prompt injection
+        const lines = [];
+        lines.push(`Tasks: ${status.pending} pending | ${status.in_progress} active | ${status.completed} done`);
+        if (status.stale_count > 0) lines.push(`⚠ ${status.stale_count} stale tasks stuck in-progress`);
+        if (status.overdue_recurring > 0) lines.push(`🔁 ${status.overdue_recurring} overdue recurring tasks`);
+        if (status.active_work.length > 0) {
+          lines.push(`Active: ${status.active_work.slice(0, 3).map(w => `${w.short_id || w.id.slice(0, 8)} (${w.assigned_to || '?'})`).join(", ")}`);
+        }
+        if (next) lines.push(`Next up: ${next.short_id || next.id.slice(0, 8)} [${next.priority}] ${next.title}`);
+        const text = lines.join("\n");
+        return new Response(text, { headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" } });
+      }
+
       // ── API: Task attachments ──
       const attachmentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/attachments$/);
       if (attachmentsMatch && method === "GET") {
