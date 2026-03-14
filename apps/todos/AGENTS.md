@@ -21,9 +21,9 @@ With `TODOS_PROFILE=minimal`, only 8 tools load — 90% fewer tokens at session 
 
 ```bash
 # In your Claude Code config or CLAUDE.md:
-TODOS_PROFILE=minimal    # 8 tools: claim, complete, fail, status, get_task, start, add_comment, get_next
-TODOS_PROFILE=standard   # ~47 tools (default)
-TODOS_PROFILE=full       # all 60+ tools
+TODOS_PROFILE=minimal    # 11 tools: claim, complete, fail, status, get_task, start, add_comment, get_next, get_context, get_health, get_next_task
+TODOS_PROFILE=standard   # ~50 tools (default)
+TODOS_PROFILE=full       # all 65+ tools
 ```
 
 ## Recommended Agent Session Pattern

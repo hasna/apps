@@ -43,7 +43,7 @@ TODOS_PROFILE=full todos-mcp     # All 60+ tools
 
 ```bash
 bun install                       # Install dependencies
-bun test                          # Run all 647 tests
+bun test                          # Run all 651 tests
 bun test src/db/tasks.test.ts     # Run a single test file
 bun run typecheck                 # TypeScript type checking (tsc --noEmit)
 bun run build                     # Build all three entry points to dist/
