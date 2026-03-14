@@ -2124,6 +2124,75 @@ program
     } catch { handleError(new Error("Failed to pin")); }
   });
 
+// summary — markdown summary for standups, PRs, handoffs
+program
+  .command("summary")
+  .description("Generate a markdown summary of recent task activity")
+  .option("--days <n>", "Days of history to include", "7")
+  .option("--project <id>", "Filter to project")
+  .option("--agent <id>", "Filter to agent")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const days = parseInt(opts.days, 10);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const projectId = opts.project || autoProject(globalOpts);
+
+    const filter: Record<string, unknown> = {};
+    if (projectId) filter.project_id = projectId;
+    if (opts.agent) filter.assigned_to = opts.agent;
+
+    const { getTasksChangedSince } = require("../db/tasks.js") as any;
+    const changed = getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db) as any[];
+    const completed = changed.filter((t: any) => t.status === "completed");
+    const inProgress = changed.filter((t: any) => t.status === "in_progress");
+    const failed = changed.filter((t: any) => t.status === "failed");
+    const allTasks = listTasks({ ...(filter as any), status: "pending" as any });
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ completed, in_progress: inProgress, failed, pending: allTasks.length, period_days: days }, null, 2));
+      return;
+    }
+
+    const lines: string[] = [];
+    lines.push(`## Task Summary — Last ${days} day${days !== 1 ? "s" : ""}`);
+    lines.push(`*${new Date().toLocaleDateString()}*\n`);
+
+    if (completed.length > 0) {
+      lines.push(`### ✅ Completed (${completed.length})`);
+      for (const t of completed) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const who = t.assigned_to ? ` — ${t.assigned_to}` : "";
+        lines.push(`- **${id}**: ${t.title}${who}`);
+      }
+      lines.push("");
+    }
+
+    if (inProgress.length > 0) {
+      lines.push(`### 🔄 In Progress (${inProgress.length})`);
+      for (const t of inProgress) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const who = t.assigned_to ? ` — ${t.assigned_to}` : "";
+        lines.push(`- **${id}**: ${t.title}${who}`);
+      }
+      lines.push("");
+    }
+
+    if (failed.length > 0) {
+      lines.push(`### ❌ Failed (${failed.length})`);
+      for (const t of failed) {
+        const id = t.short_id || t.id.slice(0, 8);
+        lines.push(`- **${id}**: ${t.title}`);
+      }
+      lines.push("");
+    }
+
+    lines.push(`### 📋 Pending: ${allTasks.length} task${allTasks.length !== 1 ? "s" : ""} remaining`);
+
+    console.log(lines.join("\n"));
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
