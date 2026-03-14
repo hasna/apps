@@ -13,6 +13,7 @@ import { OpenAIProvider } from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { gatherFromTodos } from "../lib/gatherers/todos.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
+import { getPackageVersion } from "../lib/package-metadata.js";
 
 // --- helpers ---
 
@@ -28,126 +29,130 @@ function defaultOutputDir() {
 
 // --- server ---
 
-const server = new Server(
-  { name: "brains", version: "0.0.1" },
-  { capabilities: { tools: {} } }
-);
+export const MCP_SERVER_INFO = {
+  name: "brains",
+  version: getPackageVersion(),
+} as const;
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "list_models",
-      description: "List all fine-tuned models tracked in the local DB",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: "get_model",
-      description: "Get details for a specific fine-tuned model",
-      inputSchema: {
-        type: "object",
-        properties: {
-          model_id: { type: "string", description: "Model ID" },
-        },
-        required: ["model_id"],
-      },
-    },
-    {
-      name: "start_finetune",
-      description: "Upload a training file and start a fine-tuning job",
-      inputSchema: {
-        type: "object",
-        properties: {
-          provider: {
-            type: "string",
-            enum: ["openai", "thinker-labs"],
-            description: "Provider to use for fine-tuning",
-          },
-          base_model: {
-            type: "string",
-            description: "Base model identifier (e.g. gpt-4o-mini-2024-07-18)",
-          },
-          dataset_path: {
-            type: "string",
-            description: "Absolute path to the JSONL training file",
-          },
-          name: {
-            type: "string",
-            description: "Optional friendly name for this model",
-          },
-        },
-        required: ["provider", "base_model", "dataset_path"],
-      },
-    },
-    {
-      name: "get_finetune_status",
-      description: "Check the status of a fine-tuning job",
-      inputSchema: {
-        type: "object",
-        properties: {
-          job_id: { type: "string", description: "Fine-tune job ID" },
-          provider: {
-            type: "string",
-            enum: ["openai", "thinker-labs"],
-            description: "Provider that owns the job",
-          },
-        },
-        required: ["job_id", "provider"],
-      },
-    },
-    {
-      name: "gather_training_data",
-      description:
-        "Gather training data from ecosystem sources (todos, mementos, conversations, sessions)",
-      inputSchema: {
-        type: "object",
-        properties: {
-          sources: {
-            type: "array",
-            items: { type: "string" },
-            description: "Sources to gather from: todos, mementos, conversations, sessions",
-          },
-          limit: {
-            type: "number",
-            description: "Max examples per source (default: unlimited)",
-          },
-          output_dir: {
-            type: "string",
-            description: "Directory to write JSONL files (default: ~/.brains/datasets/)",
-          },
-        },
-        required: ["sources"],
-      },
-    },
-    {
-      name: "preview_training_data",
-      description: "Preview examples from a JSONL training file",
-      inputSchema: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "Absolute path to the JSONL file to preview",
-          },
-          limit: {
-            type: "number",
-            description: "Max number of examples to return (default: 5)",
-          },
-        },
-        required: ["file_path"],
-      },
-    },
-  ],
-}));
+export function createMcpServer() {
+  // Fellow agents: keep MCP/server versioning sourced from package.json to avoid publish drift.
+  const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } });
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: "list_models",
+        description: "List all fine-tuned models tracked in the local DB",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "get_model",
+        description: "Get details for a specific fine-tuned model",
+        inputSchema: {
+          type: "object",
+          properties: {
+            model_id: { type: "string", description: "Model ID" },
+          },
+          required: ["model_id"],
+        },
+      },
+      {
+        name: "start_finetune",
+        description: "Upload a training file and start a fine-tuning job",
+        inputSchema: {
+          type: "object",
+          properties: {
+            provider: {
+              type: "string",
+              enum: ["openai", "thinker-labs"],
+              description: "Provider to use for fine-tuning",
+            },
+            base_model: {
+              type: "string",
+              description: "Base model identifier (e.g. gpt-4o-mini-2024-07-18)",
+            },
+            dataset_path: {
+              type: "string",
+              description: "Absolute path to the JSONL training file",
+            },
+            name: {
+              type: "string",
+              description: "Optional friendly name for this model",
+            },
+          },
+          required: ["provider", "base_model", "dataset_path"],
+        },
+      },
+      {
+        name: "get_finetune_status",
+        description: "Check the status of a fine-tuning job",
+        inputSchema: {
+          type: "object",
+          properties: {
+            job_id: { type: "string", description: "Fine-tune job ID" },
+            provider: {
+              type: "string",
+              enum: ["openai", "thinker-labs"],
+              description: "Provider that owns the job",
+            },
+          },
+          required: ["job_id", "provider"],
+        },
+      },
+      {
+        name: "gather_training_data",
+        description:
+          "Gather training data from ecosystem sources (todos, mementos, conversations, sessions)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sources: {
+              type: "array",
+              items: { type: "string" },
+              description: "Sources to gather from: todos, mementos, conversations, sessions",
+            },
+            limit: {
+              type: "number",
+              description: "Max examples per source (default: unlimited)",
+            },
+            output_dir: {
+              type: "string",
+              description: "Directory to write JSONL files (default: ~/.brains/datasets/)",
+            },
+          },
+          required: ["sources"],
+        },
+      },
+      {
+        name: "preview_training_data",
+        description: "Preview examples from a JSONL training file",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: {
+              type: "string",
+              description: "Absolute path to the JSONL file to preview",
+            },
+            limit: {
+              type: "number",
+              description: "Max number of examples to return (default: 5)",
+            },
+          },
+          required: ["file_path"],
+        },
+      },
+    ],
+  }));
 
-  try {
-    switch (name) {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+
+    try {
+      switch (name) {
       case "list_models": {
         const db = getDb();
         const models = await db
@@ -393,20 +398,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      default:
-        return {
-          content: [{ type: "text", text: `Unknown tool: ${name}` }],
-          isError: true,
-        };
+        default:
+          return {
+            content: [{ type: "text", text: `Unknown tool: ${name}` }],
+            isError: true,
+          };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text", text: `Error: ${message}` }],
+        isError: true,
+      };
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [{ type: "text", text: `Error: ${message}` }],
-      isError: true,
-    };
-  }
-});
+  });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+  return server;
+}
+
+export async function startMcpServer(transport = new StdioServerTransport()) {
+  const server = createMcpServer();
+  await server.connect(transport);
+  return server;
+}
+
+if (import.meta.main) {
+  await startMcpServer();
+}
