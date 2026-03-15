@@ -89,6 +89,11 @@ function collapseNodeModules(paths: string[]): { nodeModulesPaths: string[]; oth
 /** Smart display: compress file path output into grouped patterns */
 export function smartDisplay(lines: string[]): string[] {
   if (lines.length <= 5) return lines;
+
+  // Try ls -la table compression first
+  const lsCompressed = compressLsTable(lines);
+  if (lsCompressed) return lsCompressed;
+
   if (!looksLikePaths(lines)) return compressGeneric(lines);
 
   const paths = lines.map(l => l.trim()).filter(l => l);
@@ -127,7 +132,9 @@ export function smartDisplay(lines: string[]): string[] {
       const sorted = files.sort();
       const pattern = findPattern(sorted);
       if (pattern) {
-        result.push(`  ${dir}/${pattern}  ×${files.length}`);
+        const dateRange = collapseDateRange(sorted);
+        const rangeStr = dateRange ? ` (${dateRange})` : "";
+        result.push(`  ${dir}/${pattern}  ×${files.length}${rangeStr}`);
       } else {
         result.push(`  ${dir}/ (${files.length} files)`);
         // Show first 2 + count
@@ -161,6 +168,95 @@ export function smartDisplay(lines: string[]): string[] {
   }
 
   return result;
+}
+
+/** Detect date range in timestamps and collapse */
+function collapseDateRange(files: string[]): string | null {
+  const timestamps: Date[] = [];
+  for (const f of files) {
+    const match = f.match(/(\d{4})-(\d{2})-(\d{2})T?(\d{2})?/);
+    if (match) {
+      const [, y, m, d, h] = match;
+      timestamps.push(new Date(`${y}-${m}-${d}T${h ?? "00"}:00:00`));
+    }
+  }
+  if (timestamps.length < 2) return null;
+  timestamps.sort((a, b) => a.getTime() - b.getTime());
+  const first = timestamps[0];
+  const last = timestamps[timestamps.length - 1];
+  const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
+  if (first.toDateString() === last.toDateString()) {
+    return `${fmt(first)}`;
+  }
+  return `${fmt(first)}–${fmt(last)}`;
+}
+
+/** Detect and compress ls -la style table output */
+function compressLsTable(lines: string[]): string[] | null {
+  // Detect ls -la format: permissions size date name
+  const lsPattern = /^[dlcbps-][rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+\S+\s+\w+\s+\d+\s+[\d:]+\s+.+$/;
+  const isLsOutput = lines.filter(l => lsPattern.test(l.trim())).length > lines.length * 0.5;
+  if (!isLsOutput) return null;
+
+  const result: string[] = [];
+  const dirs: string[] = [];
+  const files: { name: string; size: string }[] = [];
+  let totalSize = 0;
+
+  for (const line of lines) {
+    const match = line.trim().match(/^([dlcbps-])[rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+(\S+)\s+\w+\s+\d+\s+[\d:]+\s+(.+)$/);
+    if (!match) {
+      if (line.trim().startsWith("total ")) continue;
+      result.push(line);
+      continue;
+    }
+
+    const [, type, sizeStr, name] = match;
+    const size = parseInt(sizeStr) || 0;
+    totalSize += size;
+
+    if (type === "d") {
+      dirs.push(name);
+    } else {
+      files.push({ name, size: formatSize(size) });
+    }
+  }
+
+  // Compact display
+  if (dirs.length > 0) {
+    result.push(`  📁 ${dirs.join("  ")}${dirs.length > 5 ? ` (+${dirs.length - 5} more)` : ""}`);
+  }
+  if (files.length <= 8) {
+    for (const f of files) {
+      result.push(`  ${f.size.padStart(6)}  ${f.name}`);
+    }
+  } else {
+    // Show top 5 by size + count
+    const sorted = files.sort((a, b) => parseSize(b.size) - parseSize(a.size));
+    for (const f of sorted.slice(0, 5)) {
+      result.push(`  ${f.size.padStart(6)}  ${f.name}`);
+    }
+    result.push(`  ... +${files.length - 5} more files (${formatSize(totalSize)} total)`);
+  }
+
+  return result;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)}M`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)}K`;
+  return `${bytes}B`;
+}
+
+function parseSize(s: string): number {
+  const match = s.match(/([\d.]+)([BKMG])?/);
+  if (!match) return 0;
+  const n = parseFloat(match[1]);
+  const unit = match[2];
+  if (unit === "K") return n * 1000;
+  if (unit === "M") return n * 1000000;
+  if (unit === "G") return n * 1000000000;
+  return n;
 }
 
 /** Compress non-path generic output by deduplicating similar lines */
