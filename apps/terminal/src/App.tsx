@@ -110,7 +110,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   let nextTabId = useRef(2);
-  const sessionIdRef = useRef<string>(createSession(process.cwd()));
+  const sessionIdRef = useRef<string>("");
   const interactionIdRef = useRef<number>(0);
 
   const tab = tabs[activeTab];
@@ -217,6 +217,10 @@ export default function App() {
   const translateAndRun = async (nl: string, raw: boolean) => {
     updateTab(t => ({ ...t, sessionNl: [...t.sessionNl, nl] }));
 
+    // Lazy session creation — only when user actually types something
+    if (!sessionIdRef.current) {
+      sessionIdRef.current = createSession(process.cwd());
+    }
     // Log interaction start
     const startTime = Date.now();
     interactionIdRef.current = logInteraction(sessionIdRef.current, { nl });

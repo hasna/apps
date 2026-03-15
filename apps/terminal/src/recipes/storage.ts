@@ -61,6 +61,18 @@ export function createRecipe(opts: {
   const filePath = opts.project ? projectFile(opts.project) : GLOBAL_FILE;
   const store = loadStore(filePath);
 
+  // Prevent duplicates — update existing if same name
+  const existingIdx = store.recipes.findIndex(r => r.name === opts.name);
+  if (existingIdx >= 0) {
+    store.recipes[existingIdx].command = opts.command;
+    store.recipes[existingIdx].updatedAt = Date.now();
+    if (opts.description) store.recipes[existingIdx].description = opts.description;
+    if (opts.tags) store.recipes[existingIdx].tags = opts.tags;
+    if (opts.collection) store.recipes[existingIdx].collection = opts.collection;
+    saveStore(filePath, store);
+    return store.recipes[existingIdx];
+  }
+
   // Auto-detect variables from command if not explicitly provided
   const detectedVars = extractVariables(opts.command);
   const variables = opts.variables ?? detectedVars.map(name => ({ name, required: true }));
@@ -119,6 +131,10 @@ export function listCollections(projectPath?: string): Collection[] {
 export function createCollection(opts: { name: string; description?: string; project?: string }): Collection {
   const filePath = opts.project ? projectFile(opts.project) : GLOBAL_FILE;
   const store = loadStore(filePath);
+
+  // Prevent duplicates — return existing if same name
+  const existing = store.collections.find(c => c.name === opts.name);
+  if (existing) return existing;
 
   const collection: Collection = {
     id: genId(),
