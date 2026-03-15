@@ -64,9 +64,9 @@ function rowToHandoff(row: any): Handoff {
 export function listHandoffs(projectId?: string, limit = 10, db?: Database): Handoff[] {
   const d = db || getDatabase();
   if (projectId) {
-    return (d.query("SELECT * FROM handoffs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?").all(projectId, limit) as any[]).map(rowToHandoff);
+    return (d.query("SELECT * FROM handoffs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").all(projectId, limit) as any[]).map(rowToHandoff);
   }
-  return (d.query("SELECT * FROM handoffs ORDER BY created_at DESC LIMIT ?").all(limit) as any[]).map(rowToHandoff);
+  return (d.query("SELECT * FROM handoffs ORDER BY rowid DESC LIMIT ?").all(limit) as any[]).map(rowToHandoff);
 }
 
 export function getLatestHandoff(agentId?: string, projectId?: string, db?: Database): Handoff | null {
@@ -75,7 +75,7 @@ export function getLatestHandoff(agentId?: string, projectId?: string, db?: Data
   const params: any[] = [];
   if (agentId) { query += " AND agent_id = ?"; params.push(agentId); }
   if (projectId) { query += " AND project_id = ?"; params.push(projectId); }
-  query += " ORDER BY created_at DESC LIMIT 1";
+  query += " ORDER BY rowid DESC LIMIT 1";
   const row = d.query(query).get(...params) as any;
   return row ? rowToHandoff(row) : null;
 }
