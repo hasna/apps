@@ -15,7 +15,11 @@ export interface LazyResult {
 
 // Commands where the user explicitly wants full output — never lazify
 const PASSTHROUGH_COMMANDS = [
+  // File reading — user explicitly wants content
   /\bcat\b/, /\bhead\b/, /\btail\b/, /\bbat\b/, /\bless\b/, /\bmore\b/,
+  // Git review commands — truncating diffs/patches loses semantic meaning
+  /\bgit\s+diff\b/, /\bgit\s+show\b/, /\bgit\s+log\s+-p\b/, /\bgit\s+log\s+--patch\b/,
+  // Summary/report commands — summarizing a summary is pointless
   /\bsummary\b/i, /\bstatus\b/i, /\breport\b/i, /\bstats\b/i,
   /\bweek\b/i, /\btoday\b/i, /\bdashboard\b/i,
 ];
