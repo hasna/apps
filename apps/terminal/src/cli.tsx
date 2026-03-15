@@ -7,7 +7,7 @@ const args = process.argv.slice(2);
 // ── Help / Version ───────────────────────────────────────────────────────────
 
 if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
-  console.log(`open-terminal v0.6.1 — Smart terminal for AI agents and humans
+  console.log(`open-terminal v1.0.0 — Smart terminal for AI agents and humans
 
 USAGE:
   terminal                     Launch interactive NL terminal (TUI)
@@ -52,7 +52,12 @@ ENVIRONMENT:
 }
 
 if (args[0] === "--version" || args[0] === "-v") {
-  console.log("0.6.1");
+  const { readFileSync } = await import("fs");
+  const { join, dirname } = await import("path");
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(new URL(import.meta.url).pathname), "..", "package.json"), "utf8"));
+    console.log(pkg.version);
+  } catch { console.log("1.0.0"); }
   process.exit(0);
 }
 
