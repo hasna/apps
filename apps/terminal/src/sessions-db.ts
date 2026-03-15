@@ -1,6 +1,7 @@
 // SQLite session database — tracks every terminal interaction
 
-import Database from "better-sqlite3";
+// @ts-ignore — bun:sqlite is a bun built-in
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -9,13 +10,13 @@ import { randomUUID } from "crypto";
 const DIR = join(homedir(), ".terminal");
 const DB_PATH = join(DIR, "sessions.db");
 
-let db: Database.Database | null = null;
+let db: Database | null = null;
 
-function getDb(): Database.Database {
+function getDb(): Database {
   if (db) return db;
   if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
   db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+  db.exec("PRAGMA journal_mode = WAL");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -126,7 +127,9 @@ export function logInteraction(sessionId: string, data: {
     data.cached ? 1 : 0,
     Date.now()
   );
-  return result.lastInsertRowid as number;
+  // bun:sqlite — lastInsertRowid is a property on the statement after run()
+  const lastId = getDb().prepare("SELECT last_insert_rowid() as id").get() as any;
+  return lastId?.id ?? 0;
 }
 
 export function updateInteraction(id: number, data: {
