@@ -63,6 +63,9 @@ const SAFE_OVERRIDES = [
   /\bfind\b.*-exec\s+(wc|cat|head|tail|grep|stat|file|du|ls)\b/,
   // find without -exec is always safe
   /^\s*find\b(?!.*-exec\s+(rm|mv|chmod|chown|sed))/,
+  // xargs with read-only tools is safe
+  /\bxargs\s+(wc|cat|head|tail|grep|stat|file|du|ls|git\s+log|git\s+show|git\s+blame)\b/,
+  /\bxargs\s+-I\s*\S+\s+(wc|cat|head|tail|grep|stat|git)\b/,
 ];
 
 export function isIrreversible(command: string): boolean {
