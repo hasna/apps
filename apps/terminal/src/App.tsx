@@ -9,15 +9,19 @@ import {
   saveConfig,
   type Permissions,
 } from "./history.js";
+import { loadCache } from "./cache.js";
 import Onboarding from "./Onboarding.js";
 import StatusBar from "./StatusBar.js";
 import Spinner from "./Spinner.js";
+
+// warm cache on startup
+loadCache();
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
 type Phase =
   | { type: "input";   value: string; cursor: number; histIdx: number; raw: boolean }
-  | { type: "thinking"; nl: string; raw: boolean }
+  | { type: "thinking"; nl: string; raw: boolean; partial: string }
   | { type: "confirm"; nl: string; command: string; raw: boolean; danger: boolean }
   | { type: "explain"; nl: string; command: string; explanation: string }
   | { type: "running"; nl: string; command: string }
@@ -175,9 +179,11 @@ export default function App() {
               return;
             }
 
-            setPhase({ type: "thinking", nl, raw: false });
+            setPhase({ type: "thinking", nl, raw: false, partial: "" });
             try {
-              const command = await translateToCommand(nl, config.permissions, sessionCmds);
+              const command = await translateToCommand(nl, config.permissions, sessionCmds, (partial) => {
+                setPhase({ type: "thinking", nl, raw: false, partial });
+              });
               const blocked = checkPermissions(command, config.permissions);
               if (blocked) {
                 pushScroll({ nl, cmd: command, lines: [`blocked: ${blocked}`], truncated: false, error: true });
@@ -215,7 +221,7 @@ export default function App() {
 
           if (input === "?") {
             const { nl, command } = phase;
-            setPhase({ type: "thinking", nl, raw: false });
+            setPhase({ type: "thinking", nl, raw: false, partial: "" });
             try {
               const explanation = await explainCommand(command);
               setPhase({ type: "explain", nl, command, explanation });
@@ -248,7 +254,7 @@ export default function App() {
           if (key.ctrl && input === "c") { exit(); return; }
           if (input === "y" || input === "Y" || key.return) {
             const { nl, command, errorOutput } = phase;
-            setPhase({ type: "thinking", nl, raw: false });
+            setPhase({ type: "thinking", nl, raw: false, partial: "" });
             try {
               const fixed = await fixCommand(nl, command, errorOutput, config.permissions, sessionCmds);
               const danger = isIrreversible(fixed);
@@ -355,8 +361,23 @@ export default function App() {
         </Box>
       )}
 
-      {/* spinners */}
-      {phase.type === "thinking" && <Spinner label="translating" />}
+      {/* thinking — show streaming partial or spinner */}
+      {phase.type === "thinking" && (
+        phase.partial ? (
+          <Box flexDirection="column" paddingLeft={2}>
+            <Box gap={2}>
+              <Text dimColor>›</Text>
+              <Text dimColor>{phase.nl}</Text>
+            </Box>
+            <Box gap={2} paddingLeft={2}>
+              <Text dimColor>$</Text>
+              <Text dimColor>{phase.partial}</Text>
+            </Box>
+          </Box>
+        ) : (
+          <Spinner label="translating" />
+        )
+      )}
 
       {/* running — live stream */}
       {phase.type === "running" && (
