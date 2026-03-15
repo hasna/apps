@@ -4,14 +4,29 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { StatsCards } from "@/components/stats-cards";
 import { ServersTable } from "@/components/servers-table";
 import { AddServerDialog } from "@/components/add-server-dialog";
+import { ServerDetailSheet } from "@/components/ServerDetailSheet";
+import { SourcesTab } from "@/components/SourcesTab";
+import { FindTab } from "@/components/FindTab";
+import { DoctorPanel } from "@/components/DoctorPanel";
 import { Button } from "@/components/ui/button";
 import type { McpServerEntry } from "@/types";
+
+type Tab = "servers" | "find" | "sources" | "health";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "servers", label: "Servers" },
+  { id: "find", label: "Find" },
+  { id: "sources", label: "Sources" },
+  { id: "health", label: "Health" },
+];
 
 export function App() {
   const [servers, setServers] = React.useState<McpServerEntry[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [addOpen, setAddOpen] = React.useState(false);
+  const [selectedServer, setSelectedServer] = React.useState<McpServerEntry | null>(null);
   const [updating, setUpdating] = React.useState(false);
+  const [activeTab, setActiveTab] = React.useState<Tab>("servers");
   const [version, setVersion] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<{
     message: string;
@@ -206,15 +221,58 @@ export function App() {
         </div>
       </header>
 
+      {/* Tab Navigation */}
+      <div className="border-b">
+        <div className="mx-auto max-w-6xl px-6">
+          <nav className="flex gap-0" role="tablist">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === tab.id
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </div>
+
       {/* Content */}
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-6">
-        <StatsCards servers={servers} />
-        <ServersTable
-          data={servers}
-          onToggle={handleToggle}
-          onRemove={handleRemove}
-        />
+        {activeTab === "servers" && (
+          <>
+            <StatsCards servers={servers} />
+            <ServersTable
+              data={servers}
+              onToggle={handleToggle}
+              onRemove={handleRemove}
+              onRowClick={setSelectedServer}
+            />
+          </>
+        )}
+        {activeTab === "find" && <FindTab showToast={showToast} />}
+        {activeTab === "sources" && <SourcesTab showToast={showToast} />}
+        {activeTab === "health" && (
+          <DoctorPanel
+            serverIds={servers.map((s) => s.id)}
+            showToast={showToast}
+          />
+        )}
       </main>
+
+      {/* Server Detail Sheet */}
+      <ServerDetailSheet
+        server={selectedServer}
+        open={selectedServer !== null}
+        onClose={() => setSelectedServer(null)}
+      />
 
       {/* Add Server Dialog */}
       <AddServerDialog
