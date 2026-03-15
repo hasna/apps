@@ -41,6 +41,23 @@ const NOISE_PATTERNS: RegExp[] = [
   /^\s*\d+(\.\d+)?\s*[KMG]?B\s*\/\s*\d+(\.\d+)?\s*[KMG]?B\b/,
 ];
 
+// Sensitive env var patterns — redact values, keep names only if needed
+const SENSITIVE_PATTERNS = [
+  /^(.*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH).*?)=(.+)$/i,
+  /^(.*(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET).*?)=(.+)$/i,
+];
+
+/** Redact sensitive values in output (env vars, credentials) */
+function redactSensitive(line: string): string {
+  for (const pattern of SENSITIVE_PATTERNS) {
+    const match = line.match(pattern);
+    if (match) {
+      return `${match[1]}=[REDACTED]`;
+    }
+  }
+  return line;
+}
+
 /** Strip noise lines from output. Returns cleaned output + count of lines removed. */
 export function stripNoise(output: string): { cleaned: string; linesRemoved: number } {
   const lines = output.split("\n");
@@ -76,7 +93,8 @@ export function stripNoise(output: string): { cleaned: string; linesRemoved: num
       continue;
     }
 
-    kept.push(line);
+    // Redact sensitive values (env vars with KEY, TOKEN, SECRET, etc.)
+    kept.push(redactSensitive(line));
   }
 
   return { cleaned: kept.join("\n"), linesRemoved: removed };

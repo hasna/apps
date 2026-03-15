@@ -181,7 +181,9 @@ if (args[0] === "exec") {
     // Command failed — parse error output for structured diagnosis
     const stderr = e.stderr?.toString() ?? "";
     const stdout = e.stdout?.toString() ?? "";
-    const errorOutput = stripNoise(stripAnsi(stdout + stderr)).cleaned;
+    // Deduplicate: if stderr content appears in stdout, skip it
+    const combined = stderr && stdout.includes(stderr.trim()) ? stdout : stdout + stderr;
+    const errorOutput = stripNoise(stripAnsi(combined)).cleaned;
 
     // Try structured error parsing
     const { errorParser } = await import("./parsers/errors.js");
