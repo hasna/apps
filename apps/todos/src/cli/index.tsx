@@ -2607,6 +2607,384 @@ program
     if (completed.length === 0 && started.length === 0) console.log(chalk.dim("  No activity yesterday."));
   });
 
+// mine
+program
+  .command("mine")
+  .description("Show tasks assigned to you, grouped by status")
+  .argument("<agent>", "Agent name or ID")
+  .option("--json", "Output as JSON")
+  .action(async (agent: string, opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { listTasks } = require("../db/tasks.js") as any;
+    const projectId = autoProject(globalOpts) || undefined;
+    const filter: any = { assigned_to: agent };
+    if (projectId) filter.project_id = projectId;
+    const tasks: any[] = listTasks(filter, db);
+    // Also check agent_id for tasks created by this agent
+    const filterByAgent: any = { agent_id: agent };
+    if (projectId) filterByAgent.project_id = projectId;
+    const agentTasks: any[] = listTasks(filterByAgent, db);
+    // Merge, dedupe by id
+    const seen = new Set(tasks.map((t: any) => t.id));
+    for (const t of agentTasks) {
+      if (!seen.has(t.id)) { tasks.push(t); seen.add(t.id); }
+    }
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(tasks));
+      return;
+    }
+    const groups: Record<string, any[]> = {};
+    for (const t of tasks) {
+      const s = t.status || "unknown";
+      if (!groups[s]) groups[s] = [];
+      groups[s].push(t);
+    }
+    const statusOrder = ["in_progress", "pending", "blocked", "completed", "failed", "cancelled"];
+    const statusIcons: Record<string, string> = { in_progress: "▶", pending: "○", blocked: "⊘", completed: "✓", failed: "✗", cancelled: "—" };
+    const statusColors: Record<string, (s: string) => string> = { in_progress: chalk.blue, pending: chalk.white, blocked: chalk.red, completed: chalk.green, failed: chalk.red, cancelled: chalk.dim };
+    console.log(chalk.bold(`Tasks for ${agent} (${tasks.length} total):\n`));
+    for (const status of statusOrder) {
+      const group = groups[status];
+      if (!group || group.length === 0) continue;
+      const color = statusColors[status] || chalk.white;
+      const icon = statusIcons[status] || "?";
+      console.log(color(`  ${icon} ${status.replace("_", " ")} (${group.length}):`));
+      for (const t of group) {
+        const priority = t.priority === "critical" || t.priority === "high" ? chalk.red(` [${t.priority}]`) : "";
+        console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${priority}`);
+      }
+    }
+    if (tasks.length === 0) console.log(chalk.dim(`  No tasks assigned to ${agent}.`));
+  });
+
+// blocked
+program
+  .command("blocked")
+  .description("Show tasks blocked by incomplete dependencies")
+  .option("--json", "Output as JSON")
+  .option("--project <id>", "Filter to project")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { listTasks, getBlockingDeps } = require("../db/tasks.js") as any;
+    const projectId = autoProject(globalOpts) || opts.project || undefined;
+    const filter: any = { status: "pending" as const };
+    if (projectId) filter.project_id = projectId;
+    const allPending: any[] = listTasks(filter, db);
+    const blockedTasks: { task: any; blockers: any[] }[] = [];
+    for (const t of allPending) {
+      const blockers = getBlockingDeps(t.id, db);
+      if (blockers.length > 0) blockedTasks.push({ task: t, blockers });
+    }
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(blockedTasks.map(b => ({ ...b.task, blocked_by: b.blockers.map((bl: any) => ({ id: bl.id, short_id: bl.short_id, title: bl.title, status: bl.status })) }))));
+      return;
+    }
+    if (blockedTasks.length === 0) {
+      console.log(chalk.green("  No blocked tasks!"));
+      return;
+    }
+    console.log(chalk.bold(`Blocked (${blockedTasks.length}):\n`));
+    for (const { task, blockers } of blockedTasks) {
+      console.log(`  ${chalk.cyan(task.short_id || task.id.slice(0, 8))} ${task.title}`);
+      for (const bl of blockers) {
+        console.log(`    ${chalk.red("⊘")} ${chalk.dim(bl.short_id || bl.id.slice(0, 8))} ${chalk.dim(bl.title)} ${chalk.yellow(`[${bl.status}]`)}`);
+      }
+    }
+  });
+
+// overdue
+program
+  .command("overdue")
+  .description("Show tasks past their due date")
+  .option("--json", "Output as JSON")
+  .option("--project <id>", "Filter to project")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const projectId = autoProject(globalOpts) || opts.project || undefined;
+    const { getOverdueTasks } = require("../db/tasks.js") as any;
+    const tasks: any[] = getOverdueTasks(projectId);
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(tasks));
+      return;
+    }
+    if (tasks.length === 0) {
+      console.log(chalk.green("  No overdue tasks!"));
+      return;
+    }
+    console.log(chalk.bold.red(`Overdue (${tasks.length}):\n`));
+    for (const t of tasks) {
+      const dueDate = t.due_at!.slice(0, 10);
+      const daysOverdue = Math.floor((Date.now() - new Date(t.due_at!).getTime()) / 86400000);
+      const urgency = daysOverdue > 7 ? chalk.bgRed.white(` ${daysOverdue}d `) : chalk.red(`${daysOverdue}d`);
+      console.log(`  ${urgency} ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""} ${chalk.dim(`(due ${dueDate})`)}`);
+    }
+  });
+
+// week
+program
+  .command("week")
+  .description("Show task activity from the past 7 days")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { getTasksChangedSince } = require("../db/tasks.js") as any;
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(start.getDate() - 7);
+    start.setHours(0, 0, 0, 0);
+    const tasks: any[] = getTasksChangedSince(start.toISOString(), undefined, db);
+
+    // Group by day
+    const days: Record<string, { completed: any[]; started: any[]; other: any[] }> = {};
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      days[d.toISOString().slice(0, 10)] = { completed: [], started: [], other: [] };
+    }
+    for (const t of tasks) {
+      const day = (t.updated_at || t.created_at).slice(0, 10);
+      if (!days[day]) days[day] = { completed: [], started: [], other: [] };
+      if (t.status === "completed") days[day].completed.push(t);
+      else if (t.status === "in_progress") days[day].started.push(t);
+      else days[day].other.push(t);
+    }
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ from: start.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10), days }));
+      return;
+    }
+
+    const totalCompleted = tasks.filter((t: any) => t.status === "completed").length;
+    const totalStarted = tasks.filter((t: any) => t.status === "in_progress").length;
+    console.log(chalk.bold(`Week — ${start.toISOString().slice(0, 10)} to ${now.toISOString().slice(0, 10)}`));
+    console.log(chalk.dim(`  ${totalCompleted} completed, ${totalStarted} in progress, ${tasks.length} total changes\n`));
+
+    const sortedDays = Object.keys(days).sort().reverse();
+    for (const day of sortedDays) {
+      const dayData = days[day];
+      if (!dayData) continue;
+      const { completed, started } = dayData;
+      if (completed.length === 0 && started.length === 0) continue;
+      const weekday = new Date(day + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" });
+      console.log(chalk.bold(`  ${weekday} ${day}`));
+      for (const t of completed) console.log(`    ${chalk.green("✓")} ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
+      for (const t of started) console.log(`    ${chalk.blue("▶")} ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
+    }
+    if (tasks.length === 0) console.log(chalk.dim("  No activity this week."));
+  });
+
+// burndown
+program
+  .command("burndown")
+  .description("Show task completion velocity over the past 7 days")
+  .option("--days <n>", "Number of days", "7")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { getRecentActivity } = require("../db/audit.js") as any;
+    const numDays = parseInt(opts.days, 10);
+    const entries: any[] = getRecentActivity(5000, db);
+    const now = new Date();
+    const dayStats: { date: string; completed: number; created: number; failed: number }[] = [];
+    for (let i = numDays - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const dayEntries = entries.filter((e: any) => e.created_at.slice(0, 10) === dateStr);
+      dayStats.push({
+        date: dateStr,
+        completed: dayEntries.filter((e: any) => e.action === "complete").length,
+        created: dayEntries.filter((e: any) => e.action === "create").length,
+        failed: dayEntries.filter((e: any) => e.action === "fail").length,
+      });
+    }
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(dayStats));
+      return;
+    }
+    const maxVal = Math.max(...dayStats.map(d => Math.max(d.completed, d.created)), 1);
+    const barWidth = 30;
+    console.log(chalk.bold("Burndown (last " + numDays + " days):\n"));
+    console.log(chalk.dim("  Date        Done  New   Failed  Chart"));
+    for (const day of dayStats) {
+      const weekday = new Date(day.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" });
+      const completedBar = chalk.green("█".repeat(Math.round((day.completed / maxVal) * barWidth)));
+      const createdBar = chalk.blue("░".repeat(Math.round((day.created / maxVal) * barWidth)));
+      const failed = day.failed > 0 ? chalk.red(String(day.failed).padStart(4)) : chalk.dim("   0");
+      console.log(`  ${weekday} ${day.date.slice(5)}  ${chalk.green(String(day.completed).padStart(4))}  ${chalk.blue(String(day.created).padStart(4))}   ${failed}  ${completedBar}${createdBar}`);
+    }
+    const totalCompleted = dayStats.reduce((s, d) => s + d.completed, 0);
+    const totalCreated = dayStats.reduce((s, d) => s + d.created, 0);
+    const velocity = (totalCompleted / numDays).toFixed(1);
+    console.log(chalk.dim(`\n  Velocity: ${velocity}/day · ${totalCompleted} done · ${totalCreated} created`));
+  });
+
+// log
+program
+  .command("log")
+  .description("Show recent task activity log (git-log style)")
+  .option("--limit <n>", "Number of entries", "30")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { getRecentActivity } = require("../db/audit.js") as any;
+    const entries: any[] = getRecentActivity(parseInt(opts.limit, 10), db);
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(entries));
+      return;
+    }
+    if (entries.length === 0) {
+      console.log(chalk.dim("  No activity yet."));
+      return;
+    }
+    const actionIcons: Record<string, string> = {
+      create: chalk.green("+"), start: chalk.blue("▶"), complete: chalk.green("✓"),
+      fail: chalk.red("✗"), update: chalk.yellow("~"), approve: chalk.green("★"),
+      lock: chalk.dim("🔒"), unlock: chalk.dim("🔓"),
+    };
+    let lastDate = "";
+    for (const e of entries) {
+      const date = e.created_at.slice(0, 10);
+      const time = e.created_at.slice(11, 16);
+      if (date !== lastDate) {
+        console.log(chalk.bold(`\n  ${date}`));
+        lastDate = date;
+      }
+      const icon = actionIcons[e.action] || chalk.dim("·");
+      const agent = e.agent_id ? chalk.dim(` (${e.agent_id})`) : "";
+      const taskRef = chalk.cyan(e.task_id.slice(0, 8));
+      let detail = "";
+      if (e.field && e.old_value && e.new_value) {
+        detail = chalk.dim(` ${e.field}: ${e.old_value} → ${e.new_value}`);
+      } else if (e.field && e.new_value) {
+        detail = chalk.dim(` ${e.field}: ${e.new_value}`);
+      }
+      console.log(`  ${chalk.dim(time)} ${icon} ${e.action.padEnd(8)} ${taskRef}${detail}${agent}`);
+    }
+  });
+
+// ready
+program
+  .command("ready")
+  .description("Show all tasks ready to be claimed (pending, unblocked, unlocked)")
+  .option("--json", "Output as JSON")
+  .option("--project <id>", "Filter to project")
+  .option("--limit <n>", "Max tasks to show", "20")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { listTasks, getBlockingDeps } = require("../db/tasks.js") as any;
+    const { isLockExpired } = require("../db/database.js");
+    const projectId = autoProject(globalOpts) || opts.project || undefined;
+    const filter: any = { status: "pending" };
+    if (projectId) filter.project_id = projectId;
+    const pending: any[] = listTasks(filter, db);
+    const ready = pending.filter((t: any) => {
+      // Not locked (or lock expired)
+      if (t.locked_by && !isLockExpired(t.locked_at)) return false;
+      // No unmet dependencies
+      const blockers = getBlockingDeps(t.id, db);
+      return blockers.length === 0;
+    });
+    const limited = ready.slice(0, parseInt(opts.limit, 10));
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify(limited));
+      return;
+    }
+    if (limited.length === 0) {
+      console.log(chalk.dim("  No tasks ready to claim."));
+      return;
+    }
+    console.log(chalk.bold(`Ready to claim (${ready.length}${ready.length > limited.length ? `, showing ${limited.length}` : ""}):\n`));
+    for (const t of limited) {
+      const pri = t.priority === "critical" ? chalk.bgRed.white(" CRIT ") : t.priority === "high" ? chalk.red("[high]") : t.priority === "medium" ? chalk.yellow("[med]") : "";
+      const due = t.due_at ? chalk.dim(` due ${t.due_at.slice(0, 10)}`) : "";
+      console.log(`  ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title} ${pri}${due}`);
+    }
+  });
+
+// sprint
+program
+  .command("sprint")
+  .description("Sprint dashboard: in-progress, next up, blockers, and overdue")
+  .option("--json", "Output as JSON")
+  .option("--project <id>", "Filter to project")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { listTasks, getBlockingDeps } = require("../db/tasks.js") as any;
+    const projectId = autoProject(globalOpts) || opts.project || undefined;
+    const baseFilter: any = {};
+    if (projectId) baseFilter.project_id = projectId;
+
+    const inProgress: any[] = listTasks({ ...baseFilter, status: "in_progress" }, db);
+    const pending: any[] = listTasks({ ...baseFilter, status: "pending" }, db);
+    const nowStr = new Date().toISOString();
+
+    // Find blocked tasks
+    const blocked: { task: any; blockers: any[] }[] = [];
+    for (const t of pending) {
+      const blockers = getBlockingDeps(t.id, db);
+      if (blockers.length > 0) blocked.push({ task: t, blockers });
+    }
+
+    // Find overdue
+    const overdue = [...inProgress, ...pending].filter((t: any) => t.due_at && t.due_at < nowStr);
+
+    // Next up: top 5 unblocked pending by priority
+    const blockedIds = new Set(blocked.map(b => b.task.id));
+    const nextUp = pending.filter((t: any) => !blockedIds.has(t.id)).slice(0, 5);
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ in_progress: inProgress, next_up: nextUp, blocked, overdue }));
+      return;
+    }
+
+    console.log(chalk.bold("Sprint Dashboard\n"));
+
+    // In progress
+    console.log(chalk.blue(`  ▶ In Progress (${inProgress.length}):`));
+    if (inProgress.length === 0) console.log(chalk.dim("    (none)"));
+    for (const t of inProgress) {
+      const agent = t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : "";
+      console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${agent}`);
+    }
+
+    // Next up
+    console.log(chalk.white(`\n  ○ Next Up (${nextUp.length}):`));
+    if (nextUp.length === 0) console.log(chalk.dim("    (none)"));
+    for (const t of nextUp) {
+      const pri = t.priority === "critical" ? chalk.bgRed.white(" CRIT ") : t.priority === "high" ? chalk.red("[high]") : "";
+      console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title} ${pri}`);
+    }
+
+    // Blocked
+    if (blocked.length > 0) {
+      console.log(chalk.red(`\n  ⊘ Blocked (${blocked.length}):`));
+      for (const { task, blockers } of blocked) {
+        console.log(`    ${chalk.cyan(task.short_id || task.id.slice(0, 8))} ${task.title}`);
+        for (const bl of blockers) console.log(`      ${chalk.dim("← " + (bl.short_id || bl.id.slice(0, 8)) + " " + bl.title)} ${chalk.yellow(`[${bl.status}]`)}`);
+      }
+    }
+
+    // Overdue
+    if (overdue.length > 0) {
+      console.log(chalk.red(`\n  ⚠ Overdue (${overdue.length}):`));
+      for (const t of overdue) {
+        const daysOver = Math.floor((Date.now() - new Date(t.due_at).getTime()) / 86400000);
+        console.log(`    ${chalk.red(`${daysOver}d`)} ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}`);
+      }
+    }
+
+    // Summary line
+    console.log(chalk.dim(`\n  ${inProgress.length} active · ${pending.length} pending · ${blocked.length} blocked · ${overdue.length} overdue`));
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {

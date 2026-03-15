@@ -1452,3 +1452,14 @@ export function bulkUpdateTasks(
 
   return { updated, failed };
 }
+
+export function getOverdueTasks(projectId?: string, db?: Database): Task[] {
+  const d = db || getDatabase();
+  const nowStr = new Date().toISOString();
+  let query = `SELECT * FROM tasks WHERE due_at IS NOT NULL AND due_at < ? AND status NOT IN ('completed', 'cancelled', 'failed')`;
+  const params: any[] = [nowStr];
+  if (projectId) { query += ` AND project_id = ?`; params.push(projectId); }
+  query += ` ORDER BY due_at ASC`;
+  const rows = d.query(query).all(...params) as TaskRow[];
+  return rows.map(rowToTask);
+}

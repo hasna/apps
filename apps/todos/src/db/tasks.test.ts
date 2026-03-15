@@ -32,6 +32,7 @@ import {
   setTaskStatus,
   setTaskPriority,
   redistributeStaleTasks,
+  getOverdueTasks,
 } from "./tasks.js";
 import {
   VersionConflictError,
@@ -2003,5 +2004,37 @@ describe("redistributeStaleTasks", () => {
     const result = redistributeStaleTasks("agent", { max_age_minutes: 60 }, db);
     expect(result.released.length).toBeGreaterThan(0);
     expect(result.claimed === null || result.claimed!.status === "in_progress").toBe(true);
+  });
+});
+
+describe("getOverdueTasks", () => {
+  it("should return tasks past their due date", () => {
+    const db = getDatabase();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    createTask({ title: "Overdue task", due_at: yesterday.toISOString() }, db);
+    createTask({ title: "Future task", due_at: tomorrow.toISOString() }, db);
+    createTask({ title: "No due date" }, db);
+
+    const overdue = getOverdueTasks(undefined, db);
+    expect(overdue.length).toBe(1);
+    expect(overdue[0].title).toBe("Overdue task");
+  });
+
+  it("should not return completed overdue tasks", () => {
+    const db = getDatabase();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const task = createTask({ title: "Done overdue", due_at: yesterday.toISOString() }, db);
+    const agent = registerAgent({ name: "test-overdue-agent" }, db) as any;
+    startTask(task.id, agent.id, db);
+    completeTask(task.id, undefined, db);
+
+    const overdue = getOverdueTasks(undefined, db);
+    expect(overdue.length).toBe(0);
   });
 });
