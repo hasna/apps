@@ -1,6 +1,6 @@
 {
   "name": "@hasna/terminal",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
   "type": "module",
   "bin": {

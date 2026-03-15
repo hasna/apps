@@ -13,6 +13,21 @@ export const gitLogParser: Parser<GitLogEntry[]> = {
     const entries: GitLogEntry[] = [];
     const lines = output.split("\n");
 
+    // Detect oneline format: "abc1234 commit message"
+    const firstLine = lines[0]?.trim() ?? "";
+    const isOneline = /^[a-f0-9]{7,12}\s+/.test(firstLine) && !firstLine.startsWith("commit ");
+
+    if (isOneline) {
+      for (const line of lines) {
+        const match = line.trim().match(/^([a-f0-9]{7,12})\s+(.+)$/);
+        if (match) {
+          entries.push({ hash: match[1], author: "", date: "", message: match[2] });
+        }
+      }
+      return entries;
+    }
+
+    // Verbose format
     let hash = "", author = "", date = "", message: string[] = [];
 
     for (const line of lines) {

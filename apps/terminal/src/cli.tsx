@@ -155,10 +155,27 @@ if (args[0] === "exec") {
       console.error(`[open-terminal] saved ${savedTokens} tokens (noise filter)`);
     }
   } catch (e: any) {
-    // Command failed — show error output
+    // Command failed — parse error output for structured diagnosis
     const stderr = e.stderr?.toString() ?? "";
     const stdout = e.stdout?.toString() ?? "";
-    console.log(stripNoise(stripAnsi(stdout + stderr)).cleaned);
+    const errorOutput = stripNoise(stripAnsi(stdout + stderr)).cleaned;
+
+    // Try structured error parsing
+    const { errorParser } = await import("./parsers/errors.js");
+    if (errorOutput.length > 200 && errorParser.detect(actualCmd, errorOutput)) {
+      const info = errorParser.parse(actualCmd, errorOutput);
+      if (jsonMode) {
+        console.log(JSON.stringify({ exitCode: e.status ?? 1, error: info }));
+      } else {
+        console.log(`Error: ${info.type}`);
+        console.log(`  ${info.message}`);
+        if (info.file) console.log(`  File: ${info.file}${info.line ? `:${info.line}` : ""}`);
+        if (info.suggestion) console.log(`  Fix: ${info.suggestion}`);
+      }
+    } else {
+      // Short error or no parser match — pass through cleaned
+      console.log(errorOutput);
+    }
     process.exit(e.status ?? 1);
   }
   process.exit(0);
