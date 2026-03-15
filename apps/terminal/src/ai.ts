@@ -1,6 +1,8 @@
 import type { Permissions } from "./history.js";
 import { cacheGet, cacheSet } from "./cache.js";
 import { getProvider } from "./providers/index.js";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 
 // ── model routing ─────────────────────────────────────────────────────────────
 // Simple queries → fast model. Complex/ambiguous → smart model.
@@ -28,9 +30,9 @@ function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "s
     };
   }
 
-  // Cerebras — llama for simple, qwen for complex
+  // Cerebras — qwen for everything (llama3.1-8b too unreliable)
   return {
-    fast: "llama3.1-8b",
+    fast: "qwen-3-235b-a22b-instruct-2507",
     smart: "qwen-3-235b-a22b-instruct-2507",
     pick: isComplex ? "smart" : "fast",
   };
@@ -79,6 +81,52 @@ export interface SessionEntry {
   error?: boolean;
 }
 
+// ── project context ──────────────────────────────────────────────────────────
+
+function detectProjectContext(): string {
+  const cwd = process.cwd();
+  const parts: string[] = [];
+
+  // Node.js / TypeScript
+  const pkgPath = join(cwd, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      parts.push(`Project: Node.js/TypeScript (package.json found)`);
+      if (pkg.scripts) {
+        const scripts = Object.entries(pkg.scripts).map(([k, v]) => `${k}: ${v}`).slice(0, 8);
+        parts.push(`Available scripts: ${scripts.join(", ")}`);
+      }
+      parts.push(`Use npm/bun/pnpm commands, NOT maven/gradle/cargo.`);
+    } catch {}
+  }
+
+  // Python
+  if (existsSync(join(cwd, "requirements.txt")) || existsSync(join(cwd, "pyproject.toml"))) {
+    parts.push("Project: Python. Use pip/python commands.");
+  }
+
+  // Go
+  if (existsSync(join(cwd, "go.mod"))) {
+    parts.push("Project: Go. Use go build/test/run commands.");
+  }
+
+  // Rust
+  if (existsSync(join(cwd, "Cargo.toml"))) {
+    parts.push("Project: Rust. Use cargo build/test/run commands.");
+  }
+
+  // Java
+  if (existsSync(join(cwd, "pom.xml"))) {
+    parts.push("Project: Java/Maven. Use mvn commands.");
+  }
+  if (existsSync(join(cwd, "build.gradle")) || existsSync(join(cwd, "build.gradle.kts"))) {
+    parts.push("Project: Java/Gradle. Use gradle commands.");
+  }
+
+  return parts.length > 0 ? `\n\nPROJECT CONTEXT:\n${parts.join("\n")}` : "";
+}
+
 // ── system prompt ─────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[]): string {
@@ -101,7 +149,7 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[]): 
   let contextBlock = "";
   if (sessionEntries.length > 0) {
     const lines: string[] = [];
-    for (const e of sessionEntries.slice(-5)) { // last 5 interactions
+    for (const e of sessionEntries.slice(-5)) {
       lines.push(`> ${e.nl}`);
       lines.push(`$ ${e.cmd}`);
       if (e.output) lines.push(e.output);
@@ -110,12 +158,21 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[]): 
     contextBlock = `\n\nSESSION HISTORY (user intent > command $ output):\n${lines.join("\n")}`;
   }
 
+  const projectContext = detectProjectContext();
+
   return `You are a terminal assistant. Output ONLY the exact shell command — no explanation, no markdown, no backticks.
 The user describes what they want in plain English. You translate to the exact shell command.
-Pay attention to session history — when the user says "inside X folder" they mean a folder visible in the previous output.
-If the user refers to a relative path from a previous command, resolve it correctly.
+
+RULES:
+- When user refers to items from previous output, use the EXACT names shown (e.g., "feature/auth" not "auth", "open-skills" not "open_skills")
+- When user says "the largest/smallest/first/second", look at the previous output to identify the correct item
+- When user says "them all" or "combine them", refer to items from the most recent command output
+- For "show who changed each line" use git blame, for "show remote urls" use git remote -v
+- For text search in code, use grep -rn, NOT nm or objdump (those are for compiled binaries)
+- On macOS: for memory use vm_stat or top -l 1, for disk use df -h, for processes use ps aux
+- NEVER invent commands that don't exist. Stick to standard Unix/macOS commands.
 cwd: ${process.cwd()}
-shell: zsh / macOS${restrictionBlock}${contextBlock}`;
+shell: zsh / macOS${projectContext}${restrictionBlock}${contextBlock}`;
 }
 
 // ── streaming translate ───────────────────────────────────────────────────────
