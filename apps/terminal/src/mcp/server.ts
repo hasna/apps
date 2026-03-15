@@ -1,0 +1,476 @@
+// MCP Server for open-terminal — exposes terminal capabilities to AI agents
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { spawn } from "child_process";
+import { compress, stripAnsi } from "../compression.js";
+import { parseOutput, tokenSavings, estimateTokens } from "../parsers/index.js";
+import { summarizeOutput } from "../ai.js";
+import { searchFiles, searchContent } from "../search/index.js";
+import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipes/storage.js";
+import { substituteVariables } from "../recipes/model.js";
+import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../supervisor.js";
+import { diffOutput } from "../diff-cache.js";
+import { getEconomyStats, recordSaving } from "../economy.js";
+import { captureSnapshot } from "../snapshots.js";
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCode: number; stdout: string; stderr: string; duration: number }> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const proc = spawn("/bin/zsh", ["-c", command], {
+      cwd: cwd ?? process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+    const timer = timeout ? setTimeout(() => { try { proc.kill("SIGTERM"); } catch {} }, timeout) : null;
+
+    proc.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      resolve({ exitCode: code ?? 0, stdout, stderr, duration: Date.now() - start });
+    });
+  });
+}
+
+// ── server ───────────────────────────────────────────────────────────────────
+
+export function createServer(): McpServer {
+  const server = new McpServer({
+    name: "open-terminal",
+    version: "0.2.0",
+  });
+
+  // ── execute: run a command, return structured result ──────────────────────
+
+  server.tool(
+    "execute",
+    "Run a shell command and return the result. Supports structured output parsing (json), token compression (compressed), and AI summarization (summary).",
+    {
+      command: z.string().describe("Shell command to execute"),
+      cwd: z.string().optional().describe("Working directory (default: server cwd)"),
+      timeout: z.number().optional().describe("Timeout in ms (default: 30000)"),
+      format: z.enum(["raw", "json", "compressed", "summary"]).optional().describe("Output format"),
+      maxTokens: z.number().optional().describe("Token budget for compressed/summary format"),
+    },
+    async ({ command, cwd, timeout, format, maxTokens }) => {
+      const result = await exec(command, cwd, timeout ?? 30000);
+      const output = (result.stdout + result.stderr).trim();
+
+      // Raw mode
+      if (!format || format === "raw") {
+        const clean = stripAnsi(output);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({
+            exitCode: result.exitCode, output: clean, duration: result.duration, tokens: estimateTokens(clean),
+          }) }],
+        };
+      }
+
+      // JSON mode — structured parsing
+      if (format === "json") {
+        const parsed = parseOutput(command, output);
+        if (parsed) {
+          const savings = tokenSavings(output, parsed.data);
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+              exitCode: result.exitCode, parsed: parsed.data, parser: parsed.parser,
+              duration: result.duration, tokensSaved: savings.saved, savingsPercent: savings.percent,
+            }) }],
+          };
+        }
+      }
+
+      // Compressed mode (also fallback for json when no parser matches)
+      if (format === "compressed" || format === "json") {
+        const compressed = compress(command, output, { maxTokens, format: "json" });
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({
+            exitCode: result.exitCode, output: compressed.content, format: compressed.format,
+            duration: result.duration, tokensSaved: compressed.tokensSaved, savingsPercent: compressed.savingsPercent,
+          }) }],
+        };
+      }
+
+      // Summary mode — AI-powered
+      if (format === "summary") {
+        try {
+          const summary = await summarizeOutput(command, output, maxTokens ?? 200);
+          const rawTokens = estimateTokens(output);
+          const summaryTokens = estimateTokens(summary);
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+              exitCode: result.exitCode, summary, duration: result.duration,
+              tokensSaved: rawTokens - summaryTokens,
+            }) }],
+          };
+        } catch {
+          const compressed = compress(command, output, { maxTokens });
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+              exitCode: result.exitCode, output: compressed.content, duration: result.duration,
+              tokensSaved: compressed.tokensSaved,
+            }) }],
+          };
+        }
+      }
+
+      return { content: [{ type: "text" as const, text: output }] };
+    }
+  );
+
+  // ── browse: list files/dirs as structured JSON ────────────────────────────
+
+  server.tool(
+    "browse",
+    "List files and directories as structured JSON. Auto-filters node_modules, .git, dist by default.",
+    {
+      path: z.string().optional().describe("Directory path (default: cwd)"),
+      recursive: z.boolean().optional().describe("List recursively (default: false)"),
+      maxDepth: z.number().optional().describe("Max depth for recursive listing (default: 2)"),
+      includeHidden: z.boolean().optional().describe("Include hidden files (default: false)"),
+    },
+    async ({ path, recursive, maxDepth, includeHidden }) => {
+      const target = path ?? process.cwd();
+      const depth = maxDepth ?? 2;
+
+      let command: string;
+      if (recursive) {
+        command = `find "${target}" -maxdepth ${depth} -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*'`;
+        if (!includeHidden) command += " -not -name '.*'";
+      } else {
+        command = includeHidden ? `ls -la "${target}"` : `ls -l "${target}"`;
+      }
+
+      const result = await exec(command);
+      const parsed = parseOutput(command, result.stdout);
+
+      if (parsed) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ cwd: target, ...parsed.data as object, parser: parsed.parser }) }],
+        };
+      }
+
+      const files = result.stdout.split("\n").filter(l => l.trim());
+      return { content: [{ type: "text" as const, text: JSON.stringify({ cwd: target, files }) }] };
+    }
+  );
+
+  // ── explain_error: structured error diagnosis ─────────────────────────────
+
+  server.tool(
+    "explain_error",
+    "Parse error output and return structured diagnosis with root cause and fix suggestion.",
+    {
+      error: z.string().describe("Error output text"),
+      command: z.string().optional().describe("The command that produced the error"),
+    },
+    async ({ error, command }) => {
+      const { errorParser } = await import("../parsers/errors.js");
+      if (errorParser.detect(command ?? "", error)) {
+        const info = errorParser.parse(command ?? "", error);
+        return { content: [{ type: "text" as const, text: JSON.stringify(info) }] };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          type: "unknown", message: error.split("\n")[0]?.trim() ?? "Unknown error",
+        }) }],
+      };
+    }
+  );
+
+  // ── status: show server info ──────────────────────────────────────────────
+
+  server.tool(
+    "status",
+    "Get open-terminal server status, capabilities, and available parsers.",
+    async () => {
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          name: "open-terminal", version: "0.2.0", cwd: process.cwd(),
+          parsers: ["ls", "find", "test", "git-log", "git-status", "build", "npm-install", "error"],
+          features: ["structured-output", "token-compression", "ai-summary", "error-diagnosis"],
+        }) }],
+      };
+    }
+  );
+
+  // ── search_files: smart file search with auto-filtering ────────────────────
+
+  server.tool(
+    "search_files",
+    "Search for files by name pattern. Auto-filters node_modules, .git, dist. Returns categorized results (source, config, other) with token savings.",
+    {
+      pattern: z.string().describe("Glob pattern (e.g., '*hooks*', '*.test.ts')"),
+      path: z.string().optional().describe("Search root (default: cwd)"),
+      includeNodeModules: z.boolean().optional().describe("Include node_modules (default: false)"),
+      maxResults: z.number().optional().describe("Max results per category (default: 50)"),
+    },
+    async ({ pattern, path, includeNodeModules, maxResults }) => {
+      const result = await searchFiles(pattern, path ?? process.cwd(), { includeNodeModules, maxResults });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── search_content: smart grep with grouping ──────────────────────────────
+
+  server.tool(
+    "search_content",
+    "Search file contents by regex pattern. Groups matches by file, sorted by relevance. Auto-filters excluded directories.",
+    {
+      pattern: z.string().describe("Search pattern (regex)"),
+      path: z.string().optional().describe("Search root (default: cwd)"),
+      fileType: z.string().optional().describe("File type filter (e.g., 'ts', 'py')"),
+      maxResults: z.number().optional().describe("Max files to return (default: 30)"),
+      contextLines: z.number().optional().describe("Context lines around matches (default: 0)"),
+    },
+    async ({ pattern, path, fileType, maxResults, contextLines }) => {
+      const result = await searchContent(pattern, path ?? process.cwd(), { fileType, maxResults, contextLines });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── list_recipes: list saved command recipes ──────────────────────────────
+
+  server.tool(
+    "list_recipes",
+    "List saved command recipes. Optionally filter by collection or project.",
+    {
+      collection: z.string().optional().describe("Filter by collection name"),
+      project: z.string().optional().describe("Project path for project-scoped recipes"),
+    },
+    async ({ collection, project }) => {
+      let recipes = listRecipes(project);
+      if (collection) recipes = recipes.filter(r => r.collection === collection);
+      return { content: [{ type: "text" as const, text: JSON.stringify(recipes) }] };
+    }
+  );
+
+  // ── run_recipe: execute a saved recipe ────────────────────────────────────
+
+  server.tool(
+    "run_recipe",
+    "Run a saved recipe by name with optional variable substitution.",
+    {
+      name: z.string().describe("Recipe name"),
+      variables: z.record(z.string(), z.string()).optional().describe("Variable values: {port: '3000'}"),
+      cwd: z.string().optional().describe("Working directory"),
+      format: z.enum(["raw", "json", "compressed"]).optional().describe("Output format"),
+    },
+    async ({ name, variables, cwd, format }) => {
+      const recipe = getRecipe(name, cwd);
+      if (!recipe) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Recipe '${name}' not found` }) }] };
+      }
+
+      const command = variables ? substituteVariables(recipe.command, variables) : recipe.command;
+      const result = await exec(command, cwd, 30000);
+      const output = (result.stdout + result.stderr).trim();
+
+      if (format === "json") {
+        const parsed = parseOutput(command, output);
+        if (parsed) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({
+            recipe: name, exitCode: result.exitCode, parsed: parsed.data, duration: result.duration,
+          }) }] };
+        }
+      }
+
+      if (format === "compressed") {
+        const compressed = compress(command, output, { format: "json" });
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          recipe: name, exitCode: result.exitCode, output: compressed.content, duration: result.duration,
+          tokensSaved: compressed.tokensSaved,
+        }) }] };
+      }
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        recipe: name, exitCode: result.exitCode, output: stripAnsi(output), duration: result.duration,
+      }) }] };
+    }
+  );
+
+  // ── save_recipe: save a new recipe ────────────────────────────────────────
+
+  server.tool(
+    "save_recipe",
+    "Save a reusable command recipe. Variables in commands use {name} syntax.",
+    {
+      name: z.string().describe("Recipe name"),
+      command: z.string().describe("Shell command (use {var} for variables)"),
+      description: z.string().optional().describe("Description"),
+      collection: z.string().optional().describe("Collection to add to"),
+      project: z.string().optional().describe("Project path (for project-scoped recipe)"),
+      tags: z.array(z.string()).optional().describe("Tags"),
+    },
+    async ({ name, command, description, collection, project, tags }) => {
+      const recipe = createRecipe({ name, command, description, collection, project, tags });
+      return { content: [{ type: "text" as const, text: JSON.stringify(recipe) }] };
+    }
+  );
+
+  // ── list_collections: list recipe collections ─────────────────────────────
+
+  server.tool(
+    "list_collections",
+    "List recipe collections.",
+    {
+      project: z.string().optional().describe("Project path"),
+    },
+    async ({ project }) => {
+      const collections = listCollections(project);
+      return { content: [{ type: "text" as const, text: JSON.stringify(collections) }] };
+    }
+  );
+
+  // ── bg_start: start a background process ───────────────────────────────────
+
+  server.tool(
+    "bg_start",
+    "Start a background process (e.g., dev server). Auto-detects port from command.",
+    {
+      command: z.string().describe("Command to run in background"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ command, cwd }) => {
+      const result = bgStart(command, cwd);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── bg_status: list background processes ──────────────────────────────────
+
+  server.tool(
+    "bg_status",
+    "List all managed background processes with status, ports, and recent output.",
+    async () => {
+      return { content: [{ type: "text" as const, text: JSON.stringify(bgStatus()) }] };
+    }
+  );
+
+  // ── bg_stop: stop a background process ────────────────────────────────────
+
+  server.tool(
+    "bg_stop",
+    "Stop a managed background process by PID.",
+    { pid: z.number().describe("Process ID to stop") },
+    async ({ pid }) => {
+      const ok = bgStop(pid);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ stopped: ok, pid }) }] };
+    }
+  );
+
+  // ── bg_logs: get process output ───────────────────────────────────────────
+
+  server.tool(
+    "bg_logs",
+    "Get recent output lines from a background process.",
+    {
+      pid: z.number().describe("Process ID"),
+      tail: z.number().optional().describe("Number of lines (default: 20)"),
+    },
+    async ({ pid, tail }) => {
+      const lines = bgLogs(pid, tail);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ pid, lines }) }] };
+    }
+  );
+
+  // ── bg_wait_port: wait for port to be ready ───────────────────────────────
+
+  server.tool(
+    "bg_wait_port",
+    "Wait for a port to start accepting connections. Useful after starting a dev server.",
+    {
+      port: z.number().describe("Port number to wait for"),
+      timeout: z.number().optional().describe("Timeout in ms (default: 30000)"),
+    },
+    async ({ port, timeout }) => {
+      const ready = await bgWaitPort(port, timeout);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ port, ready }) }] };
+    }
+  );
+
+  // ── execute_diff: run command with diff from last run ───────────────────────
+
+  server.tool(
+    "execute_diff",
+    "Run a command and return diff from its last execution. Ideal for edit→test loops — only shows what changed.",
+    {
+      command: z.string().describe("Shell command to execute"),
+      cwd: z.string().optional().describe("Working directory"),
+      timeout: z.number().optional().describe("Timeout in ms"),
+    },
+    async ({ command, cwd, timeout }) => {
+      const workDir = cwd ?? process.cwd();
+      const result = await exec(command, workDir, timeout ?? 30000);
+      const output = (result.stdout + result.stderr).trim();
+      const diff = diffOutput(command, workDir, output);
+
+      if (diff.tokensSaved > 0) {
+        recordSaving("diff", diff.tokensSaved);
+      }
+
+      if (diff.unchanged) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          exitCode: result.exitCode, unchanged: true, diffSummary: diff.diffSummary,
+          duration: result.duration, tokensSaved: diff.tokensSaved,
+        }) }] };
+      }
+
+      if (diff.hasPrevious) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          exitCode: result.exitCode, diffSummary: diff.diffSummary,
+          added: diff.added.slice(0, 50), removed: diff.removed.slice(0, 50),
+          duration: result.duration, tokensSaved: diff.tokensSaved,
+        }) }] };
+      }
+
+      // First run — return full output
+      const compressed = compress(command, output, { format: "json" });
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        exitCode: result.exitCode, output: compressed.content,
+        diffSummary: "first run", duration: result.duration,
+      }) }] };
+    }
+  );
+
+  // ── token_stats: economy dashboard ────────────────────────────────────────
+
+  server.tool(
+    "token_stats",
+    "Get token economy stats — how many tokens have been saved by structured output, compression, diffing, and caching.",
+    async () => {
+      const stats = getEconomyStats();
+      return { content: [{ type: "text" as const, text: JSON.stringify(stats) }] };
+    }
+  );
+
+  // ── snapshot: capture terminal state ──────────────────────────────────────
+
+  server.tool(
+    "snapshot",
+    "Capture a compact snapshot of terminal state (cwd, env, running processes, recent commands, recipes). Useful for agent context handoff.",
+    async () => {
+      const snap = captureSnapshot();
+      return { content: [{ type: "text" as const, text: JSON.stringify(snap) }] };
+    }
+  );
+
+  return server;
+}
+
+// ── main: start MCP server via stdio ─────────────────────────────────────────
+
+export async function startMcpServer(): Promise<void> {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("open-terminal MCP server running on stdio");
+}
