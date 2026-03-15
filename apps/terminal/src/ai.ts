@@ -207,6 +207,7 @@ RULES:
 - For "show who changed each line" use git blame, for "show remote urls" use git remote -v
 - For text search in code, use grep -rn, NOT nm or objdump (those are for compiled binaries)
 - On macOS: for memory use vm_stat or top -l 1, for disk use df -h, for processes use ps aux
+- macOS uses BSD tools, NOT GNU. Use: du -d 1 (not --max-depth), ls (not ls --color), sort -r (not sort --reverse), ps aux (not ps --sort)
 - NEVER invent commands that don't exist. Stick to standard Unix/macOS commands.
 - NEVER install packages (npx, npm install, pip install, brew install). This is a READ-ONLY terminal.
 - NEVER modify source code (sed -i, codemod, awk with redirect). Only observe, never change.
