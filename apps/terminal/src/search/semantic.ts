@@ -77,7 +77,65 @@ function extractSymbols(filePath: string): CodeSymbol[] {
   const lines = content.split("\n");
   const symbols: CodeSymbol[] = [];
   const file = filePath;
+  const ext = filePath.match(/\.(\w+)$/)?.[1] ?? "";
 
+  // Python support
+  if (ext === "py") {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const defMatch = line.match(/^(\s*)(?:async\s+)?def\s+(\w+)\s*\(/);
+      if (defMatch) {
+        symbols.push({ name: defMatch[2], kind: "function", file, line: i + 1, signature: line.trim(), exported: !defMatch[2].startsWith("_") });
+      }
+      const classMatch = line.match(/^class\s+(\w+)/);
+      if (classMatch) {
+        symbols.push({ name: classMatch[1], kind: "class", file, line: i + 1, signature: line.trim(), exported: true });
+      }
+    }
+    return symbols;
+  }
+
+  // Go support
+  if (ext === "go") {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const funcMatch = line.match(/^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(/);
+      if (funcMatch) {
+        symbols.push({ name: funcMatch[1], kind: "function", file, line: i + 1, signature: line.trim(), exported: /^[A-Z]/.test(funcMatch[1]) });
+      }
+      const typeMatch = line.match(/^type\s+(\w+)\s+(struct|interface)/);
+      if (typeMatch) {
+        symbols.push({ name: typeMatch[1], kind: typeMatch[2] === "interface" ? "interface" : "class", file, line: i + 1, signature: line.trim(), exported: /^[A-Z]/.test(typeMatch[1]) });
+      }
+    }
+    return symbols;
+  }
+
+  // Rust support
+  if (ext === "rs") {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fnMatch = line.match(/^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/);
+      if (fnMatch) {
+        symbols.push({ name: fnMatch[1], kind: "function", file, line: i + 1, signature: line.trim(), exported: line.includes("pub") });
+      }
+      const structMatch = line.match(/^\s*(?:pub\s+)?struct\s+(\w+)/);
+      if (structMatch) {
+        symbols.push({ name: structMatch[1], kind: "class", file, line: i + 1, signature: line.trim(), exported: line.includes("pub") });
+      }
+      const enumMatch = line.match(/^\s*(?:pub\s+)?enum\s+(\w+)/);
+      if (enumMatch) {
+        symbols.push({ name: enumMatch[1], kind: "type", file, line: i + 1, signature: line.trim(), exported: line.includes("pub") });
+      }
+      const traitMatch = line.match(/^\s*(?:pub\s+)?trait\s+(\w+)/);
+      if (traitMatch) {
+        symbols.push({ name: traitMatch[1], kind: "interface", file, line: i + 1, signature: line.trim(), exported: line.includes("pub") });
+      }
+    }
+    return symbols;
+  }
+
+  // TypeScript/JavaScript (default)
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lineNum = i + 1;

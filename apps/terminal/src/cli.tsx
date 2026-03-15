@@ -352,6 +352,33 @@ else if (args[0] === "symbols" && args[1]) {
   }
 }
 
+// ── History command ──────────────────────────────────────────────────────────
+
+else if (args[0] === "history") {
+  const { loadContext } = await import("./session-context.js");
+  const entries = loadContext();
+  if (entries.length === 0) { console.log("No recent history."); }
+  else {
+    for (const e of entries) {
+      const time = new Date(e.timestamp).toLocaleTimeString();
+      console.log(`  ${time}  ${e.prompt}`);
+      console.log(`    $ ${e.command}`);
+    }
+  }
+}
+
+// ── Explain command ─────────────────────────────────────────────────────────
+
+else if (args[0] === "explain" && args[1]) {
+  const command = args.slice(1).join(" ");
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY) {
+    console.error("explain requires an API key"); process.exit(1);
+  }
+  const { explainCommand } = await import("./ai.js");
+  const explanation = await explainCommand(command);
+  console.log(explanation);
+}
+
 // ── Snapshot command ─────────────────────────────────────────────────────────
 
 else if (args[0] === "snapshot") {
@@ -373,13 +400,7 @@ else if (args.length > 0) {
   // Everything that doesn't match a subcommand is treated as natural language
   const prompt = args.join(" ");
 
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY) {
-    console.error("terminal: No API key found.");
-    console.error("Set one of:");
-    console.error("  export CEREBRAS_API_KEY=your_key  (free, open-source)");
-    console.error("  export ANTHROPIC_API_KEY=your_key  (Claude)");
-    process.exit(1);
-  }
+  const offlineMode = !process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY;
 
   const { translateToCommand, checkPermissions, isIrreversible } = await import("./ai.js");
   const { execSync } = await import("child_process");
@@ -393,14 +414,31 @@ else if (args.length > 0) {
   const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
   const { detectLoop } = await import("./loop-detector.js");
   const { loadConfig } = await import("./history.js");
+  const { loadContext, saveContext, formatContext } = await import("./session-context.js");
+  const { getLearned, recordMapping } = await import("./usage-cache.js");
 
   const config = loadConfig();
   const perms = config.permissions;
+  const sessionCtx = formatContext();
 
-  // Step 1: AI translates NL → shell command
+  // Check usage learning cache first (zero AI cost for repeated queries)
+  const learned = getLearned(prompt);
+  if (learned && !offlineMode) {
+    console.error(`[open-terminal] cached: $ ${learned}`);
+  }
+
+  // Step 1: AI translates NL → shell command (with session context for follow-ups)
   let command: string;
-  try {
-    command = await translateToCommand(prompt, perms, []);
+
+  if (offlineMode) {
+    // Offline: treat prompt as literal command, apply noise filter only
+    console.error("[open-terminal] offline mode (no API key) — running as literal command");
+    command = prompt;
+  } else if (learned) {
+    command = learned;
+  } else {
+    try {
+      command = await translateToCommand(sessionCtx ? `${prompt}\n${sessionCtx}` : prompt, perms, []);
   } catch (e: any) {
     // If BLOCKED, try README fallback ONLY for conceptual questions (not file access)
     if (e.message?.startsWith("BLOCKED:")) {
@@ -420,9 +458,18 @@ else if (args.length > 0) {
         } catch {}
       }
     }
-    console.error(e.message);
+    // "I don't know" honesty — better than wrong answer
+    if (e.message?.startsWith("BLOCKED:")) {
+      console.log(`I don't know how to do this with shell commands. Try running it directly.`);
+    } else {
+      console.error(e.message);
+    }
     process.exit(1);
   }
+  } // close the else (learned/offline) block
+
+  // Record the mapping for usage learning
+  if (!offlineMode && !learned) recordMapping(prompt, command);
 
   // Check permissions
   const blocked = checkPermissions(command, perms);
@@ -493,6 +540,7 @@ else if (args.length > 0) {
     const clean = stripNoise(stripAnsi(raw)).cleaned;
     const rawTokens = estimateTokens(raw);
     recordUsage(rawTokens);
+    saveContext(prompt, actualCmd, clean.slice(0, 500));
 
     // Test output detection
     // Test output: skip watchlist, let AI framing handle it
@@ -531,6 +579,25 @@ else if (args.length > 0) {
     const errStdout = e.stdout?.toString() ?? "";
     const errStderr = e.stderr?.toString() ?? "";
     if (e.status === 1 && !errStdout.trim() && !errStderr.trim()) {
+      // Empty result — retry with broader scope before giving up
+      if (!actualCmd.includes("#(broadened)")) {
+        try {
+          const broaderCmd = await translateToCommand(
+            `${prompt} (Previous command found NOTHING. Try searching a BROADER scope: use . or packages/ instead of src/. Use simpler grep pattern.)`,
+            perms, []
+          );
+          if (broaderCmd && !isIrreversible(broaderCmd) && !checkPermissions(broaderCmd, perms)) {
+            console.error(`[open-terminal] broadening search...`);
+            const broaderResult = execSync(broaderCmd + " #(broadened)", { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
+            const broaderClean = stripNoise(stripAnsi(broaderResult)).cleaned;
+            if (broaderClean.trim()) {
+              const processed = await processOutput(broaderCmd, broaderClean, prompt);
+              console.log(processed.aiProcessed ? processed.summary : broaderClean);
+              process.exit(0);
+            }
+          }
+        } catch { /* broader also failed */ }
+      }
       console.log(`No results found for: ${prompt}`);
       process.exit(0);
     }
