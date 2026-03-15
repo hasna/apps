@@ -16,6 +16,7 @@ import { diffOutput } from "../diff-cache.js";
 import { processOutput } from "../output-processor.js";
 import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
 import { cachedRead, cacheStats } from "../file-cache.js";
+import { getBootContext } from "../session-boot.js";
 import { storeOutput, expandOutput } from "../expand-store.js";
 import { rewriteCommand } from "../command-rewriter.js";
 import { shouldBeLazy, toLazy } from "../lazy-executor.js";
@@ -584,6 +585,17 @@ export function createServer(): McpServer {
       }
       const sessions = listSessions(limit ?? 20);
       return { content: [{ type: "text" as const, text: JSON.stringify(sessions) }] };
+    }
+  );
+
+  // ── boot: session start context (replaces first 5 agent commands) ──────────
+
+  server.tool(
+    "boot",
+    "Get everything an agent needs on session start in ONE call — git state, project info, source structure. Replaces: git status + git log + cat package.json + ls src/. Cached for the session.",
+    async () => {
+      const ctx = await getBootContext(process.cwd());
+      return { content: [{ type: "text" as const, text: JSON.stringify(ctx) }] };
     }
   );
 
