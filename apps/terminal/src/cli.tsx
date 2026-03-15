@@ -86,6 +86,7 @@ if (args[0] === "exec") {
   const { shouldBeLazy, toLazy, getSlice } = await import("./lazy-executor.js");
   const { parseOutput, estimateTokens } = await import("./parsers/index.js");
   const { recordSaving, recordUsage } = await import("./economy.js");
+  const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
 
   // Rewrite command if possible
   const rw = rewriteCommand(command);
@@ -124,6 +125,21 @@ if (args[0] === "exec") {
       const slice = getSlice(clean, offset ?? 0, limit ?? 50);
       console.log(slice.lines.join("\n"));
       if (slice.hasMore) console.error(`[open-terminal] showing ${slice.lines.length}/${slice.total}, ${slice.total - (offset ?? 0) - slice.lines.length} remaining`);
+      process.exit(0);
+    }
+
+    // Test output detection — use watchlist for structured test tracking
+    if (isTestOutput(clean)) {
+      const result = trackTests(process.cwd(), clean);
+      const formatted = formatWatchResult(result);
+      const savedTokens = rawTokens - estimateTokens(formatted);
+      if (savedTokens > 20) recordSaving("structured", savedTokens);
+      if (jsonMode) {
+        console.log(JSON.stringify({ exitCode: 0, type: "test-results", ...result, duration: Date.now() - start }));
+      } else {
+        console.log(formatted);
+      }
+      if (savedTokens > 10) console.error(`[open-terminal] test watchlist: saved ${savedTokens} tokens`);
       process.exit(0);
     }
 
