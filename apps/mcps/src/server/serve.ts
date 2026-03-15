@@ -16,7 +16,20 @@ import {
   disableServer,
   getCachedTools,
   getToolCounts,
+  updateServer,
+  setServerEnv,
+  unsetServerEnv,
 } from "../lib/registry.js";
+import {
+  listSources,
+  addSource,
+  removeSource,
+  enableSource,
+  disableSource,
+  findServers,
+} from "../lib/sources.js";
+import { diagnoseServer } from "../lib/doctor.js";
+import { connectToServer, callTool, disconnectServer } from "../lib/proxy.js";
 import { getDb, closeDb } from "../lib/db.js";
 
 interface ServerWithToolCount {
@@ -332,6 +345,218 @@ export async function startServer(
         }
       }
 
+      // PATCH /api/servers/:id — update server fields
+      if (singleMatch && method === "PATCH") {
+        const id = singleMatch[1];
+        if (!isValidId(id)) return json({ error: "Invalid server ID" }, 400, port);
+        const existing = getServer(id);
+        if (!existing) return json({ error: `Server '${id}' not found` }, 404, port);
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
+          let body: {
+            name?: string;
+            description?: string;
+            command?: string;
+            args?: unknown;
+            transport?: string;
+            url?: string;
+          };
+          try {
+            body = (await req.json()) as typeof body;
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400, port);
+          }
+          const fields: Parameters<typeof updateServer>[1] = {};
+          if (body.name !== undefined) fields.name = body.name;
+          if (body.description !== undefined) fields.description = body.description;
+          if (body.command !== undefined) fields.command = body.command;
+          if (body.transport !== undefined) fields.transport = body.transport as any;
+          if (body.url !== undefined) fields.url = body.url;
+          if (body.args !== undefined) {
+            if (!Array.isArray(body.args) || body.args.some((a) => typeof a !== "string")) {
+              return json({ error: "Invalid 'args' format" }, 400, port);
+            }
+            fields.args = body.args as string[];
+          }
+          const updated = updateServer(id, fields);
+          return json(redactServer(updated), 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to update server" }, 500, port);
+        }
+      }
+
+      // POST /api/servers/:id/env — set env var
+      const serverEnvMatch = path.match(/^\/api\/servers\/([^/]+)\/env$/);
+      if (serverEnvMatch && method === "POST") {
+        const id = serverEnvMatch[1];
+        if (!isValidId(id)) return json({ error: "Invalid server ID" }, 400, port);
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
+          let body: { key?: string; value?: string };
+          try {
+            body = (await req.json()) as typeof body;
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400, port);
+          }
+          if (!body.key || typeof body.key !== "string") return json({ error: "Missing 'key'" }, 400, port);
+          if (typeof body.value !== "string") return json({ error: "Missing 'value'" }, 400, port);
+          setServerEnv(id, body.key, body.value);
+          return json({ ok: true }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // DELETE /api/servers/:id/env/:key — unset env var
+      const serverEnvKeyMatch = path.match(/^\/api\/servers\/([^/]+)\/env\/([^/]+)$/);
+      if (serverEnvKeyMatch && method === "DELETE") {
+        const id = serverEnvKeyMatch[1];
+        const key = decodeURIComponent(serverEnvKeyMatch[2]);
+        if (!isValidId(id)) return json({ error: "Invalid server ID" }, 400, port);
+        try {
+          unsetServerEnv(id, key);
+          return json({ ok: true }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // GET /api/servers/:id/tools — get cached tools for a server
+      const serverToolsMatch = path.match(/^\/api\/servers\/([^/]+)\/tools$/);
+      if (serverToolsMatch && method === "GET") {
+        const id = serverToolsMatch[1];
+        if (!isValidId(id)) return json({ error: "Invalid server ID" }, 400, port);
+        const entry = getServer(id);
+        if (!entry) return json({ error: `Server '${id}' not found` }, 404, port);
+        const tools = getCachedTools(id);
+        return json(tools, 200, port);
+      }
+
+      // POST /api/servers/:id/call — call a tool on a server
+      const serverCallMatch = path.match(/^\/api\/servers\/([^/]+)\/call$/);
+      if (serverCallMatch && method === "POST") {
+        const id = serverCallMatch[1];
+        if (!isValidId(id)) return json({ error: "Invalid server ID" }, 400, port);
+        const entry = getServer(id);
+        if (!entry) return json({ error: `Server '${id}' not found` }, 404, port);
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
+          let body: { tool?: string; args?: Record<string, unknown> };
+          try {
+            body = (await req.json()) as typeof body;
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400, port);
+          }
+          if (!body.tool || typeof body.tool !== "string") return json({ error: "Missing 'tool'" }, 400, port);
+          await connectToServer(entry);
+          const toolName = `${id}__${body.tool}`;
+          const result = await callTool(toolName, body.args || {});
+          await disconnectServer(id).catch(() => undefined);
+          return json({ content: result.content }, 200, port);
+        } catch (e) {
+          await disconnectServer(id).catch(() => undefined);
+          return json({ error: e instanceof Error ? e.message : "Failed to call tool" }, 500, port);
+        }
+      }
+
+      // GET /api/servers/:id/doctor — run health diagnostics
+      const serverDoctorMatch = path.match(/^\/api\/servers\/([^/]+)\/doctor$/);
+      if (serverDoctorMatch && method === "GET") {
+        const id = serverDoctorMatch[1];
+        if (!isValidId(id)) return json({ error: "Invalid server ID" }, 400, port);
+        const entry = getServer(id);
+        if (!entry) return json({ error: `Server '${id}' not found` }, 404, port);
+        try {
+          const report = await diagnoseServer(entry);
+          return json(report, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to diagnose server" }, 500, port);
+        }
+      }
+
+      // GET /api/sources — list all sources
+      if (path === "/api/sources" && method === "GET") {
+        return json(listSources(), 200, port);
+      }
+
+      // POST /api/sources — add a source
+      if (path === "/api/sources" && method === "POST") {
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
+          let body: { name?: string; type?: string; url?: string; description?: string };
+          try {
+            body = (await req.json()) as typeof body;
+          } catch {
+            return json({ error: "Invalid JSON body" }, 400, port);
+          }
+          if (!body.name) return json({ error: "Missing 'name'" }, 400, port);
+          if (!body.type) return json({ error: "Missing 'type'" }, 400, port);
+          if (!body.url) return json({ error: "Missing 'url'" }, 400, port);
+          const source = addSource({
+            name: body.name,
+            type: body.type as any,
+            url: body.url,
+            description: body.description,
+          });
+          return json(source, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed to add source" }, 500, port);
+        }
+      }
+
+      // Source-level routes: /api/sources/:id
+      const singleSourceMatch = path.match(/^\/api\/sources\/([^/]+)$/);
+      if (singleSourceMatch && method === "DELETE") {
+        const id = singleSourceMatch[1];
+        try {
+          removeSource(id);
+          return json({ ok: true }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      const sourceEnableMatch = path.match(/^\/api\/sources\/([^/]+)\/enable$/);
+      if (sourceEnableMatch && method === "POST") {
+        const id = sourceEnableMatch[1];
+        try {
+          enableSource(id);
+          return json({ ok: true }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      const sourceDisableMatch = path.match(/^\/api\/sources\/([^/]+)\/disable$/);
+      if (sourceDisableMatch && method === "POST") {
+        const id = sourceDisableMatch[1];
+        try {
+          disableSource(id);
+          return json({ ok: true }, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
+        }
+      }
+
+      // GET /api/find — find servers across sources
+      if (path === "/api/find" && method === "GET") {
+        try {
+          const q = url.searchParams.get("q") || "";
+          const sourcesParam = url.searchParams.get("sources");
+          const limitParam = url.searchParams.get("limit");
+          const sources = sourcesParam ? sourcesParam.split(",").filter(Boolean) : undefined;
+          const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+          const results = await findServers(q, { sources, limit });
+          return json(results, 200, port);
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : "Find failed" }, 500, port);
+        }
+      }
+
       // POST /api/update — self-update the package
       if (path === "/api/update" && method === "POST") {
         if (!isLoopbackHost(host)) {
@@ -372,7 +597,7 @@ export async function startServer(
         return new Response(null, {
           headers: {
             "Access-Control-Allow-Origin": `http://localhost:${port}`,
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
           },
         });
