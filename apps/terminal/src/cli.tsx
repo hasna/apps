@@ -87,6 +87,13 @@ if (args[0] === "exec") {
   const { parseOutput, estimateTokens } = await import("./parsers/index.js");
   const { recordSaving, recordUsage } = await import("./economy.js");
   const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
+  const { detectLoop } = await import("./loop-detector.js");
+
+  // Loop detection — suggest narrowing if running full test suite repeatedly
+  const loop = detectLoop(command);
+  if (loop.detected) {
+    console.error(`[open-terminal] loop detected: test run #${loop.iteration}${loop.suggestedNarrow ? ` — try: ${loop.suggestedNarrow}` : " — consider narrowing to specific test file"}`);
+  }
 
   // Rewrite command if possible
   const rw = rewriteCommand(command);
