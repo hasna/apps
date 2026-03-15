@@ -402,19 +402,23 @@ else if (args.length > 0) {
   try {
     command = await translateToCommand(prompt, perms, []);
   } catch (e: any) {
-    // If BLOCKED, try fallback: read README or package.json for conceptual questions
+    // If BLOCKED, try README fallback ONLY for conceptual questions (not file access)
     if (e.message?.startsWith("BLOCKED:")) {
-      try {
-        const { existsSync, readFileSync } = await import("fs");
-        if (existsSync("README.md")) {
-          const readme = readFileSync("README.md", "utf8").slice(0, 3000);
-          const processed = await processOutput("cat README.md", readme, prompt);
-          if (processed.aiProcessed) {
-            console.log(processed.summary);
-            process.exit(0);
+      const isConceptual = /\b(explain|why|what does|how does|describe|architecture|overview|summary)\b/i.test(prompt);
+      const isFileAccess = /\b(cat|show|read|find|ls|list)\b.*\b(\.\w+\/|src\/|packages\/)/i.test(prompt);
+      if (isConceptual && !isFileAccess) {
+        try {
+          const { existsSync, readFileSync } = await import("fs");
+          if (existsSync("README.md")) {
+            const readme = readFileSync("README.md", "utf8").slice(0, 3000);
+            const processed = await processOutput("cat README.md", readme, prompt);
+            if (processed.aiProcessed) {
+              console.log(processed.summary);
+              process.exit(0);
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
     console.error(e.message);
     process.exit(1);
