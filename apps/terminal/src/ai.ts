@@ -26,10 +26,10 @@ function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "s
     };
   }
 
-  // Cerebras — single fast model (Llama is already fast)
+  // Cerebras — fast model for simple, smart model for complex
   return {
-    fast: "llama-4-scout-17b-16e",
-    smart: "llama-4-scout-17b-16e",
+    fast: "llama3.1-8b",
+    smart: "llama3.1-8b",
     pick: isComplex ? "smart" : "fast",
   };
 }
