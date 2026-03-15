@@ -39,7 +39,9 @@ RULES:
 - Use symbols: ✓ for success/yes, ✗ for failure/no, ⚠ for warnings
 - Maximum 8 lines
 - Keep errors/failures verbatim
-- Be direct and concise — the user wants an ANSWER, not a data dump`;
+- Be direct and concise — the user wants an ANSWER, not a data dump
+- For TEST OUTPUT: look for "X pass" and "X fail" lines. These are DEFINITIVE. If you see "42 pass, 0 fail" in the output, the answer is "42 tests pass, 0 fail." NEVER say "no tests found" or "incomplete" when pass/fail counts are visible.
+- For BUILD OUTPUT: if tsc/build exits 0 with no output, it SUCCEEDED. Empty output = success.`;
 
 /**
  * Process command output through AI summarization.
@@ -77,9 +79,17 @@ export async function processOutput(
   }
 
   try {
+    // Pre-parse: extract test counts so AI can't misread them
+    let preParseHint = "";
+    const passMatch = output.match(/(\d+)\s+pass/i);
+    const failMatch = output.match(/(\d+)\s+fail/i);
+    if (passMatch || failMatch) {
+      preParseHint = `\nPRE-PARSED TEST RESULTS: ${passMatch?.[1] ?? 0} passed, ${failMatch?.[1] ?? 0} failed. USE THESE NUMBERS.`;
+    }
+
     const provider = getProvider();
     const summary = await provider.complete(
-      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}`,
+      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}${preParseHint}\nOutput (${lines.length} lines):\n${toSummarize}`,
       {
         system: SUMMARIZE_PROMPT,
         maxTokens: 300,

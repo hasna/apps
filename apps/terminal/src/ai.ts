@@ -130,26 +130,59 @@ function detectProjectContext(): string {
   }
 
   // Python
-  if (existsSync(join(cwd, "requirements.txt")) || existsSync(join(cwd, "pyproject.toml"))) {
-    parts.push("Project: Python. Use pip/python commands.");
+  if (existsSync(join(cwd, "pyproject.toml"))) {
+    try {
+      const pyproject = readFileSync(join(cwd, "pyproject.toml"), "utf8");
+      const nameMatch = pyproject.match(/name\s*=\s*"([^"]+)"/);
+      const versionMatch = pyproject.match(/version\s*=\s*"([^"]+)"/);
+      parts.push(`Project: ${nameMatch?.[1] ?? "Python"}${versionMatch ? `@${versionMatch[1]}` : ""} (Python)`);
+    } catch { parts.push("Project: Python (pyproject.toml found)"); }
+    parts.push("Use pip/python/pytest commands. Test: pytest. Build: python -m build.");
+  } else if (existsSync(join(cwd, "requirements.txt"))) {
+    parts.push("Project: Python (requirements.txt). Use pip/python/pytest commands.");
   }
 
   // Go
   if (existsSync(join(cwd, "go.mod"))) {
-    parts.push("Project: Go. Use go build/test/run commands.");
+    try {
+      const gomod = readFileSync(join(cwd, "go.mod"), "utf8");
+      const moduleMatch = gomod.match(/module\s+(\S+)/);
+      parts.push(`Project: ${moduleMatch?.[1] ?? "Go"} (Go module)`);
+    } catch { parts.push("Project: Go (go.mod found)"); }
+    parts.push("Use go build/test/run. Test: go test ./... Build: go build.");
   }
 
   // Rust
   if (existsSync(join(cwd, "Cargo.toml"))) {
-    parts.push("Project: Rust. Use cargo build/test/run commands.");
+    try {
+      const cargo = readFileSync(join(cwd, "Cargo.toml"), "utf8");
+      const nameMatch = cargo.match(/name\s*=\s*"([^"]+)"/);
+      const versionMatch = cargo.match(/version\s*=\s*"([^"]+)"/);
+      parts.push(`Project: ${nameMatch?.[1] ?? "Rust"}${versionMatch ? `@${versionMatch[1]}` : ""} (Rust/Cargo)`);
+    } catch { parts.push("Project: Rust (Cargo.toml found)"); }
+    parts.push("Use cargo build/test/run. Test: cargo test. Build: cargo build --release.");
   }
 
   // Java
   if (existsSync(join(cwd, "pom.xml"))) {
-    parts.push("Project: Java/Maven. Use mvn commands.");
+    parts.push("Project: Java/Maven. Use mvn commands. Test: mvn test. Build: mvn package.");
   }
   if (existsSync(join(cwd, "build.gradle")) || existsSync(join(cwd, "build.gradle.kts"))) {
-    parts.push("Project: Java/Gradle. Use gradle commands.");
+    parts.push("Project: Java/Gradle. Use gradle commands. Test: gradle test. Build: gradle build.");
+  }
+
+  // Docker
+  if (existsSync(join(cwd, "Dockerfile")) || existsSync(join(cwd, "docker-compose.yml")) || existsSync(join(cwd, "docker-compose.yaml"))) {
+    parts.push("Docker: Dockerfile/docker-compose present. Container commands available.");
+  }
+
+  // Makefile
+  if (existsSync(join(cwd, "Makefile"))) {
+    try {
+      const { execSync: execS } = require("child_process");
+      const targets = execS("grep -E '^[a-zA-Z_-]+:' Makefile | head -10 | cut -d: -f1", { cwd, encoding: "utf8", timeout: 1000 }).trim();
+      if (targets) parts.push(`Makefile targets: ${targets.split("\n").join(", ")}`);
+    } catch {}
   }
 
   // Directory structure — so AI knows actual paths (not guessed ones)
