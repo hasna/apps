@@ -59,6 +59,10 @@ const IRREVERSIBLE_PATTERNS = [
 const SAFE_OVERRIDES = [
   /^\s*git\s+(log|show|diff|branch|status|blame|tag|remote|stash\s+list)\b/,
   /^\s*git\s+log\b/,
+  // find -exec with read-only tools is safe
+  /\bfind\b.*-exec\s+(wc|cat|head|tail|grep|stat|file|du|ls)\b/,
+  // find without -exec is always safe
+  /^\s*find\b(?!.*-exec\s+(rm|mv|chmod|chown|sed))/,
 ];
 
 export function isIrreversible(command: string): boolean {
