@@ -80,7 +80,7 @@ export default function App() {
   const allNl = [...nlHistory, ...sessionNl];
 
   const finishOnboarding = (perms: Permissions) => {
-    const next = { onboarded: true, permissions: perms };
+    const next = { onboarded: true, confirm: false, permissions: perms };
     setConfig(next);
     saveConfig(next);
   };
@@ -185,6 +185,11 @@ export default function App() {
                 return;
               }
               const danger = isIrreversible(command);
+              // skip confirm unless user opted in OR command is dangerous
+              if (!config.confirm && !danger) {
+                await runPhase(nl, command, false);
+                return;
+              }
               setPhase({ type: "confirm", nl, command, raw: false, danger });
             } catch (e: any) {
               setPhase({ type: "error", message: e.message });
@@ -247,6 +252,10 @@ export default function App() {
             try {
               const fixed = await fixCommand(nl, command, errorOutput, config.permissions, sessionCmds);
               const danger = isIrreversible(fixed);
+              if (!config.confirm && !danger) {
+                await runPhase(nl, fixed, false);
+                return;
+              }
               setPhase({ type: "confirm", nl, command: fixed, raw: false, danger });
             } catch (e: any) {
               setPhase({ type: "error", message: e.message });

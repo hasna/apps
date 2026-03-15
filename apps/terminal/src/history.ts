@@ -29,6 +29,7 @@ export interface Permissions {
 
 export interface Config {
   onboarded: boolean;
+  confirm: boolean; // ask before running — false = run immediately
   permissions: Permissions;
 }
 
@@ -42,6 +43,7 @@ export const DEFAULT_PERMISSIONS: Permissions = {
 
 export const DEFAULT_CONFIG: Config = {
   onboarded: false,
+  confirm: false,
   permissions: DEFAULT_PERMISSIONS,
 };
 
@@ -77,6 +79,7 @@ export function loadConfig(): Config {
     return {
       ...DEFAULT_CONFIG,
       ...saved,
+      confirm: saved.confirm ?? false,
       permissions: { ...DEFAULT_PERMISSIONS, ...(saved.permissions ?? {}) },
     };
   } catch {
