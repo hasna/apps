@@ -142,4 +142,23 @@ describe("Recurring task operations", () => {
     expect(nonRecurring).toHaveLength(1);
     expect(nonRecurring[0]!.title).toBe("One-off");
   });
+
+  it("create_handoff equivalent", () => {
+    const { createHandoff } = require("../db/handoffs.js") as any;
+    const h = createHandoff({ agent_id: "brutus", summary: "MCP handoff test", completed: ["task1"], next_steps: ["task2"] }, db);
+    expect(h.agent_id).toBe("brutus");
+    expect(h.summary).toBe("MCP handoff test");
+    expect(h.completed).toEqual(["task1"]);
+    expect(h.next_steps).toEqual(["task2"]);
+  });
+
+  it("get_latest_handoff equivalent", () => {
+    const { createHandoff, getLatestHandoff } = require("../db/handoffs.js") as any;
+    createHandoff({ agent_id: "brutus", summary: "First" }, db);
+    createHandoff({ agent_id: "brutus", summary: "Second" }, db);
+    createHandoff({ agent_id: "maximus", summary: "Other agent" }, db);
+    const latest = getLatestHandoff("brutus", undefined, db);
+    expect(latest).not.toBeNull();
+    expect(latest.summary).toBe("Second");
+  });
 });
