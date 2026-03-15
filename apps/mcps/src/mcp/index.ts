@@ -11,6 +11,8 @@ import {
   getServer,
   enableServer,
   disableServer,
+  updateServer,
+  getCachedTools,
 } from "../lib/registry.js";
 import { searchRegistry, installFromRegistry } from "../lib/remote.js";
 import { listAwesomeServers } from "../lib/finder.js";
@@ -179,6 +181,65 @@ server.tool(
     const entry = disableServer(id);
     return {
       content: [{ type: "text", text: JSON.stringify(entry, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "update_server",
+  "Update fields of a registered MCP server",
+  {
+    id: z.string().describe("Server ID to update"),
+    name: z.string().optional().describe("New display name"),
+    description: z.string().optional().describe("New description"),
+    command: z.string().optional().describe("New command"),
+    args: z.array(z.string()).optional().describe("New args list"),
+    transport: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("New transport type"),
+    url: z.string().optional().describe("New URL for remote transports"),
+  },
+  async ({ id, name, description, command, args, transport, url }) => {
+    const existing = getServer(id);
+    if (!existing) {
+      return {
+        content: [{ type: "text", text: `Server "${id}" not found.` }],
+        isError: true,
+      };
+    }
+    const fields: Parameters<typeof updateServer>[1] = {};
+    if (name !== undefined) fields.name = name;
+    if (description !== undefined) fields.description = description;
+    if (command !== undefined) fields.command = command;
+    if (args !== undefined) fields.args = args;
+    if (transport !== undefined) fields.transport = transport;
+    if (url !== undefined) fields.url = url;
+    const updated = updateServer(id, fields);
+    return {
+      content: [{ type: "text", text: JSON.stringify(redactServerEnv(updated), null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "list_tools",
+  "List all cached tools across registered servers without connecting. Optionally filter by server_id.",
+  { server_id: z.string().optional().describe("Server ID to filter by (optional)") },
+  async ({ server_id }) => {
+    if (server_id) {
+      const tools = getCachedTools(server_id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(tools.map(t => ({ ...t, server_id })), null, 2) }],
+      };
+    }
+    const servers = listServers();
+    const allTools: Array<{ server_id: string; name: string; description: string; input_schema: Record<string, unknown> }> = [];
+    for (const s of servers) {
+      const tools = getCachedTools(s.id);
+      for (const t of tools) {
+        allTools.push({ server_id: s.id, ...t });
+      }
+    }
+    return {
+      content: [{ type: "text", text: JSON.stringify(allTools, null, 2) }],
     };
   }
 );
