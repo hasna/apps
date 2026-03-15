@@ -39,6 +39,12 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { McpServerEntry } from "@/types";
 
 function TransportBadge({ transport }: { transport: string }) {
@@ -100,16 +106,69 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
+function HealthStatus({ server }: { server: McpServerEntry }) {
+  const { last_connected_at, last_error } = server;
+
+  if (last_error) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex items-center gap-1.5 text-red-500 text-sm cursor-default">
+              <span className="text-base leading-none">●</span>
+              Error
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p className="max-w-xs break-words">{last_error}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  if (!last_connected_at) {
+    return (
+      <span className="flex items-center gap-1.5 text-muted-foreground text-sm">
+        <span className="text-base leading-none">●</span>
+        Never connected
+      </span>
+    );
+  }
+
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const connectedAt = new Date(last_connected_at).getTime();
+  const isRecent = connectedAt >= sevenDaysAgo;
+
+  if (isRecent) {
+    return (
+      <span className="flex items-center gap-1.5 text-green-500 text-sm">
+        <span className="text-base leading-none">●</span>
+        Healthy
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1.5 text-yellow-500 text-sm">
+      <span className="text-base leading-none">●</span>
+      Stale
+    </span>
+  );
+}
+
 interface ServersTableProps {
   data: McpServerEntry[];
   onToggle: (id: string, enabled: boolean) => void;
   onRemove: (id: string) => void;
+  onRowClick?: (server: McpServerEntry) => void;
 }
 
 export function ServersTable({
   data,
   onToggle,
   onRemove,
+  onRowClick,
 }: ServersTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] =
@@ -182,6 +241,11 @@ export function ServersTable({
             </Badge>
           );
         },
+      },
+      {
+        id: "health",
+        header: "Health",
+        cell: ({ row }) => <HealthStatus server={row.original} />,
       },
       {
         id: "tools",
@@ -345,12 +409,14 @@ export function ServersTable({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
-                  className={
-                    !row.original.enabled ? "opacity-60" : undefined
-                  }
+                  className={`${!row.original.enabled ? "opacity-60" : ""} ${onRowClick ? "cursor-pointer hover:bg-muted/50" : ""}`}
+                  onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
+                    <TableCell
+                      key={cell.id}
+                      onClick={cell.column.id === "actions" ? (e) => e.stopPropagation() : undefined}
+                    >
                       {flexRender(
                         cell.column.columnDef.cell,
                         cell.getContext()
