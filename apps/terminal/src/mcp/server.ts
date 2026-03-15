@@ -77,17 +77,20 @@ export function createServer(): McpServer {
         };
       }
 
-      // JSON mode — structured parsing
+      // JSON mode — structured parsing (only if it actually saves tokens)
       if (format === "json") {
         const parsed = parseOutput(command, output);
         if (parsed) {
           const savings = tokenSavings(output, parsed.data);
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({
-              exitCode: result.exitCode, parsed: parsed.data, parser: parsed.parser,
-              duration: result.duration, tokensSaved: savings.saved, savingsPercent: savings.percent,
-            }) }],
-          };
+          if (savings.saved > 0) {
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify({
+                exitCode: result.exitCode, parsed: parsed.data, parser: parsed.parser,
+                duration: result.duration, tokensSaved: savings.saved, savingsPercent: savings.percent,
+              }) }],
+            };
+          }
+          // JSON was larger — fall through to compression
         }
       }
 

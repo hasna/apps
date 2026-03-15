@@ -12,10 +12,18 @@ export interface ProcessedOutput {
   full: string;
   /** Structured JSON if the AI could extract it */
   structured?: Record<string, unknown>;
-  /** How many tokens were saved */
+  /** How many tokens were saved (net, after subtracting AI cost) */
   tokensSaved: number;
+  /** Tokens used by the AI summarization call */
+  aiTokensUsed: number;
   /** Whether AI processing was used (vs passthrough) */
   aiProcessed: boolean;
+  /** Cost of the AI call in USD (Cerebras pricing) */
+  aiCostUsd: number;
+  /** Value of tokens saved in USD (at Claude Sonnet rates) */
+  savingsValueUsd: number;
+  /** Net ROI: savings minus AI cost */
+  netSavingsUsd: number;
 }
 
 const MIN_LINES_TO_PROCESS = 15;
@@ -53,7 +61,11 @@ export async function processOutput(
       summary: output,
       full: output,
       tokensSaved: 0,
+      aiTokensUsed: 0,
       aiProcessed: false,
+      aiCostUsd: 0,
+      savingsValueUsd: 0,
+      netSavingsUsd: 0,
     };
   }
 
@@ -94,12 +106,34 @@ export async function processOutput(
       }
     } catch { /* not JSON, that's fine */ }
 
+    // Cost calculation
+    // AI input: system prompt (~200 tokens) + command + output sent to AI
+    const aiInputTokens = estimateTokens(SUMMARIZE_PROMPT) + estimateTokens(toSummarize) + 20;
+    const aiOutputTokens = summaryTokens;
+    const aiTokensUsed = aiInputTokens + aiOutputTokens;
+
+    // Cerebras qwen-3-235b pricing: $0.60/M input, $1.20/M output
+    const aiCostUsd = (aiInputTokens * 0.60 + aiOutputTokens * 1.20) / 1_000_000;
+
+    // Value of tokens saved (at Claude Sonnet $3/M input — what the agent would pay)
+    const savingsValueUsd = (saved * 3.0) / 1_000_000;
+    const netSavingsUsd = savingsValueUsd - aiCostUsd;
+
+    // Only record savings if net positive (AI cost < token savings value)
+    if (netSavingsUsd > 0 && saved > 0) {
+      recordSaving("compressed", saved);
+    }
+
     return {
       summary,
       full: output,
       structured,
       tokensSaved: saved,
+      aiTokensUsed,
       aiProcessed: true,
+      aiCostUsd,
+      savingsValueUsd,
+      netSavingsUsd,
     };
   } catch {
     // AI unavailable — fall back to simple truncation
@@ -111,7 +145,11 @@ export async function processOutput(
       summary: fallback,
       full: output,
       tokensSaved: Math.max(0, estimateTokens(output) - estimateTokens(fallback)),
+      aiTokensUsed: 0,
       aiProcessed: false,
+      aiCostUsd: 0,
+      savingsValueUsd: 0,
+      netSavingsUsd: 0,
     };
   }
 }

@@ -104,8 +104,8 @@ export function compress(command: string, output: string, options: CompressOptio
       const savings = tokenSavings(output, parsed.data);
       const compressedTokens = estimateTokens(json);
 
-      // If within budget or no budget, return structured
-      if (!maxTokens || compressedTokens <= maxTokens) {
+      // ONLY use JSON if it actually saves tokens (never return larger output)
+      if (savings.saved > 0 && (!maxTokens || compressedTokens <= maxTokens)) {
         return {
           content: json,
           format: "json",
