@@ -455,25 +455,31 @@ else if (args.length > 0) {
       process.exit(0);
     }
 
-    // AI summary for medium-large output
-    if (shouldProcess(clean)) {
+    // AI answer framing — ALWAYS use in NL mode (even for small output)
+    // The AI needs to ANSWER the question, not just pass through data
+    if (clean.length > 10) {
       const processed = await processOutput(actualCmd, clean, prompt);
-      if (processed.aiProcessed && processed.tokensSaved > 30) {
-        recordSaving("compressed", processed.tokensSaved);
+      if (processed.aiProcessed) {
+        if (processed.tokensSaved > 0) recordSaving("compressed", processed.tokensSaved);
         console.log(processed.summary);
-        console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+        if (processed.tokensSaved > 10) console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
         process.exit(0);
       }
     }
 
-    // Small output — pass through clean
+    // Fallback: AI unavailable — pass through clean
     console.log(clean);
     const saved = rawTokens - estimateTokens(clean);
     if (saved > 10) { recordSaving("compressed", saved); console.error(`[open-terminal] saved ${saved} tokens`); }
   } catch (e: any) {
-    const stderr = e.stderr?.toString() ?? "";
-    const stdout = e.stdout?.toString() ?? "";
-    const combined = stderr && stdout.includes(stderr.trim()) ? stdout : stdout + stderr;
+    // Empty result (grep exit 1 = no matches) — not a real error
+    const errStdout = e.stdout?.toString() ?? "";
+    const errStderr = e.stderr?.toString() ?? "";
+    if (e.status === 1 && !errStdout.trim() && !errStderr.trim()) {
+      console.log(`No results found for: ${prompt}`);
+      process.exit(0);
+    }
+    const combined = errStderr && errStdout.includes(errStderr.trim()) ? errStdout : errStdout + errStderr;
     console.log(stripNoise(stripAnsi(combined)).cleaned);
     process.exit(e.status ?? 1);
   }

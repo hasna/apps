@@ -51,6 +51,8 @@ const IRREVERSIBLE_PATTERNS = [
   // Code modification / package installation (security risk)
   /\bnpx\s+\S+/, /\bnpm\s+install\b/, /\bbun\s+add\b/, /\bpip\s+install\b/,
   /\bcodemod\b/, /\bsed\s+-i\b/, /\bawk\s.*>/, /\bperl\s+-[pi]\b/,
+  // File creation/modification (READ-ONLY terminal)
+  /\btouch\b/, /\bmkdir\b/, /\becho\s.*>/, /\btee\b/, /\bcp\b/, /\bmv\b/,
 ];
 
 export function isIrreversible(command: string): boolean {

@@ -52,8 +52,8 @@ export async function processOutput(
 ): Promise<ProcessedOutput> {
   const lines = output.split("\n");
 
-  // Short output — pass through, no AI needed
-  if (lines.length <= MIN_LINES_TO_PROCESS) {
+  // Short output — skip AI UNLESS we have an original prompt (NL mode needs answer framing)
+  if (lines.length <= MIN_LINES_TO_PROCESS && !originalPrompt) {
     return {
       summary: output,
       full: output,
