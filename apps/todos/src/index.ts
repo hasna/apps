@@ -119,6 +119,10 @@ export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./db/templates.js";
 
+// Handoffs
+export { createHandoff, listHandoffs, getLatestHandoff } from "./db/handoffs.js";
+export type { Handoff, CreateHandoffInput } from "./db/handoffs.js";
+
 // Orgs
 export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
 
