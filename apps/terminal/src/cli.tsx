@@ -107,6 +107,51 @@ else if (args[0] === "stats") {
   console.log(`    Search:     ${formatTokens(s.savingsByFeature.search)}`);
 }
 
+// ── Sessions command ─────────────────────────────────────────────────────────
+
+else if (args[0] === "sessions") {
+  const { listSessions, getSession, getSessionInteractions, getSessionStats } = await import("./sessions-db.js");
+
+  if (args[1] === "stats") {
+    const stats = getSessionStats();
+    console.log("Session Stats:");
+    console.log(`  Total sessions:     ${stats.totalSessions}`);
+    console.log(`  Total interactions:  ${stats.totalInteractions}`);
+    console.log(`  Tokens saved:        ${stats.totalTokensSaved}`);
+    console.log(`  Tokens used:         ${stats.totalTokensUsed}`);
+    console.log(`  Cache hit rate:      ${(stats.cacheHitRate * 100).toFixed(1)}%`);
+    console.log(`  Avg per session:     ${stats.avgInteractionsPerSession.toFixed(1)}`);
+    console.log(`  Error rate:          ${(stats.errorRate * 100).toFixed(1)}%`);
+  } else if (args[1]) {
+    // Show specific session
+    const session = getSession(args[1]);
+    if (!session) { console.error(`Session '${args[1]}' not found.`); process.exit(1); }
+    console.log(`Session: ${session.id}`);
+    console.log(`  Started: ${new Date(session.started_at).toLocaleString()}`);
+    console.log(`  CWD:     ${session.cwd}`);
+    console.log(`  Provider: ${session.provider ?? "auto"}`);
+    console.log("");
+    const interactions = getSessionInteractions(session.id);
+    for (const i of interactions) {
+      const status = i.exit_code === 0 ? "✓" : i.exit_code ? "✗" : "·";
+      console.log(`  ${status} ${i.nl}`);
+      if (i.command) console.log(`    $ ${i.command}`);
+    }
+    console.log(`\n  ${interactions.length} interactions`);
+  } else {
+    // List recent sessions
+    const sessions = listSessions(20);
+    if (sessions.length === 0) { console.log("No sessions yet."); }
+    else {
+      for (const s of sessions) {
+        const date = new Date(s.started_at).toLocaleString();
+        const dir = s.cwd.split("/").pop() || s.cwd;
+        console.log(`  ${s.id.slice(0, 8)}  ${date}  ${dir}  ${s.provider ?? "auto"}`);
+      }
+    }
+  }
+}
+
 // ── Snapshot command ─────────────────────────────────────────────────────────
 
 else if (args[0] === "snapshot") {

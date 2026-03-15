@@ -9,6 +9,7 @@ import StatusBar from "./StatusBar.js";
 import Spinner from "./Spinner.js";
 import Browse from "./Browse.js";
 import FuzzyPicker from "./FuzzyPicker.js";
+import { createSession, endSession, logInteraction, updateInteraction } from "./sessions-db.js";
 
 loadCache();
 
@@ -107,6 +108,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   let nextTabId = useRef(2);
+  const sessionIdRef = useRef<string>(createSession(process.cwd()));
+  const interactionIdRef = useRef<number>(0);
 
   const tab = tabs[activeTab];
   const allNl = [...nlHistory, ...tab.sessionNl];
@@ -149,6 +152,10 @@ export default function App() {
       }],
     }));
     appendHistory({ nl, cmd, output: lines.join("\n"), ts: Date.now(), error });
+    // Log to SQLite session
+    if (interactionIdRef.current) {
+      updateInteraction(interactionIdRef.current, { output: shortOutput, exitCode: error ? 1 : 0 });
+    }
   };
 
   // ── run command ─────────────────────────────────────────────────────────────
@@ -193,6 +200,11 @@ export default function App() {
 
   const translateAndRun = async (nl: string, raw: boolean) => {
     updateTab(t => ({ ...t, sessionNl: [...t.sessionNl, nl] }));
+
+    // Log interaction start
+    const startTime = Date.now();
+    interactionIdRef.current = logInteraction(sessionIdRef.current, { nl });
+
     if (raw) { await runPhase(nl, nl, true); return; }
 
     const sessionEntries = tabs[activeTab].sessionEntries;
@@ -201,6 +213,8 @@ export default function App() {
       const command = await translateToCommand(nl, config.permissions, sessionEntries, partial =>
         setPhase({ type: "thinking", nl, partial })
       );
+      // Update interaction with generated command
+      updateInteraction(interactionIdRef.current, { command });
       const blocked = checkPermissions(command, config.permissions);
       if (blocked) {
         pushScroll({ nl, cmd: command, lines: [`blocked: ${blocked}`], truncated: false, error: true });

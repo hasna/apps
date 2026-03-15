@@ -12,6 +12,7 @@ import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipe
 import { substituteVariables } from "../recipes/model.js";
 import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../supervisor.js";
 import { diffOutput } from "../diff-cache.js";
+import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
 import { getEconomyStats, recordSaving } from "../economy.js";
 import { captureSnapshot } from "../snapshots.js";
 
@@ -460,6 +461,29 @@ export function createServer(): McpServer {
     async () => {
       const snap = captureSnapshot();
       return { content: [{ type: "text" as const, text: JSON.stringify(snap) }] };
+    }
+  );
+
+  // ── session_history: query session data ────────────────────────────────────
+
+  server.tool(
+    "session_history",
+    "Query terminal session history — recent sessions, specific session details, or aggregate stats.",
+    {
+      action: z.enum(["list", "detail", "stats"]).describe("list=recent sessions, detail=specific session, stats=aggregates"),
+      sessionId: z.string().optional().describe("Session ID (for detail action)"),
+      limit: z.number().optional().describe("Max sessions to return (for list, default: 20)"),
+    },
+    async ({ action, sessionId, limit }) => {
+      if (action === "stats") {
+        return { content: [{ type: "text" as const, text: JSON.stringify(getSessionStats()) }] };
+      }
+      if (action === "detail" && sessionId) {
+        const interactions = getSessionInteractions(sessionId);
+        return { content: [{ type: "text" as const, text: JSON.stringify(interactions) }] };
+      }
+      const sessions = listSessions(limit ?? 20);
+      return { content: [{ type: "text" as const, text: JSON.stringify(sessions) }] };
     }
   );
 
