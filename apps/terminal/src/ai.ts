@@ -68,9 +68,18 @@ export function checkPermissions(command: string, perms: Permissions): string | 
   return null;
 }
 
+// ── session context ──────────────────────────────────────────────────────────
+
+export interface SessionEntry {
+  nl: string;
+  cmd: string;
+  output?: string; // short output (first few lines)
+  error?: boolean;
+}
+
 // ── system prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(perms: Permissions, sessionCmds: string[]): string {
+function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[]): string {
   const restrictions: string[] = [];
   if (!perms.destructive)
     restrictions.push("- NEVER generate commands that delete, remove, or overwrite files/data");
@@ -87,11 +96,22 @@ function buildSystemPrompt(perms: Permissions, sessionCmds: string[]): string {
     ? `\n\nRESTRICTIONS:\n${restrictions.join("\n")}\nIf restricted, output: BLOCKED: <reason>`
     : "";
 
-  const contextBlock = sessionCmds.length > 0
-    ? `\n\nSESSION HISTORY:\n${sessionCmds.map((c) => `$ ${c}`).join("\n")}`
-    : "";
+  let contextBlock = "";
+  if (sessionEntries.length > 0) {
+    const lines: string[] = [];
+    for (const e of sessionEntries.slice(-5)) { // last 5 interactions
+      lines.push(`> ${e.nl}`);
+      lines.push(`$ ${e.cmd}`);
+      if (e.output) lines.push(e.output);
+      if (e.error) lines.push("(command failed)");
+    }
+    contextBlock = `\n\nSESSION HISTORY (user intent > command $ output):\n${lines.join("\n")}`;
+  }
 
   return `You are a terminal assistant. Output ONLY the exact shell command — no explanation, no markdown, no backticks.
+The user describes what they want in plain English. You translate to the exact shell command.
+Pay attention to session history — when the user says "inside X folder" they mean a folder visible in the previous output.
+If the user refers to a relative path from a previous command, resolve it correctly.
 cwd: ${process.cwd()}
 shell: zsh / macOS${restrictionBlock}${contextBlock}`;
 }
@@ -101,17 +121,19 @@ shell: zsh / macOS${restrictionBlock}${contextBlock}`;
 export async function translateToCommand(
   nl: string,
   perms: Permissions,
-  sessionCmds: string[],
+  sessionEntries: SessionEntry[],
   onToken?: (partial: string) => void
 ): Promise<string> {
-  // cache hit — instant
-  const cached = cacheGet(nl);
-  if (cached) { onToken?.(cached); return cached; }
+  // Only use cache when there's no session context (context makes same NL produce different commands)
+  if (sessionEntries.length === 0) {
+    const cached = cacheGet(nl);
+    if (cached) { onToken?.(cached); return cached; }
+  }
 
   const provider = getProvider();
   const routing = pickModel(nl);
   const model = routing.pick === "smart" ? routing.smart : routing.fast;
-  const system = buildSystemPrompt(perms, sessionCmds);
+  const system = buildSystemPrompt(perms, sessionEntries);
 
   let text: string;
 
@@ -133,10 +155,10 @@ export async function translateToCommand(
 export function prefetchNext(
   lastNl: string,
   perms: Permissions,
-  sessionCmds: string[]
+  sessionEntries: SessionEntry[]
 ) {
-  if (cacheGet(lastNl)) return;
-  translateToCommand(lastNl, perms, sessionCmds).catch(() => {});
+  if (sessionEntries.length === 0 && cacheGet(lastNl)) return;
+  translateToCommand(lastNl, perms, sessionEntries).catch(() => {});
 }
 
 // ── explain ───────────────────────────────────────────────────────────────────
@@ -158,7 +180,7 @@ export async function fixCommand(
   failedCommand: string,
   errorOutput: string,
   perms: Permissions,
-  sessionCmds: string[]
+  sessionEntries: SessionEntry[]
 ): Promise<string> {
   const provider = getProvider();
   const routing = pickModel(originalNl);
@@ -167,7 +189,7 @@ export async function fixCommand(
     {
       model: routing.smart, // always use smart model for fixes
       maxTokens: 256,
-      system: buildSystemPrompt(perms, sessionCmds),
+      system: buildSystemPrompt(perms, sessionEntries),
     }
   );
   if (text.startsWith("BLOCKED:")) throw new Error(text);

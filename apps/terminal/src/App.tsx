@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { spawn } from "child_process";
-import { translateToCommand, explainCommand, fixCommand, checkPermissions, isIrreversible } from "./ai.js";
+import { translateToCommand, explainCommand, fixCommand, checkPermissions, isIrreversible, type SessionEntry } from "./ai.js";
 import { loadHistory, appendHistory, loadConfig, saveConfig, type Permissions } from "./history.js";
 import { loadCache } from "./cache.js";
 import Onboarding from "./Onboarding.js";
@@ -39,7 +39,7 @@ interface TabState {
   id: number;
   cwd: string;
   scroll: ScrollEntry[];
-  sessionCmds: string[];
+  sessionEntries: SessionEntry[];
   sessionNl: string[];
   phase: Phase;
   streamLines: string[];
@@ -77,7 +77,7 @@ function maybeCd(command: string): string | null {
 function newTab(id: number, cwd: string): TabState {
   return {
     id, cwd,
-    scroll: [], sessionCmds: [], sessionNl: [],
+    scroll: [], sessionEntries: [], sessionNl: [],
     phase: { type: "input", value: "", cursor: 0, histIdx: -1, raw: false },
     streamLines: [],
   };
@@ -133,10 +133,13 @@ export default function App() {
   const commitStream = (nl: string, cmd: string, lines: string[], error: boolean) => {
     const truncated = lines.length > MAX_LINES;
     const filePaths = !error ? extractFilePaths(lines) : [];
+    // Build short output summary for session context (first 10 lines)
+    const shortOutput = lines.slice(0, 10).join("\n") + (lines.length > 10 ? `\n... (${lines.length} lines total)` : "");
+    const entry: SessionEntry = { nl, cmd, output: shortOutput, error: error || undefined };
     updateTab(t => ({
       ...t,
       streamLines: [],
-      sessionCmds: [...t.sessionCmds.slice(-9), cmd],
+      sessionEntries: [...t.sessionEntries.slice(-9), entry],
       scroll: [...t.scroll, {
         nl, cmd,
         lines: truncated ? lines.slice(0, MAX_LINES) : lines,
@@ -192,10 +195,10 @@ export default function App() {
     updateTab(t => ({ ...t, sessionNl: [...t.sessionNl, nl] }));
     if (raw) { await runPhase(nl, nl, true); return; }
 
-    const sessionCmds = tabs[activeTab].sessionCmds;
+    const sessionEntries = tabs[activeTab].sessionEntries;
     setPhase({ type: "thinking", nl, partial: "" });
     try {
-      const command = await translateToCommand(nl, config.permissions, sessionCmds, partial =>
+      const command = await translateToCommand(nl, config.permissions, sessionEntries, partial =>
         setPhase({ type: "thinking", nl, partial })
       );
       const blocked = checkPermissions(command, config.permissions);
@@ -346,7 +349,7 @@ export default function App() {
         const { nl, command, errorOutput } = phase;
         setPhase({ type: "thinking", nl, partial: "" });
         try {
-          const fixed = await fixCommand(nl, command, errorOutput, config.permissions, tab.sessionCmds);
+          const fixed = await fixCommand(nl, command, errorOutput, config.permissions, tab.sessionEntries);
           const danger = isIrreversible(fixed);
           if (!config.confirm && !danger) { await runPhase(nl, fixed, false); return; }
           setPhase({ type: "confirm", nl, command: fixed, danger });
