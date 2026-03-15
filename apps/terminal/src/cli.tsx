@@ -402,6 +402,20 @@ else if (args.length > 0) {
   try {
     command = await translateToCommand(prompt, perms, []);
   } catch (e: any) {
+    // If BLOCKED, try fallback: read README or package.json for conceptual questions
+    if (e.message?.startsWith("BLOCKED:")) {
+      try {
+        const { existsSync, readFileSync } = await import("fs");
+        if (existsSync("README.md")) {
+          const readme = readFileSync("README.md", "utf8").slice(0, 3000);
+          const processed = await processOutput("cat README.md", readme, prompt);
+          if (processed.aiProcessed) {
+            console.log(processed.summary);
+            process.exit(0);
+          }
+        }
+      } catch {}
+    }
     console.error(e.message);
     process.exit(1);
   }

@@ -253,20 +253,23 @@ export async function translateToCommand(
   let cleaned = text.trim();
   // Remove ALL markdown code blocks and their content markers
   cleaned = cleaned.replace(/```(?:bash|sh|shell)?\n?/g, "").replace(/```/g, "");
-  // Split into lines and find the FIRST one that looks like a command
+  // Split into lines and find the FIRST one that looks like a SHELL COMMAND
   const lines = cleaned.split("\n");
   let command = "";
   for (const line of lines) {
     const t = line.trim();
     if (!t) continue;
-    // Skip reasoning lines
-    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To |However|BLOCKED:|If |You |We |For )/.test(t)) continue;
-    if (/^[A-Z][a-z].*[.;:!?]$/.test(t)) continue;
-    // Found a command line — take it and stop
-    command = t;
-    break;
+    // Skip lines that are clearly English prose, not commands
+    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To |However|BLOCKED:|If |You |We |For |It |A |An |That )/.test(t)) continue;
+    if (/^[A-Z][a-z].*[.;:!?,]/.test(t)) continue; // English sentence with punctuation anywhere
+    if (t.split(" ").length > 15 && !/[|&;><$]/.test(t)) continue; // Long line without shell operators = prose
+    // Must start with a plausible command character (lowercase, /, ., $, or common tool)
+    if (/^[a-z./$~(]/.test(t) || /^[A-Z]+[_=]/.test(t)) {
+      command = t;
+      break;
+    }
   }
-  cleaned = command || cleaned.split("\n")[0].trim();
+  cleaned = command || lines[0]?.trim() || cleaned;
 
   cacheSet(nl, cleaned);
   return cleaned;
