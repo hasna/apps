@@ -21,6 +21,90 @@ if (args[0] === "mcp") {
   }
 }
 
+// ── Hook commands ────────────────────────────────────────────────────────────
+
+else if (args[0] === "hook") {
+  const { existsSync, mkdirSync, writeFileSync, readFileSync } = await import("fs");
+  const { join, dirname } = await import("path");
+  const { execSync } = await import("child_process");
+
+  const sub = args[1];
+  const target = args[2]; // --claude, --codex
+
+  if (sub === "install" && (target === "--claude" || target === "claude")) {
+    // Find the hook script
+    const hookSrc = join(dirname(new URL(import.meta.url).pathname), "hooks", "claude-hook.sh");
+    const hookDest = join(process.env.HOME ?? "~", ".claude", "hooks", "PostToolUse-open-terminal.sh");
+
+    // Copy hook script
+    const destDir = dirname(hookDest);
+    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
+
+    // Generate hook with resolved paths
+    const terminalBin = execSync("which terminal", { encoding: "utf8" }).trim();
+    const hookScript = `#!/usr/bin/env bash
+# open-terminal PostToolUse hook — compresses Bash output
+# Installed by: t hook install --claude
+
+if [ "$TOOL_NAME" != "Bash" ]; then exit 0; fi
+OUTPUT=$(cat)
+if [ \${#OUTPUT} -lt 500 ]; then echo "$OUTPUT"; exit 0; fi
+
+LINE_COUNT=$(echo "$OUTPUT" | wc -l | tr -d ' ')
+if [ "$LINE_COUNT" -gt 15 ]; then
+  COMPRESSED=$(echo "$OUTPUT" | bun -e "
+    import{compress,stripAnsi}from'${dirname(terminalBin)}/../lib/node_modules/@hasna/terminal/dist/compression.js';
+    import{stripNoise}from'${dirname(terminalBin)}/../lib/node_modules/@hasna/terminal/dist/noise-filter.js';
+    let i='';process.stdin.on('data',d=>i+=d);process.stdin.on('end',()=>{
+      const c=stripNoise(stripAnsi(i)).cleaned;
+      const r=compress('bash',c,{maxTokens:500});
+      console.log(r.tokensSaved>50?r.content:c);
+    });
+  " 2>/dev/null)
+  if [ $? -eq 0 ] && [ -n "$COMPRESSED" ]; then echo "$COMPRESSED"; exit 0; fi
+fi
+echo "$OUTPUT"
+`;
+
+    writeFileSync(hookDest, hookScript, { mode: 0o755 });
+
+    // Register in Claude settings
+    const settingsPath = join(process.env.HOME ?? "~", ".claude", "settings.json");
+    let settings: any = {};
+    if (existsSync(settingsPath)) {
+      try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch {}
+    }
+    if (!settings.hooks) settings.hooks = {};
+    if (!settings.hooks.PostToolUse) settings.hooks.PostToolUse = [];
+
+    const hookEntry = { command: hookDest, event: "PostToolUse", tools: ["Bash"] };
+    const exists = settings.hooks.PostToolUse.some((h: any) => h.command?.includes("open-terminal"));
+    if (!exists) {
+      settings.hooks.PostToolUse.push(hookEntry);
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    }
+
+    console.log("✓ Installed open-terminal PostToolUse hook for Claude Code");
+    console.log("  Hook: " + hookDest);
+    console.log("  Bash output >15 lines will be auto-compressed");
+  } else if (sub === "uninstall") {
+    const settingsPath = join(process.env.HOME ?? "~", ".claude", "settings.json");
+    if (existsSync(settingsPath)) {
+      try {
+        const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+        if (settings.hooks?.PostToolUse) {
+          settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter((h: any) => !h.command?.includes("open-terminal"));
+          writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        }
+      } catch {}
+    }
+    console.log("✓ Uninstalled open-terminal hook");
+  } else {
+    console.log("Usage: t hook install --claude");
+    console.log("       t hook uninstall");
+  }
+}
+
 // ── Recipe commands ──────────────────────────────────────────────────────────
 
 else if (args[0] === "recipe") {

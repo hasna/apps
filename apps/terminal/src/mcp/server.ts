@@ -17,15 +17,20 @@ import { processOutput } from "../output-processor.js";
 import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
 import { cachedRead, cacheStats } from "../file-cache.js";
 import { storeOutput, expandOutput } from "../expand-store.js";
+import { rewriteCommand } from "../command-rewriter.js";
+import { shouldBeLazy, toLazy } from "../lazy-executor.js";
 import { getEconomyStats, recordSaving } from "../economy.js";
 import { captureSnapshot } from "../snapshots.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCode: number; stdout: string; stderr: string; duration: number }> {
+function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCode: number; stdout: string; stderr: string; duration: number; rewritten?: string }> {
+  // Auto-optimize command before execution
+  const rw = rewriteCommand(command);
+  const actualCommand = rw.changed ? rw.rewritten : command;
   return new Promise((resolve) => {
     const start = Date.now();
-    const proc = spawn("/bin/zsh", ["-c", command], {
+    const proc = spawn("/bin/zsh", ["-c", actualCommand], {
       cwd: cwd ?? process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -43,7 +48,7 @@ function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCo
       // Strip noise before returning (npm fund, progress bars, etc.)
       const cleanStdout = stripNoise(stdout).cleaned;
       const cleanStderr = stripNoise(stderr).cleaned;
-      resolve({ exitCode: code ?? 0, stdout: cleanStdout, stderr: cleanStderr, duration: Date.now() - start });
+      resolve({ exitCode: code ?? 0, stdout: cleanStdout, stderr: cleanStderr, duration: Date.now() - start, rewritten: rw.changed ? rw.rewritten : undefined });
     });
   });
 }
@@ -72,12 +77,24 @@ export function createServer(): McpServer {
       const result = await exec(command, cwd, timeout ?? 30000);
       const output = (result.stdout + result.stderr).trim();
 
-      // Raw mode
+      // Raw mode — with lazy execution for large results
       if (!format || format === "raw") {
         const clean = stripAnsi(output);
+        // Lazy mode: if >100 lines, return count + sample instead of full output
+        if (shouldBeLazy(clean)) {
+          const lazy = toLazy(clean, command);
+          const detailKey = storeOutput(command, clean);
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+              exitCode: result.exitCode, ...lazy, detailKey, duration: result.duration,
+              ...(result.rewritten ? { rewrittenFrom: command } : {}),
+            }) }],
+          };
+        }
         return {
           content: [{ type: "text" as const, text: JSON.stringify({
             exitCode: result.exitCode, output: clean, duration: result.duration, tokens: estimateTokens(clean),
+            ...(result.rewritten ? { rewrittenFrom: command } : {}),
           }) }],
         };
       }
