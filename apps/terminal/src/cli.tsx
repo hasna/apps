@@ -440,11 +440,8 @@ else if (args.length > 0) {
     recordUsage(rawTokens);
 
     // Test output detection
-    if (isTestOutput(clean, actualCmd)) {
-      const result = trackTests(process.cwd(), clean);
-      console.log(formatWatchResult(result));
-      process.exit(0);
-    }
+    // Test output: skip watchlist, let AI framing handle it
+    // The AI reads "42 pass, 0 fail" better than regex parsing bun's mixed output
 
     // Frame-first pipeline: AI answers the question, lazy is fallback
     // For question-type prompts, answer framing runs BEFORE lazy mode
