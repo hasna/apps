@@ -42,7 +42,7 @@ function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "s
 
 const IRREVERSIBLE_PATTERNS = [
   /\brm\s/, /\brmdir\b/, /\btruncate\b/, /\bdrop\s+table\b/i,
-  /\bdelete\s+from\b/i, /\bmv\b.*\/dev\/null/, /\b>\s*[^>]/,
+  /\bdelete\s+from\b/i, /\bmv\b.*\/dev\/null/, /\becho\b.*>\s*[^>]/, /\bcat\b.*>\s*[^>]/,
   /\bdd\b/, /\bmkfs\b/, /\bformat\b/, /\bshred\b/,
   // Process/service killing
   /\bkill\b/, /\bkillall\b/, /\bpkill\b/,
