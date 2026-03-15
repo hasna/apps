@@ -535,7 +535,7 @@ else if (args.length > 0) {
   // Step 3: Execute
   try {
     const start = Date.now();
-    const raw = execSync(actualCmd, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
+    const raw = execSync(actualCmd + " 2>&1", { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
     const duration = Date.now() - start;
     const clean = stripNoise(stripAnsi(raw)).cleaned;
     const rawTokens = estimateTokens(raw);
