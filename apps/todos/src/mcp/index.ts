@@ -2458,6 +2458,65 @@ server.resource(
   },
 );
 
+// === HANDOFFS ===
+
+if (shouldRegisterTool("create_handoff")) {
+server.tool(
+  "create_handoff",
+  "Create a session handoff note for agent coordination.",
+  {
+    agent_id: z.string().optional().describe("Agent creating the handoff"),
+    project_id: z.string().optional().describe("Project ID"),
+    summary: z.string().describe("What was accomplished this session"),
+    completed: z.array(z.string()).optional().describe("Items completed"),
+    in_progress: z.array(z.string()).optional().describe("Items still in progress"),
+    blockers: z.array(z.string()).optional().describe("Blocking issues"),
+    next_steps: z.array(z.string()).optional().describe("Recommended next actions"),
+  },
+  async ({ agent_id, project_id, summary, completed, in_progress, blockers, next_steps }) => {
+    try {
+      const { createHandoff } = require("../db/handoffs.js") as any;
+      const handoff = createHandoff({
+        agent_id, project_id: project_id ? resolveId(project_id, "projects") : undefined,
+        summary, completed, in_progress, blockers, next_steps,
+      });
+      return { content: [{ type: "text" as const, text: `Handoff created: ${handoff.id.slice(0, 8)} by ${handoff.agent_id || "unknown"}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_latest_handoff")) {
+server.tool(
+  "get_latest_handoff",
+  "Get the most recent handoff for an agent or project.",
+  {
+    agent_id: z.string().optional().describe("Filter by agent"),
+    project_id: z.string().optional().describe("Filter by project"),
+  },
+  async ({ agent_id, project_id }) => {
+    try {
+      const { getLatestHandoff } = require("../db/handoffs.js") as any;
+      const handoff = getLatestHandoff(agent_id, project_id ? resolveId(project_id, "projects") : undefined);
+      if (!handoff) return { content: [{ type: "text" as const, text: "No handoffs found." }] };
+      const lines = [
+        `${handoff.created_at.slice(0, 16)} ${handoff.agent_id || "unknown"}`,
+        handoff.summary,
+      ];
+      if (handoff.completed?.length) lines.push(`Done: ${handoff.completed.join(", ")}`);
+      if (handoff.in_progress?.length) lines.push(`In progress: ${handoff.in_progress.join(", ")}`);
+      if (handoff.blockers?.length) lines.push(`Blocked: ${handoff.blockers.join(", ")}`);
+      if (handoff.next_steps?.length) lines.push(`Next: ${handoff.next_steps.join(", ")}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // todos://task-lists - All task lists
 server.resource(
   "task-lists",
