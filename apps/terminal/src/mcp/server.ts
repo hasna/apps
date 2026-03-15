@@ -587,6 +587,69 @@ export function createServer(): McpServer {
     }
   );
 
+  // ── project_overview: orient agent in one call ─────────────────────────────
+
+  server.tool(
+    "project_overview",
+    "Get project overview in one call — package.json info, source structure, config files. Replaces: cat package.json + ls src/ + cat tsconfig.json.",
+    {
+      path: z.string().optional().describe("Project root (default: cwd)"),
+    },
+    async ({ path }) => {
+      const cwd = path ?? process.cwd();
+      const [pkgResult, srcResult, configResult] = await Promise.all([
+        exec("cat package.json 2>/dev/null", cwd),
+        exec("ls -1 src/ 2>/dev/null || ls -1 lib/ 2>/dev/null || ls -1 app/ 2>/dev/null", cwd),
+        exec("ls -1 *.json *.config.* .env* tsconfig* 2>/dev/null", cwd),
+      ]);
+
+      let pkg: any = null;
+      try { pkg = JSON.parse(pkgResult.stdout); } catch {}
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          name: pkg?.name,
+          version: pkg?.version,
+          scripts: pkg?.scripts,
+          dependencies: pkg?.dependencies ? Object.keys(pkg.dependencies) : [],
+          devDependencies: pkg?.devDependencies ? Object.keys(pkg.devDependencies) : [],
+          sourceFiles: srcResult.stdout.split("\n").filter(l => l.trim()),
+          configFiles: configResult.stdout.split("\n").filter(l => l.trim()),
+        }) }],
+      };
+    }
+  );
+
+  // ── last_commit: what just happened ───────────────────────────────────────
+
+  server.tool(
+    "last_commit",
+    "Get details of the last commit — hash, message, files changed, diff stats. Replaces: git log -1 + git show --stat + git diff HEAD~1.",
+    {
+      path: z.string().optional().describe("Repo path (default: cwd)"),
+    },
+    async ({ path }) => {
+      const cwd = path ?? process.cwd();
+      const [logResult, statResult] = await Promise.all([
+        exec("git log -1 --format='%H%n%s%n%an%n%ai'", cwd),
+        exec("git show --stat --format='' HEAD", cwd),
+      ]);
+
+      const [hash, message, author, date] = logResult.stdout.split("\n");
+      const filesChanged = statResult.stdout.split("\n").filter(l => l.trim() && !l.includes("changed"));
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          hash: hash?.trim(),
+          message: message?.trim(),
+          author: author?.trim(),
+          date: date?.trim(),
+          filesChanged,
+        }) }],
+      };
+    }
+  );
+
   // ── read_file: cached file reading ─────────────────────────────────────────
 
   server.tool(

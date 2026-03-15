@@ -443,6 +443,29 @@ else if (args[0] === "sessions") {
   }
 }
 
+// ── Overview command ─────────────────────────────────────────────────────────
+
+else if (args[0] === "overview") {
+  const { existsSync, readFileSync } = await import("fs");
+  const { execSync } = await import("child_process");
+  const run = (cmd: string) => { try { return execSync(cmd, { encoding: "utf8", cwd: process.cwd() }).trim(); } catch { return ""; } };
+
+  let pkg: any = null;
+  try { pkg = JSON.parse(readFileSync("package.json", "utf8")); } catch {}
+
+  if (pkg) {
+    console.log(`${pkg.name}@${pkg.version}`);
+    if (pkg.scripts) {
+      console.log("\nScripts:");
+      for (const [k, v] of Object.entries(pkg.scripts).slice(0, 10)) console.log(`  ${k}: ${v}`);
+    }
+    if (pkg.dependencies) console.log(`\nDeps: ${Object.keys(pkg.dependencies).join(", ")}`);
+  }
+
+  const src = run("ls -1 src/ 2>/dev/null || ls -1 lib/ 2>/dev/null");
+  if (src) console.log(`\nSource:\n${src.split("\n").map(f => "  " + f).join("\n")}`);
+}
+
 // ── Repo command ─────────────────────────────────────────────────────────────
 
 else if (args[0] === "repo") {
