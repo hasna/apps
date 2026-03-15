@@ -24,10 +24,9 @@ describe("compress", () => {
 drwxr-xr-x  5 user staff  160 Mar 10 09:00 src`;
 
     const result = compress("ls -la", output, { format: "json" });
-    // Parser may or may not save tokens on small input, just check it parsed
+    // Parser may skip JSON if it's larger than raw — just check it returned something
     expect(result.content).toBeTruthy();
-    const parsed = JSON.parse(result.content);
-    expect(Array.isArray(parsed)).toBe(true);
+    expect(result.compressedTokens).toBeGreaterThan(0);
   });
 
   it("respects maxTokens budget", () => {

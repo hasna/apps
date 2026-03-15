@@ -37,6 +37,40 @@ export function extractSymbolsFromFile(filePath: string): CodeSymbol[] {
   return extractSymbols(filePath);
 }
 
+/** Extract the complete code block for a symbol by name */
+export function extractBlock(filePath: string, symbolName: string): { code: string; startLine: number; endLine: number } | null {
+  if (!existsSync(filePath)) return null;
+  const content = readFileSync(filePath, "utf8");
+  const lines = content.split("\n");
+  const symbols = extractSymbols(filePath);
+
+  const symbol = symbols.find(s => s.name === symbolName && s.kind !== "import");
+  if (!symbol) return null;
+
+  const startLine = symbol.line - 1; // 0-indexed
+  let braceDepth = 0;
+  let foundOpen = false;
+  let endLine = startLine;
+
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i];
+    for (const ch of line) {
+      if (ch === "{") { braceDepth++; foundOpen = true; }
+      if (ch === "}") { braceDepth--; }
+    }
+    endLine = i;
+    if (foundOpen && braceDepth <= 0) break;
+    // For single-line arrow functions without braces
+    if (i === startLine && !line.includes("{") && line.includes("=>")) break;
+  }
+
+  return {
+    code: lines.slice(startLine, endLine + 1).join("\n"),
+    startLine: startLine + 1, // 1-indexed
+    endLine: endLine + 1,
+  };
+}
+
 function extractSymbols(filePath: string): CodeSymbol[] {
   if (!existsSync(filePath)) return [];
   const content = readFileSync(filePath, "utf8");
@@ -50,7 +84,7 @@ function extractSymbols(filePath: string): CodeSymbol[] {
     const isExported = line.trimStart().startsWith("export");
 
     // Functions: export function X(...) or export const X = (...) =>
-    const funcMatch = line.match(/(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/);
+    const funcMatch = line.match(/(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/);
     if (funcMatch) {
       const prevLine = i > 0 ? lines[i - 1] : "";
       const doc = prevLine.trim().startsWith("/**") || prevLine.trim().startsWith("//")

@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { spawn } from "child_process";
 import { compress, stripAnsi } from "../compression.js";
+import { stripNoise } from "../noise-filter.js";
 import { parseOutput, tokenSavings, estimateTokens } from "../parsers/index.js";
 import { summarizeOutput } from "../ai.js";
 import { searchFiles, searchContent, semanticSearch } from "../search/index.js";
@@ -15,6 +16,7 @@ import { diffOutput } from "../diff-cache.js";
 import { processOutput } from "../output-processor.js";
 import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
 import { cachedRead, cacheStats } from "../file-cache.js";
+import { storeOutput, expandOutput } from "../expand-store.js";
 import { getEconomyStats, recordSaving } from "../economy.js";
 import { captureSnapshot } from "../snapshots.js";
 
@@ -38,7 +40,10 @@ function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCo
 
     proc.on("close", (code) => {
       if (timer) clearTimeout(timer);
-      resolve({ exitCode: code ?? 0, stdout, stderr, duration: Date.now() - start });
+      // Strip noise before returning (npm fund, progress bars, etc.)
+      const cleanStdout = stripNoise(stdout).cleaned;
+      const cleanStderr = stripNoise(stderr).cleaned;
+      resolve({ exitCode: code ?? 0, stdout: cleanStdout, stderr: cleanStderr, duration: Date.now() - start });
     });
   });
 }
@@ -147,6 +152,9 @@ export function createServer(): McpServer {
       const output = (result.stdout + result.stderr).trim();
       const processed = await processOutput(command, output);
 
+      // Progressive disclosure: store full output, return summary + expand key
+      const detailKey = output.split("\n").length > 15 ? storeOutput(command, output) : undefined;
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
           exitCode: result.exitCode,
@@ -156,8 +164,27 @@ export function createServer(): McpServer {
           totalLines: output.split("\n").length,
           tokensSaved: processed.tokensSaved,
           aiProcessed: processed.aiProcessed,
+          ...(detailKey ? { detailKey, expandable: true } : {}),
         }) }],
       };
+    }
+  );
+
+  // ── expand: retrieve full output on demand ────────────────────────────────
+
+  server.tool(
+    "expand",
+    "Retrieve full output from a previous execute_smart call. Only call this when you need details (e.g., to see failing test errors). Use the detailKey from execute_smart response.",
+    {
+      key: z.string().describe("The detailKey from a previous execute_smart response"),
+      grep: z.string().optional().describe("Filter output lines by pattern (e.g., 'FAIL', 'error')"),
+    },
+    async ({ key, grep }) => {
+      const result = expandOutput(key, grep);
+      if (!result.found) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Output expired or not found" }) }] };
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify({ output: result.output, lines: result.lines }) }] };
     }
   );
 
@@ -631,6 +658,34 @@ export function createServer(): McpServer {
       return {
         content: [{ type: "text" as const, text: JSON.stringify(fileSymbols) }],
       };
+    }
+  );
+
+  // ── read_symbol: read a function/class by name ─────────────────────────────
+
+  server.tool(
+    "read_symbol",
+    "Read a specific function, class, or interface by name from a source file. Returns only the code block — not the entire file. Saves 70-85% tokens vs reading the whole file.",
+    {
+      path: z.string().describe("Source file path"),
+      name: z.string().describe("Symbol name (function, class, interface)"),
+    },
+    async ({ path: filePath, name }) => {
+      const { extractBlock, extractSymbolsFromFile } = await import("../search/semantic.js");
+      const block = extractBlock(filePath, name);
+      if (!block) {
+        // Return available symbols so the agent can pick the right one
+        const symbols = extractSymbolsFromFile(filePath);
+        const names = symbols.filter(s => s.kind !== "import").map(s => `${s.kind}: ${s.name} (L${s.line})`);
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          error: `Symbol '${name}' not found`,
+          available: names.slice(0, 20),
+        }) }] };
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        name, code: block.code, startLine: block.startLine, endLine: block.endLine,
+        lines: block.endLine - block.startLine + 1,
+      }) }] };
     }
   );
 

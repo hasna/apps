@@ -100,12 +100,35 @@ export function diffOutput(command: string, cwd: string, output: string): DiffRe
   }
 
   const diff = lineDiff(prev.output, output);
+  const total = diff.added.length + diff.removed.length + diff.unchanged;
+  const similarity = total > 0 ? diff.unchanged / total : 0;
+
+  // Fuzzy threshold: if >80% similar, return diff-only (massive token savings)
+  const fullTokens = estimateTokens(output);
+
+  if (similarity > 0.8 && diff.added.length + diff.removed.length > 0) {
+    const diffContent = [
+      ...diff.added.map(l => `+ ${l}`),
+      ...diff.removed.map(l => `- ${l}`),
+    ].join("\n");
+    const diffTokens = estimateTokens(diffContent);
+
+    return {
+      full: output,
+      hasPrevious: true,
+      added: diff.added,
+      removed: diff.removed,
+      diffSummary: `${Math.round(similarity * 100)}% similar — ${summarizeDiff(diff)}`,
+      unchanged: false,
+      tokensSaved: Math.max(0, fullTokens - diffTokens),
+    };
+  }
+
+  // Less than 80% similar — return full output with diff info
   const diffContent = [
     ...diff.added.map(l => `+ ${l}`),
     ...diff.removed.map(l => `- ${l}`),
   ].join("\n");
-
-  const fullTokens = estimateTokens(output);
   const diffTokens = estimateTokens(diffContent);
 
   return {
