@@ -118,11 +118,13 @@ function detectProjectContext(): string {
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      parts.push(`Project: Node.js/TypeScript (package.json found)`);
+      parts.push(`Project: ${pkg.name}@${pkg.version} (Node.js/TypeScript)`);
+      parts.push(`npm package: ${pkg.name} (use this name for npm view, npm info, etc.)`);
       if (pkg.scripts) {
         const scripts = Object.entries(pkg.scripts).map(([k, v]) => `${k}: ${v}`).slice(0, 8);
         parts.push(`Available scripts: ${scripts.join(", ")}`);
       }
+      if (pkg.dependencies) parts.push(`Dependencies: ${Object.keys(pkg.dependencies).join(", ")}`);
       parts.push(`Use npm/bun/pnpm commands, NOT maven/gradle/cargo.`);
     } catch {}
   }
