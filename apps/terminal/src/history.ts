@@ -33,11 +33,11 @@ export interface Config {
 }
 
 export const DEFAULT_PERMISSIONS: Permissions = {
-  destructive: false,
+  destructive: true,
   network: true,
-  sudo: false,
-  write_outside_cwd: false,
-  install: false,
+  sudo: true,
+  write_outside_cwd: true,
+  install: true,
 };
 
 export const DEFAULT_CONFIG: Config = {
