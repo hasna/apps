@@ -518,7 +518,111 @@ else if (args[0] === "project" && args[1] === "init") {
   console.log("✓ Initialized .terminal/recipes.json");
 }
 
-// ── TUI mode (default) ──────────────────────────────────────────────────────
+// ── NL mode: terminal "natural language prompt" ─────────────────────────────
+
+else if (args.length > 0) {
+  // Everything that doesn't match a subcommand is treated as natural language
+  const prompt = args.join(" ");
+
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY) {
+    console.error("terminal: No API key found.");
+    console.error("Set one of:");
+    console.error("  export CEREBRAS_API_KEY=your_key  (free, open-source)");
+    console.error("  export ANTHROPIC_API_KEY=your_key  (Claude)");
+    process.exit(1);
+  }
+
+  const { translateToCommand, checkPermissions, isIrreversible } = await import("./ai.js");
+  const { execSync } = await import("child_process");
+  const { compress, stripAnsi } = await import("./compression.js");
+  const { stripNoise } = await import("./noise-filter.js");
+  const { processOutput, shouldProcess } = await import("./output-processor.js");
+  const { rewriteCommand } = await import("./command-rewriter.js");
+  const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
+  const { parseOutput, estimateTokens } = await import("./parsers/index.js");
+  const { recordSaving, recordUsage } = await import("./economy.js");
+  const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
+  const { detectLoop } = await import("./loop-detector.js");
+  const { loadConfig } = await import("./history.js");
+
+  const config = loadConfig();
+  const perms = config.permissions;
+
+  // Step 1: AI translates NL → shell command
+  let command: string;
+  try {
+    command = await translateToCommand(prompt, perms, []);
+  } catch (e: any) {
+    console.error(e.message);
+    process.exit(1);
+  }
+
+  // Check permissions
+  const blocked = checkPermissions(command, perms);
+  if (blocked) { console.error(`blocked: ${blocked}`); process.exit(1); }
+
+  // Show what we're running
+  console.error(`$ ${command}`);
+
+  // Step 2: Rewrite for optimization
+  const rw = rewriteCommand(command);
+  const actualCmd = rw.changed ? rw.rewritten : command;
+  if (rw.changed) console.error(`[open-terminal] optimized: ${actualCmd}`);
+
+  // Loop detection
+  const loop = detectLoop(actualCmd);
+  if (loop.detected) console.error(`[open-terminal] loop #${loop.iteration}${loop.suggestedNarrow ? ` — try: ${loop.suggestedNarrow}` : ""}`);
+
+  // Step 3: Execute
+  try {
+    const start = Date.now();
+    const raw = execSync(actualCmd, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
+    const duration = Date.now() - start;
+    const clean = stripNoise(stripAnsi(raw)).cleaned;
+    const rawTokens = estimateTokens(raw);
+    recordUsage(rawTokens);
+
+    // Test output detection
+    if (isTestOutput(clean)) {
+      const result = trackTests(process.cwd(), clean);
+      console.log(formatWatchResult(result));
+      process.exit(0);
+    }
+
+    // Lazy mode
+    if (shouldBeLazy(clean, actualCmd)) {
+      const lazy = toLazy(clean, actualCmd);
+      const saved = rawTokens - estimateTokens(JSON.stringify(lazy));
+      if (saved > 0) recordSaving("compressed", saved);
+      console.log(JSON.stringify(lazy, null, 2));
+      process.exit(0);
+    }
+
+    // AI summary for medium-large output
+    if (shouldProcess(clean)) {
+      const processed = await processOutput(actualCmd, clean);
+      if (processed.aiProcessed && processed.tokensSaved > 30) {
+        recordSaving("compressed", processed.tokensSaved);
+        console.log(processed.summary);
+        console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+        process.exit(0);
+      }
+    }
+
+    // Small output — pass through clean
+    console.log(clean);
+    const saved = rawTokens - estimateTokens(clean);
+    if (saved > 10) { recordSaving("compressed", saved); console.error(`[open-terminal] saved ${saved} tokens`); }
+  } catch (e: any) {
+    const stderr = e.stderr?.toString() ?? "";
+    const stdout = e.stdout?.toString() ?? "";
+    const combined = stderr && stdout.includes(stderr.trim()) ? stdout : stdout + stderr;
+    console.log(stripNoise(stripAnsi(combined)).cleaned);
+    process.exit(e.status ?? 1);
+  }
+}
+
+// ── TUI mode (no args) ──────────────────────────────────────────────────────
 
 else {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY) {

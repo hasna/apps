@@ -64,9 +64,10 @@ function extractTests(output: string): TestStatus[] {
 
 /** Detect if output looks like test runner output */
 export function isTestOutput(output: string): boolean {
-  const markers = /(?:Tests?:|PASS|FAIL|✓|✗|passed|failed|\d+\s+pass|\d+\s+fail)/i;
-  const lines = output.split("\n");
-  return lines.filter(l => markers.test(l)).length >= 2;
+  // Must have a summary line with counts (not just words "pass"/"fail" in prose)
+  const summaryLine = /(?:\d+\s+pass|\d+\s+fail|Tests?:\s+\d+|Ran\s+\d+\s+tests?)/i;
+  const testMarkers = /(?:✓|✗|✔|✕|PASS\s+\S+\.test|FAIL\s+\S+\.test|bun test|jest|vitest|pytest)/;
+  return summaryLine.test(output) && testMarkers.test(output);
 }
 
 /** Track test results and return only changes */
