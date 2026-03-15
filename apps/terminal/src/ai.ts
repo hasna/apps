@@ -53,6 +53,8 @@ const IRREVERSIBLE_PATTERNS = [
   /\bcodemod\b/, /\bsed\s+-i\b/, /\bawk\s.*>\s*\S+\.\w+/, /\bperl\s+-[pi]\b/,
   // File creation/modification (READ-ONLY terminal)
   /\btouch\b/, /\bmkdir\b/, /\becho\s.*>/, /\btee\b/, /\bcp\b/, /\bmv\b/,
+  // Starting servers/processes (dangerous from NL)
+  /\b(bun|npm|pnpm|yarn)\s+run\s+dev\b/, /\b(bun|npm)\s+start\b/,
 ];
 
 // Commands that are ALWAYS safe (read-only git, etc.)
@@ -258,6 +260,8 @@ SEMANTIC MAPPING: When the user references a concept, search the file tree for R
 - When uncertain: grep -rn "keyword" src/ --include="*.ts" -l (list matching files)
 
 ACTION vs CONCEPTUAL: If the prompt starts with "run", "execute", "check", "test", "build", "show output of" — ALWAYS generate an executable command. NEVER read README for action requests. Only read docs for "explain why", "what does X mean", "how was X designed".
+
+EXISTENCE CHECKS: If the prompt starts with "is there", "does this have", "do we have", "does X exist" — NEVER run/start/launch anything. Use ls, find, or test -d to CHECK existence. These are READ-ONLY questions.
 
 MONOREPO: If the project context says "MONOREPO", search packages/ or apps/ NOT src/. Use: grep -rn "pattern" packages/ --include="*.ts". For specific packages, use packages/PKGNAME/src/.
 cwd: ${process.cwd()}
