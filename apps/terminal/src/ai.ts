@@ -249,22 +249,24 @@ export async function translateToCommand(
 
   if (text.startsWith("BLOCKED:")) throw new Error(text);
 
-  // Strip AI reasoning — extract only the shell command
-  // AI sometimes prefixes with "Based on..." or wraps in backticks
+  // Strip AI reasoning — extract ONLY the shell command (first line)
   let cleaned = text.trim();
-  // Remove markdown code blocks
-  cleaned = cleaned.replace(/^```(?:bash|sh|shell)?\n?/m, "").replace(/\n?```$/m, "");
-  // Remove lines that look like AI reasoning (start with capital letter, contain "I ", "Based on", etc.)
+  // Remove ALL markdown code blocks and their content markers
+  cleaned = cleaned.replace(/```(?:bash|sh|shell)?\n?/g, "").replace(/```/g, "");
+  // Split into lines and find the FIRST one that looks like a command
   const lines = cleaned.split("\n");
-  const commandLines = lines.filter(l => {
-    const t = l.trim();
-    if (!t) return false;
-    // Skip obvious reasoning lines
-    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To |However|BLOCKED:)/.test(t)) return false;
-    if (/^[A-Z][a-z].*[.;:]$/.test(t)) return false; // English sentence ending with period/semicolon/colon
-    return true;
-  });
-  cleaned = commandLines.join("\n").trim() || cleaned;
+  let command = "";
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    // Skip reasoning lines
+    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To |However|BLOCKED:|If |You |We |For )/.test(t)) continue;
+    if (/^[A-Z][a-z].*[.;:!?]$/.test(t)) continue;
+    // Found a command line — take it and stop
+    command = t;
+    break;
+  }
+  cleaned = command || cleaned.split("\n")[0].trim();
 
   cacheSet(nl, cleaned);
   return cleaned;
