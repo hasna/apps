@@ -214,6 +214,10 @@ RULES:
 - Search src/ directory, NOT dist/ or node_modules/ for code queries.
 - For compound questions ("how many X and are they Y"), prefer ONE command that captures all info. Do NOT chain with &&.
 - Use exact file paths from the project context below. Do NOT guess paths.
+- For "what would break if I deleted X": use grep -rn "from.*X\\|import.*X\\|require.*X" src/ to find all importers.
+- For "find where X is defined": use grep -rn "export.*function X\\|export.*class X\\|export.*const X" src/
+- For "show me the code of function X": use grep -A 20 "function X" src/ to show the function body.
+- For conceptual questions about what code does: use cat on the relevant file, the AI summary will explain it.
 cwd: ${process.cwd()}
 shell: zsh / macOS${projectContext}${restrictionBlock}${contextBlock}`;
 }
