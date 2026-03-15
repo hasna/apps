@@ -7,7 +7,7 @@ import { spawn } from "child_process";
 import { compress, stripAnsi } from "../compression.js";
 import { parseOutput, tokenSavings, estimateTokens } from "../parsers/index.js";
 import { summarizeOutput } from "../ai.js";
-import { searchFiles, searchContent } from "../search/index.js";
+import { searchFiles, searchContent, semanticSearch } from "../search/index.js";
 import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipes/storage.js";
 import { substituteVariables } from "../recipes/model.js";
 import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../supervisor.js";
@@ -234,6 +234,28 @@ export function createServer(): McpServer {
     },
     async ({ pattern, path, fileType, maxResults, contextLines }) => {
       const result = await searchContent(pattern, path ?? process.cwd(), { fileType, maxResults, contextLines });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── search_semantic: AST-powered code search ───────────────────────────────
+
+  server.tool(
+    "search_semantic",
+    "Semantic code search — find functions, classes, components, hooks, types by meaning. Uses AST parsing, not string matching. Much more precise than grep for code navigation.",
+    {
+      query: z.string().describe("What to search for (e.g., 'auth functions', 'React components', 'database hooks')"),
+      path: z.string().optional().describe("Search root (default: cwd)"),
+      kinds: z.array(z.enum(["function", "class", "interface", "type", "variable", "export", "import", "component", "hook"])).optional().describe("Filter by symbol kind"),
+      exportedOnly: z.boolean().optional().describe("Only show exported symbols (default: false)"),
+      maxResults: z.number().optional().describe("Max results (default: 30)"),
+    },
+    async ({ query, path, kinds, exportedOnly, maxResults }) => {
+      const result = await semanticSearch(query, path ?? process.cwd(), {
+        kinds: kinds as any,
+        exportedOnly,
+        maxResults,
+      });
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     }
   );
