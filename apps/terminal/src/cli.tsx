@@ -424,12 +424,28 @@ else if (args.length > 0) {
   const blocked = checkPermissions(command, perms);
   if (blocked) { console.error(`blocked: ${blocked}`); process.exit(1); }
 
-  // Safety: warn about irreversible commands (kill, push, rm, etc.)
+  // Safety: when command is irreversible, try a safer read-only alternative
   if (isIrreversible(command)) {
-    console.error(`⚠ IRREVERSIBLE: $ ${command}`);
-    console.error(`  This command may kill processes, push code, or delete data.`);
-    console.error(`  Run directly in your shell if you're sure: ${command}`);
-    process.exit(1);
+    // Try to generate a safe alternative via AI
+    try {
+      const safeCommand = await translateToCommand(
+        `${prompt} (IMPORTANT: use ONLY read-only commands like grep, find, cat, wc, ls. Do NOT use npx, install, kill, push, sed, or any modifying command.)`,
+        perms, []
+      );
+      if (!isIrreversible(safeCommand) && !checkPermissions(safeCommand, perms)) {
+        console.error(`$ ${safeCommand} (safe alternative)`);
+        command = safeCommand;
+        // Continue to execution below
+      } else {
+        console.error(`⚠ BLOCKED: $ ${command}`);
+        console.error(`  Run directly in your shell if you're sure.`);
+        process.exit(1);
+      }
+    } catch {
+      console.error(`⚠ BLOCKED: $ ${command}`);
+      console.error(`  Run directly in your shell if you're sure.`);
+      process.exit(1);
+    }
   }
 
   // Show what we're running
@@ -493,8 +509,19 @@ else if (args.length > 0) {
       console.log(`No results found for: ${prompt}`);
       process.exit(0);
     }
+    // Combine stdout+stderr and try AI answer framing (for audit/lint/test commands)
     const combined = errStderr && errStdout.includes(errStderr.trim()) ? errStdout : errStdout + errStderr;
-    console.log(stripNoise(stripAnsi(combined)).cleaned);
+    const errorClean = stripNoise(stripAnsi(combined)).cleaned;
+    if (errorClean.length > 20) {
+      try {
+        const processed = await processOutput(actualCmd, errorClean, prompt);
+        if (processed.aiProcessed) {
+          console.log(processed.summary);
+          process.exit(e.status ?? 1);
+        }
+      } catch {}
+    }
+    console.log(errorClean);
     process.exit(e.status ?? 1);
   }
 }
