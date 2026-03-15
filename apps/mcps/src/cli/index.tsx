@@ -17,7 +17,10 @@ import {
   getToolCounts,
   setServerEnv,
   unsetServerEnv,
+  updateServer,
+  cloneServer,
 } from "../lib/registry.js";
+import type { McpSource } from "../types.js";
 import { diagnoseServer } from "../lib/doctor.js";
 import { searchRegistry, installFromRegistry } from "../lib/remote.js";
 import { listAwesomeServers } from "../lib/finder.js";
@@ -71,6 +74,7 @@ program
   .command("list")
   .description("List registered MCP servers")
   .option("--json", "Output as JSON")
+  .option("--verbose", "Show detailed info including health, command, and transport")
   .action((opts) => {
     const servers = listServers();
     if (opts.json) {
@@ -92,7 +96,36 @@ program
       const errorWarning = s.last_error ? chalk.red(" ⚠") : "";
       console.log(`  ${chalk.bold(s.name)} ${chalk.dim(`[${s.id}]`)} — ${status}${toolCount}${errorWarning}`);
       if (s.description) console.log(`    ${chalk.dim(s.description)}`);
-      console.log(`    ${chalk.dim(`${s.command} ${s.args.join(" ")}`)}`);
+      if (opts.verbose) {
+        console.log(`    Command:   ${chalk.dim(`${s.command} ${s.args.join(" ")}`)}`);
+        console.log(`    Transport: ${chalk.dim(s.transport)}`);
+        const now = Date.now();
+        if (s.last_connected_at) {
+          const connectedAt = new Date(s.last_connected_at).getTime();
+          const daysDiff = Math.floor((now - connectedAt) / (1000 * 60 * 60 * 24));
+          const connectedLabel = daysDiff === 0 ? "today" : daysDiff === 1 ? "1 day ago" : `${daysDiff} days ago`;
+          const connectedColor = !s.last_error && daysDiff < 7 ? chalk.green : chalk.yellow;
+          console.log(`    Connected: ${connectedColor(connectedLabel)}`);
+        } else {
+          console.log(`    Connected: ${chalk.dim("never")}`);
+        }
+        if (s.last_error) {
+          console.log(`    Error:     ${chalk.red(s.last_error)}`);
+        }
+        // Health icon
+        const hasError = !!s.last_error;
+        const daysSinceConnect = s.last_connected_at
+          ? Math.floor((Date.now() - new Date(s.last_connected_at).getTime()) / (1000 * 60 * 60 * 24))
+          : Infinity;
+        const healthIcon = hasError
+          ? chalk.red("✗ unhealthy")
+          : daysSinceConnect < 7
+          ? chalk.green("✓ healthy")
+          : chalk.yellow("⚠ stale");
+        console.log(`    Health:    ${healthIcon}`);
+      } else {
+        console.log(`    ${chalk.dim(`${s.command} ${s.args.join(" ")}`)}`);
+      }
     }
     closeDb();
   });
@@ -125,6 +158,18 @@ program
     }
   });
 
+async function promptReadline(rl: readline.Interface, question: string): Promise<string> {
+  return new Promise(resolve => rl.question(question, resolve));
+}
+
+function detectSourceType(url: string): McpSource["type"] | null {
+  if (url.includes("raw.githubusercontent.com") || url.endsWith(".md")) return "awesome-list";
+  if (url.includes("registry.npmjs.org")) return "npm-search";
+  if (url.includes("api.github.com/search")) return "github-topic";
+  if (url.includes("/v0/servers") || url.includes("/servers")) return "mcp-registry";
+  return null;
+}
+
 // --- add ---
 program
   .command("add")
@@ -137,6 +182,8 @@ program
   .option("--transport <type>", "Transport type: stdio, sse, streamable-http", "stdio")
   .option("--url <url>", "URL for remote transports")
   .option("--env <pairs...>", "Environment variables as KEY=VALUE pairs")
+  .option("--wizard", "Interactive setup wizard")
+  .option("--force", "Register even if duplicate command exists")
   .description("Add a local MCP server")
   .action(async (command: string | undefined, args: string[], opts) => {
     try {
@@ -149,10 +196,76 @@ program
         return;
       }
 
+      if (opts.wizard) {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const transport = (await promptReadline(rl, "Transport [stdio/sse/http] (default: stdio): ")) || "stdio";
+        const wizardCommand = await promptReadline(rl, "Command (e.g. npx, node, bunx): ");
+        if (!wizardCommand) {
+          console.error(chalk.red("Command is required"));
+          rl.close();
+          closeDb();
+          process.exit(1);
+        }
+        const argsStr = await promptReadline(rl, "Arguments (space-separated, e.g. -y @pkg/name): ");
+        const wizardArgs = argsStr.trim() ? argsStr.trim().split(/\s+/) : [];
+        const wizardName = await promptReadline(rl, "Display name (optional, press enter to skip): ");
+        const wizardDescription = await promptReadline(rl, "Description (optional): ");
+
+        const env: Record<string, string> = {};
+        console.log(chalk.dim("Add env vars (KEY=VALUE). Press enter with empty key to skip."));
+        while (true) {
+          const pair = await promptReadline(rl, "  Env var (KEY=VALUE or empty to done): ");
+          if (!pair.trim()) break;
+          const eqIdx = pair.indexOf("=");
+          if (eqIdx > 0) env[pair.slice(0, eqIdx)] = pair.slice(eqIdx + 1);
+        }
+
+        rl.close();
+
+        console.log(chalk.bold("\nServer to add:"));
+        console.log(`  Command:   ${wizardCommand} ${wizardArgs.join(" ")}`);
+        console.log(`  Transport: ${transport}`);
+        if (wizardName) console.log(`  Name:      ${wizardName}`);
+        if (Object.keys(env).length) console.log(`  Env:       ${Object.keys(env).join(", ")}`);
+        const confirm = await new Promise<string>(resolve => {
+          const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
+          rl2.question(chalk.bold("Add this server? [Y/n]: "), ans => { rl2.close(); resolve(ans); });
+        });
+        if (confirm.toLowerCase() === "n") {
+          console.log("Aborted.");
+          closeDb();
+          return;
+        }
+
+        const server = addServer({
+          command: wizardCommand,
+          args: wizardArgs,
+          name: wizardName || undefined,
+          description: wizardDescription || undefined,
+          transport: transport as any,
+          env,
+        });
+        console.log(chalk.green(`Added: ${server.name} [${server.id}]`));
+        closeDb();
+        return;
+      }
+
       if (!command) {
-        console.error(chalk.red("Error: command is required (or use --from-registry)"));
+        console.error(chalk.red("Error: command is required (or use --from-registry or --wizard)"));
         closeDb();
         process.exit(1);
+      }
+
+      // Duplicate check
+      const existing = listServers();
+      const duplicate = existing.find(s => s.command === command && JSON.stringify(s.args) === JSON.stringify(args));
+      if (duplicate) {
+        console.log(chalk.yellow(`Warning: server "${duplicate.name}" [${duplicate.id}] already uses this command.`));
+        if (!opts.force) {
+          console.log(chalk.dim("Use --force to register anyway."));
+          closeDb();
+          return;
+        }
       }
 
       const envMap: Record<string, string> = {};
@@ -182,6 +295,55 @@ program
       } else {
         console.error(chalk.red(`Failed to add server: ${err.message}`));
       }
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+// --- update-server ---
+program
+  .command("update-server")
+  .argument("<id>", "Server ID to update")
+  .description("Update fields of a registered server")
+  .option("--name <name>", "New display name")
+  .option("--description <desc>", "New description")
+  .option("--command <cmd>", "New command")
+  .option("--args <args...>", "New args list")
+  .option("--transport <type>", "New transport type")
+  .option("--url <url>", "New URL")
+  .action((id: string, opts) => {
+    const server = getServer(id);
+    if (!server) {
+      console.error(chalk.red(`Server "${id}" not found.`));
+      closeDb();
+      process.exit(1);
+    }
+    const fields: Parameters<typeof updateServer>[1] = {};
+    if (opts.name !== undefined) fields.name = opts.name;
+    if (opts.description !== undefined) fields.description = opts.description;
+    if (opts.command !== undefined) fields.command = opts.command;
+    if (opts.args !== undefined) fields.args = opts.args as string[];
+    if (opts.transport !== undefined) fields.transport = opts.transport;
+    if (opts.url !== undefined) fields.url = opts.url;
+    const updated = updateServer(id, fields);
+    console.log(chalk.green(`Updated server: ${updated.name} [${updated.id}]`));
+    closeDb();
+  });
+
+// --- clone ---
+program
+  .command("clone")
+  .argument("<id>", "Server ID to clone")
+  .argument("<new-name>", "Name for the cloned server")
+  .description("Clone a server with a new name")
+  .action((id: string, newName: string) => {
+    try {
+      const cloned = cloneServer(id, newName);
+      console.log(chalk.green(`Cloned server: ${cloned.name} [${cloned.id}]`));
+      console.log(chalk.dim(`  ${cloned.command} ${cloned.args.join(" ")}`));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
       closeDb();
       process.exit(1);
     }
@@ -407,7 +569,9 @@ program
   .command("doctor")
   .argument("[id]", "Server ID to check (omit to check all)")
   .description("Diagnose server health — checks PATH, env vars, connectivity")
-  .action(async (id: string | undefined) => {
+  .option("--fix", "Attempt to fix issues automatically")
+  .action(async (id: string | undefined, opts) => {
+    const { execFileSync: execFileSync2 } = await import("child_process");
     const servers = id ? [getServer(id)].filter(Boolean) : listServers();
     if (servers.length === 0) {
       console.log(chalk.dim(id ? `Server "${id}" not found.` : "No servers registered."));
@@ -422,6 +586,15 @@ program
       for (const check of report.checks) {
         const icon = check.pass ? chalk.green("✓") : chalk.red("✗");
         console.log(`  ${icon} ${check.name}: ${chalk.dim(check.message)}`);
+        if (!check.pass && opts.fix && check.fixable && check.fixHint) {
+          console.log(chalk.dim(`  Attempting fix: ${check.fixHint}`));
+          try {
+            execFileSync2("npm", ["install", "-g", check.fixHint.replace("npm install -g ", "")], { stdio: "inherit" });
+            console.log(chalk.green(`  Fixed!`));
+          } catch {
+            console.log(chalk.red(`  Fix failed`));
+          }
+        }
       }
       if (!report.healthy) allHealthy = false;
     }
@@ -431,6 +604,45 @@ program
       console.log(chalk.green("All checks passed."));
     } else {
       console.log(chalk.red("Some checks failed. Fix issues above."));
+    }
+    closeDb();
+  });
+
+// --- completion ---
+program
+  .command("completion")
+  .argument("<shell>", "Shell type: bash, zsh, fish")
+  .description("Generate shell completion script")
+  .action((shell: string) => {
+    const commands = ["list","search","find","add","remove","enable","disable","info","status","tools","call","doctor","install","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
+
+    if (shell === "bash") {
+      console.log(`# Add to ~/.bashrc: eval "$(mcps completion bash)"
+_mcps_complete() {
+  local cur prev words
+  COMPREPLY=()
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  prev="\${COMP_WORDS[COMP_CWORD-1]}"
+  local cmds="${commands.join(" ")}"
+  if [ $COMP_CWORD -eq 1 ]; then
+    COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
+  fi
+}
+complete -F _mcps_complete mcps`);
+    } else if (shell === "zsh") {
+      console.log(`# Add to ~/.zshrc: eval "$(mcps completion zsh)"
+_mcps() {
+  local -a cmds
+  cmds=(${commands.map(c => `'${c}'`).join(" ")})
+  _describe 'commands' cmds
+}
+compdef _mcps mcps`);
+    } else if (shell === "fish") {
+      const lines = commands.map(c => `complete -c mcps -f -a '${c}'`).join("\n");
+      console.log(`# Add to ~/.config/fish/completions/mcps.fish\n${lines}`);
+    } else {
+      console.error(chalk.red(`Unknown shell: ${shell}. Use bash, zsh, or fish.`));
+      process.exit(1);
     }
     closeDb();
   });
@@ -521,7 +733,9 @@ program
         console.log(chalk.dim(`Searching for "${q}" across ${sources ? sources.join(", ") : "all enabled sources"}...`));
       }
 
+      const t0 = Date.now();
       const results = await findServers(q, { sources, limit, noCache });
+      const elapsed = Date.now() - t0;
 
       if (opts.json) {
         console.log(JSON.stringify(results, null, 2));
@@ -535,15 +749,25 @@ program
         return;
       }
 
+      // Count per source
+      const countBySource = new Map<string, number>();
+      for (const r of results) {
+        const key = r.sourceId ?? r.source;
+        countBySource.set(key, (countBySource.get(key) ?? 0) + 1);
+      }
+      const allSourcesList = listSources();
+      const sourceNameMap = new Map(allSourcesList.map((s) => [s.id, s.name]));
+      const sourcesUsed = countBySource.size;
+      const breakdownParts = Array.from(countBySource.entries())
+        .map(([k, n]) => `${sourceNameMap.get(k) ?? k}: ${n}`)
+        .join(", ");
+
       const sourceColors: Record<string, (s: string) => string> = {
         registry: chalk.blue,
         npm: chalk.red,
         awesome: chalk.yellow,
         github: chalk.magenta,
       };
-
-      const allSources = listSources();
-      const sourceNameMap = new Map(allSources.map((s) => [s.id, s.name]));
 
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
@@ -559,9 +783,11 @@ program
 
       console.log(
         chalk.dim(
-          `\n${results.length} result(s). Use \`mcps add --from-registry <id>\` or \`mcps add npx -y <pkg>\` to install.`
+          `\nFound ${results.length} results across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"} (${elapsed}ms)`
         )
       );
+      if (breakdownParts) console.log(chalk.dim(`  Breakdown: ${breakdownParts}`));
+      console.log(chalk.dim(`Use \`mcps add --from-registry <id>\` or \`mcps add npx -y <pkg>\` to install.`));
 
       if (opts.install) {
         let chosen = results[0];
@@ -649,18 +875,30 @@ sourcesCmd
   .command("add")
   .description("Add a new search source")
   .option("--name <name>", "Source name (required)")
-  .option("--type <type>", "Source type: mcp-registry, awesome-list, npm-search, github-topic (required)")
+  .option("--type <type>", "Source type: mcp-registry, awesome-list, npm-search, github-topic")
   .option("--url <url>", "Source URL (required)")
   .option("--description <desc>", "Description")
   .option("--test", "Test the source after adding by running a sample search")
   .action(async (opts) => {
-    if (!opts.name || !opts.type || !opts.url) {
-      console.error(chalk.red("Error: --name, --type, and --url are required"));
+    if (!opts.name || !opts.url) {
+      console.error(chalk.red("Error: --name and --url are required"));
       closeDb();
       process.exit(1);
     }
     const validTypes = ["mcp-registry", "awesome-list", "npm-search", "github-topic"];
-    if (!validTypes.includes(opts.type)) {
+    let sourceType = opts.type as string | undefined;
+    if (!sourceType) {
+      const detected = detectSourceType(opts.url as string);
+      if (detected) {
+        console.log(chalk.dim(`Auto-detected type: ${detected}`));
+        sourceType = detected;
+      } else {
+        console.error(chalk.red(`Error: could not auto-detect --type. Please specify one of: ${validTypes.join(", ")}`));
+        closeDb();
+        process.exit(1);
+      }
+    }
+    if (!validTypes.includes(sourceType)) {
       console.error(chalk.red(`Error: --type must be one of: ${validTypes.join(", ")}`));
       closeDb();
       process.exit(1);
@@ -668,7 +906,7 @@ sourcesCmd
     try {
       const source = addSource({
         name: opts.name,
-        type: opts.type,
+        type: sourceType as any,
         url: opts.url,
         description: opts.description,
       });
