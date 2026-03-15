@@ -446,18 +446,12 @@ else if (args.length > 0) {
       process.exit(0);
     }
 
-    // Lazy mode
-    if (shouldBeLazy(clean, actualCmd)) {
-      const lazy = toLazy(clean, actualCmd);
-      const saved = rawTokens - estimateTokens(JSON.stringify(lazy));
-      if (saved > 0) recordSaving("compressed", saved);
-      console.log(JSON.stringify(lazy, null, 2));
-      process.exit(0);
-    }
+    // Frame-first pipeline: AI answers the question, lazy is fallback
+    // For question-type prompts, answer framing runs BEFORE lazy mode
+    const isQuestion = /^(what|which|how|is|are|does|do|can|should|where|who|why|am|was|were|has|have|will)\b/i.test(prompt) || prompt.includes("?");
 
-    // AI answer framing — ALWAYS use in NL mode (even for small output)
-    // The AI needs to ANSWER the question, not just pass through data
     if (clean.length > 10) {
+      // Try AI answer framing first (especially for questions)
       const processed = await processOutput(actualCmd, clean, prompt);
       if (processed.aiProcessed) {
         if (processed.tokensSaved > 0) recordSaving("compressed", processed.tokensSaved);
@@ -465,6 +459,15 @@ else if (args.length > 0) {
         if (processed.tokensSaved > 10) console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
         process.exit(0);
       }
+    }
+
+    // Lazy mode — fallback when AI framing didn't run or failed
+    if (shouldBeLazy(clean, actualCmd)) {
+      const lazy = toLazy(clean, actualCmd);
+      const saved = rawTokens - estimateTokens(JSON.stringify(lazy));
+      if (saved > 0) recordSaving("compressed", saved);
+      console.log(JSON.stringify(lazy, null, 2));
+      process.exit(0);
     }
 
     // Fallback: AI unavailable — pass through clean
