@@ -148,12 +148,25 @@ function detectProjectContext(): string {
     const topLevel = execSync("ls -1", { cwd, encoding: "utf8", timeout: 2000 }).trim();
     parts.push(`Top-level: ${topLevel.split("\n").join(", ")}`);
 
+    // Detect monorepo (packages/ or workspaces in package.json)
+    const isMonorepo = existsSync(join(cwd, "packages")) || existsSync(join(cwd, "apps"));
+    if (isMonorepo) {
+      const pkgDirs = execSync(
+        `ls -d packages/*/src 2>/dev/null || ls -d apps/*/src 2>/dev/null || echo ""`,
+        { cwd, encoding: "utf8", timeout: 2000 }
+      ).trim();
+      if (pkgDirs) {
+        parts.push(`MONOREPO: Source is in packages/*/src/, NOT src/. Search packages/ not src/.`);
+        parts.push(`Package sources:\n${pkgDirs}`);
+      }
+    }
+
     // src/ structure — include FILES so AI knows exact filenames + extensions
-    for (const srcDir of ["src", "lib", "app"]) {
+    for (const srcDir of isMonorepo ? ["packages"] : ["src", "lib", "app"]) {
       if (existsSync(join(cwd, srcDir))) {
         const tree = execSync(
-          `find ${srcDir} -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name '*.test.*' -not -name '*.spec.*' 2>/dev/null | sort | head -60`,
-          { cwd, encoding: "utf8", timeout: 2000 }
+          `find ${srcDir} -maxdepth ${isMonorepo ? 4 : 3} -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name '*.test.*' -not -name '*.spec.*' 2>/dev/null | sort | head -80`,
+          { cwd, encoding: "utf8", timeout: 3000 }
         ).trim();
         if (tree) parts.push(`Files in ${srcDir}/:\n${tree}`);
         break;
@@ -238,6 +251,8 @@ SEMANTIC MAPPING: When the user references a concept, search the file tree for R
 - When uncertain: grep -rn "keyword" src/ --include="*.ts" -l (list matching files)
 
 ACTION vs CONCEPTUAL: If the prompt starts with "run", "execute", "check", "test", "build", "show output of" — ALWAYS generate an executable command. NEVER read README for action requests. Only read docs for "explain why", "what does X mean", "how was X designed".
+
+MONOREPO: If the project context says "MONOREPO", search packages/ or apps/ NOT src/. Use: grep -rn "pattern" packages/ --include="*.ts". For specific packages, use packages/PKGNAME/src/.
 cwd: ${process.cwd()}
 shell: zsh / macOS${projectContext}${restrictionBlock}${contextBlock}`;
 }
