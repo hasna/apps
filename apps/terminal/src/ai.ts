@@ -55,7 +55,15 @@ const IRREVERSIBLE_PATTERNS = [
   /\btouch\b/, /\bmkdir\b/, /\becho\s.*>/, /\btee\b/, /\bcp\b/, /\bmv\b/,
 ];
 
+// Commands that are ALWAYS safe (read-only git, etc.)
+const SAFE_OVERRIDES = [
+  /^\s*git\s+(log|show|diff|branch|status|blame|tag|remote|stash\s+list)\b/,
+  /^\s*git\s+log\b/,
+];
+
 export function isIrreversible(command: string): boolean {
+  // Safe overrides take priority
+  if (SAFE_OVERRIDES.some((r) => r.test(command))) return false;
   return IRREVERSIBLE_PATTERNS.some((r) => r.test(command));
 }
 
@@ -251,8 +259,8 @@ export async function translateToCommand(
     const t = l.trim();
     if (!t) return false;
     // Skip obvious reasoning lines
-    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To )/.test(t)) return false;
-    if (/^[A-Z][a-z].*\.$/.test(t)) return false; // English sentence ending with period
+    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To |However|BLOCKED:)/.test(t)) return false;
+    if (/^[A-Z][a-z].*[.;:]$/.test(t)) return false; // English sentence ending with period/semicolon/colon
     return true;
   });
   cleaned = commandLines.join("\n").trim() || cleaned;
