@@ -63,10 +63,12 @@ function extractTests(output: string): TestStatus[] {
 }
 
 /** Detect if output looks like test runner output */
-export function isTestOutput(output: string): boolean {
-  // Must have a summary line with counts (not just words "pass"/"fail" in prose)
-  const summaryLine = /(?:\d+\s+pass|\d+\s+fail|Tests?:\s+\d+|Ran\s+\d+\s+tests?)/i;
-  const testMarkers = /(?:✓|✗|✔|✕|PASS\s+\S+\.test|FAIL\s+\S+\.test|bun test|jest|vitest|pytest)/;
+export function isTestOutput(output: string, command?: string): boolean {
+  // If the command is explicitly a test command, trust it
+  if (command && /\b(bun\s+test|npm\s+test|jest|vitest|pytest|cargo\s+test|go\s+test)\b/.test(command)) return true;
+  // Otherwise require BOTH a summary line AND a test runner marker in the output
+  const summaryLine = /(?:\d+\s+pass|\d+\s+fail|Tests?:\s+\d+|Ran\s+\d+\s+tests?)\s*$/im;
+  const testMarkers = /(?:✓|✗|✔|✕|PASS\s+\S+\.test|FAIL\s+\S+\.test|bun test v|jest|vitest|pytest)/;
   return summaryLine.test(output) && testMarkers.test(output);
 }
 

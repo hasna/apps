@@ -410,6 +410,14 @@ else if (args.length > 0) {
   const blocked = checkPermissions(command, perms);
   if (blocked) { console.error(`blocked: ${blocked}`); process.exit(1); }
 
+  // Safety: warn about irreversible commands (kill, push, rm, etc.)
+  if (isIrreversible(command)) {
+    console.error(`⚠ IRREVERSIBLE: $ ${command}`);
+    console.error(`  This command may kill processes, push code, or delete data.`);
+    console.error(`  Run with terminal exec "${command}" to bypass, or use the TUI for confirmation.`);
+    process.exit(1);
+  }
+
   // Show what we're running
   console.error(`$ ${command}`);
 
@@ -432,7 +440,7 @@ else if (args.length > 0) {
     recordUsage(rawTokens);
 
     // Test output detection
-    if (isTestOutput(clean)) {
+    if (isTestOutput(clean, actualCmd)) {
       const result = trackTests(process.cwd(), clean);
       console.log(formatWatchResult(result));
       process.exit(0);
@@ -449,7 +457,7 @@ else if (args.length > 0) {
 
     // AI summary for medium-large output
     if (shouldProcess(clean)) {
-      const processed = await processOutput(actualCmd, clean);
+      const processed = await processOutput(actualCmd, clean, prompt);
       if (processed.aiProcessed && processed.tokensSaved > 30) {
         recordSaving("compressed", processed.tokensSaved);
         console.log(processed.summary);

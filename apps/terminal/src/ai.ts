@@ -44,6 +44,10 @@ const IRREVERSIBLE_PATTERNS = [
   /\brm\s/, /\brmdir\b/, /\btruncate\b/, /\bdrop\s+table\b/i,
   /\bdelete\s+from\b/i, /\bmv\b.*\/dev\/null/, /\b>\s*[^>]/,
   /\bdd\b/, /\bmkfs\b/, /\bformat\b/, /\bshred\b/,
+  // Process/service killing
+  /\bkill\b/, /\bkillall\b/, /\bpkill\b/,
+  // Git push/force operations
+  /\bgit\s+push\b/, /\bgit\s+reset\s+--hard\b/, /\bgit\s+force\b/,
 ];
 
 export function isIrreversible(command: string): boolean {

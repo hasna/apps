@@ -29,21 +29,17 @@ export interface ProcessedOutput {
 const MIN_LINES_TO_PROCESS = 15;
 const MAX_OUTPUT_FOR_AI = 8000; // chars to send to AI (truncate if longer)
 
-const SUMMARIZE_PROMPT = `You are an output summarizer for a terminal. Given command output, return a CONCISE structured summary.
+const SUMMARIZE_PROMPT = `You are an intelligent terminal assistant. Given a user's original question and the command output, ANSWER THE QUESTION directly.
 
 RULES:
-- Return ONLY the summary, no explanations
-- For test output: show pass count, fail count, and ONLY the failing test names + errors
-- For build output: show status (ok/fail), error count, warning count
-- For install output: show package count, time, vulnerabilities
-- For file listings: show directory count, file count, notable files
-- For git output: show branch, status, key info
-- For logs: show line count, error count, latest error
-- For search results: show match count, top files
-- For ANY output: keep errors/failures/warnings, drop verbose/repetitive/progress lines
-- Use symbols: ✓ for success, ✗ for failure, ⚠ for warnings
-- Maximum 8 lines in your summary
-- If there are errors, ALWAYS include them verbatim`;
+- If the user asked a YES/NO question, start with Yes or No, then explain briefly
+- If the user asked "how many", give the number first, then context
+- If the user asked "show me X", show only X, not everything
+- ANSWER the question using the data — don't just summarize the raw output
+- Use symbols: ✓ for success/yes, ✗ for failure/no, ⚠ for warnings
+- Maximum 8 lines
+- Keep errors/failures verbatim
+- Be direct and concise — the user wants an ANSWER, not a data dump`;
 
 /**
  * Process command output through AI summarization.
@@ -52,6 +48,7 @@ RULES:
 export async function processOutput(
   command: string,
   output: string,
+  originalPrompt?: string,
 ): Promise<ProcessedOutput> {
   const lines = output.split("\n");
 
@@ -82,7 +79,7 @@ export async function processOutput(
   try {
     const provider = getProvider();
     const summary = await provider.complete(
-      `Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}`,
+      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}`,
       {
         system: SUMMARIZE_PROMPT,
         maxTokens: 300,

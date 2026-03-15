@@ -54,7 +54,7 @@ export function toLazy(output: string, command: string): LazyResult {
     count: lines.length,
     sample,
     categories: Object.keys(categories).length > 1 ? categories : undefined,
-    hint: `${lines.length} results. Showing first 20. Use terminal exec --offset=20 --limit=20 to paginate.`,
+    hint: `${lines.length} results. Showing first 20. Use a more specific query to narrow results.`,
   };
 }
 
