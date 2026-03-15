@@ -1,0 +1,125 @@
+// AI-powered output processor — uses cheap AI to intelligently summarize any output
+// NOTHING is hardcoded. The AI decides what's important, what's noise, what to keep.
+
+import { getProvider } from "./providers/index.js";
+import { estimateTokens } from "./parsers/index.js";
+import { recordSaving } from "./economy.js";
+
+export interface ProcessedOutput {
+  /** AI-generated summary (concise, structured) */
+  summary: string;
+  /** Full original output (always available) */
+  full: string;
+  /** Structured JSON if the AI could extract it */
+  structured?: Record<string, unknown>;
+  /** How many tokens were saved */
+  tokensSaved: number;
+  /** Whether AI processing was used (vs passthrough) */
+  aiProcessed: boolean;
+}
+
+const MIN_LINES_TO_PROCESS = 15;
+const MAX_OUTPUT_FOR_AI = 8000; // chars to send to AI (truncate if longer)
+
+const SUMMARIZE_PROMPT = `You are an output summarizer for a terminal. Given command output, return a CONCISE structured summary.
+
+RULES:
+- Return ONLY the summary, no explanations
+- For test output: show pass count, fail count, and ONLY the failing test names + errors
+- For build output: show status (ok/fail), error count, warning count
+- For install output: show package count, time, vulnerabilities
+- For file listings: show directory count, file count, notable files
+- For git output: show branch, status, key info
+- For logs: show line count, error count, latest error
+- For search results: show match count, top files
+- For ANY output: keep errors/failures/warnings, drop verbose/repetitive/progress lines
+- Use symbols: ✓ for success, ✗ for failure, ⚠ for warnings
+- Maximum 8 lines in your summary
+- If there are errors, ALWAYS include them verbatim`;
+
+/**
+ * Process command output through AI summarization.
+ * Cheap AI call (~100 tokens) saves 1000+ tokens downstream.
+ */
+export async function processOutput(
+  command: string,
+  output: string,
+): Promise<ProcessedOutput> {
+  const lines = output.split("\n");
+
+  // Short output — pass through, no AI needed
+  if (lines.length <= MIN_LINES_TO_PROCESS) {
+    return {
+      summary: output,
+      full: output,
+      tokensSaved: 0,
+      aiProcessed: false,
+    };
+  }
+
+  // Truncate very long output before sending to AI
+  let toSummarize = output;
+  if (toSummarize.length > MAX_OUTPUT_FOR_AI) {
+    const headChars = Math.floor(MAX_OUTPUT_FOR_AI * 0.6);
+    const tailChars = Math.floor(MAX_OUTPUT_FOR_AI * 0.3);
+    toSummarize = output.slice(0, headChars) +
+      `\n\n... (${lines.length} total lines, middle truncated) ...\n\n` +
+      output.slice(-tailChars);
+  }
+
+  try {
+    const provider = getProvider();
+    const summary = await provider.complete(
+      `Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}`,
+      {
+        system: SUMMARIZE_PROMPT,
+        maxTokens: 300,
+      }
+    );
+
+    const originalTokens = estimateTokens(output);
+    const summaryTokens = estimateTokens(summary);
+    const saved = Math.max(0, originalTokens - summaryTokens);
+
+    if (saved > 0) {
+      recordSaving("compressed", saved);
+    }
+
+    // Try to extract structured JSON if the AI returned it
+    let structured: Record<string, unknown> | undefined;
+    try {
+      const jsonMatch = summary.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        structured = JSON.parse(jsonMatch[0]);
+      }
+    } catch { /* not JSON, that's fine */ }
+
+    return {
+      summary,
+      full: output,
+      structured,
+      tokensSaved: saved,
+      aiProcessed: true,
+    };
+  } catch {
+    // AI unavailable — fall back to simple truncation
+    const head = lines.slice(0, 5).join("\n");
+    const tail = lines.slice(-5).join("\n");
+    const fallback = `${head}\n  ... (${lines.length - 10} lines hidden) ...\n${tail}`;
+
+    return {
+      summary: fallback,
+      full: output,
+      tokensSaved: Math.max(0, estimateTokens(output) - estimateTokens(fallback)),
+      aiProcessed: false,
+    };
+  }
+}
+
+/**
+ * Lightweight version — just decides IF output should be processed.
+ * Returns true if the output would benefit from AI summarization.
+ */
+export function shouldProcess(output: string): boolean {
+  return output.split("\n").length > MIN_LINES_TO_PROCESS;
+}
