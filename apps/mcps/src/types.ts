@@ -11,6 +11,8 @@ export interface McpServerEntry {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  last_connected_at?: string | null;
+  last_error?: string | null;
 }
 
 export interface AddServerOptions {
@@ -64,4 +66,42 @@ export interface ConnectedServer {
   disconnect: () => Promise<void>;
 }
 
-export type TuiView = "servers" | "detail" | "search" | "call";
+export type TuiView = "servers" | "detail" | "search" | "call" | "find";
+
+export interface FinderResult {
+  name: string;
+  description: string;
+  /** Where this result came from */
+  source: "registry" | "npm" | "awesome" | "github";
+  /** DB id of the source that returned this result */
+  sourceId?: string;
+  /** Homepage / repository URL */
+  url?: string;
+  /** GitHub repo URL if known */
+  githubRepo?: string;
+  /** npm package name if known */
+  npmPackage?: string;
+  /** Ready-to-run install command, e.g. `npx -y @package/name` */
+  installCmd?: string;
+  /** GitHub star count if available */
+  stars?: number;
+}
+
+export interface McpSource {
+  id: string;
+  name: string;
+  /** mcp-registry | awesome-list | npm-search | github-topic */
+  type: "mcp-registry" | "awesome-list" | "npm-search" | "github-topic";
+  /** The URL endpoint for this source */
+  url: string;
+  description: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface AddSourceOptions {
+  name: string;
+  type: "mcp-registry" | "awesome-list" | "npm-search" | "github-topic";
+  url: string;
+  description?: string;
+}

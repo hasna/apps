@@ -15,6 +15,8 @@ function parseRow(row: Record<string, unknown>): McpServerEntry {
     enabled: (row.enabled as number) === 1,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
+    last_connected_at: (row.last_connected_at as string) ?? null,
+    last_error: (row.last_error as string) ?? null,
   };
 }
 
@@ -178,6 +180,23 @@ export function enableServer(id: string): McpServerEntry {
 
 export function disableServer(id: string): McpServerEntry {
   return updateServer(id, { enabled: false });
+}
+
+export function setServerEnv(id: string, key: string, value: string): void {
+  const db = getDb();
+  const server = getServer(id);
+  if (!server) throw new Error(`Server "${id}" not found`);
+  const env = { ...server.env, [key]: value };
+  db.prepare("UPDATE servers SET env = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(env), id);
+}
+
+export function unsetServerEnv(id: string, key: string): void {
+  const db = getDb();
+  const server = getServer(id);
+  if (!server) throw new Error(`Server "${id}" not found`);
+  const env = { ...server.env };
+  delete env[key];
+  db.prepare("UPDATE servers SET env = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(env), id);
 }
 
 export function cacheTools(

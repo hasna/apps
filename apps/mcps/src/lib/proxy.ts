@@ -4,6 +4,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { TOOL_PREFIX_SEPARATOR } from "./config.js";
 import { listServers, cacheTools } from "./registry.js";
+import { getDb } from "./db.js";
 import type { McpServerEntry, McpTool, ConnectedServer } from "../types.js";
 
 const connections = new Map<string, ConnectedServer>();
@@ -93,8 +94,21 @@ export async function connectToServer(entry: McpServerEntry): Promise<ConnectedS
       (connected as any)._client = client;
       connections.set(entry.id, connected);
 
+      // Record successful connection
+      try {
+        getDb().prepare("UPDATE servers SET last_connected_at = datetime('now'), last_error = NULL WHERE id = ?").run(entry.id);
+      } catch {
+        // ignore DB errors — don't fail the connection
+      }
+
       return connected;
     } catch (err) {
+      // Record connection failure
+      try {
+        getDb().prepare("UPDATE servers SET last_error = ? WHERE id = ?").run((err as Error).message, entry.id);
+      } catch {
+        // ignore DB errors
+      }
       try {
         await client.close();
       } catch {
