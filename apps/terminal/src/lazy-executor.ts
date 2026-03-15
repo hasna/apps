@@ -3,7 +3,7 @@
 
 import { dirname } from "path";
 
-const LAZY_THRESHOLD = 100; // lines before switching to lazy mode
+const LAZY_THRESHOLD = 200; // lines before switching to lazy mode (was 100, too aggressive)
 
 export interface LazyResult {
   lazy: true;
@@ -13,8 +13,17 @@ export interface LazyResult {
   hint: string;
 }
 
+// Commands where the user explicitly wants full output — never lazify
+const PASSTHROUGH_COMMANDS = [
+  /\bcat\b/, /\bhead\b/, /\btail\b/, /\bbat\b/, /\bless\b/, /\bmore\b/,
+  /\bsummary\b/i, /\bstatus\b/i, /\breport\b/i, /\bstats\b/i,
+  /\bweek\b/i, /\btoday\b/i, /\bdashboard\b/i,
+];
+
 /** Check if output should use lazy mode */
-export function shouldBeLazy(output: string): boolean {
+export function shouldBeLazy(output: string, command?: string): boolean {
+  // Never lazify explicit read commands or summary commands
+  if (command && PASSTHROUGH_COMMANDS.some(p => p.test(command))) return false;
   return output.split("\n").filter(l => l.trim()).length > LAZY_THRESHOLD;
 }
 
@@ -41,7 +50,7 @@ export function toLazy(output: string, command: string): LazyResult {
     count: lines.length,
     sample,
     categories: Object.keys(categories).length > 1 ? categories : undefined,
-    hint: `${lines.length} results. Showing first 20. Use offset/limit to paginate, or narrow your search.`,
+    hint: `${lines.length} results. Showing first 20. Use terminal exec --offset=20 --limit=20 to paginate.`,
   };
 }
 

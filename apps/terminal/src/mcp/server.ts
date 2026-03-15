@@ -81,7 +81,7 @@ export function createServer(): McpServer {
       if (!format || format === "raw") {
         const clean = stripAnsi(output);
         // Lazy mode: if >100 lines, return count + sample instead of full output
-        if (shouldBeLazy(clean)) {
+        if (shouldBeLazy(clean, command)) {
           const lazy = toLazy(clean, command);
           const detailKey = storeOutput(command, clean);
           return {

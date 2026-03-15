@@ -59,16 +59,33 @@ if (args[0] === "--version" || args[0] === "-v") {
 // ── Exec command — smart execution for agents ────────────────────────────────
 
 if (args[0] === "exec") {
-  const command = args.slice(1).join(" ");
-  if (!command) { console.error("Usage: terminal exec <command>"); process.exit(1); }
+  // Parse flags: --json, --offset=N, --limit=N, --raw
+  const flags: Record<string, string> = {};
+  const cmdParts: string[] = [];
+  for (const arg of args.slice(1)) {
+    const flagMatch = arg.match(/^--(\w+)(?:=(.+))?$/);
+    if (flagMatch) { flags[flagMatch[1]] = flagMatch[2] ?? "true"; }
+    else { cmdParts.push(arg); }
+  }
+  const command = cmdParts.join(" ");
+  const jsonMode = flags.json === "true";
+  const rawMode = flags.raw === "true";
+  const offset = flags.offset ? parseInt(flags.offset) : undefined;
+  const limit = flags.limit ? parseInt(flags.limit) : undefined;
+
+  if (!command) {
+    console.error("Usage: terminal exec <command> [--json] [--raw] [--offset=N] [--limit=N]");
+    process.exit(1);
+  }
 
   const { execSync } = await import("child_process");
-  const { stripAnsi } = await import("./compression.js");
+  const { compress, stripAnsi } = await import("./compression.js");
   const { stripNoise } = await import("./noise-filter.js");
   const { processOutput, shouldProcess } = await import("./output-processor.js");
   const { rewriteCommand } = await import("./command-rewriter.js");
-  const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
-  const { estimateTokens } = await import("./parsers/index.js");
+  const { shouldBeLazy, toLazy, getSlice } = await import("./lazy-executor.js");
+  const { parseOutput, estimateTokens } = await import("./parsers/index.js");
+  const { recordSaving, recordUsage } = await import("./economy.js");
 
   // Rewrite command if possible
   const rw = rewriteCommand(command);
@@ -82,21 +99,50 @@ if (args[0] === "exec") {
     const clean = stripNoise(stripAnsi(raw)).cleaned;
     const rawTokens = estimateTokens(raw);
 
-    // Lazy mode for huge output
-    if (shouldBeLazy(clean)) {
+    // Track usage
+    recordUsage(rawTokens);
+
+    // --raw flag: skip all processing
+    if (rawMode) { console.log(clean); process.exit(0); }
+
+    // --json flag: always return structured JSON
+    if (jsonMode) {
+      const parsed = parseOutput(actualCmd, clean);
+      if (parsed) {
+        const saved = rawTokens - estimateTokens(JSON.stringify(parsed.data));
+        if (saved > 0) recordSaving("structured", saved);
+        console.log(JSON.stringify({ exitCode: 0, parser: parsed.parser, data: parsed.data, duration, tokensSaved: Math.max(0, saved) }));
+      } else {
+        const compressed = compress(actualCmd, clean, { format: "json" });
+        console.log(JSON.stringify({ exitCode: 0, output: compressed.content, duration, tokensSaved: compressed.tokensSaved }));
+      }
+      process.exit(0);
+    }
+
+    // Pagination: --offset + --limit on a previous large result
+    if (offset !== undefined || limit !== undefined) {
+      const slice = getSlice(clean, offset ?? 0, limit ?? 50);
+      console.log(slice.lines.join("\n"));
+      if (slice.hasMore) console.error(`[open-terminal] showing ${slice.lines.length}/${slice.total}, ${slice.total - (offset ?? 0) - slice.lines.length} remaining`);
+      process.exit(0);
+    }
+
+    // Lazy mode for huge output (threshold 200, skip cat/summary commands)
+    if (shouldBeLazy(clean, actualCmd)) {
       const lazy = toLazy(clean, actualCmd);
       const savedTokens = rawTokens - estimateTokens(JSON.stringify(lazy));
+      if (savedTokens > 0) recordSaving("compressed", savedTokens);
       console.log(JSON.stringify({ ...lazy, duration, tokensSaved: savedTokens }));
       process.exit(0);
     }
 
-    // AI summary for medium-large output
+    // AI summary for medium-large output (>15 lines)
     if (shouldProcess(clean)) {
       const processed = await processOutput(actualCmd, clean);
       if (processed.aiProcessed && processed.tokensSaved > 30) {
+        recordSaving("compressed", processed.tokensSaved);
         console.log(processed.summary);
-        const savedTokens = rawTokens - estimateTokens(processed.summary);
-        console.error(`[open-terminal] ${rawTokens} → ${rawTokens - savedTokens} tokens (saved ${savedTokens}, ${Math.round(savedTokens/rawTokens*100)}%)`);
+        console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved}, ${Math.round(processed.tokensSaved/rawTokens*100)}%)`);
         process.exit(0);
       }
     }
@@ -105,6 +151,7 @@ if (args[0] === "exec") {
     console.log(clean);
     const savedTokens = rawTokens - estimateTokens(clean);
     if (savedTokens > 10) {
+      recordSaving("compressed", savedTokens);
       console.error(`[open-terminal] saved ${savedTokens} tokens (noise filter)`);
     }
   } catch (e: any) {
