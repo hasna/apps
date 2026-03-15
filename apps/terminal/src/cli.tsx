@@ -4,6 +4,58 @@ import { render } from "ink";
 
 const args = process.argv.slice(2);
 
+// ── Help / Version ───────────────────────────────────────────────────────────
+
+if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
+  console.log(`open-terminal v0.6.1 — Smart terminal for AI agents and humans
+
+USAGE:
+  terminal                     Launch interactive NL terminal (TUI)
+  terminal <subcommand>        Run a specific command
+
+SUBCOMMANDS:
+  mcp serve                    Start MCP server (stdio transport)
+  mcp install --claude|--codex|--gemini|--all
+                               Install as MCP server for AI agents
+  hook install --claude        Install Claude Code PostToolUse hook
+  hook uninstall               Remove hooks
+  recipe add <name> <cmd>      Save a reusable command recipe
+  recipe list                  List saved recipes
+  recipe run <name> [--var=X]  Run a recipe with variable substitution
+  recipe delete <name>         Delete a recipe
+  collection create <name>     Create a recipe collection
+  collection list              List collections
+  project init                 Initialize project-scoped recipes
+  repo                         Show git repo state (branch + status + log)
+  symbols <file>               Show file outline (functions, classes, exports)
+  stats                        Show token economy dashboard
+  sessions                     List recent terminal sessions
+  sessions stats               Show session analytics
+  sessions <id>                Show session details
+  snapshot                     Capture terminal state as JSON
+  --help                       Show this help
+  --version                    Show version
+
+MCP TOOLS (20+):
+  execute, execute_smart, execute_diff, expand, browse,
+  search_files, search_content, search_semantic, read_file,
+  read_symbol, symbols, repo_state, explain_error, status,
+  bg_start, bg_stop, bg_status, bg_logs, bg_wait_port,
+  list_recipes, run_recipe, save_recipe, list_collections,
+  snapshot, token_stats, session_history
+
+ENVIRONMENT:
+  CEREBRAS_API_KEY             Cerebras API key (free, open-source default)
+  ANTHROPIC_API_KEY            Anthropic API key (Claude models)
+`);
+  process.exit(0);
+}
+
+if (args[0] === "--version" || args[0] === "-v") {
+  console.log("0.6.1");
+  process.exit(0);
+}
+
 // ── MCP commands ─────────────────────────────────────────────────────────────
 
 if (args[0] === "mcp") {
