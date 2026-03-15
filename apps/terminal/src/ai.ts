@@ -138,14 +138,14 @@ function detectProjectContext(): string {
     const topLevel = execSync("ls -1", { cwd, encoding: "utf8", timeout: 2000 }).trim();
     parts.push(`Top-level: ${topLevel.split("\n").join(", ")}`);
 
-    // src/ structure (2 levels deep, most important for path resolution)
+    // src/ structure — include FILES so AI knows exact filenames + extensions
     for (const srcDir of ["src", "lib", "app"]) {
       if (existsSync(join(cwd, srcDir))) {
         const tree = execSync(
-          `find ${srcDir} -maxdepth 2 -type d -not -path '*/node_modules/*' 2>/dev/null | head -30`,
+          `find ${srcDir} -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name '*.test.*' -not -name '*.spec.*' 2>/dev/null | sort | head -60`,
           { cwd, encoding: "utf8", timeout: 2000 }
         ).trim();
-        if (tree) parts.push(`Directories in ${srcDir}/:\n${tree}`);
+        if (tree) parts.push(`Files in ${srcDir}/:\n${tree}`);
         break;
       }
     }
@@ -201,6 +201,8 @@ RULES:
 - NEVER install packages (npx, npm install, pip install, brew install). This is a READ-ONLY terminal.
 - NEVER modify source code (sed -i, codemod, awk with redirect). Only observe, never change.
 - Search src/ directory, NOT dist/ or node_modules/ for code queries.
+- For compound questions ("how many X and are they Y"), prefer ONE command that captures all info. Do NOT chain with &&.
+- Use exact file paths from the project context below. Do NOT guess paths.
 cwd: ${process.cwd()}
 shell: zsh / macOS${projectContext}${restrictionBlock}${contextBlock}`;
 }
