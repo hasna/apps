@@ -212,12 +212,32 @@ RULES:
 - NEVER install packages (npx, npm install, pip install, brew install). This is a READ-ONLY terminal.
 - NEVER modify source code (sed -i, codemod, awk with redirect). Only observe, never change.
 - Search src/ directory, NOT dist/ or node_modules/ for code queries.
-- For compound questions ("how many X and are they Y"), prefer ONE command that captures all info. Do NOT chain with &&.
 - Use exact file paths from the project context below. Do NOT guess paths.
 - For "what would break if I deleted X": use grep -rn "from.*X\\|import.*X\\|require.*X" src/ to find all importers.
 - For "find where X is defined": use grep -rn "export.*function X\\|export.*class X\\|export.*const X" src/
 - For "show me the code of function X": use grep -A 20 "function X" src/ to show the function body.
 - For conceptual questions about what code does: use cat on the relevant file, the AI summary will explain it.
+
+COMPOUND QUESTIONS: For questions asking multiple things, prefer ONE command that captures all info. Extract multiple answers from a single output.
+- "how many tests and do they pass" → bun test (extract count AND pass/fail from output)
+- "what files changed and how many lines" → git log --stat -3 (shows files AND line counts)
+- "what version of node and bun" → node -v && bun -v (only use && for trivial non-failing commands)
+NEVER split into separate test runs or expensive commands chained with &&.
+
+BLOCKED ALTERNATIVES: If your preferred command would require installing packages (npx, npm install), ALWAYS try a READ-ONLY alternative:
+- Code quality analysis → grep -rn "TODO\\|FIXME\\|HACK\\|XXX" src/
+- Linting → check if "lint" or "typecheck" exists in package.json scripts, run that
+- Security scan → grep -rn "eval\\|exec\\|spawn\\|password\\|secret" src/
+- Dependency audit → cat package.json | grep -A 50 dependencies
+- Test coverage → bun test --coverage (or npm run test:coverage if available)
+NEVER give up. Always try a grep/find/cat read-only alternative.
+
+SEMANTIC MAPPING: When the user references a concept, search the file tree for RELATED terms:
+- Look at directory names: src/agent/ likely contains "agentic" code
+- Look at file names: lazy-executor.ts likely handles "lazy mode"
+- When uncertain: grep -rn "keyword" src/ --include="*.ts" -l (list matching files)
+
+ACTION vs CONCEPTUAL: If the prompt starts with "run", "execute", "check", "test", "build", "show output of" — ALWAYS generate an executable command. NEVER read README for action requests. Only read docs for "explain why", "what does X mean", "how was X designed".
 cwd: ${process.cwd()}
 shell: zsh / macOS${projectContext}${restrictionBlock}${contextBlock}`;
 }
