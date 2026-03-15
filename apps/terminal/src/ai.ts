@@ -49,6 +49,18 @@ export function checkPermissions(command: string, perms: Permissions): string | 
   return null;
 }
 
+export async function explainCommand(command: string): Promise<string> {
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 128,
+    system: "Explain what this shell command does in one plain English sentence. No markdown. No code blocks. Just a sentence.",
+    messages: [{ role: "user", content: command }],
+  });
+  const block = message.content[0];
+  if (block.type !== "text") return "";
+  return block.text.trim();
+}
+
 export async function translateToCommand(nl: string, perms: Permissions): Promise<string> {
   const message = await client.messages.create({
     model: "claude-opus-4-6",
