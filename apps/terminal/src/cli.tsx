@@ -40,11 +40,13 @@ else if (args[0] === "hook") {
     const destDir = dirname(hookDest);
     if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
 
-    // Generate hook with resolved paths
-    const terminalBin = execSync("which terminal", { encoding: "utf8" }).trim();
+    // Generate hook with stable paths (resolve npm global root, not fnm temp shell)
+    const npmRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
+    const distPath = join(npmRoot, "@hasna/terminal/dist");
     const hookScript = `#!/usr/bin/env bash
 # open-terminal PostToolUse hook — compresses Bash output
 # Installed by: t hook install --claude
+# Docs: https://github.com/hasna/terminal
 
 if [ "$TOOL_NAME" != "Bash" ]; then exit 0; fi
 OUTPUT=$(cat)
@@ -52,9 +54,14 @@ if [ \${#OUTPUT} -lt 500 ]; then echo "$OUTPUT"; exit 0; fi
 
 LINE_COUNT=$(echo "$OUTPUT" | wc -l | tr -d ' ')
 if [ "$LINE_COUNT" -gt 15 ]; then
+  # Find the dist path (stable, not fnm temp shell)
+  DIST="${distPath}"
+  if [ ! -d "$DIST" ]; then
+    DIST="$(npm root -g 2>/dev/null)/@hasna/terminal/dist"
+  fi
   COMPRESSED=$(echo "$OUTPUT" | bun -e "
-    import{compress,stripAnsi}from'${dirname(terminalBin)}/../lib/node_modules/@hasna/terminal/dist/compression.js';
-    import{stripNoise}from'${dirname(terminalBin)}/../lib/node_modules/@hasna/terminal/dist/noise-filter.js';
+    import{compress,stripAnsi}from'$DIST/compression.js';
+    import{stripNoise}from'$DIST/noise-filter.js';
     let i='';process.stdin.on('data',d=>i+=d);process.stdin.on('end',()=>{
       const c=stripNoise(stripAnsi(i)).cleaned;
       const r=compress('bash',c,{maxTokens:500});
