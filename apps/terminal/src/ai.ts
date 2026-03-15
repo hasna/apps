@@ -124,6 +124,26 @@ function detectProjectContext(): string {
     parts.push("Project: Java/Gradle. Use gradle commands.");
   }
 
+  // Directory structure — so AI knows actual paths (not guessed ones)
+  try {
+    const { execSync } = require("child_process");
+    // Top-level dirs
+    const topLevel = execSync("ls -1", { cwd, encoding: "utf8", timeout: 2000 }).trim();
+    parts.push(`Top-level: ${topLevel.split("\n").join(", ")}`);
+
+    // src/ structure (2 levels deep, most important for path resolution)
+    for (const srcDir of ["src", "lib", "app"]) {
+      if (existsSync(join(cwd, srcDir))) {
+        const tree = execSync(
+          `find ${srcDir} -maxdepth 2 -type d -not -path '*/node_modules/*' 2>/dev/null | head -30`,
+          { cwd, encoding: "utf8", timeout: 2000 }
+        ).trim();
+        if (tree) parts.push(`Directories in ${srcDir}/:\n${tree}`);
+        break;
+      }
+    }
+  } catch { /* timeout or no exec — skip */ }
+
   return parts.length > 0 ? `\n\nPROJECT CONTEXT:\n${parts.join("\n")}` : "";
 }
 

@@ -7,32 +7,31 @@ const args = process.argv.slice(2);
 // ── Help / Version ───────────────────────────────────────────────────────────
 
 if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
-  console.log(`open-terminal v1.0.0 — Smart terminal for AI agents and humans
+  console.log(`open-terminal — Natural language shell for AI agents and humans
 
 USAGE:
+  terminal "your request"      NL → AI picks command → runs → smart output
   terminal                     Launch interactive NL terminal (TUI)
-  terminal <subcommand>        Run a specific command
+
+EXAMPLES:
+  terminal "list all typescript files"
+  terminal "run tests"
+  terminal "what changed in git"
+  terminal "show me the auth functions"
+  terminal "kill port 3000"
+  terminal "how many lines of code"
 
 SUBCOMMANDS:
-  mcp serve                    Start MCP server (stdio transport)
-  mcp install --claude|--codex|--gemini|--all
-                               Install as MCP server for AI agents
-  hook install --claude        Install Claude Code PostToolUse hook
-  hook uninstall               Remove hooks
-  recipe add <name> <cmd>      Save a reusable command recipe
-  recipe list                  List saved recipes
-  recipe run <name> [--var=X]  Run a recipe with variable substitution
-  recipe delete <name>         Delete a recipe
-  collection create <name>     Create a recipe collection
-  collection list              List collections
-  project init                 Initialize project-scoped recipes
-  repo                         Show git repo state (branch + status + log)
-  symbols <file>               Show file outline (functions, classes, exports)
-  stats                        Show token economy dashboard
-  sessions                     List recent terminal sessions
-  sessions stats               Show session analytics
-  sessions <id>                Show session details
-  snapshot                     Capture terminal state as JSON
+  repo                         Git repo state (branch + status + log)
+  symbols <file>               File outline (functions, classes, exports)
+  overview                     Project overview (deps, scripts, structure)
+  stats                        Token economy dashboard
+  sessions [stats|<id>]        Session history and analytics
+  recipe add|list|run|delete   Reusable command recipes
+  collection create|list       Recipe collections
+  mcp serve                    Start MCP server for AI agents
+  mcp install --claude|--codex Install MCP server
+  snapshot                     Terminal state as JSON
   --help                       Show this help
   --version                    Show version
 
@@ -58,156 +57,6 @@ if (args[0] === "--version" || args[0] === "-v") {
     const pkg = JSON.parse(readFileSync(join(dirname(new URL(import.meta.url).pathname), "..", "package.json"), "utf8"));
     console.log(pkg.version);
   } catch { console.log("1.0.0"); }
-  process.exit(0);
-}
-
-// ── Exec command — smart execution for agents ────────────────────────────────
-
-if (args[0] === "exec") {
-  // Parse flags: --json, --offset=N, --limit=N, --raw
-  const flags: Record<string, string> = {};
-  const cmdParts: string[] = [];
-  for (const arg of args.slice(1)) {
-    const flagMatch = arg.match(/^--(\w+)(?:=(.+))?$/);
-    if (flagMatch) { flags[flagMatch[1]] = flagMatch[2] ?? "true"; }
-    else { cmdParts.push(arg); }
-  }
-  const command = cmdParts.join(" ");
-  const jsonMode = flags.json === "true";
-  const rawMode = flags.raw === "true";
-  const offset = flags.offset ? parseInt(flags.offset) : undefined;
-  const limit = flags.limit ? parseInt(flags.limit) : undefined;
-
-  if (!command) {
-    console.error("Usage: terminal exec <command> [--json] [--raw] [--offset=N] [--limit=N]");
-    process.exit(1);
-  }
-
-  const { execSync } = await import("child_process");
-  const { compress, stripAnsi } = await import("./compression.js");
-  const { stripNoise } = await import("./noise-filter.js");
-  const { processOutput, shouldProcess } = await import("./output-processor.js");
-  const { rewriteCommand } = await import("./command-rewriter.js");
-  const { shouldBeLazy, toLazy, getSlice } = await import("./lazy-executor.js");
-  const { parseOutput, estimateTokens } = await import("./parsers/index.js");
-  const { recordSaving, recordUsage } = await import("./economy.js");
-  const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
-  const { detectLoop } = await import("./loop-detector.js");
-
-  // Loop detection — suggest narrowing if running full test suite repeatedly
-  const loop = detectLoop(command);
-  if (loop.detected) {
-    console.error(`[open-terminal] loop detected: test run #${loop.iteration}${loop.suggestedNarrow ? ` — try: ${loop.suggestedNarrow}` : " — consider narrowing to specific test file"}`);
-  }
-
-  // Rewrite command if possible
-  const rw = rewriteCommand(command);
-  const actualCmd = rw.changed ? rw.rewritten : command;
-  if (rw.changed) console.error(`[open-terminal] rewritten: ${actualCmd} (${rw.reason})`);
-
-  try {
-    const start = Date.now();
-    const raw = execSync(actualCmd, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
-    const duration = Date.now() - start;
-    const clean = stripNoise(stripAnsi(raw)).cleaned;
-    const rawTokens = estimateTokens(raw);
-
-    // Track usage
-    recordUsage(rawTokens);
-
-    // --raw flag: skip all processing
-    if (rawMode) { console.log(clean); process.exit(0); }
-
-    // --json flag: always return structured JSON
-    if (jsonMode) {
-      const parsed = parseOutput(actualCmd, clean);
-      if (parsed) {
-        const saved = rawTokens - estimateTokens(JSON.stringify(parsed.data));
-        if (saved > 0) recordSaving("structured", saved);
-        console.log(JSON.stringify({ exitCode: 0, parser: parsed.parser, data: parsed.data, duration, tokensSaved: Math.max(0, saved) }));
-      } else {
-        const compressed = compress(actualCmd, clean, { format: "json" });
-        console.log(JSON.stringify({ exitCode: 0, output: compressed.content, duration, tokensSaved: compressed.tokensSaved }));
-      }
-      process.exit(0);
-    }
-
-    // Pagination: --offset + --limit on a previous large result
-    if (offset !== undefined || limit !== undefined) {
-      const slice = getSlice(clean, offset ?? 0, limit ?? 50);
-      console.log(slice.lines.join("\n"));
-      if (slice.hasMore) console.error(`[open-terminal] showing ${slice.lines.length}/${slice.total}, ${slice.total - (offset ?? 0) - slice.lines.length} remaining`);
-      process.exit(0);
-    }
-
-    // Test output detection — use watchlist for structured test tracking
-    if (isTestOutput(clean)) {
-      const result = trackTests(process.cwd(), clean);
-      const formatted = formatWatchResult(result);
-      const savedTokens = rawTokens - estimateTokens(formatted);
-      if (savedTokens > 20) recordSaving("structured", savedTokens);
-      if (jsonMode) {
-        console.log(JSON.stringify({ exitCode: 0, type: "test-results", ...result, duration: Date.now() - start }));
-      } else {
-        console.log(formatted);
-      }
-      if (savedTokens > 10) console.error(`[open-terminal] test watchlist: saved ${savedTokens} tokens`);
-      process.exit(0);
-    }
-
-    // Lazy mode for huge output (threshold 200, skip cat/summary commands)
-    if (shouldBeLazy(clean, actualCmd)) {
-      const lazy = toLazy(clean, actualCmd);
-      const savedTokens = rawTokens - estimateTokens(JSON.stringify(lazy));
-      if (savedTokens > 0) recordSaving("compressed", savedTokens);
-      console.log(JSON.stringify({ ...lazy, duration, tokensSaved: savedTokens }));
-      process.exit(0);
-    }
-
-    // AI summary for medium-large output (>15 lines)
-    if (shouldProcess(clean)) {
-      const processed = await processOutput(actualCmd, clean);
-      if (processed.aiProcessed && processed.tokensSaved > 30) {
-        recordSaving("compressed", processed.tokensSaved);
-        console.log(processed.summary);
-        console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved}, ${Math.round(processed.tokensSaved/rawTokens*100)}%)`);
-        process.exit(0);
-      }
-    }
-
-    // Small/medium output — just noise-strip and return
-    console.log(clean);
-    const savedTokens = rawTokens - estimateTokens(clean);
-    if (savedTokens > 10) {
-      recordSaving("compressed", savedTokens);
-      console.error(`[open-terminal] saved ${savedTokens} tokens (noise filter)`);
-    }
-  } catch (e: any) {
-    // Command failed — parse error output for structured diagnosis
-    const stderr = e.stderr?.toString() ?? "";
-    const stdout = e.stdout?.toString() ?? "";
-    // Deduplicate: if stderr content appears in stdout, skip it
-    const combined = stderr && stdout.includes(stderr.trim()) ? stdout : stdout + stderr;
-    const errorOutput = stripNoise(stripAnsi(combined)).cleaned;
-
-    // Try structured error parsing
-    const { errorParser } = await import("./parsers/errors.js");
-    if (errorOutput.length > 200 && errorParser.detect(actualCmd, errorOutput)) {
-      const info = errorParser.parse(actualCmd, errorOutput);
-      if (jsonMode) {
-        console.log(JSON.stringify({ exitCode: e.status ?? 1, error: info }));
-      } else {
-        console.log(`Error: ${info.type}`);
-        console.log(`  ${info.message}`);
-        if (info.file) console.log(`  File: ${info.file}${info.line ? `:${info.line}` : ""}`);
-        if (info.suggestion) console.log(`  Fix: ${info.suggestion}`);
-      }
-    } else {
-      // Short error or no parser match — pass through cleaned
-      console.log(errorOutput);
-    }
-    process.exit(e.status ?? 1);
-  }
   process.exit(0);
 }
 
