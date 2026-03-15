@@ -10,6 +10,8 @@ const COMPLEX_SIGNALS = [
   /\b(all files?|recursively|bulk|batch)\b/i,
   /\b(pipeline|chain|then|and then|after)\b/i,
   /\b(if|when|unless|only if)\b/i,
+  /\b(go into|go to|navigate|cd into|enter)\b.*\b(and|then)\b/i, // multi-step navigation
+  /\b(inside|within|under)\b/i,  // relative references need context awareness
   /[|&;]{2}/,           // pipes / &&  in NL (unusual = complex intent)
 ];
 
@@ -26,10 +28,10 @@ function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "s
     };
   }
 
-  // Cerebras — fast model for simple, smart model for complex
+  // Cerebras — llama for simple, qwen for complex
   return {
     fast: "llama3.1-8b",
-    smart: "llama3.1-8b",
+    smart: "qwen-3-235b-a22b-instruct-2507",
     pick: isComplex ? "smart" : "fast",
   };
 }

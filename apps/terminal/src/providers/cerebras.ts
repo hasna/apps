@@ -4,7 +4,7 @@
 import type { LLMProvider, ProviderOptions, StreamCallbacks } from "./base.js";
 
 const CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1";
-const DEFAULT_MODEL = "llama3.1-8b";
+const DEFAULT_MODEL = "qwen-3-235b-a22b-instruct-2507";
 
 export class CerebrasProvider implements LLMProvider {
   readonly name = "cerebras";
