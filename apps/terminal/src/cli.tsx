@@ -448,10 +448,31 @@ else if (args.length > 0) {
     }
   }
 
+  // Step 2: Validate command before executing
+  const { validateCommand } = await import("./command-validator.js");
+  const validation = validateCommand(command, process.cwd());
+  if (!validation.valid) {
+    // Auto-retry: re-translate with simpler constraints
+    console.error(`[open-terminal] invalid command detected: ${validation.issues.join(", ")}`);
+    try {
+      const retryCommand = await translateToCommand(
+        `${prompt} (IMPORTANT: keep it simple. Use basic grep/find/cat/ls/wc commands. No complex awk/sed pipelines. No GNU flags. Verify file paths from the project context.)`,
+        perms, []
+      );
+      if (retryCommand && retryCommand !== command) {
+        const retryValidation = validateCommand(retryCommand, process.cwd());
+        if (retryValidation.valid || retryValidation.issues.length < validation.issues.length) {
+          command = retryCommand;
+          console.error(`[open-terminal] retried: $ ${command}`);
+        }
+      }
+    } catch {}
+  }
+
   // Show what we're running
   console.error(`$ ${command}`);
 
-  // Step 2: Rewrite for optimization
+  // Step 3: Rewrite for optimization
   const rw = rewriteCommand(command);
   const actualCmd = rw.changed ? rw.rewritten : command;
   if (rw.changed) console.error(`[open-terminal] optimized: ${actualCmd}`);
@@ -509,6 +530,27 @@ else if (args.length > 0) {
       console.log(`No results found for: ${prompt}`);
       process.exit(0);
     }
+
+    // Auto-retry: if command failed (exit 2+), ask AI for a simpler alternative
+    if (e.status >= 2 && !actualCmd.includes("(retry)")) {
+      try {
+        const retryCmd = await translateToCommand(
+          `${prompt} (The previous command failed with: ${errStderr.slice(0, 200)}. Try a SIMPLER approach. Use basic commands only.)`,
+          perms, []
+        );
+        if (retryCmd && !isIrreversible(retryCmd) && !checkPermissions(retryCmd, perms)) {
+          console.error(`[open-terminal] retrying: $ ${retryCmd}`);
+          const retryResult = execSync(retryCmd + " #(retry)", { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
+          const retryClean = stripNoise(stripAnsi(retryResult)).cleaned;
+          if (retryClean.length > 5) {
+            const processed = await processOutput(retryCmd, retryClean, prompt);
+            console.log(processed.aiProcessed ? processed.summary : retryClean);
+            process.exit(0);
+          }
+        }
+      } catch { /* retry also failed, fall through */ }
+    }
+
     // Combine stdout+stderr and try AI answer framing (for audit/lint/test commands)
     const combined = errStderr && errStdout.includes(errStderr.trim()) ? errStdout : errStdout + errStderr;
     const errorClean = stripNoise(stripAnsi(combined)).cleaned;
