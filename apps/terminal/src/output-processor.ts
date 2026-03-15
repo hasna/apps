@@ -79,17 +79,27 @@ export async function processOutput(
   }
 
   try {
-    // Pre-parse: extract test counts so AI can't misread them
-    let preParseHint = "";
+    // Pre-parse: if output contains clear pass/fail counts, extract and return directly
+    // No hardcoded test runner list — works for ANY tool that outputs "X pass, Y fail"
     const passMatch = output.match(/(\d+)\s+pass/i);
     const failMatch = output.match(/(\d+)\s+fail/i);
-    if (passMatch || failMatch) {
-      preParseHint = `\nPRE-PARSED TEST RESULTS: ${passMatch?.[1] ?? 0} passed, ${failMatch?.[1] ?? 0} failed. USE THESE NUMBERS.`;
+    // Pre-parse fires when output has BOTH pass+fail counts AND the user asked about tests
+    if (passMatch && failMatch && originalPrompt && /test|pass|fail/i.test(originalPrompt)) {
+      const passed = parseInt(passMatch[1]);
+      const failed = parseInt(failMatch[1]);
+      const answer = failed === 0
+        ? `✓ Yes, all ${passed} tests pass.`
+        : `✗ ${failed} of ${passed + failed} tests failed.`;
+      const savedTokens = estimateTokens(output) - estimateTokens(answer);
+      return {
+        summary: answer, full: output, tokensSaved: Math.max(0, savedTokens),
+        aiTokensUsed: 0, aiProcessed: true, aiCostUsd: 0, savingsValueUsd: 0, netSavingsUsd: 0,
+      };
     }
 
     const provider = getProvider();
     const summary = await provider.complete(
-      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}${preParseHint}\nOutput (${lines.length} lines):\n${toSummarize}`,
+      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}`,
       {
         system: SUMMARIZE_PROMPT,
         maxTokens: 300,
