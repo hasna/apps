@@ -10,6 +10,7 @@ import Spinner from "./Spinner.js";
 import Browse from "./Browse.js";
 import FuzzyPicker from "./FuzzyPicker.js";
 import { createSession, endSession, logInteraction, updateInteraction } from "./sessions-db.js";
+import { smartDisplay } from "./smart-display.js";
 
 loadCache();
 
@@ -134,9 +135,11 @@ export default function App() {
     updateTab(t => ({ ...t, scroll: [...t.scroll, { ...entry, expanded: false }] }));
 
   const commitStream = (nl: string, cmd: string, lines: string[], error: boolean) => {
-    const truncated = lines.length > MAX_LINES;
     const filePaths = !error ? extractFilePaths(lines) : [];
-    // Build short output summary for session context (first 10 lines)
+    // Smart display: compress repetitive output (paths, duplicates, patterns)
+    const displayLines = !error && lines.length > 5 ? smartDisplay(lines) : lines;
+    const truncated = displayLines.length > MAX_LINES;
+    // Build short output summary for session context (first 10 lines of ORIGINAL output)
     const shortOutput = lines.slice(0, 10).join("\n") + (lines.length > 10 ? `\n... (${lines.length} lines total)` : "");
     const entry: SessionEntry = { nl, cmd, output: shortOutput, error: error || undefined };
     updateTab(t => ({
@@ -145,7 +148,7 @@ export default function App() {
       sessionEntries: [...t.sessionEntries.slice(-9), entry],
       scroll: [...t.scroll, {
         nl, cmd,
-        lines: truncated ? lines.slice(0, MAX_LINES) : lines,
+        lines: truncated ? displayLines.slice(0, MAX_LINES) : displayLines,
         truncated, expanded: false,
         error: error || undefined,
         filePaths: filePaths.length ? filePaths : undefined,
