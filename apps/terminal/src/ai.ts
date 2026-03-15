@@ -239,8 +239,26 @@ export async function translateToCommand(
   }
 
   if (text.startsWith("BLOCKED:")) throw new Error(text);
-  cacheSet(nl, text);
-  return text;
+
+  // Strip AI reasoning — extract only the shell command
+  // AI sometimes prefixes with "Based on..." or wraps in backticks
+  let cleaned = text.trim();
+  // Remove markdown code blocks
+  cleaned = cleaned.replace(/^```(?:bash|sh|shell)?\n?/m, "").replace(/\n?```$/m, "");
+  // Remove lines that look like AI reasoning (start with capital letter, contain "I ", "Based on", etc.)
+  const lines = cleaned.split("\n");
+  const commandLines = lines.filter(l => {
+    const t = l.trim();
+    if (!t) return false;
+    // Skip obvious reasoning lines
+    if (/^(Based on|I |This |The |Let me|Here|Note:|Since|Looking|To )/.test(t)) return false;
+    if (/^[A-Z][a-z].*\.$/.test(t)) return false; // English sentence ending with period
+    return true;
+  });
+  cleaned = commandLines.join("\n").trim() || cleaned;
+
+  cacheSet(nl, cleaned);
+  return cleaned;
 }
 
 // ── prefetch ──────────────────────────────────────────────────────────────────
