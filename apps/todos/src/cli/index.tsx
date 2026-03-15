@@ -3048,6 +3048,40 @@ program
     }
   });
 
+// priorities
+program
+  .command("priorities")
+  .description("Show task counts grouped by priority")
+  .option("--json", "Output as JSON")
+  .option("--project <id>", "Filter to project")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { countTasks } = require("../db/tasks.js") as any;
+    const projectId = autoProject(globalOpts) || opts.project || undefined;
+    const base = projectId ? { project_id: projectId } : {};
+    const priorities = ["critical", "high", "medium", "low", "none"];
+    const counts: Record<string, { total: number; pending: number; in_progress: number; completed: number }> = {};
+    for (const p of priorities) {
+      counts[p] = {
+        total: countTasks({ ...base, priority: p }, db),
+        pending: countTasks({ ...base, priority: p, status: "pending" }, db),
+        in_progress: countTasks({ ...base, priority: p, status: "in_progress" }, db),
+        completed: countTasks({ ...base, priority: p, status: "completed" }, db),
+      };
+    }
+    if (opts.json || globalOpts.json) { console.log(JSON.stringify(counts)); return; }
+    console.log(chalk.bold("Priority Breakdown:\n"));
+    const priColors: Record<string, (s: string) => string> = { critical: chalk.bgRed.white, high: chalk.red, medium: chalk.yellow, low: chalk.blue, none: chalk.dim };
+    for (const p of priorities) {
+      const c = counts[p];
+      if (!c || c.total === 0) continue;
+      const color = priColors[p] || chalk.white;
+      const bar = chalk.green("█".repeat(Math.min(c.completed, 30))) + chalk.blue("░".repeat(Math.min(c.in_progress, 10))) + chalk.dim("·".repeat(Math.min(c.pending, 20)));
+      console.log(`  ${color(p.padEnd(9))} ${String(c.total).padStart(4)} total  ${chalk.green(String(c.completed).padStart(3))} done  ${chalk.blue(String(c.in_progress).padStart(3))} active  ${chalk.dim(String(c.pending).padStart(3))} pending  ${bar}`);
+    }
+  });
+
 // context — one-shot session start info
 program
   .command("context")
