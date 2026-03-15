@@ -428,7 +428,7 @@ else if (args.length > 0) {
   if (isIrreversible(command)) {
     console.error(`⚠ IRREVERSIBLE: $ ${command}`);
     console.error(`  This command may kill processes, push code, or delete data.`);
-    console.error(`  Run with terminal exec "${command}" to bypass, or use the TUI for confirmation.`);
+    console.error(`  Run directly in your shell if you're sure: ${command}`);
     process.exit(1);
   }
 
