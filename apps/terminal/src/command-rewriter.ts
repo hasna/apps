@@ -47,10 +47,10 @@ const rules: RewriteRule[] = [
     rewrite: () => "npm ls --depth=0",
     reason: "full tree is massive, top-level usually enough",
   },
-  // ps aux without filter → add sort and head
+  // ps aux without filter → sort by memory and head (macOS compatible)
   {
     pattern: /^ps\s+aux\s*$/,
-    rewrite: () => "ps aux --sort=-%mem | head -20",
+    rewrite: () => "ps aux | sort -k4 -rn | head -20",
     reason: "full process list is noise, show top consumers",
   },
 ];

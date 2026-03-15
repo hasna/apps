@@ -56,6 +56,67 @@ if (args[0] === "--version" || args[0] === "-v") {
   process.exit(0);
 }
 
+// ── Exec command — smart execution for agents ────────────────────────────────
+
+if (args[0] === "exec") {
+  const command = args.slice(1).join(" ");
+  if (!command) { console.error("Usage: terminal exec <command>"); process.exit(1); }
+
+  const { execSync } = await import("child_process");
+  const { stripAnsi } = await import("./compression.js");
+  const { stripNoise } = await import("./noise-filter.js");
+  const { processOutput, shouldProcess } = await import("./output-processor.js");
+  const { rewriteCommand } = await import("./command-rewriter.js");
+  const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
+  const { estimateTokens } = await import("./parsers/index.js");
+
+  // Rewrite command if possible
+  const rw = rewriteCommand(command);
+  const actualCmd = rw.changed ? rw.rewritten : command;
+  if (rw.changed) console.error(`[open-terminal] rewritten: ${actualCmd} (${rw.reason})`);
+
+  try {
+    const start = Date.now();
+    const raw = execSync(actualCmd, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
+    const duration = Date.now() - start;
+    const clean = stripNoise(stripAnsi(raw)).cleaned;
+    const rawTokens = estimateTokens(raw);
+
+    // Lazy mode for huge output
+    if (shouldBeLazy(clean)) {
+      const lazy = toLazy(clean, actualCmd);
+      const savedTokens = rawTokens - estimateTokens(JSON.stringify(lazy));
+      console.log(JSON.stringify({ ...lazy, duration, tokensSaved: savedTokens }));
+      process.exit(0);
+    }
+
+    // AI summary for medium-large output
+    if (shouldProcess(clean)) {
+      const processed = await processOutput(actualCmd, clean);
+      if (processed.aiProcessed && processed.tokensSaved > 30) {
+        console.log(processed.summary);
+        const savedTokens = rawTokens - estimateTokens(processed.summary);
+        console.error(`[open-terminal] ${rawTokens} → ${rawTokens - savedTokens} tokens (saved ${savedTokens}, ${Math.round(savedTokens/rawTokens*100)}%)`);
+        process.exit(0);
+      }
+    }
+
+    // Small/medium output — just noise-strip and return
+    console.log(clean);
+    const savedTokens = rawTokens - estimateTokens(clean);
+    if (savedTokens > 10) {
+      console.error(`[open-terminal] saved ${savedTokens} tokens (noise filter)`);
+    }
+  } catch (e: any) {
+    // Command failed — show error output
+    const stderr = e.stderr?.toString() ?? "";
+    const stdout = e.stdout?.toString() ?? "";
+    console.log(stripNoise(stripAnsi(stdout + stderr)).cleaned);
+    process.exit(e.status ?? 1);
+  }
+  process.exit(0);
+}
+
 // ── MCP commands ─────────────────────────────────────────────────────────────
 
 if (args[0] === "mcp") {
