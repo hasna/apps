@@ -3048,6 +3048,53 @@ program
     }
   });
 
+// context — one-shot session start info
+program
+  .command("context")
+  .description("Session start context: status, latest handoff, next task, overdue")
+  .option("--agent <name>", "Agent name for handoff lookup")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { getStatus } = require("../db/tasks.js") as any;
+    const { getNextTask, getOverdueTasks } = require("../db/tasks.js") as any;
+    const { getLatestHandoff } = require("../db/handoffs.js") as any;
+    const projectId = autoProject(globalOpts) || undefined;
+    const agentName = opts.agent || globalOpts.agent || undefined;
+    const filters = projectId ? { project_id: projectId } : undefined;
+    const status = getStatus(filters, agentName);
+    const nextTask = getNextTask(agentName, filters, db);
+    const overdue = getOverdueTasks(projectId, db);
+    const handoff = agentName ? getLatestHandoff(agentName, projectId, db) : getLatestHandoff(undefined, projectId, db);
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ status, next_task: nextTask, overdue_count: overdue.length, latest_handoff: handoff, as_of: new Date().toISOString() }));
+      return;
+    }
+
+    console.log(chalk.bold("Session Context\n"));
+    console.log(`  ${status.pending} pending · ${status.in_progress} active · ${status.completed} done · ${status.total} total`);
+    if (status.stale_count > 0) console.log(chalk.yellow(`  ⚠ ${status.stale_count} stale tasks`));
+    if (overdue.length > 0) console.log(chalk.red(`  ⚠ ${overdue.length} overdue tasks`));
+
+    if (nextTask) {
+      const pri = nextTask.priority === "critical" || nextTask.priority === "high" ? chalk.red(` [${nextTask.priority}]`) : "";
+      console.log(chalk.bold(`\n  Next up:`));
+      console.log(`    ${chalk.cyan(nextTask.short_id || nextTask.id.slice(0, 8))} ${nextTask.title}${pri}`);
+    }
+
+    if (handoff) {
+      console.log(chalk.bold(`\n  Last handoff (${handoff.agent_id || "unknown"}, ${handoff.created_at.slice(0, 16).replace("T", " ")}):`));
+      console.log(`    ${handoff.summary}`);
+      if (handoff.next_steps?.length) {
+        for (const s of handoff.next_steps) console.log(`    → ${s}`);
+      }
+    }
+
+    console.log(chalk.dim(`\n  as_of: ${new Date().toISOString()}`));
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
