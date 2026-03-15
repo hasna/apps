@@ -1,11 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
 import type { Permissions } from "./history.js";
 import { cacheGet, cacheSet } from "./cache.js";
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+import { getProvider } from "./providers/index.js";
 
 // ── model routing ─────────────────────────────────────────────────────────────
-// Simple queries → haiku (fast). Complex/ambiguous → sonnet.
+// Simple queries → fast model. Complex/ambiguous → smart model.
 
 const COMPLEX_SIGNALS = [
   /\b(undo|revert|rollback|previous|last)\b/i,
@@ -15,9 +13,25 @@ const COMPLEX_SIGNALS = [
   /[|&;]{2}/,           // pipes / &&  in NL (unusual = complex intent)
 ];
 
-function pickModel(nl: string): string {
+/** Model routing per provider */
+function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "smart" } {
   const isComplex = COMPLEX_SIGNALS.some((r) => r.test(nl)) || nl.split(" ").length > 10;
-  return isComplex ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
+  const provider = getProvider();
+
+  if (provider.name === "anthropic") {
+    return {
+      fast: "claude-haiku-4-5-20251001",
+      smart: "claude-sonnet-4-6",
+      pick: isComplex ? "smart" : "fast",
+    };
+  }
+
+  // Cerebras — single fast model (Llama is already fast)
+  return {
+    fast: "llama-4-scout-17b-16e",
+    smart: "llama-4-scout-17b-16e",
+    pick: isComplex ? "smart" : "fast",
+  };
 }
 
 // ── irreversibility ───────────────────────────────────────────────────────────
@@ -94,50 +108,33 @@ export async function translateToCommand(
   const cached = cacheGet(nl);
   if (cached) { onToken?.(cached); return cached; }
 
-  const model = pickModel(nl);
-  let result = "";
+  const provider = getProvider();
+  const routing = pickModel(nl);
+  const model = routing.pick === "smart" ? routing.smart : routing.fast;
+  const system = buildSystemPrompt(perms, sessionCmds);
+
+  let text: string;
 
   if (onToken) {
-    // streaming path
-    const stream = await client.messages.stream({
-      model,
-      max_tokens: 256,
-      system: buildSystemPrompt(perms, sessionCmds),
-      messages: [{ role: "user", content: nl }],
+    text = await provider.stream(nl, { model, maxTokens: 256, system }, {
+      onToken: (partial) => onToken(partial),
     });
-    for await (const chunk of stream) {
-      if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
-        result += chunk.delta.text;
-        onToken(result.trim());
-      }
-    }
   } else {
-    const message = await client.messages.create({
-      model,
-      max_tokens: 256,
-      system: buildSystemPrompt(perms, sessionCmds),
-      messages: [{ role: "user", content: nl }],
-    });
-    const block = message.content[0];
-    if (block.type !== "text") throw new Error("Unexpected response type");
-    result = block.text;
+    text = await provider.complete(nl, { model, maxTokens: 256, system });
   }
 
-  const text = result.trim();
   if (text.startsWith("BLOCKED:")) throw new Error(text);
   cacheSet(nl, text);
   return text;
 }
 
 // ── prefetch ──────────────────────────────────────────────────────────────────
-// Silently warm the cache after a command runs — no await, fire and forget
 
 export function prefetchNext(
   lastNl: string,
   perms: Permissions,
   sessionCmds: string[]
 ) {
-  // Only prefetch if we don't have it cached already
   if (cacheGet(lastNl)) return;
   translateToCommand(lastNl, perms, sessionCmds).catch(() => {});
 }
@@ -145,15 +142,13 @@ export function prefetchNext(
 // ── explain ───────────────────────────────────────────────────────────────────
 
 export async function explainCommand(command: string): Promise<string> {
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 128,
+  const provider = getProvider();
+  const routing = pickModel("explain"); // simple = fast model
+  return provider.complete(command, {
+    model: routing.fast,
+    maxTokens: 128,
     system: "Explain what this shell command does in one plain English sentence. No markdown, no code blocks.",
-    messages: [{ role: "user", content: command }],
   });
-  const block = message.content[0];
-  if (block.type !== "text") return "";
-  return block.text.trim();
 }
 
 // ── auto-fix ──────────────────────────────────────────────────────────────────
@@ -165,18 +160,35 @@ export async function fixCommand(
   perms: Permissions,
   sessionCmds: string[]
 ): Promise<string> {
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 256,
-    system: buildSystemPrompt(perms, sessionCmds),
-    messages: [{
-      role: "user",
-      content: `I wanted to: ${originalNl}\nI ran: ${failedCommand}\nError:\n${errorOutput}\n\nGive me the corrected command only.`,
-    }],
-  });
-  const block = message.content[0];
-  if (block.type !== "text") throw new Error("Unexpected response type");
-  const text = block.text.trim();
+  const provider = getProvider();
+  const routing = pickModel(originalNl);
+  const text = await provider.complete(
+    `I wanted to: ${originalNl}\nI ran: ${failedCommand}\nError:\n${errorOutput}\n\nGive me the corrected command only.`,
+    {
+      model: routing.smart, // always use smart model for fixes
+      maxTokens: 256,
+      system: buildSystemPrompt(perms, sessionCmds),
+    }
+  );
   if (text.startsWith("BLOCKED:")) throw new Error(text);
   return text;
+}
+
+// ── summarize output (for MCP/agent use) ──────────────────────────────────────
+
+export async function summarizeOutput(
+  command: string,
+  output: string,
+  maxTokens: number = 200
+): Promise<string> {
+  const provider = getProvider();
+  const routing = pickModel("summarize");
+  return provider.complete(
+    `Command: ${command}\nOutput:\n${output}\n\nSummarize this output concisely for an AI agent. Focus on: status, key results, errors. Be terse.`,
+    {
+      model: routing.fast,
+      maxTokens,
+      system: "You summarize command output for AI agents. Be extremely concise. Return structured info. No prose.",
+    }
+  );
 }
