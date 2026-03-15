@@ -11,6 +11,7 @@ import Browse from "./Browse.js";
 import FuzzyPicker from "./FuzzyPicker.js";
 import { createSession, endSession, logInteraction, updateInteraction } from "./sessions-db.js";
 import { smartDisplay } from "./smart-display.js";
+import { processOutput, shouldProcess } from "./output-processor.js";
 
 loadCache();
 
@@ -134,10 +135,21 @@ export default function App() {
   const pushScroll = (entry: Omit<ScrollEntry, "expanded">) =>
     updateTab(t => ({ ...t, scroll: [...t.scroll, { ...entry, expanded: false }] }));
 
-  const commitStream = (nl: string, cmd: string, lines: string[], error: boolean) => {
+  const commitStream = async (nl: string, cmd: string, lines: string[], error: boolean) => {
     const filePaths = !error ? extractFilePaths(lines) : [];
-    // Smart display: compress repetitive output (paths, duplicates, patterns)
-    const displayLines = !error && lines.length > 5 ? smartDisplay(lines) : lines;
+    // Smart display: first try pattern-based compression, then AI if still large
+    let displayLines = !error && lines.length > 5 ? smartDisplay(lines) : lines;
+
+    // AI-powered processing for large outputs (no hardcoded patterns)
+    if (!error && shouldProcess(lines.join("\n"))) {
+      try {
+        const processed = await processOutput(cmd, lines.join("\n"));
+        if (processed.aiProcessed && processed.tokensSaved > 50) {
+          displayLines = processed.summary.split("\n");
+        }
+      } catch { /* fallback to smartDisplay result */ }
+    }
+
     const truncated = displayLines.length > MAX_LINES;
     // Build short output summary for session context (first 10 lines of ORIGINAL output)
     const shortOutput = lines.slice(0, 10).join("\n") + (lines.length > 10 ? `\n... (${lines.length} lines total)` : "");
@@ -185,14 +197,15 @@ export default function App() {
               updateTab(t => ({ ...t, cwd: newCwd }));
             } catch {}
           }
-          commitStream(nl, command, lines, code !== 0);
-          abortRef.current = null;
-          if (code !== 0 && !raw) {
-            setPhase({ type: "autofix", nl, command, errorOutput: lines.join("\n") });
-          } else {
-            inputPhase({ raw });
-          }
-          resolve();
+          commitStream(nl, command, lines, code !== 0).then(() => {
+            abortRef.current = null;
+            if (code !== 0 && !raw) {
+              setPhase({ type: "autofix", nl, command, errorOutput: lines.join("\n") });
+            } else {
+              inputPhase({ raw });
+            }
+            resolve();
+          });
         },
         abort.signal
       );

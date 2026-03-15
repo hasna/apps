@@ -93,5 +93,13 @@ export async function searchContent(
   const resultTokens = Math.ceil(JSON.stringify(result).length / 4);
   result.tokensSaved = Math.max(0, rawTokens - resultTokens);
 
+  // Overflow guard — warn when results are truncated
+  if (totalMatches > maxResults * 3) {
+    (result as any).overflow = {
+      warning: `${totalMatches} total matches across ${fileMap.size} files — showing top ${files.length}`,
+      suggestion: "Try a more specific pattern, add fileType filter, or use -l to list files only",
+    };
+  }
+
   return result;
 }

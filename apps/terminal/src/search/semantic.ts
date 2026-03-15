@@ -33,6 +33,10 @@ function exec(command: string, cwd: string): Promise<string> {
 }
 
 /** Extract code symbols from a TypeScript/JavaScript file using regex-based parsing */
+export function extractSymbolsFromFile(filePath: string): CodeSymbol[] {
+  return extractSymbols(filePath);
+}
+
 function extractSymbols(filePath: string): CodeSymbol[] {
   if (!existsSync(filePath)) return [];
   const content = readFileSync(filePath, "utf8");

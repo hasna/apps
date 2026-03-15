@@ -152,6 +152,36 @@ else if (args[0] === "sessions") {
   }
 }
 
+// ── Repo command ─────────────────────────────────────────────────────────────
+
+else if (args[0] === "repo") {
+  const { execSync } = await import("child_process");
+  const run = (cmd: string) => { try { return execSync(cmd, { encoding: "utf8", cwd: process.cwd() }).trim(); } catch { return ""; } };
+  const branch = run("git branch --show-current");
+  const status = run("git status --short");
+  const log = run("git log --oneline -8 --decorate");
+  console.log(`Branch: ${branch}`);
+  if (status) { console.log(`\nChanges:\n${status}`); }
+  else { console.log("\nClean working tree"); }
+  console.log(`\nRecent:\n${log}`);
+}
+
+// ── Symbols command ──────────────────────────────────────────────────────────
+
+else if (args[0] === "symbols" && args[1]) {
+  const { extractSymbolsFromFile } = await import("./search/semantic.js");
+  const { resolve } = await import("path");
+  const filePath = resolve(args[1]);
+  const symbols = extractSymbolsFromFile(filePath);
+  if (symbols.length === 0) { console.log("No symbols found."); }
+  else {
+    for (const s of symbols) {
+      const exp = s.exported ? "⬡" : "·";
+      console.log(`  ${exp} ${s.kind.padEnd(10)} L${String(s.line).padStart(4)}  ${s.name}`);
+    }
+  }
+}
+
 // ── Snapshot command ─────────────────────────────────────────────────────────
 
 else if (args[0] === "snapshot") {

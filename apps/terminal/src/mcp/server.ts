@@ -12,7 +12,9 @@ import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipe
 import { substituteVariables } from "../recipes/model.js";
 import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../supervisor.js";
 import { diffOutput } from "../diff-cache.js";
+import { processOutput } from "../output-processor.js";
 import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
+import { cachedRead, cacheStats } from "../file-cache.js";
 import { getEconomyStats, recordSaving } from "../economy.js";
 import { captureSnapshot } from "../snapshots.js";
 
@@ -124,6 +126,35 @@ export function createServer(): McpServer {
       }
 
       return { content: [{ type: "text" as const, text: output }] };
+    }
+  );
+
+  // ── execute_smart: AI-powered output processing ────────────────────────────
+
+  server.tool(
+    "execute_smart",
+    "Run a command and get AI-summarized output. The AI decides what's important — errors, failures, key results are kept; verbose logs, progress bars, passing tests are dropped. Saves 80-95% tokens vs raw output. Best tool for agents.",
+    {
+      command: z.string().describe("Shell command to execute"),
+      cwd: z.string().optional().describe("Working directory"),
+      timeout: z.number().optional().describe("Timeout in ms (default: 30000)"),
+    },
+    async ({ command, cwd, timeout }) => {
+      const result = await exec(command, cwd, timeout ?? 30000);
+      const output = (result.stdout + result.stderr).trim();
+      const processed = await processOutput(command, output);
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          exitCode: result.exitCode,
+          summary: processed.summary,
+          structured: processed.structured,
+          duration: result.duration,
+          totalLines: output.split("\n").length,
+          tokensSaved: processed.tokensSaved,
+          aiProcessed: processed.aiProcessed,
+        }) }],
+      };
     }
   );
 
@@ -506,6 +537,97 @@ export function createServer(): McpServer {
       }
       const sessions = listSessions(limit ?? 20);
       return { content: [{ type: "text" as const, text: JSON.stringify(sessions) }] };
+    }
+  );
+
+  // ── read_file: cached file reading ─────────────────────────────────────────
+
+  server.tool(
+    "read_file",
+    "Read a file with session caching. Second read of unchanged file returns instantly from cache. Supports offset/limit for pagination without re-reading.",
+    {
+      path: z.string().describe("File path"),
+      offset: z.number().optional().describe("Start line (0-indexed)"),
+      limit: z.number().optional().describe("Max lines to return"),
+    },
+    async ({ path, offset, limit }) => {
+      const result = cachedRead(path, { offset, limit });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          content: result.content,
+          cached: result.cached,
+          readCount: result.readCount,
+          ...(result.cached ? { note: `Served from cache (read #${result.readCount})` } : {}),
+        }) }],
+      };
+    }
+  );
+
+  // ── repo_state: git status + diff + log in one call ───────────────────────
+
+  server.tool(
+    "repo_state",
+    "Get full repository state in one call — branch, status, staged/unstaged files, recent commits. Replaces the common 3-command pattern: git status + git diff --stat + git log.",
+    {
+      path: z.string().optional().describe("Repo path (default: cwd)"),
+    },
+    async ({ path }) => {
+      const cwd = path ?? process.cwd();
+      const [statusResult, diffResult, logResult] = await Promise.all([
+        exec("git status --porcelain", cwd),
+        exec("git diff --stat", cwd),
+        exec("git log --oneline -12 --decorate", cwd),
+      ]);
+
+      const branchResult = await exec("git branch --show-current", cwd);
+
+      const staged: string[] = [];
+      const unstaged: string[] = [];
+      const untracked: string[] = [];
+      for (const line of statusResult.stdout.split("\n").filter(l => l.trim())) {
+        const x = line[0], y = line[1], file = line.slice(3);
+        if (x === "?" && y === "?") untracked.push(file);
+        else if (x !== " " && x !== "?") staged.push(file);
+        if (y !== " " && y !== "?") unstaged.push(file);
+      }
+
+      const commits = logResult.stdout.split("\n").filter(l => l.trim()).map(l => {
+        const match = l.match(/^([a-f0-9]+)\s+(.+)$/);
+        return match ? { hash: match[1], message: match[2] } : { hash: "", message: l };
+      });
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          branch: branchResult.stdout.trim(),
+          dirty: staged.length + unstaged.length + untracked.length > 0,
+          staged, unstaged, untracked,
+          diffSummary: diffResult.stdout.trim() || "no changes",
+          recentCommits: commits,
+        }) }],
+      };
+    }
+  );
+
+  // ── symbols: file structure outline ───────────────────────────────────────
+
+  server.tool(
+    "symbols",
+    "Get a structured outline of a source file — functions, classes, interfaces, exports with line numbers. Replaces the common grep pattern: grep -n '^export|class|function' file.",
+    {
+      path: z.string().describe("File path to extract symbols from"),
+    },
+    async ({ path: filePath }) => {
+      const { semanticSearch } = await import("../search/semantic.js");
+      const dir = filePath.replace(/\/[^/]+$/, "") || ".";
+      const file = filePath.split("/").pop() ?? filePath;
+      const result = await semanticSearch(file.replace(/\.\w+$/, ""), dir, { maxResults: 50 });
+      // Filter to only symbols from the requested file
+      const fileSymbols = result.symbols.filter(s =>
+        s.file.endsWith(filePath) || s.file.endsWith("/" + filePath)
+      );
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(fileSymbols) }],
+      };
     }
   );
 
