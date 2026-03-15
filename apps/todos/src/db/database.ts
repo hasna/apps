@@ -387,6 +387,21 @@ const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN spawned_from_session TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (19);
   `,
+  // Migration 20: Handoffs table for agent session handoffs
+  `
+  CREATE TABLE IF NOT EXISTS handoffs (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    summary TEXT NOT NULL,
+    completed TEXT,
+    in_progress TEXT,
+    blockers TEXT,
+    next_steps TEXT,
+    created_at TEXT NOT NULL
+  );
+  INSERT OR IGNORE INTO _migrations (id) VALUES (20);
+  `,
 ];
 
 let _db: Database | null = null;

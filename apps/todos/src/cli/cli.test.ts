@@ -250,6 +250,40 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-sprint.db"); } catch {}
   });
 
+  it("should create and list handoffs", async () => {
+    const createProc = Bun.spawn(
+      ["bun", "run", "src/cli/index.tsx", "handoff", "--create", "--agent", "test", "--summary", "Test handoff", "--json"],
+      {
+        cwd: import.meta.dir + "/../..",
+        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-handoff.db", TODOS_AUTO_PROJECT: "false" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const createOut = await new Response(createProc.stdout).text();
+    await createProc.exited;
+    const handoff = JSON.parse(createOut);
+    expect(handoff.agent_id).toBe("test");
+    expect(handoff.summary).toBe("Test handoff");
+
+    const listProc = Bun.spawn(
+      ["bun", "run", "src/cli/index.tsx", "handoff", "--json"],
+      {
+        cwd: import.meta.dir + "/../..",
+        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-handoff.db", TODOS_AUTO_PROJECT: "false" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const listOut = await new Response(listProc.stdout).text();
+    await listProc.exited;
+    const handoffs = JSON.parse(listOut);
+    expect(handoffs.length).toBe(1);
+
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync("/tmp/test-cli-handoff.db"); } catch {}
+  });
+
   it("should run overdue command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "overdue", "--json"],

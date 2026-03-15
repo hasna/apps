@@ -2985,6 +2985,69 @@ program
     console.log(chalk.dim(`\n  ${inProgress.length} active · ${pending.length} pending · ${blocked.length} blocked · ${overdue.length} overdue`));
   });
 
+// handoff
+program
+  .command("handoff")
+  .description("Create or view agent session handoffs")
+  .option("--create", "Create a new handoff")
+  .option("--agent <name>", "Agent name")
+  .option("--summary <text>", "Handoff summary")
+  .option("--completed <items>", "Comma-separated completed items")
+  .option("--in-progress <items>", "Comma-separated in-progress items")
+  .option("--blockers <items>", "Comma-separated blockers")
+  .option("--next <items>", "Comma-separated next steps")
+  .option("--json", "Output as JSON")
+  .option("--limit <n>", "Number of handoffs to show", "5")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const db = getDatabase();
+    const { createHandoff, listHandoffs } = require("../db/handoffs.js") as any;
+    const projectId = autoProject(globalOpts) || undefined;
+
+    if (opts.create || opts.summary) {
+      if (!opts.summary) { console.error(chalk.red("  --summary is required for creating a handoff")); process.exit(1); }
+      const handoff = createHandoff({
+        agent_id: opts.agent || globalOpts.agent || undefined,
+        project_id: projectId,
+        summary: opts.summary,
+        completed: opts.completed ? opts.completed.split(",").map((s: string) => s.trim()) : undefined,
+        inProgress: opts.inProgress ? opts.inProgress.split(",").map((s: string) => s.trim()) : undefined,
+        blockers: opts.blockers ? opts.blockers.split(",").map((s: string) => s.trim()) : undefined,
+        next_steps: opts.next ? opts.next.split(",").map((s: string) => s.trim()) : undefined,
+      }, db);
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
+      console.log(chalk.green(`  ✓ Handoff created by ${handoff.agent_id || "unknown"}`));
+      return;
+    }
+
+    // View mode — show recent handoffs
+    const handoffs: any[] = listHandoffs(projectId, parseInt(opts.limit, 10), db);
+    if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoffs)); return; }
+    if (handoffs.length === 0) { console.log(chalk.dim("  No handoffs yet.")); return; }
+
+    for (const h of handoffs) {
+      const time = h.created_at.slice(0, 16).replace("T", " ");
+      console.log(chalk.bold(`\n  ${time} ${h.agent_id || "unknown"}`));
+      console.log(`  ${h.summary}`);
+      if (h.completed?.length) {
+        console.log(chalk.green(`  ✓ Completed:`));
+        for (const c of h.completed) console.log(`    - ${c}`);
+      }
+      if (h.in_progress?.length) {
+        console.log(chalk.blue(`  ▶ In progress:`));
+        for (const c of h.in_progress) console.log(`    - ${c}`);
+      }
+      if (h.blockers?.length) {
+        console.log(chalk.red(`  ⊘ Blockers:`));
+        for (const c of h.blockers) console.log(`    - ${c}`);
+      }
+      if (h.next_steps?.length) {
+        console.log(chalk.cyan(`  → Next steps:`));
+        for (const c of h.next_steps) console.log(`    - ${c}`);
+      }
+    }
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
