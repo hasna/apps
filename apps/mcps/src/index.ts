@@ -16,8 +16,10 @@ export {
   enableServer,
   disableServer,
   getToolCounts,
+  getCachedTools,
   setServerEnv,
   unsetServerEnv,
+  cloneServer,
 } from "./lib/registry.js";
 
 export { diagnoseServer } from "./lib/doctor.js";

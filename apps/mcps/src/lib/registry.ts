@@ -239,6 +239,21 @@ export function getToolCounts(): Map<string, number> {
   return new Map(rows.map((row) => [row.server_id, Number(row.count)]));
 }
 
+export function cloneServer(id: string, newName: string): McpServerEntry {
+  const server = getServer(id);
+  if (!server) throw new Error(`Server "${id}" not found`);
+  return addServer({
+    name: newName,
+    description: server.description ?? undefined,
+    command: server.command,
+    args: server.args,
+    env: server.env,
+    transport: server.transport,
+    url: server.url ?? undefined,
+    source: server.source,
+  });
+}
+
 export function getCachedTools(serverId: string): Array<{ name: string; description: string; input_schema: Record<string, unknown> }> {
   const db = getDb();
   const rows = db

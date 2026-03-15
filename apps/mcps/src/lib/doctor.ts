@@ -6,6 +6,8 @@ export interface DoctorCheck {
   name: string;
   pass: boolean;
   message: string;
+  fixable?: boolean;
+  fixHint?: string;
 }
 
 export interface DoctorReport {
@@ -20,10 +22,20 @@ export async function diagnoseServer(server: McpServerEntry): Promise<DoctorRepo
   // 1. Command exists on PATH (for stdio servers)
   if (server.transport === "stdio") {
     try {
-      execFileSync("which", [server.command], { stdio: "pipe" });
-      checks.push({ name: "command on PATH", pass: true, message: `${server.command} found` });
+      const path = execFileSync("which", [server.command], { stdio: "pipe" }).toString().trim();
+      let version = "";
+      try {
+        version = execFileSync(server.command, ["--version"], { stdio: "pipe" }).toString().trim().split("\n")[0];
+      } catch {}
+      checks.push({ name: "command on PATH", pass: true, message: `${path}${version ? ` (${version})` : ""}` });
     } catch {
-      checks.push({ name: "command on PATH", pass: false, message: `${server.command} not found on PATH` });
+      checks.push({
+        name: "command on PATH",
+        pass: false,
+        message: `${server.command} not found on PATH`,
+        fixable: true,
+        fixHint: server.args[0] || server.command,
+      });
     }
   }
 
