@@ -50,7 +50,7 @@ const IRREVERSIBLE_PATTERNS = [
   /\bgit\s+push\b/, /\bgit\s+reset\s+--hard\b/, /\bgit\s+force\b/,
   // Code modification / package installation (security risk)
   /\bnpx\s+\S+/, /\bnpm\s+install\b/, /\bbun\s+add\b/, /\bpip\s+install\b/,
-  /\bcodemod\b/, /\bsed\s+-i\b/, /\bawk\s.*>/, /\bperl\s+-[pi]\b/,
+  /\bcodemod\b/, /\bsed\s+-i\b/, /\bawk\s.*>\s*\S+\.\w+/, /\bperl\s+-[pi]\b/,
   // File creation/modification (READ-ONLY terminal)
   /\btouch\b/, /\bmkdir\b/, /\becho\s.*>/, /\btee\b/, /\bcp\b/, /\bmv\b/,
 ];
