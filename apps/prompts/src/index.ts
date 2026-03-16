@@ -1,5 +1,5 @@
 // DB layer
-export { createPrompt, getPrompt, requirePrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats } from "./db/prompts.js"
+export { createPrompt, getPrompt, requirePrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt } from "./db/prompts.js"
 export { listVersions, getVersion, restoreVersion } from "./db/versions.js"
 export { listCollections, getCollection, ensureCollection, movePrompt } from "./db/collections.js"
 export { registerAgent, listAgents } from "./db/agents.js"
@@ -14,6 +14,8 @@ export type { VariableInfo } from "./lib/template.js"
 
 // Import/Export
 export { importFromJson, exportToJson } from "./lib/importer.js"
+export { findDuplicates } from "./lib/duplicates.js"
+export type { DuplicateMatch } from "./lib/duplicates.js"
 
 // IDs
 export { generateSlug, uniqueSlug, generatePromptId } from "./lib/ids.js"

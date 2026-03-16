@@ -12,19 +12,19 @@ bun install -g @hasna/prompts
 
 ```bash
 # Save a prompt
-open-prompts save "TypeScript Code Review" \
+prompts save "TypeScript Code Review" \
   --body "Review this TypeScript code for correctness, types, and style:\n\n{{code}}" \
   --tags "code,review,typescript" \
   --collection "code"
 
 # Use it (prints body, increments counter)
-open-prompts use typescript-code-review
+prompts use typescript-code-review
 
 # Render a template
-open-prompts render typescript-code-review --var code="$(cat myfile.ts)"
+prompts render typescript-code-review --var code="$(cat myfile.ts)"
 
 # Search
-open-prompts search "code review"
+prompts search "code review"
 ```
 
 ---
@@ -37,7 +37,7 @@ Add to your Claude/agent config:
 {
   "mcpServers": {
     "prompts": {
-      "command": "open-prompts-mcp"
+      "command": "prompts-mcp"
     }
   }
 }
@@ -86,28 +86,28 @@ Later, in any session:
 ## CLI Reference
 
 ```bash
-open-prompts save <title>        # Save a prompt (--body, --file, or stdin)
-open-prompts use <id|slug>       # Get body, increment counter
-open-prompts get <id|slug>       # Get details without incrementing
-open-prompts list                # List all prompts
-open-prompts search <query>      # Full-text search
-open-prompts render <id> -v k=v  # Render template with variables
-open-prompts templates           # List templates
-open-prompts inspect <id>        # Show template variables
-open-prompts update <id>         # Update fields
-open-prompts delete <id>         # Delete
-open-prompts history <id>        # Version history
-open-prompts restore <id> <v>    # Restore version
-open-prompts collections         # List collections
-open-prompts move <id> <col>     # Move to collection
-open-prompts export              # Export as JSON
-open-prompts import <file>       # Import from JSON
-open-prompts stats               # Usage statistics
+prompts save <title>        # Save a prompt (--body, --file, or stdin)
+prompts use <id|slug>       # Get body, increment counter
+prompts get <id|slug>       # Get details without incrementing
+prompts list                # List all prompts
+prompts search <query>      # Full-text search
+prompts render <id> -v k=v  # Render template with variables
+prompts templates           # List templates
+prompts inspect <id>        # Show template variables
+prompts update <id>         # Update fields
+prompts delete <id>         # Delete
+prompts history <id>        # Version history
+prompts restore <id> <v>    # Restore version
+prompts collections         # List collections
+prompts move <id> <col>     # Move to collection
+prompts export              # Export as JSON
+prompts import <file>       # Import from JSON
+prompts stats               # Usage statistics
 
 # Global flags
-open-prompts list --json         # Machine-readable output
-open-prompts list -c code        # Filter by collection
-open-prompts list -t review,ts   # Filter by tags
+prompts list --json         # Machine-readable output
+prompts list -c code        # Filter by collection
+prompts list -t review,ts   # Filter by tags
 ```
 
 ---
@@ -118,18 +118,18 @@ Prompts with `{{variable}}` syntax are automatically detected as templates.
 
 ```bash
 # Save a template
-open-prompts save "PR Description" \
+prompts save "PR Description" \
   --body "Write a PR description for this {{language|TypeScript}} change:\n\n{{diff}}\n\nFocus on: {{focus|what changed and why}}"
 
 # Inspect variables
-open-prompts inspect pr-description
+prompts inspect pr-description
 # Variables for pr-description:
 #   language  optional  (default: "TypeScript")
 #   diff      required
 #   focus     optional  (default: "what changed and why")
 
 # Render
-open-prompts render pr-description \
+prompts render pr-description \
   --var diff="$(git diff main)" \
   --var language=Go
 ```
@@ -183,7 +183,7 @@ importFromClaudeCommands([
 ## REST API
 
 ```bash
-open-prompts-serve   # starts on port 19430
+prompts-serve   # starts on port 19430
 ```
 
 | Method | Endpoint | Description |
@@ -212,7 +212,7 @@ open-prompts-serve   # starts on port 19430
 ## Web Dashboard
 
 ```bash
-open-prompts-serve   # start API on :19430
+prompts-serve   # start API on :19430
 # open dashboard/dist/index.html or run dashboard dev server
 ```
 
@@ -256,7 +256,7 @@ Priority order:
 # Export existing slash commands as prompts
 for f in .claude/commands/*.md; do
   name=$(basename "$f" .md)
-  open-prompts save "$name" --file "$f" --collection claude-commands --tags "slash-command"
+  prompts save "$name" --file "$f" --collection claude-commands --tags "slash-command"
 done
 ```
 

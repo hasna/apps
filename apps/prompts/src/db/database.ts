@@ -133,6 +133,10 @@ function runMigrations(db: Database): void {
       `,
     },
     {
+      name: "003_pinned",
+      sql: `ALTER TABLE prompts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;`,
+    },
+    {
       name: "002_fts5",
       sql: `
         CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(
@@ -182,19 +186,37 @@ export function hasFts(db: Database): boolean {
 }
 
 export function resolvePrompt(db: Database, idOrSlug: string): string | null {
-  // Try exact ID
+  // 1. Exact ID
   const byId = db.query("SELECT id FROM prompts WHERE id = ?").get(idOrSlug) as { id: string } | null
   if (byId) return byId.id
 
-  // Try slug
+  // 2. Exact slug
   const bySlug = db.query("SELECT id FROM prompts WHERE slug = ?").get(idOrSlug) as { id: string } | null
   if (bySlug) return bySlug.id
 
-  // Try partial ID prefix (PRMT-00001 style)
+  // 3. Partial ID prefix (PRMT-001 → PRMT-00001)
   const byPrefix = db
     .query("SELECT id FROM prompts WHERE id LIKE ? LIMIT 2")
     .all(`${idOrSlug}%`) as Array<{ id: string }>
   if (byPrefix.length === 1 && byPrefix[0]) return byPrefix[0].id
+
+  // 4. Slug prefix match (e.g. "ts-review" → "typescript-code-review")
+  const bySlugPrefix = db
+    .query("SELECT id FROM prompts WHERE slug LIKE ? LIMIT 2")
+    .all(`${idOrSlug}%`) as Array<{ id: string }>
+  if (bySlugPrefix.length === 1 && bySlugPrefix[0]) return bySlugPrefix[0].id
+
+  // 5. Slug substring match
+  const bySlugSub = db
+    .query("SELECT id FROM prompts WHERE slug LIKE ? LIMIT 2")
+    .all(`%${idOrSlug}%`) as Array<{ id: string }>
+  if (bySlugSub.length === 1 && bySlugSub[0]) return bySlugSub[0].id
+
+  // 6. Title substring match (case-insensitive)
+  const byTitle = db
+    .query("SELECT id FROM prompts WHERE lower(title) LIKE ? LIMIT 2")
+    .all(`%${idOrSlug.toLowerCase()}%`) as Array<{ id: string }>
+  if (byTitle.length === 1 && byTitle[0]) return byTitle[0].id
 
   return null
 }

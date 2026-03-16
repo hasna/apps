@@ -10,6 +10,7 @@ export interface Prompt {
   variables: TemplateVariable[]
   is_template: boolean
   source: PromptSource
+  pinned: boolean
   version: number
   use_count: number
   last_used_at: string | null

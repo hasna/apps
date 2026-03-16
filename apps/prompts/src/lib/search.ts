@@ -14,6 +14,7 @@ function rowToSearchResult(row: Record<string, unknown>, snippet?: string): Sear
       collection: row["collection"] as string,
       tags: JSON.parse((row["tags"] as string) || "[]") as string[],
       variables: JSON.parse((row["variables"] as string) || "[]") as [],
+      pinned: Boolean(row["pinned"]),
       is_template: Boolean(row["is_template"]),
       source: row["source"] as "manual" | "ai-session" | "imported",
       version: row["version"] as number,

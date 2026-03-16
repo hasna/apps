@@ -2,13 +2,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats } from "../db/prompts.js"
+import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
 import { registerAgent } from "../db/agents.js"
 import { searchPrompts, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
+import { maybeSaveMemento } from "../lib/mementos.js"
+import { lintAll } from "../lib/lint.js"
 
 const server = new McpServer({ name: "open-prompts", version: "0.1.0" })
 
@@ -34,12 +36,14 @@ server.registerTool(
       tags: z.array(z.string()).optional().describe("Tags for filtering and search"),
       source: z.enum(["manual", "ai-session", "imported"]).optional().describe("Where this prompt came from"),
       changed_by: z.string().optional().describe("Agent name making this change"),
+      force: z.boolean().optional().describe("Save even if a similar prompt already exists"),
     },
   },
   async (args) => {
     try {
-      const { prompt, created } = await upsertPrompt(args)
-      return ok({ ...prompt, _created: created })
+      const { force, ...input } = args
+      const { prompt, created, duplicate_warning } = upsertPrompt(input, force ?? false)
+      return ok({ ...prompt, _created: created, _duplicate_warning: duplicate_warning ?? null })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
@@ -99,11 +103,15 @@ server.registerTool(
   "prompts_use",
   {
     description: "Get a prompt's body and increment its use counter. This is the primary way to retrieve a prompt for actual use.",
-    inputSchema: { id: z.string().describe("Prompt ID or slug") },
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      agent: z.string().optional().describe("Agent ID for mementos integration"),
+    },
   },
-  async ({ id }) => {
+  async ({ id, agent }) => {
     try {
       const prompt = usePrompt(id)
+      await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, agentId: agent })
       return ok({ body: prompt.body, prompt })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -119,12 +127,14 @@ server.registerTool(
     inputSchema: {
       id: z.string().describe("Prompt ID or slug"),
       vars: z.record(z.string()).describe("Variable values as key-value pairs"),
+      agent: z.string().optional().describe("Agent ID for mementos integration"),
     },
   },
-  async ({ id, vars }) => {
+  async ({ id, vars, agent }) => {
     try {
       const prompt = usePrompt(id)
       const result = renderTemplate(prompt.body, vars)
+      await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, rendered: result.rendered, agentId: agent })
       return ok(result)
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -366,6 +376,121 @@ server.registerTool(
     },
   },
   async ({ name, description }) => ok(ensureCollection(name, description))
+)
+
+// ── prompts_save_from_session ─────────────────────────────────────────────────
+server.registerTool(
+  "prompts_save_from_session",
+  {
+    description:
+      "Minimal frictionless save for AI agents mid-conversation. The agent is expected to derive title, slug, and tags from the body before calling this. Automatically sets source=ai-session. Perfect for 'save this as a reusable prompt' moments.",
+    inputSchema: {
+      title: z.string().describe("A short descriptive title for this prompt"),
+      body: z.string().describe("The prompt content to save"),
+      slug: z.string().optional().describe("URL-friendly identifier (auto-generated from title if omitted)"),
+      tags: z.array(z.string()).optional().describe("Relevant tags extracted from the prompt context"),
+      collection: z.string().optional().describe("Collection to save into (default: 'sessions')"),
+      description: z.string().optional().describe("One-line description of what this prompt does"),
+      agent: z.string().optional().describe("Agent name saving this prompt"),
+    },
+  },
+  async ({ title, body, slug, tags, collection, description, agent }) => {
+    try {
+      const { prompt, created } = upsertPrompt({
+        title,
+        body,
+        slug,
+        tags,
+        collection: collection ?? "sessions",
+        description,
+        source: "ai-session",
+        changed_by: agent,
+      })
+      return ok({ ...prompt, _created: created, _tip: created ? `Saved as "${prompt.slug}". Use prompts_use("${prompt.slug}") to retrieve it.` : `Updated existing prompt "${prompt.slug}".` })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_pin ───────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_pin",
+  {
+    description: "Pin a prompt so it always appears first in lists.",
+    inputSchema: { id: z.string() },
+  },
+  async ({ id }) => {
+    try { return ok(pinPrompt(id, true)) }
+    catch (e) { return err(e instanceof Error ? e.message : String(e)) }
+  }
+)
+
+server.registerTool(
+  "prompts_unpin",
+  {
+    description: "Unpin a previously pinned prompt.",
+    inputSchema: { id: z.string() },
+  },
+  async ({ id }) => {
+    try { return ok(pinPrompt(id, false)) }
+    catch (e) { return err(e instanceof Error ? e.message : String(e)) }
+  }
+)
+
+// ── prompts_recent ────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_recent",
+  {
+    description: "Get recently used prompts, ordered by last_used_at descending.",
+    inputSchema: { limit: z.number().optional().default(10) },
+  },
+  async ({ limit }) => {
+    const prompts = listPrompts({ limit: 500 })
+      .filter((p) => p.last_used_at !== null)
+      .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
+      .slice(0, limit)
+    return ok(prompts)
+  }
+)
+
+// ── prompts_lint ──────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_lint",
+  {
+    description: "Check prompt quality: missing descriptions, undocumented template vars, short bodies, no tags.",
+    inputSchema: { collection: z.string().optional() },
+  },
+  async ({ collection }) => {
+    const prompts = listPrompts({ collection, limit: 10000 })
+    const results = lintAll(prompts)
+    const summary = {
+      total_checked: prompts.length,
+      prompts_with_issues: results.length,
+      errors: results.flatMap((r) => r.issues).filter((i) => i.severity === "error").length,
+      warnings: results.flatMap((r) => r.issues).filter((i) => i.severity === "warn").length,
+      info: results.flatMap((r) => r.issues).filter((i) => i.severity === "info").length,
+      results,
+    }
+    return ok(summary)
+  }
+)
+
+// ── prompts_stale ─────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_stale",
+  {
+    description: "List prompts not used in N days. Useful for library hygiene.",
+    inputSchema: { days: z.number().optional().default(30).describe("Inactivity threshold in days") },
+  },
+  async ({ days }) => {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const all = listPrompts({ limit: 10000 })
+    const stale = all
+      .filter((p) => p.last_used_at === null || p.last_used_at < cutoff)
+      .sort((a, b) => (a.last_used_at ?? "").localeCompare(b.last_used_at ?? ""))
+    return ok({ stale, count: stale.length, threshold_days: days })
+  }
 )
 
 // ── prompts_stats ─────────────────────────────────────────────────────────────

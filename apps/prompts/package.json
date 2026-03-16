@@ -1,14 +1,14 @@
 {
   "name": "@hasna/prompts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reusable prompt library for AI agents — CLI + MCP server + REST API + web dashboard",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "open-prompts": "dist/cli/index.js",
-    "open-prompts-mcp": "dist/mcp/index.js",
-    "open-prompts-serve": "dist/server/index.js"
+    "prompts": "dist/cli/index.js",
+    "prompts-mcp": "dist/mcp/index.js",
+    "prompts-serve": "dist/server/index.js"
   },
   "exports": {
     ".": {

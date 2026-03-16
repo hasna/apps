@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Search, Plus, BookOpen, Layers, BarChart2, Copy, Check, Tag, Edit2, Trash2, Play } from "lucide-react"
 import { api } from "./api"
@@ -23,11 +23,25 @@ function Dashboard() {
   const [search, setSearch] = useState("")
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const { data: collections = [] } = useQuery({
     queryKey: ["collections"],
     queryFn: () => api.listCollections(),
   })
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName
+      const isInput = tag === "INPUT" || tag === "TEXTAREA"
+      if (e.key === "/" && !isInput) { e.preventDefault(); searchRef.current?.focus() }
+      if (e.key === "n" && !isInput) { e.preventDefault(); setShowCreate(true) }
+      if (e.key === "Escape") { setSelectedPrompt(null); setShowCreate(false); searchRef.current?.blur() }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
 
   return (
     <div className="app">
@@ -44,6 +58,7 @@ function Dashboard() {
           setSearch={setSearch}
           onNew={() => setShowCreate(true)}
           view={view}
+          inputRef={searchRef}
         />
         {view === "stats" ? (
           <StatsView />
@@ -111,18 +126,20 @@ function Sidebar({ view, setView, collections, selectedCollection, setSelectedCo
   )
 }
 
-function Header({ search, setSearch, onNew, view }: {
+function Header({ search, setSearch, onNew, view, inputRef }: {
   search: string
   setSearch: (s: string) => void
   onNew: () => void
   view: View
+  inputRef?: React.RefObject<HTMLInputElement | null>
 }) {
   return (
     <div className="header">
       <div className="search-bar">
         <Search size={16} />
         <input
-          placeholder="Search prompts..."
+          ref={inputRef}
+          placeholder='Search prompts… (press / to focus)'
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -176,21 +193,63 @@ function PromptList({ view, search, collection, onSelect, selected }: {
 }
 
 function PromptCard({ prompt, selected, onSelect }: { prompt: Prompt; selected: boolean; onSelect: (p: Prompt) => void }) {
+  const [showQuickRender, setShowQuickRender] = useState(false)
+  const [vars, setVars] = useState<Record<string, string>>({})
+  const [rendered, setRendered] = useState<string | null>(null)
+
+  const renderMutation = useMutation({
+    mutationFn: () => api.renderPrompt(prompt.id, vars),
+    onSuccess: (r) => { setRendered(r.rendered); void navigator.clipboard.writeText(r.rendered) },
+  })
+
   return (
-    <div className={`prompt-card ${selected ? "selected" : ""}`} onClick={() => onSelect(prompt)}>
-      <div className="prompt-card-header">
-        <span className="prompt-id">{prompt.id}</span>
-        {prompt.is_template && <span className="badge template">template</span>}
-        <span className="badge collection">{prompt.collection}</span>
+    <div className={`prompt-card ${selected ? "selected" : ""}`}>
+      <div onClick={() => onSelect(prompt)}>
+        <div className="prompt-card-header">
+          <span className="prompt-id">{prompt.id}</span>
+          {prompt.is_template && <span className="badge template">template</span>}
+          {(prompt as Prompt & { pinned?: boolean }).pinned && <span title="Pinned">📌</span>}
+          <span className="badge collection">{prompt.collection}</span>
+        </div>
+        <div className="prompt-title">{prompt.title}</div>
+        {prompt.description && <div className="prompt-desc">{prompt.description}</div>}
+        <div className="prompt-footer">
+          {prompt.tags.map((t) => (
+            <span key={t} className="tag"><Tag size={10} />{t}</span>
+          ))}
+          <span className="use-count"><Play size={10} />{prompt.use_count}×</span>
+          {prompt.is_template && (
+            <button
+              className="quick-render-btn"
+              title="Quick render template"
+              onClick={(e) => { e.stopPropagation(); setShowQuickRender(!showQuickRender); setRendered(null) }}
+            >
+              <Play size={12} /> Fill
+            </button>
+          )}
+        </div>
       </div>
-      <div className="prompt-title">{prompt.title}</div>
-      {prompt.description && <div className="prompt-desc">{prompt.description}</div>}
-      <div className="prompt-footer">
-        {prompt.tags.map((t) => (
-          <span key={t} className="tag"><Tag size={10} />{t}</span>
-        ))}
-        <span className="use-count"><Play size={10} />{prompt.use_count}×</span>
-      </div>
+
+      {showQuickRender && prompt.is_template && (
+        <div className="quick-render" onClick={(e) => e.stopPropagation()}>
+          {prompt.variables.map((v) => (
+            <label key={v.name}>
+              <span>{v.name}{(v as typeof v & { required?: boolean }).required ? " *" : ""}</span>
+              <input
+                placeholder={v.default ?? ""}
+                value={vars[v.name] ?? ""}
+                onChange={(e) => setVars((prev) => ({ ...prev, [v.name]: e.target.value }))}
+              />
+            </label>
+          ))}
+          <div className="quick-render-actions">
+            <button className="btn-primary" onClick={() => renderMutation.mutate()}>
+              {renderMutation.isPending ? "…" : <><Copy size={12} /> Copy</>}
+            </button>
+            {rendered && <span className="muted">Copied!</span>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

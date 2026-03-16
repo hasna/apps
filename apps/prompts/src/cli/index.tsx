@@ -2,12 +2,13 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import { createRequire } from "module"
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats } from "../db/prompts.js"
+import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, movePrompt } from "../db/collections.js"
 import { searchPrompts } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
+import { lintAll } from "../lib/lint.js"
 import type { Prompt } from "../types/index.js"
 
 const require = createRequire(import.meta.url)
@@ -15,7 +16,7 @@ const require = createRequire(import.meta.url)
 const pkg = require("../../package.json")
 
 const program = new Command()
-  .name("open-prompts")
+  .name("prompts")
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
   .version(pkg.version as string)
   .description("Reusable prompt library — save, search, render prompts from any AI session")
@@ -46,7 +47,8 @@ function handleError(e: unknown): never {
 function fmtPrompt(p: Prompt): string {
   const tags = p.tags.length > 0 ? chalk.gray(` [${p.tags.join(", ")}]`) : ""
   const template = p.is_template ? chalk.cyan(" ◇") : ""
-  return `${chalk.bold(p.id)} ${chalk.green(p.slug)}${template}  ${p.title}${tags}  ${chalk.gray(p.collection)}`
+  const pin = p.pinned ? chalk.yellow(" 📌") : ""
+  return `${chalk.bold(p.id)} ${chalk.green(p.slug)}${template}${pin}  ${p.title}${tags}  ${chalk.gray(p.collection)}`
 }
 
 // ── save ──────────────────────────────────────────────────────────────────────
@@ -61,6 +63,7 @@ program
   .option("-t, --tags <tags>", "Comma-separated tags")
   .option("--source <source>", "Source: manual|ai-session|imported", "manual")
   .option("--agent <name>", "Agent name (for attribution)")
+  .option("--force", "Save even if a similar prompt already exists")
   .action(async (title: string, opts: Record<string, string>) => {
     try {
       let body = opts["body"] ?? ""
@@ -75,7 +78,7 @@ program
       }
       if (!body) handleError("No body provided. Use --body, --file, or pipe via stdin.")
 
-      const { prompt, created } = upsertPrompt({
+      const { prompt, created, duplicate_warning } = upsertPrompt({
         title,
         body,
         slug: opts["slug"],
@@ -84,7 +87,10 @@ program
         tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : [],
         source: (opts["source"] as "manual" | "ai-session" | "imported") || "manual",
         changed_by: opts["agent"],
-      })
+      }, Boolean(opts["force"]))
+      if (duplicate_warning && !isJson()) {
+        console.warn(chalk.yellow(`Warning: ${duplicate_warning}`))
+      }
 
       if (isJson()) {
         output(prompt)
@@ -141,15 +147,21 @@ program
   .option("-c, --collection <name>", "Filter by collection")
   .option("-t, --tags <tags>", "Filter by tags (comma-separated)")
   .option("--templates", "Show only templates")
+  .option("--recent", "Sort by recently used")
   .option("-n, --limit <n>", "Max results", "50")
   .action((opts: Record<string, string | boolean>) => {
     try {
-      const prompts = listPrompts({
+      let prompts = listPrompts({
         collection: opts["collection"] as string | undefined,
         tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
         is_template: opts["templates"] ? true : undefined,
         limit: parseInt(opts["limit"] as string) || 50,
       })
+      if (opts["recent"]) {
+        prompts = prompts
+          .filter((p) => p.last_used_at !== null)
+          .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
+      }
       if (isJson()) {
         output(prompts)
       } else if (prompts.length === 0) {
@@ -184,7 +196,11 @@ program
       } else {
         for (const r of results) {
           console.log(fmtPrompt(r.prompt))
-          if (r.snippet) console.log(chalk.gray("  " + r.snippet))
+          if (r.snippet) {
+            // Highlight [matched] portions returned by FTS5 snippet()
+            const highlighted = r.snippet.replace(/\[([^\]]+)\]/g, (_m: string, word: string) => chalk.yellowBright(word))
+            console.log(chalk.gray("  ") + chalk.gray(highlighted))
+          }
         }
         console.log(chalk.gray(`\n${results.length} result(s)`))
       }
@@ -474,6 +490,134 @@ program
             console.log(`  ${chalk.bold(c.collection)}  ${chalk.gray(`${c.count}`)}`)
         }
       }
+    } catch (e) {
+      handleError(e)
+    }
+  })
+
+// ── recent ────────────────────────────────────────────────────────────────────
+program
+  .command("recent [n]")
+  .description("Show recently used prompts (default: 10)")
+  .action((n: string | undefined) => {
+    try {
+      const limit = parseInt(n ?? "10") || 10
+      const prompts = listPrompts({ limit })
+        .filter((p) => p.last_used_at !== null)
+        .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
+        .slice(0, limit)
+      if (isJson()) { output(prompts); return }
+      if (prompts.length === 0) { console.log(chalk.gray("No recently used prompts.")); return }
+      for (const p of prompts) {
+        const ago = chalk.gray(new Date(p.last_used_at!).toLocaleString())
+        console.log(`${chalk.bold(p.id)} ${chalk.green(p.slug)}  ${p.title}  ${ago}`)
+      }
+    } catch (e) { handleError(e) }
+  })
+
+// ── lint ──────────────────────────────────────────────────────────────────────
+program
+  .command("lint")
+  .description("Check prompt quality: missing descriptions, undocumented vars, short bodies, no tags")
+  .option("-c, --collection <name>", "Lint only this collection")
+  .action((opts: Record<string, string>) => {
+    try {
+      const prompts = listPrompts({ collection: opts["collection"], limit: 10000 })
+      const results = lintAll(prompts)
+      if (isJson()) { output(results); return }
+      if (results.length === 0) { console.log(chalk.green("✓ All prompts pass lint.")); return }
+
+      let errors = 0, warns = 0, infos = 0
+      for (const { prompt: p, issues } of results) {
+        console.log(`\n${chalk.bold(p.slug)}  ${chalk.gray(p.id)}`)
+        for (const issue of issues) {
+          if (issue.severity === "error") { console.log(chalk.red(`  ✗ [${issue.rule}] ${issue.message}`)); errors++ }
+          else if (issue.severity === "warn") { console.log(chalk.yellow(`  ⚠ [${issue.rule}] ${issue.message}`)); warns++ }
+          else { console.log(chalk.gray(`  ℹ [${issue.rule}] ${issue.message}`)); infos++ }
+        }
+      }
+      console.log(chalk.bold(`\n${results.length} prompt(s) with issues — ${errors} errors, ${warns} warnings, ${infos} info`))
+      if (errors > 0) process.exit(1)
+    } catch (e) { handleError(e) }
+  })
+
+// ── stale ─────────────────────────────────────────────────────────────────────
+program
+  .command("stale [days]")
+  .description("List prompts not used in N days (default: 30)")
+  .action((days: string | undefined) => {
+    try {
+      const threshold = parseInt(days ?? "30") || 30
+      const cutoff = new Date(Date.now() - threshold * 24 * 60 * 60 * 1000).toISOString()
+      const all = listPrompts({ limit: 10000 })
+      const stale = all.filter(
+        (p) => p.last_used_at === null || p.last_used_at < cutoff
+      ).sort((a, b) => (a.last_used_at ?? "").localeCompare(b.last_used_at ?? ""))
+      if (isJson()) { output(stale); return }
+      if (stale.length === 0) { console.log(chalk.green(`No stale prompts (threshold: ${threshold} days).`)); return }
+      console.log(chalk.bold(`Stale prompts (not used in ${threshold}+ days):`))
+      for (const p of stale) {
+        const last = p.last_used_at ? chalk.gray(new Date(p.last_used_at).toLocaleDateString()) : chalk.red("never")
+        console.log(`  ${chalk.green(p.slug)}  ${chalk.gray(`${p.use_count}×`)}  last used: ${last}`)
+      }
+      console.log(chalk.gray(`\n${stale.length} stale prompt(s)`))
+    } catch (e) { handleError(e) }
+  })
+
+// ── pin / unpin ───────────────────────────────────────────────────────────────
+program
+  .command("pin <id>")
+  .description("Pin a prompt so it always appears first in lists")
+  .action((id: string) => {
+    try {
+      const p = pinPrompt(id, true)
+      if (isJson()) output(p)
+      else console.log(chalk.yellow(`📌 Pinned ${chalk.bold(p.slug)}`))
+    } catch (e) { handleError(e) }
+  })
+
+program
+  .command("unpin <id>")
+  .description("Unpin a prompt")
+  .action((id: string) => {
+    try {
+      const p = pinPrompt(id, false)
+      if (isJson()) output(p)
+      else console.log(chalk.gray(`Unpinned ${chalk.bold(p.slug)}`))
+    } catch (e) { handleError(e) }
+  })
+
+// ── copy ──────────────────────────────────────────────────────────────────────
+program
+  .command("copy <id>")
+  .description("Copy prompt body to clipboard and increment use counter")
+  .action(async (id: string) => {
+    try {
+      const prompt = usePrompt(id)
+      const { platform } = process
+      if (platform === "darwin") {
+        const proc = Bun.spawn(["pbcopy"], { stdin: "pipe" })
+        proc.stdin.write(prompt.body)
+        proc.stdin.end()
+        await proc.exited
+      } else if (platform === "linux") {
+        // Try xclip then xsel
+        try {
+          const proc = Bun.spawn(["xclip", "-selection", "clipboard"], { stdin: "pipe" })
+          proc.stdin.write(prompt.body)
+          proc.stdin.end()
+          await proc.exited
+        } catch {
+          const proc = Bun.spawn(["xsel", "--clipboard", "--input"], { stdin: "pipe" })
+          proc.stdin.write(prompt.body)
+          proc.stdin.end()
+          await proc.exited
+        }
+      } else {
+        handleError("Clipboard not supported on this platform. Use `prompts use` instead.")
+      }
+      if (isJson()) output({ copied: true, id: prompt.id, slug: prompt.slug })
+      else console.log(chalk.green(`Copied ${chalk.bold(prompt.slug)} to clipboard`))
     } catch (e) {
       handleError(e)
     }

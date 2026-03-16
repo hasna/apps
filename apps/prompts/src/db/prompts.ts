@@ -1,6 +1,7 @@
 import { getDatabase, resolvePrompt } from "./database.js"
 import { generatePromptId, generateSlug, uniqueSlug } from "../lib/ids.js"
 import { ensureCollection } from "./collections.js"
+import { findDuplicates } from "../lib/duplicates.js"
 import { extractVariables } from "../lib/template.js"
 import type {
   Prompt,
@@ -24,6 +25,7 @@ function rowToPrompt(row: Record<string, unknown>): Prompt {
     collection: row["collection"] as string,
     tags: JSON.parse((row["tags"] as string) || "[]") as string[],
     variables: JSON.parse((row["variables"] as string) || "[]") as TemplateVariable[],
+    pinned: Boolean(row["pinned"]),
     is_template: Boolean(row["is_template"]),
     source: row["source"] as PromptSource,
     version: row["version"] as number,
@@ -123,7 +125,7 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
   const offset = filter.offset ?? 0
 
   const rows = db
-    .query(`SELECT * FROM prompts ${where} ORDER BY use_count DESC, updated_at DESC LIMIT ? OFFSET ?`)
+    .query(`SELECT * FROM prompts ${where} ORDER BY pinned DESC, use_count DESC, updated_at DESC LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as Array<Record<string, unknown>>
 
   return rows.map(rowToPrompt)
@@ -193,7 +195,14 @@ export function usePrompt(idOrSlug: string): Prompt {
   return requirePrompt(prompt.id)
 }
 
-export function upsertPrompt(input: CreatePromptInput): { prompt: Prompt; created: boolean } {
+export function pinPrompt(idOrSlug: string, pinned: boolean): Prompt {
+  const db = getDatabase()
+  const prompt = requirePrompt(idOrSlug)
+  db.run("UPDATE prompts SET pinned = ?, updated_at = datetime('now') WHERE id = ?", [pinned ? 1 : 0, prompt.id])
+  return requirePrompt(prompt.id)
+}
+
+export function upsertPrompt(input: CreatePromptInput, force = false): { prompt: Prompt; created: boolean; duplicate_warning?: string } {
   const db = getDatabase()
   const slug = input.slug || generateSlug(input.title)
   const existing = db.query("SELECT id FROM prompts WHERE slug = ?").get(slug) as { id: string } | null
@@ -210,8 +219,18 @@ export function upsertPrompt(input: CreatePromptInput): { prompt: Prompt; create
     return { prompt, created: false }
   }
 
+  // Check for near-duplicates unless force=true
+  let duplicate_warning: string | undefined
+  if (!force && input.body) {
+    const dupes = findDuplicates(input.body, 0.8, slug)
+    if (dupes.length > 0) {
+      const top = dupes[0]!
+      duplicate_warning = `Similar prompt already exists: "${top.prompt.slug}" (${Math.round(top.score * 100)}% match). Use --force to save anyway.`
+    }
+  }
+
   const prompt = createPrompt({ ...input, slug })
-  return { prompt, created: true }
+  return { prompt, created: true, duplicate_warning }
 }
 
 export function getPromptStats() {

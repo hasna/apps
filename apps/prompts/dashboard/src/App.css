@@ -343,6 +343,26 @@
 .stat-row:hover { background: var(--surface2); }
 .slug { font-family: monospace; color: var(--accent-hover); }
 
+.quick-render-btn {
+  display: flex; align-items: center; gap: 3px;
+  font-size: 11px; padding: 2px 7px; border-radius: 4px;
+  background: rgba(99,102,241,0.15); color: var(--accent-hover);
+  border: none; cursor: pointer; margin-left: auto;
+}
+.quick-render-btn:hover { background: var(--accent); color: #fff; }
+.quick-render {
+  border-top: 1px solid var(--border);
+  padding: 10px 0 4px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.quick-render label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.quick-render input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+  padding: 4px 8px; color: var(--text); font-size: 12px; outline: none;
+}
+.quick-render input:focus { border-color: var(--accent); }
+.quick-render-actions { display: flex; align-items: center; gap: 8px; }
+
 .loading, .empty { padding: 40px; text-align: center; color: var(--muted); }
 .muted { color: var(--muted); font-size: 13px; }
 .error { color: var(--red); font-size: 13px; }
