@@ -21,28 +21,25 @@ export function uniqueSlug(baseSlug: string): string {
   return slug
 }
 
+const CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+function nanoid(len: number): string {
+  let id = ""
+  for (let i = 0; i < len; i++) {
+    id += CHARS[Math.floor(Math.random() * CHARS.length)]
+  }
+  return id
+}
+
 export function generatePromptId(): string {
   const db = getDatabase()
-  const row = db
-    .query("SELECT id FROM prompts ORDER BY rowid DESC LIMIT 1")
-    .get() as { id: string } | null
-
-  let next = 1
-  if (row) {
-    const match = row.id.match(/PRMT-(\d+)/)
-    if (match && match[1]) {
-      next = parseInt(match[1], 10) + 1
-    }
-  }
-
-  return `PRMT-${String(next).padStart(5, "0")}`
+  let id: string
+  do {
+    id = `prmt-${nanoid(8)}`
+  } while (db.query("SELECT 1 FROM prompts WHERE id = ?").get(id))
+  return id
 }
 
 export function generateId(prefix: string): string {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-  let id = prefix + "-"
-  for (let i = 0; i < 8; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)]
-  }
-  return id
+  return `${prefix}-${nanoid(8)}`
 }

@@ -16,7 +16,7 @@ beforeEach(() => {
 describe("createPrompt", () => {
   test("creates a prompt with auto-generated id and slug", () => {
     const p = createPrompt({ title: "TypeScript Review", body: "Review this TS code" })
-    expect(p.id).toMatch(/^PRMT-\d{5}$/)
+    expect(p.id).toMatch(/^prmt-[a-z0-9]{8}$/)
     expect(p.slug).toBe("typescript-review")
     expect(p.title).toBe("TypeScript Review")
     expect(p.body).toBe("Review this TS code")
