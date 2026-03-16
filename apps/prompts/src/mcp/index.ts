@@ -6,6 +6,9 @@ import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPr
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
 import { registerAgent } from "../db/agents.js"
+import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
+import { resolveProject } from "../db/database.js"
+import { getDatabase } from "../db/database.js"
 import { searchPrompts, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
@@ -37,11 +40,18 @@ server.registerTool(
       source: z.enum(["manual", "ai-session", "imported"]).optional().describe("Where this prompt came from"),
       changed_by: z.string().optional().describe("Agent name making this change"),
       force: z.boolean().optional().describe("Save even if a similar prompt already exists"),
+      project: z.string().optional().describe("Project name, slug, or ID to scope this prompt to"),
     },
   },
   async (args) => {
     try {
-      const { force, ...input } = args
+      const { force, project, ...input } = args
+      if (project) {
+        const db = getDatabase()
+        const pid = resolveProject(db, project)
+        if (!pid) return err(`Project not found: ${project}`)
+        ;(input as typeof input & { project_id?: string }).project_id = pid
+      }
       const { prompt, created, duplicate_warning } = upsertPrompt(input, force ?? false)
       return ok({ ...prompt, _created: created, _duplicate_warning: duplicate_warning ?? null })
     } catch (e) {
@@ -76,9 +86,18 @@ server.registerTool(
       source: z.enum(["manual", "ai-session", "imported"]).optional(),
       limit: z.number().optional().default(50),
       offset: z.number().optional().default(0),
+      project: z.string().optional().describe("Project name, slug, or ID — shows project prompts first, then globals"),
     },
   },
-  async (args) => ok(listPrompts(args))
+  async ({ project, ...args }) => {
+    if (project) {
+      const db = getDatabase()
+      const pid = resolveProject(db, project)
+      if (!pid) return err(`Project not found: ${project}`)
+      return ok(listPrompts({ ...args, project_id: pid }))
+    }
+    return ok(listPrompts(args))
+  }
 )
 
 // ── prompts_delete ────────────────────────────────────────────────────────────
@@ -183,9 +202,18 @@ server.registerTool(
       is_template: z.boolean().optional(),
       source: z.enum(["manual", "ai-session", "imported"]).optional(),
       limit: z.number().optional().default(20),
+      project: z.string().optional().describe("Project name, slug, or ID to scope search"),
     },
   },
-  async ({ q, ...filter }) => ok(searchPrompts(q, filter))
+  async ({ q, project, ...filter }) => {
+    if (project) {
+      const db = getDatabase()
+      const pid = resolveProject(db, project)
+      if (!pid) return err(`Project not found: ${project}`)
+      return ok(searchPrompts(q, { ...filter, project_id: pid }))
+    }
+    return ok(searchPrompts(q, filter))
+  }
 )
 
 // ── prompts_similar ───────────────────────────────────────────────────────────
@@ -392,10 +420,18 @@ server.registerTool(
       collection: z.string().optional().describe("Collection to save into (default: 'sessions')"),
       description: z.string().optional().describe("One-line description of what this prompt does"),
       agent: z.string().optional().describe("Agent name saving this prompt"),
+      project: z.string().optional().describe("Project name, slug, or ID to scope this prompt to"),
     },
   },
-  async ({ title, body, slug, tags, collection, description, agent }) => {
+  async ({ title, body, slug, tags, collection, description, agent, project }) => {
     try {
+      let project_id: string | undefined
+      if (project) {
+        const db = getDatabase()
+        const pid = resolveProject(db, project)
+        if (!pid) return err(`Project not found: ${project}`)
+        project_id = pid
+      }
       const { prompt, created } = upsertPrompt({
         title,
         body,
@@ -405,6 +441,7 @@ server.registerTool(
         description,
         source: "ai-session",
         changed_by: agent,
+        project_id,
       })
       return ok({ ...prompt, _created: created, _tip: created ? `Saved as "${prompt.slug}". Use prompts_use("${prompt.slug}") to retrieve it.` : `Updated existing prompt "${prompt.slug}".` })
     } catch (e) {
@@ -501,6 +538,67 @@ server.registerTool(
     inputSchema: {},
   },
   async () => ok(getPromptStats())
+)
+
+// ── prompts_project_create ────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_project_create",
+  {
+    description: "Create a new project to scope prompts.",
+    inputSchema: {
+      name: z.string().describe("Project name"),
+      description: z.string().optional().describe("Short description"),
+      path: z.string().optional().describe("Optional filesystem path this project maps to"),
+    },
+  },
+  async ({ name, description, path }) => {
+    try {
+      return ok(createProject({ name, description, path }))
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_project_list ──────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_project_list",
+  {
+    description: "List all projects with prompt counts.",
+    inputSchema: {},
+  },
+  async () => ok(listProjects())
+)
+
+// ── prompts_project_get ───────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_project_get",
+  {
+    description: "Get a project by ID, slug, or name.",
+    inputSchema: { id: z.string().describe("Project ID, slug, or name") },
+  },
+  async ({ id }) => {
+    const project = getProject(id)
+    if (!project) return err(`Project not found: ${id}`)
+    return ok(project)
+  }
+)
+
+// ── prompts_project_delete ────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_project_delete",
+  {
+    description: "Delete a project. Prompts in the project become global (project_id set to null).",
+    inputSchema: { id: z.string().describe("Project ID, slug, or name") },
+  },
+  async ({ id }) => {
+    try {
+      deleteProject(id)
+      return ok({ deleted: true, id })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
 )
 
 // ── Start ─────────────────────────────────────────────────────────────────────

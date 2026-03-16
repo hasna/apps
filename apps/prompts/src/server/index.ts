@@ -2,6 +2,9 @@
 import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
+import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
+import { resolveProject } from "../db/database.js"
+import { getDatabase } from "../db/database.js"
 import { searchPrompts, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
@@ -59,7 +62,14 @@ export default {
         const source = url.searchParams.get("source") as "manual" | "ai-session" | "imported" | undefined ?? undefined
         const limit = parseInt(url.searchParams.get("limit") ?? "100")
         const offset = parseInt(url.searchParams.get("offset") ?? "0")
-        return json(listPrompts({ collection, tags, is_template, source, limit, offset }))
+        const projectParam = url.searchParams.get("project") ?? undefined
+        let project_id: string | undefined
+        if (projectParam) {
+          const pid = resolveProject(getDatabase(), projectParam)
+          if (!pid) return notFound(`Project not found: ${projectParam}`)
+          project_id = pid
+        }
+        return json(listPrompts({ collection, tags, is_template, source, limit, offset, project_id }))
       }
 
       // ── POST /api/prompts ───────────────────────────────────────────────────
@@ -194,6 +204,50 @@ export default {
       if (path === "/api/export" && method === "GET") {
         const collection = url.searchParams.get("collection") ?? undefined
         return json(exportToJson(collection))
+      }
+
+      // ── GET /api/projects ───────────────────────────────────────────────────
+      if (path === "/api/projects" && method === "GET") {
+        return json(listProjects())
+      }
+
+      // ── POST /api/projects ──────────────────────────────────────────────────
+      if (path === "/api/projects" && method === "POST") {
+        const { name, description, path: projPath } = await parseBody<{ name: string; description?: string; path?: string }>(req)
+        if (!name) return badRequest("name is required")
+        return json(createProject({ name, description, path: projPath }), 201)
+      }
+
+      // ── GET/DELETE /api/projects/:id ─────────────────────────────────────────
+      const projectMatch = path.match(/^\/api\/projects\/([^/]+)$/)
+      if (projectMatch) {
+        const projId = projectMatch[1]!
+
+        if (method === "GET") {
+          const project = getProject(projId)
+          if (!project) return notFound(`Project not found: ${projId}`)
+          return json(project)
+        }
+
+        if (method === "DELETE") {
+          try {
+            deleteProject(projId)
+            return json({ deleted: true, id: projId })
+          } catch (e) {
+            return notFound(e instanceof Error ? e.message : String(e))
+          }
+        }
+      }
+
+      // ── GET /api/projects/:id/prompts ────────────────────────────────────────
+      const projectPromptsMatch = path.match(/^\/api\/projects\/([^/]+)\/prompts$/)
+      if (projectPromptsMatch && method === "GET") {
+        const projId = projectPromptsMatch[1]!
+        const project = getProject(projId)
+        if (!project) return notFound(`Project not found: ${projId}`)
+        const limit = parseInt(url.searchParams.get("limit") ?? "100")
+        const offset = parseInt(url.searchParams.get("offset") ?? "0")
+        return json(listPrompts({ project_id: project.id, limit, offset }))
       }
 
       // ── GET /health ─────────────────────────────────────────────────────────

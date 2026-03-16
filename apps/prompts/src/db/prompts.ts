@@ -26,6 +26,7 @@ function rowToPrompt(row: Record<string, unknown>): Prompt {
     tags: JSON.parse((row["tags"] as string) || "[]") as string[],
     variables: JSON.parse((row["variables"] as string) || "[]") as TemplateVariable[],
     pinned: Boolean(row["pinned"]),
+    project_id: (row["project_id"] as string | null) ?? null,
     is_template: Boolean(row["is_template"]),
     source: row["source"] as PromptSource,
     version: row["version"] as number,
@@ -55,6 +56,7 @@ export function createPrompt(input: CreatePromptInput): Prompt {
   ensureCollection(collection)
   const tags = JSON.stringify(input.tags || [])
   const source = input.source || "manual"
+  const project_id = input.project_id ?? null
 
   // Auto-detect template variables
   const vars = extractVariables(input.body)
@@ -64,9 +66,9 @@ export function createPrompt(input: CreatePromptInput): Prompt {
   const is_template = vars.length > 0 ? 1 : 0
 
   db.run(
-    `INSERT INTO prompts (id, name, slug, title, body, description, collection, tags, variables, is_template, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, name, slug, input.title, input.body, input.description ?? null, collection, tags, variables, is_template, source]
+    `INSERT INTO prompts (id, name, slug, title, body, description, collection, tags, variables, is_template, source, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, name, slug, input.title, input.body, input.description ?? null, collection, tags, variables, is_template, source, project_id]
   )
 
   // Save initial version
@@ -120,12 +122,21 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
     }
   }
 
+  let orderBy = "pinned DESC, use_count DESC, updated_at DESC"
+
+  if (filter.project_id !== undefined && filter.project_id !== null) {
+    // Show project prompts + global prompts, project prompts first
+    conditions.push("(project_id = ? OR project_id IS NULL)")
+    params.push(filter.project_id)
+    orderBy = `(CASE WHEN project_id = '${filter.project_id}' THEN 0 ELSE 1 END), pinned DESC, use_count DESC, updated_at DESC`
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
   const limit = filter.limit ?? 100
   const offset = filter.offset ?? 0
 
   const rows = db
-    .query(`SELECT * FROM prompts ${where} ORDER BY pinned DESC, use_count DESC, updated_at DESC LIMIT ? OFFSET ?`)
+    .query(`SELECT * FROM prompts ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as Array<Record<string, unknown>>
 
   return rows.map(rowToPrompt)

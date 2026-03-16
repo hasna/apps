@@ -5,6 +5,8 @@ import { createRequire } from "module"
 import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, movePrompt } from "../db/collections.js"
+import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
+import { resolveProject, getDatabase } from "../db/database.js"
 import { searchPrompts } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
@@ -21,9 +23,17 @@ const program = new Command()
   .version(pkg.version as string)
   .description("Reusable prompt library — save, search, render prompts from any AI session")
   .option("--json", "Output as JSON")
+  .option("--project <name>", "Active project (name, slug, or ID) for scoped operations")
 
 function isJson(): boolean {
   return Boolean(program.opts()["json"])
+}
+
+function getActiveProjectId(): string | null {
+  const projectName = (program.opts()["project"] as string | undefined) ?? process.env["PROMPTS_PROJECT"]
+  if (!projectName) return null
+  const db = getDatabase()
+  return resolveProject(db, projectName)
 }
 
 function output(data: unknown): void {
@@ -78,6 +88,7 @@ program
       }
       if (!body) handleError("No body provided. Use --body, --file, or pipe via stdin.")
 
+      const project_id = getActiveProjectId()
       const { prompt, created, duplicate_warning } = upsertPrompt({
         title,
         body,
@@ -87,6 +98,7 @@ program
         tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : [],
         source: (opts["source"] as "manual" | "ai-session" | "imported") || "manual",
         changed_by: opts["agent"],
+        project_id,
       }, Boolean(opts["force"]))
       if (duplicate_warning && !isJson()) {
         console.warn(chalk.yellow(`Warning: ${duplicate_warning}`))
@@ -151,11 +163,13 @@ program
   .option("-n, --limit <n>", "Max results", "50")
   .action((opts: Record<string, string | boolean>) => {
     try {
+      const project_id = getActiveProjectId()
       let prompts = listPrompts({
         collection: opts["collection"] as string | undefined,
         tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
         is_template: opts["templates"] ? true : undefined,
         limit: parseInt(opts["limit"] as string) || 50,
+        ...(project_id !== null ? { project_id } : {}),
       })
       if (opts["recent"]) {
         prompts = prompts
@@ -184,10 +198,12 @@ program
   .option("-n, --limit <n>", "Max results", "20")
   .action((query: string, opts: Record<string, string>) => {
     try {
+      const project_id = getActiveProjectId()
       const results = searchPrompts(query, {
         collection: opts["collection"],
         tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
         limit: parseInt(opts["limit"] ?? "20") || 20,
+        ...(project_id !== null ? { project_id } : {}),
       })
       if (isJson()) {
         output(results)
@@ -621,6 +637,76 @@ program
     } catch (e) {
       handleError(e)
     }
+  })
+
+// ── project ───────────────────────────────────────────────────────────────────
+const projectCmd = program.command("project").description("Manage projects")
+
+projectCmd
+  .command("create <name>")
+  .description("Create a new project")
+  .option("-d, --description <desc>", "Short description")
+  .option("--path <path>", "Filesystem path this project maps to")
+  .action((name: string, opts: Record<string, string>) => {
+    try {
+      const project = createProject({ name, description: opts["description"], path: opts["path"] })
+      if (isJson()) output(project)
+      else {
+        console.log(`${chalk.green("Created")} project ${chalk.bold(project.name)} — ${chalk.gray(project.slug)}`)
+        if (project.description) console.log(chalk.gray(`  ${project.description}`))
+      }
+    } catch (e) { handleError(e) }
+  })
+
+projectCmd
+  .command("list")
+  .description("List all projects")
+  .action(() => {
+    try {
+      const projects = listProjects()
+      if (isJson()) { output(projects); return }
+      if (projects.length === 0) { console.log(chalk.gray("No projects.")); return }
+      for (const p of projects) {
+        console.log(`${chalk.bold(p.name)}  ${chalk.gray(p.slug)}  ${chalk.cyan(`${p.prompt_count} prompt(s)`)}`)
+        if (p.description) console.log(chalk.gray(`  ${p.description}`))
+      }
+    } catch (e) { handleError(e) }
+  })
+
+projectCmd
+  .command("get <id>")
+  .description("Get project details")
+  .action((id: string) => {
+    try {
+      const project = getProject(id)
+      if (!project) handleError(`Project not found: ${id}`)
+      output(isJson() ? project : `${chalk.bold(project!.name)}  ${chalk.gray(project!.slug)}  ${chalk.cyan(`${project!.prompt_count} prompt(s)`)}`)
+    } catch (e) { handleError(e) }
+  })
+
+projectCmd
+  .command("delete <id>")
+  .description("Delete a project (prompts become global)")
+  .option("-y, --yes", "Skip confirmation")
+  .action(async (id: string, opts: { yes?: boolean }) => {
+    try {
+      const project = getProject(id)
+      if (!project) handleError(`Project not found: ${id}`)
+      if (!opts.yes && !isJson()) {
+        const { createInterface } = await import("readline")
+        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        await new Promise<void>((resolve) => {
+          rl.question(chalk.yellow(`Delete project "${project!.name}"? Prompts will become global. [y/N] `), (ans) => {
+            rl.close()
+            if (ans.toLowerCase() !== "y") { console.log("Cancelled."); process.exit(0) }
+            resolve()
+          })
+        })
+      }
+      deleteProject(id)
+      if (isJson()) output({ deleted: true, id: project!.id })
+      else console.log(chalk.red(`Deleted project ${project!.name}`))
+    } catch (e) { handleError(e) }
   })
 
 program.parse()

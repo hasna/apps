@@ -15,6 +15,7 @@ function rowToSearchResult(row: Record<string, unknown>, snippet?: string): Sear
       tags: JSON.parse((row["tags"] as string) || "[]") as string[],
       variables: JSON.parse((row["variables"] as string) || "[]") as [],
       pinned: Boolean(row["pinned"]),
+      project_id: (row["project_id"] as string | null) ?? null,
       is_template: Boolean(row["is_template"]),
       source: row["source"] as "manual" | "ai-session" | "imported",
       version: row["version"] as number,
@@ -71,6 +72,10 @@ export function searchPrompts(
       const tagConds = filter.tags.map(() => "p.tags LIKE ?")
       conditions.push(`(${tagConds.join(" OR ")})`)
       for (const tag of filter.tags) params.push(`%"${tag}"%`)
+    }
+    if (filter.project_id !== undefined && filter.project_id !== null) {
+      conditions.push("(p.project_id = ? OR p.project_id IS NULL)")
+      params.push(filter.project_id)
     }
 
     const where = conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : ""

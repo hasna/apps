@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react"
 import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Search, Plus, BookOpen, Layers, BarChart2, Copy, Check, Tag, Edit2, Trash2, Play } from "lucide-react"
+import { Search, Plus, BookOpen, Layers, BarChart2, Copy, Check, Tag, Edit2, Trash2, Play, FolderOpen } from "lucide-react"
 import { api } from "./api"
-import type { Prompt, Collection } from "./api"
+import type { Prompt, Collection, Project } from "./api"
 import "./App.css"
 
 const queryClient = new QueryClient()
@@ -20,6 +20,7 @@ type View = "prompts" | "templates" | "stats"
 function Dashboard() {
   const [view, setView] = useState<View>("prompts")
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null)
+  const [selectedProject, setSelectedProject] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null)
   const [showCreate, setShowCreate] = useState(false)
@@ -28,6 +29,11 @@ function Dashboard() {
   const { data: collections = [] } = useQuery({
     queryKey: ["collections"],
     queryFn: () => api.listCollections(),
+  })
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => api.listProjects(),
   })
 
   // Keyboard shortcuts
@@ -50,7 +56,10 @@ function Dashboard() {
         setView={setView}
         collections={collections}
         selectedCollection={selectedCollection}
-        setSelectedCollection={setSelectedCollection}
+        setSelectedCollection={(c) => { setSelectedCollection(c); setSelectedProject(null) }}
+        projects={projects}
+        selectedProject={selectedProject}
+        setSelectedProject={(p) => { setSelectedProject(p); setSelectedCollection(null) }}
       />
       <main className="main">
         <Header
@@ -67,6 +76,7 @@ function Dashboard() {
             view={view}
             search={search}
             collection={selectedCollection}
+            project={selectedProject}
             onSelect={setSelectedPrompt}
             selected={selectedPrompt}
           />
@@ -84,12 +94,15 @@ function Dashboard() {
   )
 }
 
-function Sidebar({ view, setView, collections, selectedCollection, setSelectedCollection }: {
+function Sidebar({ view, setView, collections, selectedCollection, setSelectedCollection, projects, selectedProject, setSelectedProject }: {
   view: View
   setView: (v: View) => void
   collections: Collection[]
   selectedCollection: string | null
   setSelectedCollection: (c: string | null) => void
+  projects: Project[]
+  selectedProject: string | null
+  setSelectedProject: (p: string | null) => void
 }) {
   return (
     <aside className="sidebar">
@@ -98,16 +111,32 @@ function Sidebar({ view, setView, collections, selectedCollection, setSelectedCo
         <span>open-prompts</span>
       </div>
       <nav className="sidebar-nav">
-        <button className={`nav-item ${view === "prompts" ? "active" : ""}`} onClick={() => { setView("prompts"); setSelectedCollection(null) }}>
+        <button className={`nav-item ${view === "prompts" ? "active" : ""}`} onClick={() => { setView("prompts"); setSelectedCollection(null); setSelectedProject(null) }}>
           <BookOpen size={16} /> All Prompts
         </button>
-        <button className={`nav-item ${view === "templates" ? "active" : ""}`} onClick={() => { setView("templates"); setSelectedCollection(null) }}>
+        <button className={`nav-item ${view === "templates" ? "active" : ""}`} onClick={() => { setView("templates"); setSelectedCollection(null); setSelectedProject(null) }}>
           <Layers size={16} /> Templates
         </button>
         <button className={`nav-item ${view === "stats" ? "active" : ""}`} onClick={() => setView("stats")}>
           <BarChart2 size={16} /> Stats
         </button>
       </nav>
+      {projects.length > 0 && (
+        <div className="sidebar-section">
+          <div className="sidebar-section-title">Projects</div>
+          {projects.map((p) => (
+            <button
+              key={p.id}
+              className={`nav-item collection-item ${selectedProject === p.id ? "active" : ""}`}
+              onClick={() => { setSelectedProject(p.id === selectedProject ? null : p.id); setView("prompts") }}
+            >
+              <FolderOpen size={14} />
+              <span>{p.name}</span>
+              <span className="collection-count">{p.prompt_count}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="sidebar-section">
         <div className="sidebar-section-title">Collections</div>
         {collections.map((c) => (
@@ -153,23 +182,28 @@ function Header({ search, setSearch, onNew, view, inputRef }: {
   )
 }
 
-function PromptList({ view, search, collection, onSelect, selected }: {
+function PromptList({ view, search, collection, project, onSelect, selected }: {
   view: View
   search: string
   collection: string | null
+  project: string | null
   onSelect: (p: Prompt) => void
   selected: Prompt | null
 }) {
   const { data: searchResults, isLoading: searching } = useQuery({
-    queryKey: ["search", search, collection],
-    queryFn: () => api.search(search, collection ? { collection } : undefined),
+    queryKey: ["search", search, collection, project],
+    queryFn: () => api.search(search, {
+      ...(collection ? { collection } : {}),
+      ...(project ? { project } : {}),
+    }),
     enabled: search.length > 0,
   })
 
   const { data: prompts = [], isLoading } = useQuery({
-    queryKey: ["prompts", collection, view],
+    queryKey: ["prompts", collection, project, view],
     queryFn: () => api.listPrompts({
       ...(collection ? { collection } : {}),
+      ...(project ? { project } : {}),
       ...(view === "templates" ? { templates: "1" } : {}),
       limit: "200",
     }),
@@ -209,6 +243,7 @@ function PromptCard({ prompt, selected, onSelect }: { prompt: Prompt; selected: 
           <span className="prompt-id">{prompt.id}</span>
           {prompt.is_template && <span className="badge template">template</span>}
           {(prompt as Prompt & { pinned?: boolean }).pinned && <span title="Pinned">📌</span>}
+          {prompt.project_id && <span className="badge project"><FolderOpen size={10} />project</span>}
           <span className="badge collection">{prompt.collection}</span>
         </div>
         <div className="prompt-title">{prompt.title}</div>

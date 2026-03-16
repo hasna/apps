@@ -11,11 +11,22 @@ export interface Prompt {
   is_template: boolean
   source: PromptSource
   pinned: boolean
+  project_id: string | null
   version: number
   use_count: number
   last_used_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  path: string | null
+  prompt_count: number
+  created_at: string
 }
 
 export interface TemplateVariable {
@@ -62,6 +73,7 @@ export interface CreatePromptInput {
   tags?: string[]
   source?: PromptSource
   changed_by?: string
+  project_id?: string | null
 }
 
 export interface UpdatePromptInput {
@@ -81,6 +93,7 @@ export interface ListPromptsFilter {
   q?: string
   limit?: number
   offset?: number
+  project_id?: string | null
 }
 
 export interface SearchResult {
@@ -130,5 +143,12 @@ export class TemplateRenderError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "TemplateRenderError"
+  }
+}
+
+export class ProjectNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Project not found: ${id}`)
+    this.name = "ProjectNotFoundError"
   }
 }

@@ -12,11 +12,22 @@ export interface Prompt {
   variables: Array<{ name: string; default?: string; required: boolean }>
   is_template: boolean
   source: string
+  project_id: string | null
   version: number
   use_count: number
   last_used_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  path: string | null
+  prompt_count: number
+  created_at: string
 }
 
 export interface Collection {
@@ -89,6 +100,12 @@ export const api = {
     return request<Array<{ prompt: Prompt; score: number; snippet?: string }>>(`/api/search?${qs}`)
   },
   listCollections: () => request<Collection[]>("/api/collections"),
+  listProjects: () => request<Project[]>("/api/projects"),
+  createProject: (data: { name: string; description?: string; path?: string }) =>
+    request<Project>("/api/projects", { method: "POST", body: JSON.stringify(data) }),
+  deleteProject: (id: string) =>
+    request<{ deleted: boolean }>(`/api/projects/${id}`, { method: "DELETE" }),
+  getProjectPrompts: (id: string) => request<Prompt[]>(`/api/projects/${id}/prompts`),
   getStats: () => request<Stats>("/api/stats"),
   exportPrompts: (collection?: string) => {
     const qs = collection ? `?collection=${collection}` : ""

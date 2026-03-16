@@ -137,6 +137,21 @@ function runMigrations(db: Database): void {
       sql: `ALTER TABLE prompts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;`,
     },
     {
+      name: "004_projects",
+      sql: `
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          slug TEXT NOT NULL UNIQUE,
+          description TEXT,
+          path TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        ALTER TABLE prompts ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_prompts_project_id ON prompts(project_id);
+      `,
+    },
+    {
       name: "002_fts5",
       sql: `
         CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(
@@ -175,6 +190,34 @@ function runMigrations(db: Database): void {
     db.exec(migration.sql)
     db.run("INSERT INTO _migrations (name) VALUES (?)", [migration.name])
   }
+}
+
+export function resolveProject(db: Database, idOrSlug: string): string | null {
+  // 1. Exact ID
+  const byId = db.query("SELECT id FROM projects WHERE id = ?").get(idOrSlug) as { id: string } | null
+  if (byId) return byId.id
+
+  // 2. Exact slug
+  const bySlug = db.query("SELECT id FROM projects WHERE slug = ?").get(idOrSlug) as { id: string } | null
+  if (bySlug) return bySlug.id
+
+  // 3. Exact name (case-insensitive)
+  const byName = db.query("SELECT id FROM projects WHERE lower(name) = ?").get(idOrSlug.toLowerCase()) as { id: string } | null
+  if (byName) return byName.id
+
+  // 4. Partial ID prefix
+  const byPrefix = db
+    .query("SELECT id FROM projects WHERE id LIKE ? LIMIT 2")
+    .all(`${idOrSlug}%`) as Array<{ id: string }>
+  if (byPrefix.length === 1 && byPrefix[0]) return byPrefix[0].id
+
+  // 5. Slug prefix
+  const bySlugPrefix = db
+    .query("SELECT id FROM projects WHERE slug LIKE ? LIMIT 2")
+    .all(`${idOrSlug}%`) as Array<{ id: string }>
+  if (bySlugPrefix.length === 1 && bySlugPrefix[0]) return bySlugPrefix[0].id
+
+  return null
 }
 
 export function hasFts(db: Database): boolean {

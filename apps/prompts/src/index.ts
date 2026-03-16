@@ -4,6 +4,7 @@ export { listVersions, getVersion, restoreVersion } from "./db/versions.js"
 export { listCollections, getCollection, ensureCollection, movePrompt } from "./db/collections.js"
 export { registerAgent, listAgents } from "./db/agents.js"
 export { getDatabase, getDbPath } from "./db/database.js"
+export { createProject, getProject, listProjects, deleteProject } from "./db/projects.js"
 
 // Search
 export { searchPrompts, findSimilar } from "./lib/search.js"
@@ -26,6 +27,7 @@ export type {
   PromptVersion,
   Collection,
   Agent,
+  Project,
   TemplateVariable,
   PromptSource,
   CreatePromptInput,
@@ -41,4 +43,5 @@ export {
   VersionConflictError,
   DuplicateSlugError,
   TemplateRenderError,
+  ProjectNotFoundError,
 } from "./types/index.js"
