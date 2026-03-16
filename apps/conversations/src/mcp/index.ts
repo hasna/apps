@@ -34,7 +34,7 @@ server.registerTool("send_message", {
     content: z.string(),
     from: z.string().optional(),
     priority: z.string().optional(),
-    blocking: z.boolean().optional(),
+    blocking: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { from: fromParam, to, content, priority, blocking } = args;
@@ -61,8 +61,8 @@ server.registerTool("read_messages", {
     to: z.string().optional(),
     space: z.string().optional(),
     since: z.string().optional(),
-    limit: z.number().optional(),
-    unread_only: z.boolean().optional(),
+    limit: z.coerce.number().optional(),
+    unread_only: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const messages = readMessages(args);
@@ -89,7 +89,7 @@ server.registerTool("list_sessions", {
 server.registerTool("reply", {
   description: "Reply to a message by ID.",
   inputSchema: {
-    message_id: z.number(),
+    message_id: z.coerce.number(),
     content: z.string(),
     from: z.string().optional(),
   },
@@ -127,8 +127,8 @@ server.registerTool("mark_read", {
   description: "Mark messages read by IDs or all.",
   inputSchema: {
     from: z.string().optional(),
-    ids: z.array(z.number()).optional(),
-    all: z.boolean().optional(),
+    ids: z.array(z.coerce.number()).optional(),
+    all: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { from: fromParam, ids, all } = args;
@@ -158,7 +158,7 @@ server.registerTool("search_messages", {
     space: z.string().optional(),
     from: z.string().optional(),
     to: z.string().optional(),
-    limit: z.number().optional(),
+    limit: z.coerce.number().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { query, space, from, to, limit } = args;
@@ -226,7 +226,7 @@ server.registerTool("list_spaces", {
   inputSchema: {
     project_id: z.string().optional(),
     parent_id: z.string().optional(),
-    include_archived: z.boolean().optional(),
+    include_archived: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { project_id, parent_id, include_archived } = args;
@@ -253,7 +253,7 @@ server.registerTool("send_to_space", {
     content: z.string(),
     from: z.string().optional(),
     priority: z.string().optional(),
-    blocking: z.boolean().optional(),
+    blocking: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { from: fromParam, space, content, priority, blocking } = args;
@@ -287,7 +287,7 @@ server.registerTool("read_space", {
   inputSchema: {
     space: z.string(),
     since: z.string().optional(),
-    limit: z.number().optional(),
+    limit: z.coerce.number().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { space, since, limit } = args;
@@ -620,7 +620,7 @@ server.registerTool("delete_project", {
 server.registerTool("delete_message", {
   description: "Delete a message (sender only).",
   inputSchema: {
-    id: z.number(),
+    id: z.coerce.number(),
     from: z.string().optional(),
   },
 }, async (args: Record<string, any>) => {
@@ -643,7 +643,7 @@ server.registerTool("delete_message", {
 server.registerTool("edit_message", {
   description: "Edit message content (sender only).",
   inputSchema: {
-    id: z.number(),
+    id: z.coerce.number(),
     content: z.string(),
     from: z.string().optional(),
   },
@@ -667,7 +667,7 @@ server.registerTool("edit_message", {
 server.registerTool("pin_message", {
   description: "Pin a message.",
   inputSchema: {
-    id: z.number(),
+    id: z.coerce.number(),
   },
 }, async ({ id }) => {
   const msg = pinMessage(id);
@@ -687,7 +687,7 @@ server.registerTool("pin_message", {
 server.registerTool("unpin_message", {
   description: "Unpin a message.",
   inputSchema: {
-    id: z.number(),
+    id: z.coerce.number(),
   },
 }, async ({ id }) => {
   const msg = unpinMessage(id);
@@ -709,7 +709,7 @@ server.registerTool("get_pinned_messages", {
   inputSchema: {
     space: z.string().optional(),
     session_id: z.string().optional(),
-    limit: z.number().optional(),
+    limit: z.coerce.number().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { space, session_id, limit } = args;
@@ -741,7 +741,7 @@ server.registerTool("heartbeat", {
 server.registerTool("list_agents", {
   description: "List agents with presence status.",
   inputSchema: {
-    online_only: z.boolean().optional(),
+    online_only: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const { online_only } = args;
