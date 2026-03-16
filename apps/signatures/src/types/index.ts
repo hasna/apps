@@ -107,6 +107,9 @@ export interface SigningSession {
   source: SessionSource;
   connector_name?: string;
   metadata?: Record<string, unknown>;
+  attachment_id?: string;
+  share_link?: string;
+  share_expires_at?: string;
   created_at: string;
   updated_at: string;
 }

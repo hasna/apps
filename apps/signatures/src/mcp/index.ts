@@ -37,7 +37,7 @@ import {
   deleteFieldsForDocument,
 } from "../db/signature-fields.js";
 import { createPlacement, listPlacementsForDocument } from "../db/signature-placements.js";
-import { createSigningSession } from "../db/signing-sessions.js";
+import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
 import { getStats } from "../db/stats.js";
 import { searchDocuments } from "../lib/search.js";
 import { signPdf } from "../lib/pdf-signer.js";
@@ -45,6 +45,10 @@ import { detectSignatureFields } from "../lib/pdf-detector.js";
 import { generateTextSignature, generateDrawingSignature } from "../lib/signature-gen.js";
 import { storeDocument } from "../lib/files.js";
 import { updateDocument as updateDoc } from "../db/documents.js";
+import { signWithBrowseruse, registerSigningSession } from "../lib/connector-integration.js";
+import { shareDocument, receiveDocument } from "../lib/attachments-integration.js";
+import { getSetting, setSetting } from "../db/settings.js";
+import { isCerebrasConfigured } from "../lib/pdf-detector.js";
 
 const server = new Server(
   { name: "signatures", version: "0.1.0" },
@@ -234,6 +238,78 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "signatures_stats",
       description: "Get system statistics",
       inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "signatures_connector_sign",
+      description: "Initiate a connector-driven signing session (e.g. browseruse for online doc signing). Records the session in the DB with source=browseruse or connector.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          document_id: { type: "string", description: "Document ID or slug" },
+          connector_name: { type: "string", description: "Connector name, e.g. 'browseruse'" },
+          url: { type: "string", description: "URL of the external signing portal" },
+          signer_name: { type: "string" },
+          signer_email: { type: "string" },
+          metadata: { type: "object", description: "Extra metadata to persist with the session" },
+        },
+        required: ["document_id", "connector_name"],
+      },
+    },
+    {
+      name: "signatures_share_document",
+      description: "Upload a document via attachments and create a shareable signing session link",
+      inputSchema: {
+        type: "object",
+        properties: {
+          document_id: { type: "string" },
+          signer_name: { type: "string" },
+          signer_email: { type: "string" },
+          expiry: { type: "string", description: "Link expiry e.g. '7d', '24h'" },
+        },
+        required: ["document_id"],
+      },
+    },
+    {
+      name: "signatures_get_link",
+      description: "Get the share link for a signing session",
+      inputSchema: {
+        type: "object",
+        properties: { session_id: { type: "string" } },
+        required: ["session_id"],
+      },
+    },
+    {
+      name: "signatures_receive_signed",
+      description: "Download a signed document from an attachment and mark session complete",
+      inputSchema: {
+        type: "object",
+        properties: {
+          session_id: { type: "string" },
+          attachment_id: { type: "string" },
+        },
+        required: ["session_id", "attachment_id"],
+      },
+    },
+    {
+      name: "signatures_config_set",
+      description: "Set a configuration setting (e.g. cerebras_api_key, cerebras_model)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          key: { type: "string" },
+          value: { type: "string" },
+        },
+        required: ["key", "value"],
+      },
+    },
+    {
+      name: "signatures_config_get",
+      description: "Get a configuration setting",
+      inputSchema: {
+        type: "object",
+        properties: { key: { type: "string" } },
+        required: ["key"],
+      },
     },
   ],
 }));
@@ -499,6 +575,120 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "signatures_stats": {
         const stats = getStats();
         return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+      }
+
+      case "signatures_connector_sign": {
+        const a = args as Record<string, unknown>;
+        const connectorName = a["connector_name"] as string;
+        const url = a["url"] as string | undefined;
+
+        let session;
+        if (connectorName === "browseruse" && url) {
+          session = signWithBrowseruse(a["document_id"] as string, url, {
+            signer_name: a["signer_name"] as string | undefined,
+            signer_email: a["signer_email"] as string | undefined,
+            metadata: a["metadata"] as Record<string, unknown> | undefined,
+          });
+        } else {
+          session = registerSigningSession({
+            document_id: a["document_id"] as string,
+            connector_name: connectorName,
+            signer_name: a["signer_name"] as string | undefined,
+            signer_email: a["signer_email"] as string | undefined,
+            signing_url: url,
+            metadata: a["metadata"] as Record<string, unknown> | undefined,
+          });
+        }
+        return { content: [{ type: "text", text: JSON.stringify(session, null, 2) }] };
+      }
+
+      case "signatures_share_document": {
+        const a = args as Record<string, unknown>;
+        const doc = getDocumentByIdOrSlug(a["document_id"] as string);
+
+        const session = createSigningSession({
+          document_id: doc.id,
+          signer_name: a["signer_name"] as string | undefined,
+          signer_email: a["signer_email"] as string | undefined,
+          source: "local",
+        });
+
+        const shared = await shareDocument(doc.file_path, doc.file_name, {
+          expiry: a["expiry"] as string | undefined,
+        });
+
+        const updated = updateSessionAttachment(session.id, {
+          attachment_id: shared.attachmentId,
+          share_link: shared.shareLink,
+          share_expires_at: shared.expiresAt,
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              session_id: updated.id,
+              share_link: updated.share_link,
+              expires_at: updated.share_expires_at,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "signatures_get_link": {
+        const a = args as Record<string, unknown>;
+        const session = getSessionById(a["session_id"] as string);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              session_id: session.id,
+              share_link: session.share_link ?? null,
+              expires_at: session.share_expires_at ?? null,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "signatures_receive_signed": {
+        const a = args as Record<string, unknown>;
+        const session = getSessionById(a["session_id"] as string);
+        const doc = getDocumentByIdOrSlug(session.document_id);
+
+        const signedDir = doc.file_path.replace(/([^/]+)\.pdf$/i, "signed-$1.pdf");
+        await receiveDocument(a["attachment_id"] as string, signedDir);
+
+        updateSessionStatus(session.id, "completed");
+        updateDoc(doc.id, { status: "completed" });
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, session_id: session.id }, null, 2),
+          }],
+        };
+      }
+
+      case "signatures_config_set": {
+        const a = args as Record<string, unknown>;
+        setSetting(a["key"] as string, a["value"] as string);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, key: a["key"], value: a["value"] }, null, 2),
+          }],
+        };
+      }
+
+      case "signatures_config_get": {
+        const a = args as Record<string, unknown>;
+        const value = getSetting(a["key"] as string);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ key: a["key"], value }, null, 2),
+          }],
+        };
       }
 
       default:

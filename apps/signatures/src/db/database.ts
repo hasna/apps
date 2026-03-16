@@ -243,4 +243,26 @@ const MIGRATIONS: [string, string][] = [
     END;
     `,
   ],
+  [
+    "003_settings",
+    `
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
+  ],
+  [
+    "004a_signing_session_attachment_id",
+    `ALTER TABLE signing_sessions ADD COLUMN attachment_id TEXT`,
+  ],
+  [
+    "004b_signing_session_share_link",
+    `ALTER TABLE signing_sessions ADD COLUMN share_link TEXT`,
+  ],
+  [
+    "004c_signing_session_share_expires_at",
+    `ALTER TABLE signing_sessions ADD COLUMN share_expires_at TEXT`,
+  ],
 ];

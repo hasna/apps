@@ -20,13 +20,16 @@ import {
   deleteFieldsForDocument,
 } from "../db/signature-fields.js";
 import { createPlacement, listPlacementsForDocument } from "../db/signature-placements.js";
-import { createSigningSession } from "../db/signing-sessions.js";
+import { createSigningSession, updateSessionAttachment, updateSessionStatus, getSessionById } from "../db/signing-sessions.js";
 import { getStats } from "../db/stats.js";
 import { search } from "../lib/search.js";
 import { signPdf } from "../lib/pdf-signer.js";
 import { detectSignatureFields } from "../lib/pdf-detector.js";
 import { generateTextSignature, generateDrawingSignature } from "../lib/signature-gen.js";
 import { storeDocument } from "../lib/files.js";
+import { signWithBrowseruse, registerSigningSession } from "../lib/connector-integration.js";
+import { shareDocument, receiveDocument } from "../lib/attachments-integration.js";
+import { getSetting, setSetting, getAllSettings } from "../db/settings.js";
 
 const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
 
@@ -184,6 +187,34 @@ Bun.serve({
         });
       }
 
+      const docConnectorSignMatch = path.match(/^\/api\/documents\/([^/]+)\/connector-sign$/);
+      if (docConnectorSignMatch && method === "POST") {
+        const id = docConnectorSignMatch[1]!;
+        const body = await parseBody(req) as Record<string, unknown>;
+        const connectorName = body["connector_name"] as string | undefined;
+        if (!connectorName) return error("connector_name is required");
+        const url = body["url"] as string | undefined;
+
+        let session;
+        if (connectorName === "browseruse" && url) {
+          session = signWithBrowseruse(id, url, {
+            signer_name: body["signer_name"] as string | undefined,
+            signer_email: body["signer_email"] as string | undefined,
+            metadata: body["metadata"] as Record<string, unknown> | undefined,
+          });
+        } else {
+          session = registerSigningSession({
+            document_id: id,
+            connector_name: connectorName,
+            signer_name: body["signer_name"] as string | undefined,
+            signer_email: body["signer_email"] as string | undefined,
+            signing_url: url,
+            metadata: body["metadata"] as Record<string, unknown> | undefined,
+          });
+        }
+        return json(session, 201);
+      }
+
       const docDetectMatch = path.match(/^\/api\/documents\/([^/]+)\/detect$/);
       if (docDetectMatch && method === "POST") {
         const id = docDetectMatch[1]!;
@@ -283,6 +314,82 @@ Bun.serve({
         if (method === "POST") {
           const body = await parseBody(req) as Record<string, unknown>;
           return json(createTag({ name: body["name"] as string, color: body["color"] as string | undefined }), 201);
+        }
+      }
+
+      // Share document
+      const docShareMatch = path.match(/^\/api\/documents\/([^/]+)\/share$/);
+      if (docShareMatch && method === "POST") {
+        const id = docShareMatch[1]!;
+        const body = await parseBody(req) as Record<string, unknown>;
+        const doc = getDocumentByIdOrSlug(id);
+
+        const session = createSigningSession({
+          document_id: doc.id,
+          signer_name: body["signer_name"] as string | undefined,
+          signer_email: body["signer_email"] as string | undefined,
+          source: "local",
+        });
+
+        const shared = await shareDocument(doc.file_path, doc.file_name, {
+          expiry: body["expiry"] as string | undefined,
+        });
+
+        updateSessionAttachment(session.id, {
+          attachment_id: shared.attachmentId,
+          share_link: shared.shareLink,
+          share_expires_at: shared.expiresAt,
+        });
+
+        return json({ session_id: session.id, share_link: shared.shareLink }, 201);
+      }
+
+      // Session link
+      const sessionLinkMatch = path.match(/^\/api\/sessions\/([^/]+)\/link$/);
+      if (sessionLinkMatch && method === "GET") {
+        const id = sessionLinkMatch[1]!;
+        const session = getSessionById(id);
+        return json({ session_id: session.id, share_link: session.share_link ?? null, expires_at: session.share_expires_at ?? null });
+      }
+
+      // Session receive
+      const sessionReceiveMatch = path.match(/^\/api\/sessions\/([^/]+)\/receive$/);
+      if (sessionReceiveMatch && method === "POST") {
+        const id = sessionReceiveMatch[1]!;
+        const body = await parseBody(req) as Record<string, unknown>;
+        const attachmentId = body["attachment_id"] as string;
+        if (!attachmentId) return error("attachment_id is required");
+
+        const session = getSessionById(id);
+        const doc = getDocumentByIdOrSlug(session.document_id);
+
+        const signedPath = doc.file_path.replace(/([^/]+)\.pdf$/i, "signed-$1.pdf");
+        await receiveDocument(attachmentId, signedPath);
+
+        updateSessionStatus(session.id, "completed");
+        updateDocument(doc.id, { status: "completed" });
+
+        return json({ success: true, session_id: session.id });
+      }
+
+      // Config
+      if (path === "/api/config") {
+        if (method === "GET") {
+          const all = getAllSettings();
+          // Mask sensitive keys
+          const masked: Record<string, string> = {};
+          for (const [k, v] of Object.entries(all)) {
+            masked[k] = k.toLowerCase().includes("key") || k.toLowerCase().includes("secret") ? "***" : v;
+          }
+          return json(masked);
+        }
+        if (method === "PUT") {
+          const body = await parseBody(req) as Record<string, unknown>;
+          const key = body["key"] as string;
+          const value = body["value"] as string;
+          if (!key || !value) return error("key and value are required");
+          setSetting(key, value);
+          return json({ success: true, key });
         }
       }
 

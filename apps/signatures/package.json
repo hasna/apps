@@ -17,13 +17,14 @@
     }
   },
   "scripts": {
-    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react && bun build src/mcp/index.ts --outdir dist/mcp --target bun && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun",
+    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external @hasna/attachments && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/attachments && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/attachments && bun build src/index.ts --outdir dist --target bun --external @hasna/attachments",
     "dev:serve": "bun run src/server/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hasna/attachments": "latest",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chalk": "^5.3.0",
     "commander": "^12.0.0",

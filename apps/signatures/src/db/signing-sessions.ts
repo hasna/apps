@@ -16,6 +16,9 @@ function rowToSession(row: Record<string, unknown>): SigningSession {
     metadata: row["metadata"]
       ? (JSON.parse(row["metadata"] as string) as Record<string, unknown>)
       : undefined,
+    attachment_id: row["attachment_id"] as string | undefined,
+    share_link: row["share_link"] as string | undefined,
+    share_expires_at: row["share_expires_at"] as string | undefined,
     created_at: row["created_at"] as string,
     updated_at: row["updated_at"] as string,
   };
@@ -82,6 +85,27 @@ export function listSessionsForDocument(documentId: string): SigningSession[] {
     )
     .all(documentId);
   return rows.map(rowToSession);
+}
+
+export function updateSessionAttachment(
+  id: string,
+  data: { attachment_id: string; share_link: string; share_expires_at?: string | null }
+): SigningSession {
+  const db = getDatabase();
+  const existing = db
+    .query<{ id: string }, [string]>(
+      "SELECT id FROM signing_sessions WHERE id = ?"
+    )
+    .get(id);
+  if (!existing) throw new NotFoundError("SigningSession", id);
+
+  db.query(
+    `UPDATE signing_sessions
+     SET attachment_id = ?, share_link = ?, share_expires_at = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(data.attachment_id, data.share_link, data.share_expires_at ?? null, id);
+
+  return getSessionById(id);
 }
 
 export function updateSessionStatus(id: string, status: SessionStatus): SigningSession {

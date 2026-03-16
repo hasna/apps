@@ -22,11 +22,13 @@ import {
 } from "../db/collections.js";
 import { listFieldsForDocument, deleteFieldsForDocument, createSignatureField } from "../db/signature-fields.js";
 import { createPlacement } from "../db/signature-placements.js";
-import { createSigningSession } from "../db/signing-sessions.js";
+import { createSigningSession, updateSessionAttachment, getSessionById } from "../db/signing-sessions.js";
 import { getStats } from "../db/stats.js";
 import { storeDocument } from "../lib/files.js";
 import { signPdf } from "../lib/pdf-signer.js";
-import { detectSignatureFields } from "../lib/pdf-detector.js";
+import { detectSignatureFields, detectSignatureFieldsOnPage, isCerebrasConfigured } from "../lib/pdf-detector.js";
+import { shareDocument } from "../lib/attachments-integration.js";
+import { getSetting, setSetting } from "../db/settings.js";
 import {
   generateTextSignature,
   generateDrawingSignature,
@@ -187,13 +189,22 @@ documentCmd
 
 documentCmd
   .command("detect <id-or-slug>")
-  .description("Detect signature fields in a document")
+  .description("Detect signature fields in a document (uses Cerebras AI if configured)")
+  .option("--page <n>", "Detect on specific page only")
   .option("--json", "Output as JSON")
   .action(async (idOrSlug: string, opts: Record<string, unknown>) => {
     try {
       const doc = getDocumentByIdOrSlug(idOrSlug);
       deleteFieldsForDocument(doc.id);
-      const detected = await detectSignatureFields(doc.file_path);
+
+      const pageOpt = opts["page"] ? parseInt(opts["page"] as string, 10) : undefined;
+      let detected;
+      if (pageOpt !== undefined) {
+        detected = await detectSignatureFieldsOnPage(doc.file_path, pageOpt);
+      } else {
+        detected = await detectSignatureFields(doc.file_path);
+      }
+
       const fields = [];
       for (const f of detected) {
         fields.push(createSignatureField({ ...f, document_id: doc.id }));
@@ -202,9 +213,58 @@ documentCmd
       if (opts["json"]) {
         console.log(JSON.stringify(fields, null, 2));
       } else {
-        console.log(chalk.green(`✓ Detected ${fields.length} signature field(s)`));
+        const mode = isCerebrasConfigured() ? chalk.cyan("Cerebras AI") : chalk.yellow("heuristic");
+        console.log(chalk.green(`✓ Detected ${fields.length} signature field(s)`) + ` [${mode}]`);
         for (const f of fields) {
           console.log(`  ${chalk.cyan(f.id)}  Page ${f.page}  (${f.x.toFixed(1)}%, ${f.y.toFixed(1)}%)  ${f.field_type}`);
+        }
+      }
+    } catch (err) {
+      console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+documentCmd
+  .command("share <id-or-slug>")
+  .description("Upload document to attachments and create a shareable signing link")
+  .option("--expiry <expiry>", "Link expiry e.g. 7d, 24h", "7d")
+  .option("--signer-name <name>", "Signer name")
+  .option("--signer-email <email>", "Signer email")
+  .option("--json", "Output as JSON")
+  .action(async (idOrSlug: string, opts: Record<string, unknown>) => {
+    try {
+      const doc = getDocumentByIdOrSlug(idOrSlug);
+
+      const session = createSigningSession({
+        document_id: doc.id,
+        signer_name: opts["signerName"] as string | undefined,
+        signer_email: opts["signerEmail"] as string | undefined,
+        source: "local",
+      });
+
+      const shared = await shareDocument(doc.file_path, doc.file_name, {
+        expiry: opts["expiry"] as string | undefined,
+      });
+
+      updateSessionAttachment(session.id, {
+        attachment_id: shared.attachmentId,
+        share_link: shared.shareLink,
+        share_expires_at: shared.expiresAt,
+      });
+
+      if (opts["json"]) {
+        console.log(JSON.stringify({
+          session_id: session.id,
+          share_link: shared.shareLink,
+          expires_at: shared.expiresAt,
+        }, null, 2));
+      } else {
+        console.log(chalk.green("✓ Document shared"));
+        console.log(`  Session: ${chalk.cyan(session.id)}`);
+        console.log(`  Link:    ${chalk.cyan(shared.shareLink)}`);
+        if (shared.expiresAt) {
+          console.log(`  Expires: ${shared.expiresAt}`);
         }
       }
     } catch (err) {
@@ -449,6 +509,46 @@ program
       console.log(`  Collections: ${chalk.cyan(stats.total_collections)}`);
       console.log(`  Tags:        ${chalk.cyan(stats.total_tags)}`);
       console.log(`  Placements:  ${chalk.cyan(stats.total_placements)}`);
+    } catch (err) {
+      console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+// ── config ────────────────────────────────────────────────────────────────────
+
+const configCmd = program.command("config").description("Configuration commands");
+
+configCmd
+  .command("set <key> <value>")
+  .description("Set a configuration value (e.g. cerebras_api_key, cerebras_model)")
+  .action((key: string, value: string) => {
+    try {
+      setSetting(key, value);
+      const masked = key.toLowerCase().includes("key") || key.toLowerCase().includes("secret")
+        ? "***"
+        : value;
+      console.log(chalk.green(`✓ Set ${key} = ${masked}`));
+    } catch (err) {
+      console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("get <key>")
+  .description("Get a configuration value")
+  .action((key: string) => {
+    try {
+      const value = getSetting(key);
+      if (value === null) {
+        console.log(chalk.yellow(`No value set for: ${key}`));
+      } else {
+        const display = key.toLowerCase().includes("key") || key.toLowerCase().includes("secret")
+          ? "***"
+          : value;
+        console.log(`${key} = ${display}`);
+      }
     } catch (err) {
       console.error(chalk.red("Error:"), err instanceof Error ? err.message : err);
       process.exit(1);
