@@ -1,5 +1,5 @@
 // DB layer
-export { createPrompt, getPrompt, requirePrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt } from "./db/prompts.js"
+export { createPrompt, getPrompt, listPromptsSlim, promptToSaveResult, requirePrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt } from "./db/prompts.js"
 export { listVersions, getVersion, restoreVersion } from "./db/versions.js"
 export { listCollections, getCollection, ensureCollection, movePrompt } from "./db/collections.js"
 export { registerAgent, listAgents } from "./db/agents.js"
@@ -7,7 +7,7 @@ export { getDatabase, getDbPath } from "./db/database.js"
 export { createProject, getProject, listProjects, deleteProject } from "./db/projects.js"
 
 // Search
-export { searchPrompts, findSimilar } from "./lib/search.js"
+export { searchPrompts, searchPromptsSlim, findSimilar } from "./lib/search.js"
 
 // Templates
 export { extractVariables, extractVariableInfo, renderTemplate, validateVars } from "./lib/template.js"
@@ -24,6 +24,9 @@ export { generateSlug, uniqueSlug, generatePromptId } from "./lib/ids.js"
 // Types
 export type {
   Prompt,
+  SlimPrompt,
+  SaveResult,
+  SlimSearchResult,
   PromptVersion,
   Collection,
   Agent,

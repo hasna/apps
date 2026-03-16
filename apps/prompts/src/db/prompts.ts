@@ -5,6 +5,8 @@ import { findDuplicates } from "../lib/duplicates.js"
 import { extractVariables } from "../lib/template.js"
 import type {
   Prompt,
+  SlimPrompt,
+  SaveResult,
   CreatePromptInput,
   UpdatePromptInput,
   ListPromptsFilter,
@@ -13,6 +15,42 @@ import type {
 } from "../types/index.js"
 import { PromptNotFoundError, VersionConflictError, DuplicateSlugError } from "../types/index.js"
 import { generateId } from "../lib/ids.js"
+
+function rowToSlimPrompt(row: Record<string, unknown>): SlimPrompt {
+  const variables = JSON.parse((row["variables"] as string) || "[]") as Array<{ name: string }>
+  return {
+    id: row["id"] as string,
+    slug: row["slug"] as string,
+    title: row["title"] as string,
+    description: (row["description"] as string | null) ?? null,
+    collection: row["collection"] as string,
+    tags: JSON.parse((row["tags"] as string) || "[]") as string[],
+    variable_names: variables.map((v) => v.name),
+    is_template: Boolean(row["is_template"]),
+    source: row["source"] as PromptSource,
+    pinned: Boolean(row["pinned"]),
+    next_prompt: (row["next_prompt"] as string | null) ?? null,
+    expires_at: (row["expires_at"] as string | null) ?? null,
+    project_id: (row["project_id"] as string | null) ?? null,
+    use_count: row["use_count"] as number,
+    last_used_at: (row["last_used_at"] as string | null) ?? null,
+    created_at: row["created_at"] as string,
+    updated_at: row["updated_at"] as string,
+  }
+}
+
+export function promptToSaveResult(prompt: Prompt, created: boolean, duplicate_warning?: string | null): SaveResult {
+  return {
+    id: prompt.id,
+    slug: prompt.slug,
+    title: prompt.title,
+    collection: prompt.collection,
+    is_template: prompt.is_template,
+    variable_names: prompt.variables.map((v) => v.name),
+    created,
+    duplicate_warning: duplicate_warning ?? null,
+  }
+}
 
 function rowToPrompt(row: Record<string, unknown>): Prompt {
   return {
@@ -134,7 +172,7 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
-  const limit = filter.limit ?? 100
+  const limit = filter.limit ?? 20
   const offset = filter.offset ?? 0
 
   const rows = db
@@ -142,6 +180,40 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
     .all(...params, limit, offset) as Array<Record<string, unknown>>
 
   return rows.map(rowToPrompt)
+}
+
+/** Slim version of listPrompts — no body, no full variables. Default for MCP listing. */
+export function listPromptsSlim(filter: ListPromptsFilter = {}): SlimPrompt[] {
+  const db = getDatabase()
+  const conditions: string[] = []
+  const params: (string | number)[] = []
+
+  if (filter.collection) { conditions.push("collection = ?"); params.push(filter.collection) }
+  if (filter.is_template !== undefined) { conditions.push("is_template = ?"); params.push(filter.is_template ? 1 : 0) }
+  if (filter.source) { conditions.push("source = ?"); params.push(filter.source) }
+  if (filter.tags && filter.tags.length > 0) {
+    const tagConds = filter.tags.map(() => "tags LIKE ?")
+    conditions.push(`(${tagConds.join(" OR ")})`)
+    for (const tag of filter.tags) params.push(`%"${tag}"%`)
+  }
+
+  let orderBy = "pinned DESC, use_count DESC, updated_at DESC"
+  if (filter.project_id) {
+    conditions.push("(project_id = ? OR project_id IS NULL)")
+    params.push(filter.project_id)
+    orderBy = `(CASE WHEN project_id = '${filter.project_id}' THEN 0 ELSE 1 END), pinned DESC, use_count DESC, updated_at DESC`
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
+  const limit = filter.limit ?? 20
+  const offset = filter.offset ?? 0
+
+  // Select only needed columns — no body
+  const rows = db
+    .query(`SELECT id, slug, name, title, description, collection, tags, variables, is_template, source, pinned, next_prompt, expires_at, project_id, use_count, last_used_at, created_at, updated_at FROM prompts ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as Array<Record<string, unknown>>
+
+  return rows.map(rowToSlimPrompt)
 }
 
 export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt {

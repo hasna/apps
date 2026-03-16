@@ -1,3 +1,28 @@
+/**
+ * Slim prompt — no body, no full variable details.
+ * Returned by list/search/stats/recent/stale/trending by default.
+ * Saves tokens — use prompts_use / prompts_get / prompts_body to get the actual body.
+ */
+export interface SlimPrompt {
+  id: string
+  slug: string
+  title: string
+  description: string | null
+  collection: string
+  tags: string[]
+  variable_names: string[]
+  is_template: boolean
+  source: PromptSource
+  pinned: boolean
+  next_prompt: string | null
+  expires_at: string | null
+  project_id: string | null
+  use_count: number
+  last_used_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Prompt {
   id: string
   name: string
@@ -103,6 +128,33 @@ export interface SearchResult {
   prompt: Prompt
   score: number
   snippet?: string
+}
+
+/** Slim search result — body replaced by snippet, no full prompt */
+export interface SlimSearchResult {
+  id: string
+  slug: string
+  title: string
+  description: string | null
+  collection: string
+  tags: string[]
+  is_template: boolean
+  variable_names: string[]
+  use_count: number
+  score: number
+  snippet?: string
+}
+
+/** Returned by save/update to avoid echoing back the full body */
+export interface SaveResult {
+  id: string
+  slug: string
+  title: string
+  collection: string
+  is_template: boolean
+  variable_names: string[]
+  created: boolean
+  duplicate_warning?: string | null
 }
 
 export interface RenderResult {

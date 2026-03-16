@@ -2,14 +2,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending } from "../db/prompts.js"
+import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
 import { registerAgent } from "../db/agents.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
 import { resolveProject } from "../db/database.js"
 import { getDatabase } from "../db/database.js"
-import { searchPrompts, findSimilar } from "../lib/search.js"
+import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
 import { maybeSaveMemento } from "../lib/mementos.js"
@@ -55,7 +55,7 @@ server.registerTool(
         ;(input as typeof input & { project_id?: string }).project_id = pid
       }
       const { prompt, created, duplicate_warning } = upsertPrompt(input, force ?? false)
-      return ok({ ...prompt, _created: created, _duplicate_warning: duplicate_warning ?? null })
+      return ok(promptToSaveResult(prompt, created, duplicate_warning))
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
@@ -80,29 +80,52 @@ server.registerTool(
 server.registerTool(
   "prompts_list",
   {
-    description: "List prompts with optional filters.",
+    description: "List prompts (slim by default — no body). Use prompts_use or prompts_body to get the actual body. Pass include_body:true only if you need body text for all results. summary_only:true returns just id+slug+title for maximum token savings.",
     inputSchema: {
       collection: z.string().optional(),
       tags: z.array(z.string()).optional(),
       is_template: z.boolean().optional(),
       source: z.enum(["manual", "ai-session", "imported"]).optional(),
-      limit: z.number().optional().default(50),
+      limit: z.number().optional().default(20),
       offset: z.number().optional().default(0),
-      project: z.string().optional().describe("Project name, slug, or ID — shows project prompts first, then globals"),
+      project: z.string().optional().describe("Project name, slug, or ID"),
+      include_body: z.boolean().optional().describe("Include full body text (expensive — avoid unless needed)"),
+      summary_only: z.boolean().optional().describe("Return only id+slug+title — maximum token savings"),
     },
   },
-  async ({ project, ...args }) => {
+  async ({ project, include_body, summary_only, ...args }) => {
+    let project_id: string | undefined
     if (project) {
       const db = getDatabase()
       const pid = resolveProject(db, project)
       if (!pid) return err(`Project not found: ${project}`)
-      return ok(listPrompts({ ...args, project_id: pid }))
+      project_id = pid
     }
-    return ok(listPrompts(args))
+    const filter = { ...args, ...(project_id ? { project_id } : {}) }
+    if (summary_only) {
+      const items = listPromptsSlim(filter)
+      return ok(items.map((p) => ({ id: p.id, slug: p.slug, title: p.title })))
+    }
+    if (include_body) return ok(listPrompts(filter))
+    return ok(listPromptsSlim(filter))
   }
 )
 
 // ── prompts_delete ────────────────────────────────────────────────────────────
+// ── prompts_body ──────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_body",
+  {
+    description: "Get just the body text of a prompt without incrementing the use counter. Use prompts_use when you want to actually use a prompt (increments counter). Use this just to read/inspect the body.",
+    inputSchema: { id: z.string().describe("Prompt ID or slug") },
+  },
+  async ({ id }) => {
+    const prompt = getPrompt(id)
+    if (!prompt) return err(`Prompt not found: ${id}`)
+    return ok({ id: prompt.id, slug: prompt.slug, body: prompt.body, is_template: prompt.is_template, variable_names: prompt.variables.map((v) => v.name) })
+  }
+)
+
 server.registerTool(
   "prompts_delete",
   {
@@ -174,7 +197,7 @@ server.registerTool(
       limit: z.number().optional().default(50),
     },
   },
-  async (args) => ok(listPrompts({ ...args, is_template: true }))
+  async (args) => ok(listPromptsSlim({ ...args, is_template: true }))
 )
 
 // ── prompts_variables ─────────────────────────────────────────────────────────
@@ -196,25 +219,29 @@ server.registerTool(
 server.registerTool(
   "prompts_search",
   {
-    description: "Full-text search across prompt name, slug, title, body, description, and tags. Uses FTS5 BM25 ranking.",
+    description: "Search prompts by text (FTS5 BM25). Returns slim results with snippet — no body. Use prompts_use/prompts_body to get the body of a result.",
     inputSchema: {
       q: z.string().describe("Search query"),
       collection: z.string().optional(),
       tags: z.array(z.string()).optional(),
       is_template: z.boolean().optional(),
       source: z.enum(["manual", "ai-session", "imported"]).optional(),
-      limit: z.number().optional().default(20),
-      project: z.string().optional().describe("Project name, slug, or ID to scope search"),
+      limit: z.number().optional().default(10),
+      project: z.string().optional(),
+      include_body: z.boolean().optional().describe("Include full body in results (expensive)"),
     },
   },
-  async ({ q, project, ...filter }) => {
+  async ({ q, project, include_body, ...filter }) => {
+    let project_id: string | undefined
     if (project) {
       const db = getDatabase()
       const pid = resolveProject(db, project)
       if (!pid) return err(`Project not found: ${project}`)
-      return ok(searchPrompts(q, { ...filter, project_id: pid }))
+      project_id = pid
     }
-    return ok(searchPrompts(q, filter))
+    const f = { ...filter, ...(project_id ? { project_id } : {}) }
+    if (include_body) return ok(searchPrompts(q, f))
+    return ok(searchPromptsSlim(q, f))
   }
 )
 
@@ -375,7 +402,7 @@ server.registerTool(
   async ({ id, ...updates }) => {
     try {
       const prompt = updatePrompt(id, updates)
-      return ok(prompt)
+      return ok(promptToSaveResult(prompt, false))
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
@@ -464,8 +491,8 @@ server.registerTool(
         project_id,
       })
       if (pin) pinPrompt(prompt.id, true)
-      const final = pin ? { ...prompt, pinned: true } : prompt
-      return ok({ ...final, _created: created, _tip: created ? `Saved as "${prompt.slug}". Use prompts_use("${prompt.slug}") to retrieve it.` : `Updated existing prompt "${prompt.slug}".` })
+      const result = promptToSaveResult(prompt, created)
+      return ok({ ...result, pinned: pin ?? false, _tip: created ? `Saved as "${prompt.slug}". Use prompts_use("${prompt.slug}") to retrieve it.` : `Updated "${prompt.slug}".` })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
@@ -490,8 +517,10 @@ server.registerTool(
     inputSchema: { collection: z.string().optional(), limit: z.number().optional().default(50) },
   },
   async ({ collection, limit }) => {
-    const all = listPrompts({ collection, limit: 10000 })
-    const unused = all.filter((p) => p.use_count === 0).slice(0, limit)
+    const all = listPromptsSlim({ collection, limit: 10000 })
+    const unused = all.filter((p) => p.use_count === 0)
+      .slice(0, limit)
+      .map((p) => ({ id: p.id, slug: p.slug, title: p.title, collection: p.collection, created_at: p.created_at }))
     return ok({ unused, count: unused.length })
   }
 )
@@ -639,11 +668,11 @@ server.registerTool(
 server.registerTool(
   "prompts_recent",
   {
-    description: "Get recently used prompts, ordered by last_used_at descending.",
+    description: "Get recently used prompts (slim — no body). Returns id, slug, title, tags, use_count, last_used_at.",
     inputSchema: { limit: z.number().optional().default(10) },
   },
   async ({ limit }) => {
-    const prompts = listPrompts({ limit: 500 })
+    const prompts = listPromptsSlim({ limit: 500 })
       .filter((p) => p.last_used_at !== null)
       .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
       .slice(0, limit)
@@ -682,10 +711,11 @@ server.registerTool(
   },
   async ({ days }) => {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
-    const all = listPrompts({ limit: 10000 })
+    const all = listPromptsSlim({ limit: 10000 })
     const stale = all
       .filter((p) => p.last_used_at === null || p.last_used_at < cutoff)
       .sort((a, b) => (a.last_used_at ?? "").localeCompare(b.last_used_at ?? ""))
+      .map((p) => ({ id: p.id, slug: p.slug, title: p.title, last_used_at: p.last_used_at, use_count: p.use_count }))
     return ok({ stale, count: stale.length, threshold_days: days })
   }
 )

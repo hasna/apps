@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats } from "../db/prompts.js"
+import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
 import { resolveProject } from "../db/database.js"
 import { getDatabase } from "../db/database.js"
-import { searchPrompts, findSimilar } from "../lib/search.js"
+import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
 
@@ -60,8 +60,9 @@ export default {
         const tags = url.searchParams.get("tags")?.split(",") ?? undefined
         const is_template = url.searchParams.has("templates") ? true : undefined
         const source = url.searchParams.get("source") as "manual" | "ai-session" | "imported" | undefined ?? undefined
-        const limit = parseInt(url.searchParams.get("limit") ?? "100")
+        const limit = parseInt(url.searchParams.get("limit") ?? "20")
         const offset = parseInt(url.searchParams.get("offset") ?? "0")
+        const full = url.searchParams.has("full")  // ?full=1 to get body
         const projectParam = url.searchParams.get("project") ?? undefined
         let project_id: string | undefined
         if (projectParam) {
@@ -69,14 +70,15 @@ export default {
           if (!pid) return notFound(`Project not found: ${projectParam}`)
           project_id = pid
         }
-        return json(listPrompts({ collection, tags, is_template, source, limit, offset, project_id }))
+        const filter = { collection, tags, is_template, source, limit, offset, project_id }
+        return json(full ? listPrompts(filter) : listPromptsSlim(filter))
       }
 
       // ── POST /api/prompts ───────────────────────────────────────────────────
       if (path === "/api/prompts" && method === "POST") {
         const body = await parseBody<Parameters<typeof upsertPrompt>[0]>(req)
-        const result = upsertPrompt(body)
-        return json(result, result.created ? 201 : 200)
+        const { prompt, created, duplicate_warning } = upsertPrompt(body)
+        return json(promptToSaveResult(prompt, created, duplicate_warning), created ? 201 : 200)
       }
 
       // ── GET /api/prompts/:id ────────────────────────────────────────────────
@@ -93,7 +95,7 @@ export default {
         if (method === "PUT") {
           const body = await parseBody<Parameters<typeof updatePrompt>[1]>(req)
           const prompt = updatePrompt(id, body)
-          return json(prompt)
+          return json(promptToSaveResult(prompt, false))
         }
 
         if (method === "DELETE") {
@@ -169,12 +171,16 @@ export default {
         const tags = url.searchParams.get("tags")?.split(",") ?? undefined
         const is_template = url.searchParams.has("templates") ? true : undefined
         const limit = parseInt(url.searchParams.get("limit") ?? "20")
-        return json(searchPrompts(q, { collection, tags, is_template, limit }))
+        const full = url.searchParams.has("full")
+        return json(full
+          ? searchPrompts(q, { collection, tags, is_template, limit })
+          : searchPromptsSlim(q, { collection, tags, is_template, limit })
+        )
       }
 
       // ── GET /api/templates ──────────────────────────────────────────────────
       if (path === "/api/templates" && method === "GET") {
-        return json(listPrompts({ is_template: true, limit: 100 }))
+        return json(listPromptsSlim({ is_template: true, limit: 50 }))
       }
 
       // ── GET /api/collections ────────────────────────────────────────────────
@@ -247,7 +253,8 @@ export default {
         if (!project) return notFound(`Project not found: ${projId}`)
         const limit = parseInt(url.searchParams.get("limit") ?? "100")
         const offset = parseInt(url.searchParams.get("offset") ?? "0")
-        return json(listPrompts({ project_id: project.id, limit, offset }))
+        const full = url.searchParams.has("full")
+        return json(full ? listPrompts({ project_id: project.id, limit, offset }) : listPromptsSlim({ project_id: project.id, limit, offset }))
       }
 
       // ── GET /health ─────────────────────────────────────────────────────────
