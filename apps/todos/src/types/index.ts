@@ -21,6 +21,40 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export const PLAN_STATUSES = ["active", "completed", "archived"] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
+// Project Source — a data source or file location associated with a project
+export interface ProjectSource {
+  id: string;
+  project_id: string;
+  type: string; // 's3', 'gdrive', 'local', 'github', 'notion', 'http', etc.
+  name: string;
+  uri: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectSourceRow {
+  id: string;
+  project_id: string;
+  type: string;
+  name: string;
+  uri: string;
+  description: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProjectSourceInput {
+  project_id: string;
+  type: string;
+  name: string;
+  uri: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // Project
 export interface Project {
   id: string;
@@ -32,6 +66,7 @@ export interface Project {
   task_counter: number;
   created_at: string;
   updated_at: string;
+  sources?: ProjectSource[];
 }
 
 export interface CreateProjectInput {

@@ -38,6 +38,9 @@ import {
   createProject,
   getProject,
   listProjects,
+  addProjectSource,
+  removeProjectSource,
+  listProjectSources,
 } from "../db/projects.js";
 import {
   createPlan,
@@ -679,6 +682,84 @@ server.tool(
           text: `Project created: ${project.id.slice(0, 8)} | ${project.name} | ${project.path}${taskList}`,
         }],
       };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// add_project_source
+if (shouldRegisterTool("add_project_source")) {
+server.tool(
+  "add_project_source",
+  "Add a data source to a project (S3 bucket, Google Drive folder, local path, GitHub repo, Notion page, etc.). Sources are revealed to agents when they load the project.",
+  {
+    project_id: z.string().describe("Project ID"),
+    type: z.string().describe("Source type: 's3', 'gdrive', 'local', 'github', 'notion', 'http', or any custom label"),
+    name: z.string().describe("Human-readable label for this source"),
+    uri: z.string().describe("The source URI (bucket path, folder URL, local path, repo URL, etc.)"),
+    description: z.string().optional().describe("What this source contains or how agents should use it"),
+    metadata: z.record(z.unknown()).optional().describe("Extra config (e.g. region, access role, subfolder)"),
+  },
+  async (params) => {
+    try {
+      const resolvedProjectId = resolveId(params.project_id, "projects");
+      const source = addProjectSource({ ...params, project_id: resolvedProjectId });
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Source added: ${source.id.slice(0, 8)} | [${source.type}] ${source.name} → ${source.uri}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// remove_project_source
+if (shouldRegisterTool("remove_project_source")) {
+server.tool(
+  "remove_project_source",
+  "Remove a data source from a project by source ID.",
+  {
+    source_id: z.string().describe("Source ID to remove"),
+  },
+  async ({ source_id }) => {
+    try {
+      const db = getDatabase();
+      const row = db.query("SELECT * FROM project_sources WHERE id LIKE ?").get(`${source_id}%`) as { id: string; name: string } | null;
+      if (!row) return { content: [{ type: "text" as const, text: `Source not found: ${source_id}` }], isError: true };
+      removeProjectSource(row.id);
+      return { content: [{ type: "text" as const, text: `Source removed: ${row.name}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// list_project_sources
+if (shouldRegisterTool("list_project_sources")) {
+server.tool(
+  "list_project_sources",
+  "List all data sources attached to a project.",
+  {
+    project_id: z.string().describe("Project ID"),
+  },
+  async ({ project_id }) => {
+    try {
+      const resolvedId = resolveId(project_id, "projects");
+      const sources = listProjectSources(resolvedId);
+      if (sources.length === 0) {
+        return { content: [{ type: "text" as const, text: "No sources configured for this project." }] };
+      }
+      const lines = sources.map(s =>
+        `${s.id.slice(0, 8)} | [${s.type}] ${s.name} → ${s.uri}${s.description ? `\n  ${s.description}` : ""}`
+      );
+      return { content: [{ type: "text" as const, text: `${sources.length} source(s):\n${lines.join("\n")}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -2235,6 +2316,20 @@ server.tool(
         }
       }
 
+      // 4. Project sources (if project_id provided)
+      if (project_id) {
+        const resolvedId = resolveId(project_id, "projects");
+        const sources = listProjectSources(resolvedId);
+        if (sources.length > 0) {
+          lines.push("");
+          lines.push(`## Data Sources`);
+          for (const s of sources) {
+            lines.push(`[${s.type}] ${s.name}: ${s.uri}${s.description ? ` — ${s.description}` : ""}`);
+          }
+        }
+      }
+
+      lines.push(`\nas_of: ${new Date().toISOString()}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -2282,7 +2377,7 @@ server.tool(
       "create_task","list_tasks","get_task","update_task","delete_task",
       "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
       "add_dependency","remove_dependency","add_comment","log_progress",
-      "create_project","list_projects",
+      "create_project","list_projects","add_project_source","remove_project_source","list_project_sources",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
       "register_agent","list_agents","get_agent","rename_agent","delete_agent",
       "get_my_tasks","get_org_chart","set_reports_to",
@@ -2337,6 +2432,9 @@ server.tool(
       // Projects
       create_project: "Register a new project. Auto-generates task prefix for short IDs (e.g. APP-00001).\n  Params: name(string, req), path(string, req — unique absolute path), description(string), task_list_id(string)\n  Example: {name: 'my-app', path: '/Users/dev/my-app'}",
       list_projects: "List all registered projects. No params.",
+      add_project_source: "Add a data source to a project (S3, GDrive, local path, GitHub, Notion, HTTP, etc.).\n  Params: project_id(string, req), type(string, req — e.g. 's3','gdrive','local','github','notion','http'), name(string, req), uri(string, req), description(string), metadata(object)\n  Example: {project_id: 'a1b2c3d4', type: 's3', name: 'Assets bucket', uri: 's3://my-bucket/assets/', description: 'Project media files'}",
+      remove_project_source: "Remove a data source from a project.\n  Params: source_id(string, req — source ID or prefix)\n  Example: {source_id: 'abc12345'}",
+      list_project_sources: "List all data sources for a project.\n  Params: project_id(string, req)\n  Example: {project_id: 'a1b2c3d4'}",
 
       // Plans
       create_plan: "Create a plan to group related tasks.\n  Params: name(string, req), project_id(string), description(string), status(active|completed|archived, default:active), task_list_id(string), agent_id(string)\n  Example: {name: 'Sprint 1', project_id: 'a1b2c3d4'}",

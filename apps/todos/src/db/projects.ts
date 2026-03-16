@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import type { CreateProjectInput, Project } from "../types/index.js";
+import type { CreateProjectInput, CreateProjectSourceInput, Project, ProjectSource, ProjectSourceRow } from "../types/index.js";
 import { ProjectNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 
@@ -105,6 +105,48 @@ export function deleteProject(id: string, db?: Database): boolean {
   const d = db || getDatabase();
   const result = d.run("DELETE FROM projects WHERE id = ?", [id]);
   return result.changes > 0;
+}
+
+// ── Project Sources ──────────────────────────────────────────────────────────
+
+function rowToSource(row: ProjectSourceRow): ProjectSource {
+  return {
+    ...row,
+    metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {},
+  };
+}
+
+export function addProjectSource(input: CreateProjectSourceInput, db?: Database): ProjectSource {
+  const d = db || getDatabase();
+  const id = uuid();
+  const timestamp = now();
+  d.run(
+    `INSERT INTO project_sources (id, project_id, type, name, uri, description, metadata, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.project_id, input.type, input.name, input.uri, input.description || null,
+     JSON.stringify(input.metadata || {}), timestamp, timestamp],
+  );
+  return rowToSource(d.query("SELECT * FROM project_sources WHERE id = ?").get(id) as ProjectSourceRow);
+}
+
+export function removeProjectSource(id: string, db?: Database): boolean {
+  const d = db || getDatabase();
+  const result = d.run("DELETE FROM project_sources WHERE id = ?", [id]);
+  return result.changes > 0;
+}
+
+export function listProjectSources(projectId: string, db?: Database): ProjectSource[] {
+  const d = db || getDatabase();
+  const rows = d.query("SELECT * FROM project_sources WHERE project_id = ? ORDER BY name").all(projectId) as ProjectSourceRow[];
+  return rows.map(rowToSource);
+}
+
+export function getProjectWithSources(id: string, db?: Database): Project | null {
+  const d = db || getDatabase();
+  const project = getProject(id, d);
+  if (!project) return null;
+  project.sources = listProjectSources(id, d);
+  return project;
 }
 
 export function nextTaskShortId(projectId: string, db?: Database): string | null {

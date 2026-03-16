@@ -49,12 +49,16 @@ export {
   createProject,
   getProject,
   getProjectByPath,
+  getProjectWithSources,
   listProjects,
   updateProject,
   deleteProject,
   ensureProject,
   nextTaskShortId,
   slugify,
+  addProjectSource,
+  removeProjectSource,
+  listProjectSources,
 } from "./db/projects.js";
 
 // Plans
@@ -159,6 +163,9 @@ export type {
   CreateCommentInput,
   Project,
   CreateProjectInput,
+  ProjectSource,
+  ProjectSourceRow,
+  CreateProjectSourceInput,
   Plan,
   CreatePlanInput,
   UpdatePlanInput,

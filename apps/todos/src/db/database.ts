@@ -402,6 +402,23 @@ const MIGRATIONS = [
   );
   INSERT OR IGNORE INTO _migrations (id) VALUES (20);
   `,
+  // Migration 21: Project sources — named data sources (S3, GDrive, local, etc.) per project
+  `
+  CREATE TABLE IF NOT EXISTS project_sources (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    description TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (21);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -546,6 +563,19 @@ function ensureSchema(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
 
+  ensureTable("project_sources", `
+    CREATE TABLE project_sources (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      uri TEXT NOT NULL,
+      description TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
   // ── Columns (ALTER TABLE is not idempotent in SQLite, so check first) ──
 
   // Projects
@@ -605,6 +635,8 @@ function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_history_agent ON task_history(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_parent ON tasks(recurrence_parent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_rule ON tasks(recurrence_rule) WHERE recurrence_rule IS NOT NULL");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type)");
 }
 
 function backfillTaskTags(db: Database): void {
