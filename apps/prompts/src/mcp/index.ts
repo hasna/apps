@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt } from "../db/prompts.js"
+import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
 import { registerAgent } from "../db/agents.js"
@@ -11,9 +11,11 @@ import { resolveProject } from "../db/database.js"
 import { getDatabase } from "../db/database.js"
 import { searchPrompts, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
-import { importFromJson, exportToJson } from "../lib/importer.js"
+import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
 import { maybeSaveMemento } from "../lib/mementos.js"
+import { diffTexts, formatDiff } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
+import { runAudit } from "../lib/audit.js"
 
 const server = new McpServer({ name: "open-prompts", version: "0.1.0" })
 
@@ -338,6 +340,23 @@ server.registerTool(
   }
 )
 
+// ── prompts_import_slash_commands ─────────────────────────────────────────────
+server.registerTool(
+  "prompts_import_slash_commands",
+  {
+    description: "Auto-scan .claude/commands, .codex/skills, .gemini/extensions (both project and home dir) and import all .md files as prompts.",
+    inputSchema: {
+      dir: z.string().optional().describe("Root directory to scan (default: cwd)"),
+      changed_by: z.string().optional(),
+    },
+  },
+  async ({ dir, changed_by }) => {
+    const rootDir = dir ?? process.cwd()
+    const result = scanAndImportSlashCommands(rootDir, changed_by)
+    return ok(result)
+  }
+)
+
 // ── prompts_update ────────────────────────────────────────────────────────────
 server.registerTool(
   "prompts_update",
@@ -421,9 +440,10 @@ server.registerTool(
       description: z.string().optional().describe("One-line description of what this prompt does"),
       agent: z.string().optional().describe("Agent name saving this prompt"),
       project: z.string().optional().describe("Project name, slug, or ID to scope this prompt to"),
+      pin: z.boolean().optional().describe("Pin the prompt immediately so it surfaces first in all lists"),
     },
   },
-  async ({ title, body, slug, tags, collection, description, agent, project }) => {
+  async ({ title, body, slug, tags, collection, description, agent, project, pin }) => {
     try {
       let project_id: string | undefined
       if (project) {
@@ -443,10 +463,150 @@ server.registerTool(
         changed_by: agent,
         project_id,
       })
-      return ok({ ...prompt, _created: created, _tip: created ? `Saved as "${prompt.slug}". Use prompts_use("${prompt.slug}") to retrieve it.` : `Updated existing prompt "${prompt.slug}".` })
+      if (pin) pinPrompt(prompt.id, true)
+      const final = pin ? { ...prompt, pinned: true } : prompt
+      return ok({ ...final, _created: created, _tip: created ? `Saved as "${prompt.slug}". Use prompts_use("${prompt.slug}") to retrieve it.` : `Updated existing prompt "${prompt.slug}".` })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
+  }
+)
+
+// ── prompts_audit ─────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_audit",
+  {
+    description: "Run a full audit: orphaned project refs, empty collections, missing version history, near-duplicate slugs, expired prompts.",
+    inputSchema: {},
+  },
+  async () => ok(runAudit())
+)
+
+// ── prompts_unused ────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_unused",
+  {
+    description: "List prompts with use_count = 0 — never used. Good for library cleanup.",
+    inputSchema: { collection: z.string().optional(), limit: z.number().optional().default(50) },
+  },
+  async ({ collection, limit }) => {
+    const all = listPrompts({ collection, limit: 10000 })
+    const unused = all.filter((p) => p.use_count === 0).slice(0, limit)
+    return ok({ unused, count: unused.length })
+  }
+)
+
+// ── prompts_trending ──────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_trending",
+  {
+    description: "Get most-used prompts in the last N days based on per-use log.",
+    inputSchema: {
+      days: z.number().optional().default(7),
+      limit: z.number().optional().default(10),
+    },
+  },
+  async ({ days, limit }) => ok(getTrending(days, limit))
+)
+
+// ── prompts_set_expiry ────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_set_expiry",
+  {
+    description: "Set or clear an expiry date on a prompt. Pass expires_at=null to clear.",
+    inputSchema: {
+      id: z.string(),
+      expires_at: z.string().nullable().describe("ISO date string (e.g. 2026-12-31) or null to clear"),
+    },
+  },
+  async ({ id, expires_at }) => {
+    try { return ok(setExpiry(id, expires_at)) }
+    catch (e) { return err(e instanceof Error ? e.message : String(e)) }
+  }
+)
+
+// ── prompts_duplicate ─────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_duplicate",
+  {
+    description: "Clone a prompt with a new slug. Copies body, tags, collection, description. Version resets to 1.",
+    inputSchema: {
+      id: z.string(),
+      slug: z.string().optional().describe("New slug (auto-generated if omitted)"),
+      title: z.string().optional().describe("New title (defaults to 'Copy of <original>')"),
+    },
+  },
+  async ({ id, slug, title }) => {
+    try {
+      const source = getPrompt(id)
+      if (!source) return err(`Prompt not found: ${id}`)
+      const { prompt } = upsertPrompt({
+        title: title ?? `Copy of ${source.title}`,
+        slug,
+        body: source.body,
+        description: source.description ?? undefined,
+        collection: source.collection,
+        tags: source.tags,
+        source: "manual",
+      })
+      return ok(prompt)
+    } catch (e) { return err(e instanceof Error ? e.message : String(e)) }
+  }
+)
+
+// ── prompts_diff ──────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_diff",
+  {
+    description: "Show a line diff between two versions of a prompt body. v2 defaults to current version.",
+    inputSchema: {
+      id: z.string(),
+      v1: z.number().describe("First version number"),
+      v2: z.number().optional().describe("Second version (default: current)"),
+    },
+  },
+  async ({ id, v1, v2 }) => {
+    try {
+      const prompt = getPrompt(id)
+      if (!prompt) return err(`Prompt not found: ${id}`)
+      const versions = listVersions(prompt.id)
+      const versionA = versions.find((v) => v.version === v1)
+      if (!versionA) return err(`Version ${v1} not found`)
+      const bodyB = v2 ? (versions.find((v) => v.version === v2)?.body ?? null) : prompt.body
+      if (bodyB === null) return err(`Version ${v2} not found`)
+      const lines = diffTexts(versionA.body, bodyB)
+      return ok({ lines, formatted: formatDiff(lines), v1, v2: v2 ?? prompt.version })
+    } catch (e) { return err(e instanceof Error ? e.message : String(e)) }
+  }
+)
+
+// ── prompts_chain ─────────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_chain",
+  {
+    description: "Set or get the next prompt in a chain. After using prompt A, the agent is suggested prompt B. Pass next_prompt=null to clear.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      next_prompt: z.string().nullable().optional().describe("Slug of the next prompt in the chain, or null to clear"),
+    },
+  },
+  async ({ id, next_prompt }) => {
+    try {
+      if (next_prompt !== undefined) {
+        const p = setNextPrompt(id, next_prompt ?? null)
+        return ok(p)
+      }
+      // Show full chain
+      const chain: Array<{ id: string; slug: string; title: string }> = []
+      let cur = getPrompt(id)
+      const seen = new Set<string>()
+      while (cur && !seen.has(cur.id)) {
+        chain.push({ id: cur.id, slug: cur.slug, title: cur.title })
+        seen.add(cur.id)
+        cur = cur.next_prompt ? getPrompt(cur.next_prompt) : null
+      }
+      return ok(chain)
+    } catch (e) { return err(e instanceof Error ? e.message : String(e)) }
   }
 )
 

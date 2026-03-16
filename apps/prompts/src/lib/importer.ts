@@ -126,6 +126,65 @@ export function importFromMarkdown(files: Array<{ filename: string; content: str
   return importFromJson(items, changedBy)
 }
 
+// ── Auto-scan slash commands from all agents ──────────────────────────────────
+export interface SlashCommandScanResult {
+  scanned: Array<{ source: string; file: string }>
+  imported: ImportResult
+}
+
+export function scanAndImportSlashCommands(
+  rootDir: string,
+  changedBy?: string
+): SlashCommandScanResult {
+  const { existsSync, readdirSync, readFileSync } = require("fs") as typeof import("fs")
+  const { join } = require("path") as typeof import("path")
+  const home = process.env["HOME"] ?? "~"
+
+  const sources: Array<{ dir: string; collection: string; tags: string[] }> = [
+    { dir: join(rootDir, ".claude", "commands"), collection: "claude-commands", tags: ["claude", "slash-command"] },
+    { dir: join(home, ".claude", "commands"), collection: "claude-commands", tags: ["claude", "slash-command"] },
+    { dir: join(rootDir, ".codex", "skills"), collection: "codex-skills", tags: ["codex", "skill"] },
+    { dir: join(home, ".codex", "skills"), collection: "codex-skills", tags: ["codex", "skill"] },
+    { dir: join(rootDir, ".gemini", "extensions"), collection: "gemini-extensions", tags: ["gemini", "extension"] },
+    { dir: join(home, ".gemini", "extensions"), collection: "gemini-extensions", tags: ["gemini", "extension"] },
+  ]
+
+  const files: Array<{ filename: string; content: string; collection: string; tags: string[] }> = []
+  const scanned: Array<{ source: string; file: string }> = []
+
+  for (const { dir, collection, tags } of sources) {
+    if (!existsSync(dir)) continue
+    let entries: string[]
+    try {
+      entries = readdirSync(dir) as string[]
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith(".md")) continue
+      const filePath = join(dir, entry)
+      try {
+        const content = readFileSync(filePath, "utf-8") as string
+        files.push({ filename: entry, content, collection, tags })
+        scanned.push({ source: dir, file: entry })
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+
+  const items: ImportItem[] = files.map((f) => {
+    const base = markdownToImportItem(f.content, f.filename)
+    if (base) return { ...base, collection: base.collection ?? f.collection, tags: base.tags ?? f.tags }
+    const name = f.filename.replace(/\.md$/, "")
+    const title = name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    return { title, slug: name, body: f.content.trim(), collection: f.collection, tags: f.tags }
+  })
+
+  const imported = importFromJson(items, changedBy)
+  return { scanned, imported }
+}
+
 // ── Claude Code slash commands import ────────────────────────────────────────
 // Claude Code stores slash commands as .md files in .claude/commands/
 // Each file's name becomes the command name, content is the prompt body

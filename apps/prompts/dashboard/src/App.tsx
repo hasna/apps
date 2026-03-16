@@ -16,6 +16,7 @@ export default function App() {
 }
 
 type View = "prompts" | "templates" | "stats"
+type Theme = "dark" | "light"
 
 function Dashboard() {
   const [view, setView] = useState<View>("prompts")
@@ -24,6 +25,9 @@ function Dashboard() {
   const [search, setSearch] = useState("")
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [theme, setTheme] = useState<Theme>("dark")
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set())
   const searchRef = useRef<HTMLInputElement>(null)
 
   const { data: collections = [] } = useQuery({
@@ -49,17 +53,26 @@ function Dashboard() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
+  // Apply theme to document root
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme)
+  }, [theme])
+
   return (
-    <div className="app">
+    <div className={`app theme-${theme}`}>
       <Sidebar
         view={view}
         setView={setView}
         collections={collections}
         selectedCollection={selectedCollection}
-        setSelectedCollection={(c) => { setSelectedCollection(c); setSelectedProject(null) }}
+        setSelectedCollection={(c) => { setSelectedCollection(c); setSelectedProject(null); setSelectedTag(null) }}
         projects={projects}
         selectedProject={selectedProject}
-        setSelectedProject={(p) => { setSelectedProject(p); setSelectedCollection(null) }}
+        setSelectedProject={(p) => { setSelectedProject(p); setSelectedCollection(null); setSelectedTag(null) }}
+        selectedTag={selectedTag}
+        setSelectedTag={(t) => { setSelectedTag(t); setSelectedCollection(null); setSelectedProject(null) }}
+        theme={theme}
+        toggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
       />
       <main className="main">
         <Header
@@ -68,6 +81,8 @@ function Dashboard() {
           onNew={() => setShowCreate(true)}
           view={view}
           inputRef={searchRef}
+          bulkCount={bulkSelected.size}
+          onBulkClear={() => setBulkSelected(new Set())}
         />
         {view === "stats" ? (
           <StatsView />
@@ -77,8 +92,11 @@ function Dashboard() {
             search={search}
             collection={selectedCollection}
             project={selectedProject}
+            tag={selectedTag}
             onSelect={setSelectedPrompt}
             selected={selectedPrompt}
+            bulkSelected={bulkSelected}
+            onBulkToggle={(id) => setBulkSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })}
           />
         )}
       </main>
@@ -94,7 +112,7 @@ function Dashboard() {
   )
 }
 
-function Sidebar({ view, setView, collections, selectedCollection, setSelectedCollection, projects, selectedProject, setSelectedProject }: {
+function Sidebar({ view, setView, collections, selectedCollection, setSelectedCollection, projects, selectedProject, setSelectedProject, selectedTag, setSelectedTag, theme, toggleTheme }: {
   view: View
   setView: (v: View) => void
   collections: Collection[]
@@ -103,18 +121,38 @@ function Sidebar({ view, setView, collections, selectedCollection, setSelectedCo
   projects: Project[]
   selectedProject: string | null
   setSelectedProject: (p: string | null) => void
+  selectedTag: string | null
+  setSelectedTag: (t: string | null) => void
+  theme: Theme
+  toggleTheme: () => void
 }) {
+  const { data: allPrompts = [] } = useQuery({
+    queryKey: ["prompts-all"],
+    queryFn: () => api.listPrompts({ limit: "1000" }),
+  })
+
+  // Build tag frequency map
+  const tagFreq = new Map<string, number>()
+  for (const p of allPrompts) {
+    for (const t of p.tags) tagFreq.set(t, (tagFreq.get(t) ?? 0) + 1)
+  }
+  const tags = Array.from(tagFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 20)
+  const maxFreq = Math.max(...tags.map(([, n]) => n), 1)
+
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
         <BookOpen size={20} />
         <span>open-prompts</span>
+        <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
+          {theme === "dark" ? "☀" : "🌙"}
+        </button>
       </div>
       <nav className="sidebar-nav">
-        <button className={`nav-item ${view === "prompts" ? "active" : ""}`} onClick={() => { setView("prompts"); setSelectedCollection(null); setSelectedProject(null) }}>
+        <button className={`nav-item ${view === "prompts" ? "active" : ""}`} onClick={() => { setView("prompts"); setSelectedCollection(null); setSelectedProject(null); setSelectedTag(null) }}>
           <BookOpen size={16} /> All Prompts
         </button>
-        <button className={`nav-item ${view === "templates" ? "active" : ""}`} onClick={() => { setView("templates"); setSelectedCollection(null); setSelectedProject(null) }}>
+        <button className={`nav-item ${view === "templates" ? "active" : ""}`} onClick={() => { setView("templates"); setSelectedCollection(null); setSelectedProject(null); setSelectedTag(null) }}>
           <Layers size={16} /> Templates
         </button>
         <button className={`nav-item ${view === "stats" ? "active" : ""}`} onClick={() => setView("stats")}>
@@ -151,19 +189,48 @@ function Sidebar({ view, setView, collections, selectedCollection, setSelectedCo
           </button>
         ))}
       </div>
+      {tags.length > 0 && (
+        <div className="sidebar-section">
+          <div className="sidebar-section-title">Tags</div>
+          <div className="tag-cloud">
+            {tags.map(([tag, freq]) => {
+              const size = 10 + Math.round((freq / maxFreq) * 6)
+              return (
+                <button
+                  key={tag}
+                  className={`tag-cloud-item ${selectedTag === tag ? "active" : ""}`}
+                  style={{ fontSize: size }}
+                  onClick={() => { setSelectedTag(selectedTag === tag ? null : tag); setView("prompts") }}
+                  title={`${freq} prompt(s)`}
+                >
+                  {tag}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </aside>
   )
 }
 
-function Header({ search, setSearch, onNew, view, inputRef }: {
+function Header({ search, setSearch, onNew, view, inputRef, bulkCount, onBulkClear }: {
   search: string
   setSearch: (s: string) => void
   onNew: () => void
   view: View
   inputRef?: React.RefObject<HTMLInputElement | null>
+  bulkCount?: number
+  onBulkClear?: () => void
 }) {
   return (
     <div className="header">
+      {bulkCount != null && bulkCount > 0 && (
+        <div className="bulk-bar">
+          <span>{bulkCount} selected</span>
+          <button onClick={onBulkClear}>Clear</button>
+        </div>
+      )}
       <div className="search-bar">
         <Search size={16} />
         <input
@@ -182,37 +249,46 @@ function Header({ search, setSearch, onNew, view, inputRef }: {
   )
 }
 
-function PromptList({ view, search, collection, project, onSelect, selected }: {
+function PromptList({ view, search, collection, project, tag, onSelect, selected, bulkSelected, onBulkToggle }: {
   view: View
   search: string
   collection: string | null
   project: string | null
+  tag: string | null
   onSelect: (p: Prompt) => void
   selected: Prompt | null
+  bulkSelected: Set<string>
+  onBulkToggle: (id: string) => void
 }) {
+  const searchParams = {
+    ...(collection ? { collection } : {}),
+    ...(project ? { project } : {}),
+    ...(tag ? { tags: tag } : {}),
+  }
   const { data: searchResults, isLoading: searching } = useQuery({
-    queryKey: ["search", search, collection, project],
-    queryFn: () => api.search(search, {
-      ...(collection ? { collection } : {}),
-      ...(project ? { project } : {}),
-    }),
+    queryKey: ["search", search, collection, project, tag],
+    queryFn: () => api.search(search, searchParams),
     enabled: search.length > 0,
   })
 
   const { data: prompts = [], isLoading } = useQuery({
-    queryKey: ["prompts", collection, project, view],
+    queryKey: ["prompts", collection, project, tag, view],
     queryFn: () => api.listPrompts({
-      ...(collection ? { collection } : {}),
-      ...(project ? { project } : {}),
+      ...searchParams,
       ...(view === "templates" ? { templates: "1" } : {}),
       limit: "200",
     }),
     enabled: search.length === 0,
   })
 
-  const items: Prompt[] = search.length > 0
+  let items: Prompt[] = search.length > 0
     ? (searchResults ?? []).map((r) => r.prompt)
     : prompts
+
+  // Client-side tag filter if set and not in search mode
+  if (tag && search.length === 0) {
+    items = items.filter((p) => p.tags.includes(tag))
+  }
 
   if (isLoading || searching) return <div className="loading">Loading...</div>
   if (items.length === 0) return <div className="empty">No prompts found.</div>
@@ -220,13 +296,26 @@ function PromptList({ view, search, collection, project, onSelect, selected }: {
   return (
     <div className="prompt-list">
       {items.map((p) => (
-        <PromptCard key={p.id} prompt={p} selected={selected?.id === p.id} onSelect={onSelect} />
+        <PromptCard
+          key={p.id}
+          prompt={p}
+          selected={selected?.id === p.id}
+          onSelect={onSelect}
+          bulkSelected={bulkSelected.has(p.id)}
+          onBulkToggle={onBulkToggle}
+        />
       ))}
     </div>
   )
 }
 
-function PromptCard({ prompt, selected, onSelect }: { prompt: Prompt; selected: boolean; onSelect: (p: Prompt) => void }) {
+function PromptCard({ prompt, selected, onSelect, bulkSelected, onBulkToggle }: {
+  prompt: Prompt
+  selected: boolean
+  onSelect: (p: Prompt) => void
+  bulkSelected?: boolean
+  onBulkToggle?: (id: string) => void
+}) {
   const [showQuickRender, setShowQuickRender] = useState(false)
   const [vars, setVars] = useState<Record<string, string>>({})
   const [rendered, setRendered] = useState<string | null>(null)
@@ -237,9 +326,18 @@ function PromptCard({ prompt, selected, onSelect }: { prompt: Prompt; selected: 
   })
 
   return (
-    <div className={`prompt-card ${selected ? "selected" : ""}`}>
+    <div className={`prompt-card ${selected ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""}`}>
       <div onClick={() => onSelect(prompt)}>
         <div className="prompt-card-header">
+          {onBulkToggle && (
+            <input
+              type="checkbox"
+              className="bulk-checkbox"
+              checked={bulkSelected ?? false}
+              onChange={(e) => { e.stopPropagation(); onBulkToggle(prompt.id) }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
           <span className="prompt-id">{prompt.id}</span>
           {prompt.is_template && <span className="badge template">template</span>}
           {(prompt as Prompt & { pinned?: boolean }).pinned && <span title="Pinned">📌</span>}

@@ -26,6 +26,8 @@ function rowToPrompt(row: Record<string, unknown>): Prompt {
     tags: JSON.parse((row["tags"] as string) || "[]") as string[],
     variables: JSON.parse((row["variables"] as string) || "[]") as TemplateVariable[],
     pinned: Boolean(row["pinned"]),
+    next_prompt: (row["next_prompt"] as string | null) ?? null,
+    expires_at: (row["expires_at"] as string | null) ?? null,
     project_id: (row["project_id"] as string | null) ?? null,
     is_template: Boolean(row["is_template"]),
     source: row["source"] as PromptSource,
@@ -158,6 +160,7 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
       description = COALESCE(?, description),
       collection = COALESCE(?, collection),
       tags = COALESCE(?, tags),
+      next_prompt = CASE WHEN ? IS NOT NULL THEN ? ELSE next_prompt END,
       variables = ?,
       is_template = ?,
       version = version + 1,
@@ -169,6 +172,8 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
       input.description ?? null,
       input.collection ?? null,
       input.tags ? JSON.stringify(input.tags) : null,
+      "next_prompt" in input ? (input.next_prompt ?? "") : null,
+      "next_prompt" in input ? (input.next_prompt ?? null) : null,
       variables,
       is_template,
       prompt.id,
@@ -203,6 +208,35 @@ export function usePrompt(idOrSlug: string): Prompt {
     "UPDATE prompts SET use_count = use_count + 1, last_used_at = datetime('now') WHERE id = ?",
     [prompt.id]
   )
+  db.run("INSERT INTO usage_log (id, prompt_id) VALUES (?, ?)", [generateId("UL"), prompt.id])
+  return requirePrompt(prompt.id)
+}
+
+export function getTrending(days = 7, limit = 10): Array<{ id: string; slug: string; title: string; uses: number }> {
+  const db = getDatabase()
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+  return db.query(
+    `SELECT p.id, p.slug, p.title, COUNT(ul.id) as uses
+     FROM usage_log ul
+     JOIN prompts p ON p.id = ul.prompt_id
+     WHERE ul.used_at >= ?
+     GROUP BY p.id
+     ORDER BY uses DESC
+     LIMIT ?`
+  ).all(cutoff, limit) as Array<{ id: string; slug: string; title: string; uses: number }>
+}
+
+export function setExpiry(idOrSlug: string, expiresAt: string | null): Prompt {
+  const db = getDatabase()
+  const prompt = requirePrompt(idOrSlug)
+  db.run("UPDATE prompts SET expires_at = ?, updated_at = datetime('now') WHERE id = ?", [expiresAt, prompt.id])
+  return requirePrompt(prompt.id)
+}
+
+export function setNextPrompt(idOrSlug: string, nextSlug: string | null): Prompt {
+  const db = getDatabase()
+  const prompt = requirePrompt(idOrSlug)
+  db.run("UPDATE prompts SET next_prompt = ?, updated_at = datetime('now') WHERE id = ?", [nextSlug, prompt.id])
   return requirePrompt(prompt.id)
 }
 

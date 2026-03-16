@@ -15,6 +15,8 @@ function rowToSearchResult(row: Record<string, unknown>, snippet?: string): Sear
       tags: JSON.parse((row["tags"] as string) || "[]") as string[],
       variables: JSON.parse((row["variables"] as string) || "[]") as [],
       pinned: Boolean(row["pinned"]),
+      next_prompt: (row["next_prompt"] as string | null) ?? null,
+      expires_at: (row["expires_at"] as string | null) ?? null,
       project_id: (row["project_id"] as string | null) ?? null,
       is_template: Boolean(row["is_template"]),
       source: row["source"] as "manual" | "ai-session" | "imported",

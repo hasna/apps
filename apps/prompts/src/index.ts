@@ -1,5 +1,5 @@
 // DB layer
-export { createPrompt, getPrompt, requirePrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt } from "./db/prompts.js"
+export { createPrompt, getPrompt, requirePrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt } from "./db/prompts.js"
 export { listVersions, getVersion, restoreVersion } from "./db/versions.js"
 export { listCollections, getCollection, ensureCollection, movePrompt } from "./db/collections.js"
 export { registerAgent, listAgents } from "./db/agents.js"

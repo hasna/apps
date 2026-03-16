@@ -11,6 +11,8 @@ export interface Prompt {
   is_template: boolean
   source: PromptSource
   pinned: boolean
+  next_prompt: string | null
+  expires_at: string | null
   project_id: string | null
   version: number
   use_count: number
@@ -82,6 +84,7 @@ export interface UpdatePromptInput {
   description?: string
   collection?: string
   tags?: string[]
+  next_prompt?: string | null
   changed_by?: string
 }
 

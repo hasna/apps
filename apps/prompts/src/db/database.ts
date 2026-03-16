@@ -152,6 +152,26 @@ function runMigrations(db: Database): void {
       `,
     },
     {
+      name: "005_chaining",
+      sql: `ALTER TABLE prompts ADD COLUMN next_prompt TEXT;`,
+    },
+    {
+      name: "006_expiry",
+      sql: `ALTER TABLE prompts ADD COLUMN expires_at TEXT;`,
+    },
+    {
+      name: "007_usage_log",
+      sql: `
+        CREATE TABLE IF NOT EXISTS usage_log (
+          id TEXT PRIMARY KEY,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          used_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_log_prompt_id ON usage_log(prompt_id);
+        CREATE INDEX IF NOT EXISTS idx_usage_log_used_at ON usage_log(used_at);
+      `,
+    },
+    {
       name: "002_fts5",
       sql: `
         CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(

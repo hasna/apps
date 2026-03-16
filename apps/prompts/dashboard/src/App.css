@@ -3,6 +3,22 @@
 :root {
   --bg: #0f1117;
   --surface: #1a1d27;
+
+/* Light theme overrides */
+[data-theme="light"] {
+  --bg: #f8f9fc;
+  --surface: #ffffff;
+  --surface2: #f0f2f7;
+  --border: #e2e6ef;
+  --text: #1a1d27;
+  --muted: #8490a8;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --green: #16a34a;
+  --red: #dc2626;
+  --yellow: #d97706;
+  --cyan: #0891b2;
+}
   --surface2: #22263a;
   --border: #2e3347;
   --text: #e2e8f0;
@@ -363,6 +379,36 @@
 }
 .quick-render input:focus { border-color: var(--accent); }
 .quick-render-actions { display: flex; align-items: center; gap: 8px; }
+
+/* Tag cloud */
+.tag-cloud { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 6px; }
+.tag-cloud-item {
+  background: none; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--muted); cursor: pointer; padding: 2px 6px; line-height: 1.4;
+  transition: all 0.1s;
+}
+.tag-cloud-item:hover { border-color: var(--accent); color: var(--text); }
+.tag-cloud-item.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Theme toggle */
+.theme-toggle {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  font-size: 15px; padding: 2px 4px; opacity: 0.7;
+}
+.theme-toggle:hover { opacity: 1; }
+
+/* Bulk */
+.bulk-checkbox { width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent); }
+.prompt-card.bulk-selected { border-color: var(--accent); background: rgba(99,102,241,0.06); }
+.bulk-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px; background: var(--accent); color: #fff;
+  font-size: 13px;
+}
+.bulk-bar button {
+  background: rgba(255,255,255,0.2); border: none; border-radius: 4px;
+  color: #fff; cursor: pointer; padding: 2px 10px; font-size: 12px;
+}
 
 .loading, .empty { padding: 40px; text-align: center; color: var(--muted); }
 .muted { color: var(--muted); font-size: 13px; }
