@@ -78,6 +78,17 @@ export function validateCommand(command: string, cwd: string): ValidationResult 
     issues.push(`GNU flag on macOS: ${gnuFlags.join(", ")}`);
   }
 
+  // Complexity guard — extreme pipe chains are fragile
+  const pipeCount = (command.match(/\|/g) || []).length;
+  if (pipeCount > 7) {
+    issues.push(`too complex: ${pipeCount} pipes — simplify`);
+  }
+
+  // grep -P (PCRE) doesn't exist on macOS
+  if (/grep\s+.*-[a-zA-Z]*P/.test(command)) {
+    issues.push("grep -P (PCRE) not available on macOS — use grep -E");
+  }
+
   return {
     valid: issues.length === 0,
     issues,

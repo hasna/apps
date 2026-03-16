@@ -4,6 +4,8 @@
 import { getProvider } from "./providers/index.js";
 import { estimateTokens } from "./parsers/index.js";
 import { recordSaving } from "./economy.js";
+import { discoverOutputHints } from "./context-hints.js";
+import { formatProfileHints } from "./tool-profiles.js";
 
 export interface ProcessedOutput {
   /** AI-generated summary (concise, structured) */
@@ -79,27 +81,19 @@ export async function processOutput(
   }
 
   try {
-    // Pre-parse: if output contains clear pass/fail counts, extract and return directly
-    // No hardcoded test runner list — works for ANY tool that outputs "X pass, Y fail"
-    const passMatch = output.match(/(\d+)\s+pass/i);
-    const failMatch = output.match(/(\d+)\s+fail/i);
-    // Pre-parse fires when output has BOTH pass+fail counts AND the user asked about tests
-    if (passMatch && failMatch && originalPrompt && /test|pass|fail/i.test(originalPrompt)) {
-      const passed = parseInt(passMatch[1]);
-      const failed = parseInt(failMatch[1]);
-      const answer = failed === 0
-        ? `✓ Yes, all ${passed} tests pass.`
-        : `✗ ${failed} of ${passed + failed} tests failed.`;
-      const savedTokens = estimateTokens(output) - estimateTokens(answer);
-      return {
-        summary: answer, full: output, tokensSaved: Math.max(0, savedTokens),
-        aiTokensUsed: 0, aiProcessed: true, aiCostUsd: 0, savingsValueUsd: 0, netSavingsUsd: 0,
-      };
-    }
+    // Discover output hints — regex discovers patterns, AI decides what matters
+    const outputHints = discoverOutputHints(output, command);
+    const hintsBlock = outputHints.length > 0
+      ? `\n\nOUTPUT OBSERVATIONS:\n${outputHints.join("\n")}`
+      : "";
+
+    // Inject tool-specific profile hints
+    const profileBlock = formatProfileHints(command);
+    const profileHints = profileBlock ? `\n\n${profileBlock}` : "";
 
     const provider = getProvider();
     const summary = await provider.complete(
-      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}`,
+      `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}${hintsBlock}${profileHints}`,
       {
         system: SUMMARIZE_PROMPT,
         maxTokens: 300,

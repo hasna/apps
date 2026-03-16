@@ -31,6 +31,7 @@ SUBCOMMANDS:
   collection create|list       Recipe collections
   mcp serve                    Start MCP server for AI agents
   mcp install --claude|--codex Install MCP server
+  discover [--days=N] [--json]  Scan Claude sessions, show token savings potential
   snapshot                     Terminal state as JSON
   --help                       Show this help
   --version                    Show version
@@ -44,7 +45,9 @@ MCP TOOLS (20+):
   snapshot, token_stats, session_history
 
 ENVIRONMENT:
-  CEREBRAS_API_KEY             Cerebras API key (free, open-source default)
+  XAI_API_KEY                  xAI API key (Grok, code-optimized — default)
+  CEREBRAS_API_KEY             Cerebras API key (free, open-source)
+  GROQ_API_KEY                 Groq API key (free, ultra-fast inference)
   ANTHROPIC_API_KEY            Anthropic API key (Claude models)
 `);
   process.exit(0);
@@ -241,17 +244,8 @@ else if (args[0] === "collection") {
 // ── Stats command ────────────────────────────────────────────────────────────
 
 else if (args[0] === "stats") {
-  const { getEconomyStats, formatTokens } = await import("./economy.js");
-  const s = getEconomyStats();
-  console.log("Token Economy:");
-  console.log(`  Total saved:  ${formatTokens(s.totalTokensSaved)}`);
-  console.log(`  Total used:   ${formatTokens(s.totalTokensUsed)}`);
-  console.log(`  By feature:`);
-  console.log(`    Structured: ${formatTokens(s.savingsByFeature.structured)}`);
-  console.log(`    Compressed: ${formatTokens(s.savingsByFeature.compressed)}`);
-  console.log(`    Diff cache: ${formatTokens(s.savingsByFeature.diff)}`);
-  console.log(`    NL cache:   ${formatTokens(s.savingsByFeature.cache)}`);
-  console.log(`    Search:     ${formatTokens(s.savingsByFeature.search)}`);
+  const { formatEconomicsSummary } = await import("./economy.js");
+  console.log(formatEconomicsSummary());
 }
 
 // ── Sessions command ─────────────────────────────────────────────────────────
@@ -341,15 +335,43 @@ else if (args[0] === "repo") {
 else if (args[0] === "symbols" && args[1]) {
   const { extractSymbolsFromFile } = await import("./search/semantic.js");
   const { resolve } = await import("path");
-  const filePath = resolve(args[1]);
-  const symbols = extractSymbolsFromFile(filePath);
-  if (symbols.length === 0) { console.log("No symbols found."); }
-  else {
-    for (const s of symbols) {
+  const { statSync, readdirSync } = await import("fs");
+  const target = resolve(args[1]);
+  const filter = args[2]; // optional: grep-like filter on symbol name
+
+  // Support directories — recurse and extract symbols from all source files
+  const files: string[] = [];
+  try {
+    if (statSync(target).isDirectory()) {
+      const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue;
+          const full = resolve(dir, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (/\.(ts|tsx|py|go|rs)$/.test(entry.name) && !/\.(test|spec)\.\w+$/.test(entry.name)) files.push(full);
+        }
+      };
+      walk(target);
+    } else {
+      files.push(target);
+    }
+  } catch { files.push(target); }
+
+  let totalSymbols = 0;
+  for (const file of files) {
+    const symbols = extractSymbolsFromFile(file);
+    const filtered = filter ? symbols.filter(s => s.name.toLowerCase().includes(filter.toLowerCase()) || s.kind.toLowerCase().includes(filter.toLowerCase())) : symbols;
+    if (filtered.length === 0) continue;
+    const relPath = file.replace(process.cwd() + "/", "");
+    if (files.length > 1) console.log(`\n${relPath}:`);
+    for (const s of filtered) {
       const exp = s.exported ? "⬡" : "·";
       console.log(`  ${exp} ${s.kind.padEnd(10)} L${String(s.line).padStart(4)}  ${s.name}`);
     }
+    totalSymbols += filtered.length;
   }
+  if (totalSymbols === 0) console.log("No symbols found.");
+  else if (files.length > 1) console.log(`\n${totalSymbols} symbols across ${files.length} files`);
 }
 
 // ── History command ──────────────────────────────────────────────────────────
@@ -371,12 +393,26 @@ else if (args[0] === "history") {
 
 else if (args[0] === "explain" && args[1]) {
   const command = args.slice(1).join(" ");
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY) {
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY && !process.env.GROQ_API_KEY && !process.env.XAI_API_KEY) {
     console.error("explain requires an API key"); process.exit(1);
   }
   const { explainCommand } = await import("./ai.js");
   const explanation = await explainCommand(command);
   console.log(explanation);
+}
+
+// ── Discover command ─────────────────────────────────────────────────────────
+
+else if (args[0] === "discover") {
+  const { discover, formatDiscoverReport } = await import("./discover.js");
+  const days = parseInt(args.find(a => a.startsWith("--days="))?.split("=")[1] ?? "30");
+  const json = args.includes("--json");
+  const report = discover({ maxAgeDays: days });
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(formatDiscoverReport(report));
+  }
 }
 
 // ── Snapshot command ─────────────────────────────────────────────────────────
@@ -400,7 +436,7 @@ else if (args.length > 0) {
   // Everything that doesn't match a subcommand is treated as natural language
   const prompt = args.join(" ");
 
-  const offlineMode = !process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY;
+  const offlineMode = !process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY && !process.env.GROQ_API_KEY && !process.env.XAI_API_KEY;
 
   const { translateToCommand, checkPermissions, isIrreversible } = await import("./ai.js");
   const { execSync } = await import("child_process");
@@ -409,6 +445,7 @@ else if (args.length > 0) {
   const { processOutput, shouldProcess } = await import("./output-processor.js");
   const { rewriteCommand } = await import("./command-rewriter.js");
   const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
+  const { saveOutput, formatOutputHint } = await import("./output-store.js");
   const { parseOutput, estimateTokens } = await import("./parsers/index.js");
   const { recordSaving, recordUsage } = await import("./economy.js");
   const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
@@ -416,6 +453,7 @@ else if (args.length > 0) {
   const { loadConfig } = await import("./history.js");
   const { loadContext, saveContext, formatContext } = await import("./session-context.js");
   const { getLearned, recordMapping } = await import("./usage-cache.js");
+  const { recordCorrection, findSimilarCorrections, recordOutput } = await import("./sessions-db.js");
 
   const config = loadConfig();
   const perms = config.permissions;
@@ -458,9 +496,10 @@ else if (args.length > 0) {
         } catch {}
       }
     }
-    // "I don't know" honesty — better than wrong answer
+    // Show the block reason clearly
     if (e.message?.startsWith("BLOCKED:")) {
-      console.log(`I don't know how to do this with shell commands. Try running it directly.`);
+      console.log(`⚠ ${e.message}`);
+      console.log(`  This is a READ-ONLY terminal. Run directly in your shell if you're sure.`);
     } else {
       console.error(e.message);
     }
@@ -507,7 +546,7 @@ else if (args.length > 0) {
     console.error(`[open-terminal] invalid command detected: ${validation.issues.join(", ")}`);
     try {
       const retryCommand = await translateToCommand(
-        `${prompt} (IMPORTANT: keep it simple. Use basic grep/find/cat/ls/wc commands. No complex awk/sed pipelines. No GNU flags. Verify file paths from the project context.)`,
+        `${prompt} (Previous command had issues: ${validation.issues.join(", ")}. Fix those specific issues. Keep the approach but correct the errors.)`,
         perms, []
       );
       if (retryCommand && retryCommand !== command) {
@@ -515,6 +554,14 @@ else if (args.length > 0) {
         if (retryValidation.valid || retryValidation.issues.length < validation.issues.length) {
           command = retryCommand;
           console.error(`[open-terminal] retried: $ ${command}`);
+        } else {
+          // Retry also invalid — use the simpler of the two
+          const retryPipes = (retryCommand.match(/\|/g) || []).length;
+          const origPipes = (command.match(/\|/g) || []).length;
+          if (retryPipes < origPipes) {
+            command = retryCommand;
+            console.error(`[open-terminal] retried (simpler): $ ${command}`);
+          }
         }
       }
     } catch {}
@@ -555,7 +602,14 @@ else if (args.length > 0) {
       const processed = await processOutput(actualCmd, clean, prompt);
       if (processed.aiProcessed) {
         if (processed.tokensSaved > 0) recordSaving("compressed", processed.tokensSaved);
-        console.log(processed.summary);
+        // Save full output for lazy recovery — agents can read the file
+        if (processed.tokensSaved > 50) {
+          const outputPath = saveOutput(actualCmd, clean);
+          console.log(processed.summary);
+          console.log(formatOutputHint(outputPath));
+        } else {
+          console.log(processed.summary);
+        }
         if (processed.tokensSaved > 10) console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
         process.exit(0);
       }
@@ -577,7 +631,7 @@ else if (args.length > 0) {
   } catch (e: any) {
     // Empty result (grep exit 1 = no matches) — not a real error
     const errStdout = e.stdout?.toString() ?? "";
-    const errStderr = e.stderr?.toString() ?? "";
+    let errStderr = e.stderr?.toString() ?? "";
     if (e.status === 1 && !errStdout.trim() && !errStderr.trim()) {
       // Empty result — retry with broader scope before giving up
       if (!actualCmd.includes("#(broadened)")) {
@@ -602,24 +656,37 @@ else if (args.length > 0) {
       process.exit(0);
     }
 
-    // Auto-retry: if command failed (exit 2+), ask AI for a simpler alternative
-    if (e.status >= 2 && !actualCmd.includes("(retry)")) {
-      try {
-        const retryCmd = await translateToCommand(
-          `${prompt} (The previous command failed with: ${errStderr.slice(0, 200)}. Try a SIMPLER approach. Use basic commands only.)`,
-          perms, []
-        );
-        if (retryCmd && !isIrreversible(retryCmd) && !checkPermissions(retryCmd, perms)) {
-          console.error(`[open-terminal] retrying: $ ${retryCmd}`);
-          const retryResult = execSync(retryCmd + " #(retry)", { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
+    // 3-retry learning loop: each attempt learns from the previous failure
+    if (e.status >= 2) {
+      const retryStrategies = [
+        // Attempt 2: inject error context
+        `${prompt} (Command "${actualCmd}" failed with: ${errStderr.slice(0, 300)}. Fix this specific error. Keep the approach but correct the issue.)`,
+        // Attempt 3: inject corrections + force simplicity
+        `${prompt} (TWO commands already failed for this query. Use the ABSOLUTE SIMPLEST approach: basic grep -rn, find, wc -l, cat. No awk, no xargs, no subshells. Must work on macOS BSD.)`,
+      ];
+
+      for (let attempt = 0; attempt < retryStrategies.length; attempt++) {
+        try {
+          const retryCmd = await translateToCommand(retryStrategies[attempt], perms, []);
+          if (!retryCmd || retryCmd === actualCmd || isIrreversible(retryCmd) || checkPermissions(retryCmd, perms)) continue;
+
+          console.error(`[open-terminal] retry ${attempt + 2}/3: $ ${retryCmd}`);
+          const retryResult = execSync(retryCmd + ` #(retry${attempt + 2})`, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
           const retryClean = stripNoise(stripAnsi(retryResult)).cleaned;
           if (retryClean.length > 5) {
+            // Record correction — AI learns for next time
+            recordCorrection(prompt, actualCmd, errStderr.slice(0, 500), retryCmd, true);
             const processed = await processOutput(retryCmd, retryClean, prompt);
             console.log(processed.aiProcessed ? processed.summary : retryClean);
             process.exit(0);
           }
+        } catch (retryErr: any) {
+          // This attempt also failed — record it and try next strategy
+          const retryStderr = retryErr.stderr?.toString() ?? "";
+          errStderr = retryStderr; // update for next attempt's context
+          continue;
         }
-      } catch { /* retry also failed, fall through */ }
+      }
     }
 
     // Combine stdout+stderr and try AI answer framing (for audit/lint/test commands)
@@ -642,11 +709,13 @@ else if (args.length > 0) {
 // ── TUI mode (no args) ──────────────────────────────────────────────────────
 
 else {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY) {
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY && !process.env.GROQ_API_KEY && !process.env.XAI_API_KEY) {
     console.error("terminal: No API key found.");
     console.error("Set one of:");
-    console.error("  export CEREBRAS_API_KEY=your_key  (free, open-source)");
-    console.error("  export ANTHROPIC_API_KEY=your_key  (Claude)");
+    console.error("  export XAI_API_KEY=your_key        (Grok, code-optimized — default)");
+    console.error("  export CEREBRAS_API_KEY=your_key   (free, open-source)");
+    console.error("  export GROQ_API_KEY=your_key       (free, ultra-fast)");
+    console.error("  export ANTHROPIC_API_KEY=your_key   (Claude)");
     process.exit(1);
   }
 

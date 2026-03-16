@@ -3,37 +3,51 @@ import { cacheGet, cacheSet } from "./cache.js";
 import { getProvider } from "./providers/index.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { discoverProjectHints, discoverSafetyHints, formatHints } from "./context-hints.js";
 
 // ── model routing ─────────────────────────────────────────────────────────────
-// Simple queries → fast model. Complex/ambiguous → smart model.
+// Config-driven model selection. Defaults per provider, user can override in ~/.terminal/config.json
 
 const COMPLEX_SIGNALS = [
   /\b(undo|revert|rollback|previous|last)\b/i,
   /\b(all files?|recursively|bulk|batch)\b/i,
   /\b(pipeline|chain|then|and then|after)\b/i,
   /\b(if|when|unless|only if)\b/i,
-  /\b(go into|go to|navigate|cd into|enter)\b.*\b(and|then)\b/i, // multi-step navigation
-  /\b(inside|within|under)\b/i,  // relative references need context awareness
-  /[|&;]{2}/,           // pipes / &&  in NL (unusual = complex intent)
+  /\b(go into|go to|navigate|cd into|enter)\b.*\b(and|then)\b/i,
+  /\b(inside|within|under)\b/i,
+  /[|&;]{2}/,
 ];
 
-/** Model routing per provider */
+/** Default models per provider — user can override in ~/.terminal/config.json under "models" */
+const MODEL_DEFAULTS: Record<string, { fast: string; smart: string }> = {
+  cerebras:  { fast: "qwen-3-235b-a22b-instruct-2507", smart: "qwen-3-235b-a22b-instruct-2507" },
+  groq:      { fast: "openai/gpt-oss-120b",             smart: "moonshotai/kimi-k2-instruct" },
+  xai:       { fast: "grok-code-fast-1",                smart: "grok-4-fast-non-reasoning" },
+  anthropic: { fast: "claude-haiku-4-5-20251001",       smart: "claude-sonnet-4-6" },
+};
+
+/** Load user model overrides from ~/.terminal/config.json */
+function loadModelOverrides(): Record<string, { fast?: string; smart?: string }> {
+  try {
+    const configPath = join(process.env.HOME ?? "~", ".terminal", "config.json");
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      return config.models ?? {};
+    }
+  } catch {}
+  return {};
+}
+
+/** Model routing per provider — config-driven with defaults */
 function pickModel(nl: string): { fast: string; smart: string; pick: "fast" | "smart" } {
   const isComplex = COMPLEX_SIGNALS.some((r) => r.test(nl)) || nl.split(" ").length > 10;
   const provider = getProvider();
+  const defaults = MODEL_DEFAULTS[provider.name] ?? MODEL_DEFAULTS.cerebras;
+  const overrides = loadModelOverrides()[provider.name] ?? {};
 
-  if (provider.name === "anthropic") {
-    return {
-      fast: "claude-haiku-4-5-20251001",
-      smart: "claude-sonnet-4-6",
-      pick: isComplex ? "smart" : "fast",
-    };
-  }
-
-  // Cerebras — qwen for everything (llama3.1-8b too unreliable)
   return {
-    fast: "qwen-3-235b-a22b-instruct-2507",
-    smart: "qwen-3-235b-a22b-instruct-2507",
+    fast: overrides.fast ?? defaults.fast,
+    smart: overrides.smart ?? defaults.smart,
     pick: isComplex ? "smart" : "fast",
   };
 }
@@ -107,123 +121,33 @@ export interface SessionEntry {
   error?: boolean;
 }
 
-// ── project context ──────────────────────────────────────────────────────────
+// ── correction memory ───────────────────────────────────────────────────────
+
+/** Load past corrections relevant to a prompt — injected as negative examples */
+function loadCorrectionHints(prompt: string): string {
+  try {
+    // Dynamic import to avoid circular deps
+    const { findSimilarCorrections } = require("./sessions-db.js");
+    const corrections = findSimilarCorrections(prompt, 3);
+    if (corrections.length === 0) return "";
+
+    const lines = corrections.map((c: any) =>
+      `AVOID: "${c.failed_command}" (failed: ${c.error_type}). USE: "${c.corrected_command}" instead.`
+    );
+    return `\n\nLEARNED CORRECTIONS (from past failures):\n${lines.join("\n")}`;
+  } catch { return ""; }
+}
+
+// ── project context (powered by context-hints) ──────────────────────────────
 
 function detectProjectContext(): string {
-  const cwd = process.cwd();
-  const parts: string[] = [];
-
-  // Node.js / TypeScript
-  const pkgPath = join(cwd, "package.json");
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      parts.push(`Project: ${pkg.name}@${pkg.version} (Node.js/TypeScript)`);
-      parts.push(`npm package: ${pkg.name} (use this name for npm view, npm info, etc.)`);
-      if (pkg.scripts) {
-        const scripts = Object.entries(pkg.scripts).map(([k, v]) => `${k}: ${v}`).slice(0, 8);
-        parts.push(`Available scripts: ${scripts.join(", ")}`);
-      }
-      if (pkg.dependencies) parts.push(`Dependencies: ${Object.keys(pkg.dependencies).join(", ")}`);
-      parts.push(`Use npm/bun/pnpm commands, NOT maven/gradle/cargo.`);
-    } catch {}
-  }
-
-  // Python
-  if (existsSync(join(cwd, "pyproject.toml"))) {
-    try {
-      const pyproject = readFileSync(join(cwd, "pyproject.toml"), "utf8");
-      const nameMatch = pyproject.match(/name\s*=\s*"([^"]+)"/);
-      const versionMatch = pyproject.match(/version\s*=\s*"([^"]+)"/);
-      parts.push(`Project: ${nameMatch?.[1] ?? "Python"}${versionMatch ? `@${versionMatch[1]}` : ""} (Python)`);
-    } catch { parts.push("Project: Python (pyproject.toml found)"); }
-    parts.push("Use pip/python/pytest commands. Test: pytest. Build: python -m build.");
-  } else if (existsSync(join(cwd, "requirements.txt"))) {
-    parts.push("Project: Python (requirements.txt). Use pip/python/pytest commands.");
-  }
-
-  // Go
-  if (existsSync(join(cwd, "go.mod"))) {
-    try {
-      const gomod = readFileSync(join(cwd, "go.mod"), "utf8");
-      const moduleMatch = gomod.match(/module\s+(\S+)/);
-      parts.push(`Project: ${moduleMatch?.[1] ?? "Go"} (Go module)`);
-    } catch { parts.push("Project: Go (go.mod found)"); }
-    parts.push("Use go build/test/run. Test: go test ./... Build: go build.");
-  }
-
-  // Rust
-  if (existsSync(join(cwd, "Cargo.toml"))) {
-    try {
-      const cargo = readFileSync(join(cwd, "Cargo.toml"), "utf8");
-      const nameMatch = cargo.match(/name\s*=\s*"([^"]+)"/);
-      const versionMatch = cargo.match(/version\s*=\s*"([^"]+)"/);
-      parts.push(`Project: ${nameMatch?.[1] ?? "Rust"}${versionMatch ? `@${versionMatch[1]}` : ""} (Rust/Cargo)`);
-    } catch { parts.push("Project: Rust (Cargo.toml found)"); }
-    parts.push("Use cargo build/test/run. Test: cargo test. Build: cargo build --release.");
-  }
-
-  // Java
-  if (existsSync(join(cwd, "pom.xml"))) {
-    parts.push("Project: Java/Maven. Use mvn commands. Test: mvn test. Build: mvn package.");
-  }
-  if (existsSync(join(cwd, "build.gradle")) || existsSync(join(cwd, "build.gradle.kts"))) {
-    parts.push("Project: Java/Gradle. Use gradle commands. Test: gradle test. Build: gradle build.");
-  }
-
-  // Docker
-  if (existsSync(join(cwd, "Dockerfile")) || existsSync(join(cwd, "docker-compose.yml")) || existsSync(join(cwd, "docker-compose.yaml"))) {
-    parts.push("Docker: Dockerfile/docker-compose present. Container commands available.");
-  }
-
-  // Makefile
-  if (existsSync(join(cwd, "Makefile"))) {
-    try {
-      const { execSync: execS } = require("child_process");
-      const targets = execS("grep -E '^[a-zA-Z_-]+:' Makefile | head -10 | cut -d: -f1", { cwd, encoding: "utf8", timeout: 1000 }).trim();
-      if (targets) parts.push(`Makefile targets: ${targets.split("\n").join(", ")}`);
-    } catch {}
-  }
-
-  // Directory structure — so AI knows actual paths (not guessed ones)
-  try {
-    const { execSync } = require("child_process");
-    // Top-level dirs
-    const topLevel = execSync("ls -1", { cwd, encoding: "utf8", timeout: 2000 }).trim();
-    parts.push(`Top-level: ${topLevel.split("\n").join(", ")}`);
-
-    // Detect monorepo (packages/ or workspaces in package.json)
-    const isMonorepo = existsSync(join(cwd, "packages")) || existsSync(join(cwd, "apps"));
-    if (isMonorepo) {
-      const pkgDirs = execSync(
-        `ls -d packages/*/src 2>/dev/null || ls -d apps/*/src 2>/dev/null || echo ""`,
-        { cwd, encoding: "utf8", timeout: 2000 }
-      ).trim();
-      if (pkgDirs) {
-        parts.push(`MONOREPO: Source is in packages/*/src/, NOT src/. Search packages/ not src/.`);
-        parts.push(`Package sources:\n${pkgDirs}`);
-      }
-    }
-
-    // src/ structure — include FILES so AI knows exact filenames + extensions
-    for (const srcDir of isMonorepo ? ["packages"] : ["src", "lib", "app"]) {
-      if (existsSync(join(cwd, srcDir))) {
-        const tree = execSync(
-          `find ${srcDir} -maxdepth ${isMonorepo ? 4 : 3} -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name '*.test.*' -not -name '*.spec.*' 2>/dev/null | sort | head -80`,
-          { cwd, encoding: "utf8", timeout: 3000 }
-        ).trim();
-        if (tree) parts.push(`Files in ${srcDir}/:\n${tree}`);
-        break;
-      }
-    }
-  } catch { /* timeout or no exec — skip */ }
-
-  return parts.length > 0 ? `\n\nPROJECT CONTEXT:\n${parts.join("\n")}` : "";
+  const hints = discoverProjectHints(process.cwd());
+  return hints.length > 0 ? `\n\n${formatHints(hints)}` : "";
 }
 
 // ── system prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[]): string {
+function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[], currentPrompt?: string): string {
   const restrictions: string[] = [];
   if (!perms.destructive)
     restrictions.push("- NEVER generate commands that delete, remove, or overwrite files/data");
@@ -254,10 +178,24 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[]): 
 
   const projectContext = detectProjectContext();
 
+  // Inject safety hints for the command being generated (AI sees what's risky)
+  const safetyBlock = sessionEntries.length > 0
+    ? (() => {
+        const lastCmd = sessionEntries[sessionEntries.length - 1]?.cmd;
+        if (lastCmd) {
+          const safetyHints = discoverSafetyHints(lastCmd);
+          return safetyHints.length > 0 ? `\n\nLAST COMMAND SAFETY:\n${safetyHints.join("\n")}` : "";
+        }
+        return "";
+      })()
+    : "";
+
   return `You are a terminal assistant. Output ONLY the exact shell command — no explanation, no markdown, no backticks.
 The user describes what they want in plain English. You translate to the exact shell command.
 
 RULES:
+- SIMPLICITY FIRST: Use the simplest command that works. Prefer grep | sort | head over 10-pipe chains. Complex pipelines are OK when needed, but NEVER pass file:line output to wc or xargs without cleaning it first.
+- ALWAYS use grep -rn (with -r) when searching directories. NEVER use grep without -r on src/ or any directory.
 - When user refers to items from previous output, use the EXACT names shown (e.g., "feature/auth" not "auth", "open-skills" not "open_skills")
 - When user says "the largest/smallest/first/second", look at the previous output to identify the correct item
 - When user says "them all" or "combine them", refer to items from the most recent command output
@@ -265,6 +203,7 @@ RULES:
 - For text search in code, use grep -rn, NOT nm or objdump (those are for compiled binaries)
 - On macOS: for memory use vm_stat or top -l 1, for disk use df -h, for processes use ps aux
 - macOS uses BSD tools, NOT GNU. Use: du -d 1 (not --max-depth), ls (not ls --color), sort -r (not sort --reverse), ps aux (not ps --sort)
+- NEVER use grep -P (PCRE). macOS grep has NO -P flag. Use grep -E for extended regex, or sed/awk for complex extraction.
 - NEVER invent commands that don't exist. Stick to standard Unix/macOS commands.
 - NEVER install packages (npx, npm install, pip install, brew install). This is a READ-ONLY terminal.
 - NEVER modify source code (sed -i, codemod, awk with redirect). Only observe, never change.
@@ -272,8 +211,18 @@ RULES:
 - Use exact file paths from the project context below. Do NOT guess paths.
 - For "what would break if I deleted X": use grep -rn "from.*X\\|import.*X\\|require.*X" src/ to find all importers.
 - For "find where X is defined": use grep -rn "export.*function X\\|export.*class X\\|export.*const X" src/
-- For "show me the code of function X": use grep -A 20 "function X" src/ to show the function body.
+- For "show me the code of function X": if you know the file, use grep -A 30 "function X" src/file.ts. If not, use grep -rn -A 30 "function X" src/ --include="*.ts"
+- ALWAYS use grep -rn (recursive) when searching directories. NEVER use grep without -r on a directory — it will fail.
 - For conceptual questions about what code does: use cat on the relevant file, the AI summary will explain it.
+- For DESTRUCTIVE requests (delete, remove, install, push): output BLOCKED: <reason>. NEVER try to execute destructive commands.
+
+AST-POWERED QUERIES: For code STRUCTURE questions, use the built-in AST tool instead of grep:
+- "find all exported functions" → terminal symbols src/ (lists all functions, classes, interfaces with line numbers)
+- "show all interfaces" → terminal symbols src/ | grep interface
+- "what does file X export" → terminal symbols src/file.ts
+- "show me the class hierarchy" → terminal symbols src/
+The "terminal symbols" command uses AST parsing (not regex) — it understands TypeScript, Python, Go, Rust code structure.
+For TEXT search (TODO, string matches, imports) → use grep as normal.
 
 COMPOUND QUESTIONS: For questions asking multiple things, prefer ONE command that captures all info. Extract multiple answers from a single output.
 - "how many tests and do they pass" → bun test (extract count AND pass/fail from output)
@@ -287,7 +236,13 @@ BLOCKED ALTERNATIVES: If your preferred command would require installing package
 - Security scan → grep -rn "eval\\|exec\\|spawn\\|password\\|secret" src/
 - Dependency audit → cat package.json | grep -A 50 dependencies
 - Test coverage → bun test --coverage (or npm run test:coverage if available)
-NEVER give up. Always try a grep/find/cat read-only alternative.
+NEVER give up. NEVER output BLOCKED for analysis questions. Always try a grep/find/cat/wc/awk read-only alternative.
+- Cyclomatic complexity → grep -rn "if\\|else\\|for\\|while\\|switch\\|case\\|catch\\|&&\\|||" src/ --include="*.ts" | wc -l
+- Unused exports → grep -rn "export function\|export const\|export class" src/ --include="*.ts" | sed 's/.*export [a-z]* //' | sed 's/[(<:].*//' | sort -u
+- Dead code → for each exported name, grep -rn "name" src/ --include="*.ts" | wc -l (if only 1 match = unused)
+- Dependency graph → grep -rn "from " src/ --include="*.ts" | sed 's/:.*from "/→/' | sed 's/".*//' | sort -u
+- Most parameters → grep -rn "function " src/ --include="*.ts" | awk -F'[()]' '{print gsub(/,/,",",$2)+1, $0}' | sort -nr | head -10
+ALWAYS try a heuristic shell approach before giving up. NEVER say BLOCKED for analysis questions.
 
 SEMANTIC MAPPING: When the user references a concept, search the file tree for RELATED terms:
 - Look at directory names: src/agent/ likely contains "agentic" code
@@ -300,7 +255,7 @@ EXISTENCE CHECKS: If the prompt starts with "is there", "does this have", "do we
 
 MONOREPO: If the project context says "MONOREPO", search packages/ or apps/ NOT src/. Use: grep -rn "pattern" packages/ --include="*.ts". For specific packages, use packages/PKGNAME/src/.
 cwd: ${process.cwd()}
-shell: zsh / macOS${projectContext}${restrictionBlock}${contextBlock}`;
+shell: zsh / macOS${projectContext}${safetyBlock}${restrictionBlock}${contextBlock}${currentPrompt ? loadCorrectionHints(currentPrompt) : ""}`;
 }
 
 // ── streaming translate ───────────────────────────────────────────────────────
@@ -320,7 +275,7 @@ export async function translateToCommand(
   const provider = getProvider();
   const routing = pickModel(nl);
   const model = routing.pick === "smart" ? routing.smart : routing.fast;
-  const system = buildSystemPrompt(perms, sessionEntries);
+  const system = buildSystemPrompt(perms, sessionEntries, nl);
 
   let text: string;
 
@@ -399,7 +354,7 @@ export async function fixCommand(
     {
       model: routing.smart, // always use smart model for fixes
       maxTokens: 256,
-      system: buildSystemPrompt(perms, sessionEntries),
+      system: buildSystemPrompt(perms, sessionEntries, originalNl),
     }
   );
   if (text.startsWith("BLOCKED:")) throw new Error(text);

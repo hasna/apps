@@ -24,9 +24,11 @@ export interface LLMProvider {
 }
 
 export interface ProviderConfig {
-  provider: "cerebras" | "anthropic" | "auto";
+  provider: "cerebras" | "anthropic" | "groq" | "xai" | "auto";
   cerebrasModel?: string;
   anthropicModel?: string;
+  groqModel?: string;
+  xaiModel?: string;
 }
 
 export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {

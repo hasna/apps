@@ -45,6 +45,32 @@ function getDb(): Database {
 
     CREATE INDEX IF NOT EXISTS idx_interactions_session ON interactions(session_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
+
+    CREATE TABLE IF NOT EXISTS corrections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      prompt TEXT NOT NULL,
+      failed_command TEXT NOT NULL,
+      error_output TEXT,
+      corrected_command TEXT NOT NULL,
+      worked INTEGER DEFAULT 1,
+      error_type TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS outputs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
+      command TEXT NOT NULL,
+      raw_output_path TEXT,
+      compressed_summary TEXT,
+      tokens_raw INTEGER DEFAULT 0,
+      tokens_compressed INTEGER DEFAULT 0,
+      provider TEXT,
+      model TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_corrections_prompt ON corrections(prompt);
   `);
 
   return db;
@@ -184,6 +210,61 @@ export function getSessionStats(): SessionStats {
     avgInteractionsPerSession: sessions.c > 0 ? totalInteractions / sessions.c : 0,
     errorRate: totalInteractions > 0 ? (errors.c ?? 0) / totalInteractions : 0,
   };
+}
+
+// ── Corrections ─────────────────────────────────────────────────────────────
+
+/** Record a correction: command failed, then AI retried with a better one */
+export function recordCorrection(
+  prompt: string,
+  failedCommand: string,
+  errorOutput: string,
+  correctedCommand: string,
+  worked: boolean,
+  errorType?: string,
+): void {
+  getDb().prepare(
+    "INSERT INTO corrections (prompt, failed_command, error_output, corrected_command, worked, error_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(prompt, failedCommand, errorOutput?.slice(0, 2000) ?? "", correctedCommand, worked ? 1 : 0, errorType ?? null, Date.now());
+}
+
+/** Find similar corrections for a prompt — used to inject as negative examples */
+export function findSimilarCorrections(prompt: string, limit: number = 5): { failed_command: string; corrected_command: string; error_type: string }[] {
+  // Simple keyword matching — extract significant words from prompt
+  const words = prompt.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (words.length === 0) return [];
+
+  // Search corrections where the prompt shares keywords
+  const all = getDb().prepare(
+    "SELECT prompt, failed_command, corrected_command, error_type FROM corrections WHERE worked = 1 ORDER BY created_at DESC LIMIT 100"
+  ).all() as any[];
+
+  return all
+    .filter(c => {
+      const cWords = c.prompt.toLowerCase().split(/\s+/);
+      const overlap = words.filter((w: string) => cWords.some((cw: string) => cw.includes(w) || w.includes(cw)));
+      return overlap.length >= Math.min(2, words.length);
+    })
+    .slice(0, limit)
+    .map(c => ({ failed_command: c.failed_command, corrected_command: c.corrected_command, error_type: c.error_type ?? "unknown" }));
+}
+
+// ── Output tracking ─────────────────────────────────────────────────────────
+
+/** Record a compressed output for audit trail */
+export function recordOutput(
+  command: string,
+  rawOutputPath: string | null,
+  compressedSummary: string,
+  tokensRaw: number,
+  tokensCompressed: number,
+  provider?: string,
+  model?: string,
+  sessionId?: string,
+): void {
+  getDb().prepare(
+    "INSERT INTO outputs (session_id, command, raw_output_path, compressed_summary, tokens_raw, tokens_compressed, provider, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(sessionId ?? null, command, rawOutputPath ?? null, compressedSummary?.slice(0, 5000) ?? "", tokensRaw, tokensCompressed, provider ?? null, model ?? null, Date.now());
 }
 
 /** Close the database connection */

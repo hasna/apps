@@ -97,3 +97,56 @@ export function formatTokens(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return `${n}`;
 }
+
+// ── Weighted economics ──────────────────────────────────────────────────────
+// Saved input tokens are repeated across multiple turns before compaction.
+// Weighted pricing accounts for the actual billing impact.
+
+/** Provider pricing per million tokens */
+const PROVIDER_PRICING: Record<string, { input: number; output: number }> = {
+  cerebras:  { input: 0.60, output: 1.20 },
+  groq:      { input: 0.15, output: 0.60 },
+  xai:       { input: 0.20, output: 1.50 },
+  anthropic: { input: 0.80, output: 4.00 }, // Haiku
+  "anthropic-sonnet": { input: 3.00, output: 15.00 },
+  "anthropic-opus":   { input: 5.00, output: 25.00 },
+};
+
+/** Estimate USD savings from compressed tokens */
+export function estimateSavingsUsd(
+  tokensSaved: number,
+  consumerModel: string = "anthropic-opus",
+  avgTurnsBeforeCompaction: number = 5,
+): { savingsUsd: number; multipliedTokens: number; ratePerMillion: number } {
+  const pricing = PROVIDER_PRICING[consumerModel] ?? PROVIDER_PRICING["anthropic-opus"];
+  const multipliedTokens = tokensSaved * avgTurnsBeforeCompaction;
+  const savingsUsd = (multipliedTokens * pricing.input) / 1_000_000;
+  return { savingsUsd, multipliedTokens, ratePerMillion: pricing.input };
+}
+
+/** Format a full economics summary */
+export function formatEconomicsSummary(): string {
+  const s = loadStats();
+  const opus = estimateSavingsUsd(s.totalTokensSaved, "anthropic-opus");
+  const sonnet = estimateSavingsUsd(s.totalTokensSaved, "anthropic-sonnet");
+  const haiku = estimateSavingsUsd(s.totalTokensSaved, "anthropic");
+
+  return [
+    `Token Economy:`,
+    `  Tokens saved:  ${formatTokens(s.totalTokensSaved)}`,
+    `  Tokens used:   ${formatTokens(s.totalTokensUsed)}`,
+    `  Ratio:         ${s.totalTokensUsed > 0 ? (s.totalTokensSaved / s.totalTokensUsed).toFixed(1) : "∞"}x return`,
+    ``,
+    `  Estimated USD savings (×5 turns before compaction):`,
+    `    Opus ($5/M):   $${opus.savingsUsd.toFixed(2)} (${formatTokens(opus.multipliedTokens)} billable tokens)`,
+    `    Sonnet ($3/M): $${sonnet.savingsUsd.toFixed(2)}`,
+    `    Haiku ($0.8/M): $${haiku.savingsUsd.toFixed(2)}`,
+    ``,
+    `  By feature:`,
+    `    Compressed: ${formatTokens(s.savingsByFeature.compressed)}`,
+    `    Structured: ${formatTokens(s.savingsByFeature.structured)}`,
+    `    Diff cache: ${formatTokens(s.savingsByFeature.diff)}`,
+    `    NL cache:   ${formatTokens(s.savingsByFeature.cache)}`,
+    `    Search:     ${formatTokens(s.savingsByFeature.search)}`,
+  ].join("\n");
+}
