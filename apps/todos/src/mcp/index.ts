@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   createTask,
+  getTask,
   getTaskWithRelations,
   listTasks,
   countTasks,
@@ -1820,18 +1821,62 @@ server.tool(
 if (shouldRegisterTool("bulk_update_tasks")) {
 server.tool(
   "bulk_update_tasks",
-  "Update multiple tasks at once with the same changes.",
+  "Update multiple tasks at once. Two modes: (1) task_ids + shared fields — apply the same changes to all; (2) updates array — per-task fields, each entry has id plus any fields to update.",
   {
-    task_ids: z.array(z.string()),
+    // Mode 1: same fields applied to all
+    task_ids: z.array(z.string()).optional().describe("Task IDs to update with the same fields (mode 1)"),
     status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
     priority: z.enum(["low", "medium", "high", "critical"]).optional(),
     assigned_to: z.string().optional(),
     tags: z.array(z.string()).optional(),
+    // Mode 2: per-task updates
+    updates: z.array(z.object({
+      id: z.string(),
+      status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      assigned_to: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      plan_id: z.string().optional(),
+      task_list_id: z.string().optional(),
+    })).optional().describe("Per-task updates — each entry has id plus fields to update (mode 2)"),
   },
-  async ({ task_ids, ...updates }) => {
+  async ({ task_ids, updates, ...sharedFields }) => {
     try {
-      const resolvedIds = task_ids.map(id => resolveId(id));
-      const result = bulkUpdateTasks(resolvedIds, updates);
+      let result: { updated: number; failed: { id: string; error: string }[] };
+
+      if (updates && updates.length > 0) {
+        // Mode 2: per-task updates
+        const d = getDatabase();
+        let updated = 0;
+        const failed: { id: string; error: string }[] = [];
+        const tx = d.transaction(() => {
+          for (const entry of updates) {
+            try {
+              const { id, ...fields } = entry;
+              const resolvedId = resolveId(id);
+              const task = getTask(resolvedId);
+              if (!task) { failed.push({ id, error: "Task not found" }); continue; }
+              if (fields.plan_id) fields.plan_id = resolveId(fields.plan_id, "plans");
+              if (fields.task_list_id) fields.task_list_id = resolveId(fields.task_list_id, "task_lists");
+              updateTask(resolvedId, { ...fields, version: task.version }, d);
+              updated++;
+            } catch (e) {
+              failed.push({ id: entry.id, error: e instanceof Error ? e.message : String(e) });
+            }
+          }
+        });
+        tx();
+        result = { updated, failed };
+      } else if (task_ids && task_ids.length > 0) {
+        // Mode 1: same fields applied to all
+        const resolvedIds = task_ids.map(id => resolveId(id));
+        result = bulkUpdateTasks(resolvedIds, sharedFields);
+      } else {
+        return { content: [{ type: "text" as const, text: "Provide either task_ids (mode 1) or updates array (mode 2)." }], isError: true };
+      }
+
       const parts = [`Updated ${result.updated} task(s).`];
       if (result.failed.length > 0) {
         parts.push(`Failed ${result.failed.length}:`);
@@ -2626,7 +2671,7 @@ server.tool(
       // Bulk operations
       clone_task: "Duplicate a task with optional field overrides. Creates new independent copy.\n  Params: task_id(string, req), title(string), description(string), priority(low|medium|high|critical), status(pending|in_progress|completed|failed|cancelled), project_id(string), plan_id(string), task_list_id(string), assigned_to(string), tags(string[]), estimated_minutes(number)\n  Example: {task_id: 'a1b2c3d4', title: 'Cloned task', assigned_to: 'brutus'}",
       move_task: "Move a task to a different list, project, or plan.\n  Params: task_id(string, req), task_list_id(string|null), project_id(string|null), plan_id(string|null)\n  Example: {task_id: 'a1b2c3d4', task_list_id: 'e5f6g7h8'}",
-      bulk_update_tasks: "Update multiple tasks at once with the same changes.\n  Params: task_ids(string[], req), status(pending|in_progress|completed|failed|cancelled), priority(low|medium|high|critical), assigned_to(string), tags(string[])\n  Example: {task_ids: ['abc12345', 'def67890'], status: 'completed'}",
+      bulk_update_tasks: "Update multiple tasks at once. Two modes:\n  Mode 1 (same fields to all): task_ids(string[], req), status, priority, assigned_to, tags\n  Mode 2 (per-task fields): updates([{id, status?, priority?, assigned_to?, tags?, title?, description?, plan_id?, task_list_id?}], req)\n  Example mode 1: {task_ids: ['abc12345', 'def67890'], assigned_to: 'agent-id'}\n  Example mode 2: {updates: [{id: 'abc12345', assigned_to: 'agent-1'}, {id: 'def67890', status: 'in_progress'}]}",
       bulk_create_tasks: "Create multiple tasks atomically. Supports inter-task dependencies via temp_id references.\n  Params: tasks(array, req — [{temp_id, title, description, priority, status, project_id, plan_id, task_list_id, agent_id, assigned_to, tags, estimated_minutes, depends_on_temp_ids}]), project_id(string — default for all), plan_id(string — default for all), task_list_id(string — default for all)\n  Example: {tasks: [{temp_id: 'a', title: 'First'}, {temp_id: 'b', title: 'Second', depends_on_temp_ids: ['a']}]}",
 
       // Analytics
