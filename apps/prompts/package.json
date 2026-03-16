@@ -53,11 +53,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-prompts.git"
+    "url": "https://github.com/hasna/prompts.git"
   },
-  "homepage": "https://github.com/hasna/open-prompts",
+  "homepage": "https://github.com/hasna/prompts",
   "bugs": {
-    "url": "https://github.com/hasna/open-prompts/issues"
+    "url": "https://github.com/hasna/prompts/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
