@@ -56,6 +56,13 @@ import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js
 import { getAgentTaskListId } from "../lib/config.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import {
+  getChecklist,
+  addChecklistItem,
+  checkChecklistItem,
+  updateChecklistItemText,
+  removeChecklistItem,
+} from "../db/checklists.js";
+import {
   VersionConflictError,
   TaskNotFoundError,
   ProjectNotFoundError,
@@ -374,6 +381,13 @@ server.tool(
       }
       if (task.parent) {
         parts.push(`\nParent: ${task.parent.id.slice(0, 8)} | ${task.parent.title}`);
+      }
+      if (task.checklist.length > 0) {
+        const done = task.checklist.filter(i => i.checked).length;
+        parts.push(`\nChecklist (${done}/${task.checklist.length}):`);
+        for (const item of task.checklist) {
+          parts.push(`  ${item.position + 1}. [${item.checked ? "x" : " "}] ${item.text}  (${item.id.slice(0, 8)})`);
+        }
       }
 
       return { content: [{ type: "text" as const, text: parts.join("\n") }] };
@@ -760,6 +774,141 @@ server.tool(
         `${s.id.slice(0, 8)} | [${s.type}] ${s.name} → ${s.uri}${s.description ? `\n  ${s.description}` : ""}`
       );
       return { content: [{ type: "text" as const, text: `${sources.length} source(s):\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// add_checklist_item
+if (shouldRegisterTool("add_checklist_item")) {
+server.tool(
+  "add_checklist_item",
+  "Add a checklist item to a task. Items are numbered and individually checkable.",
+  {
+    task_id: z.string().describe("Task ID"),
+    text: z.string().describe("Checklist item text"),
+    position: z.number().optional().describe("Position (0-based). Appended to end if omitted."),
+  },
+  async ({ task_id, text, position }) => {
+    try {
+      const resolvedId = resolveId(task_id, "tasks");
+      const item = addChecklistItem({ task_id: resolvedId, text, position });
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Item added: ${item.position + 1}. [ ] ${item.text}  (${item.id.slice(0, 8)})`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// check_checklist_item
+if (shouldRegisterTool("check_checklist_item")) {
+server.tool(
+  "check_checklist_item",
+  "Mark a checklist item as checked or unchecked.",
+  {
+    item_id: z.string().describe("Checklist item ID or prefix"),
+    checked: z.boolean().describe("true to check, false to uncheck"),
+  },
+  async ({ item_id, checked }) => {
+    try {
+      const db = getDatabase();
+      const row = db.query("SELECT id FROM task_checklists WHERE id LIKE ?").get(`${item_id}%`) as { id: string } | null;
+      if (!row) return { content: [{ type: "text" as const, text: `Checklist item not found: ${item_id}` }], isError: true };
+      const item = checkChecklistItem(row.id, checked);
+      if (!item) return { content: [{ type: "text" as const, text: "Update failed" }], isError: true };
+      return {
+        content: [{
+          type: "text" as const,
+          text: `${item.position + 1}. [${item.checked ? "x" : " "}] ${item.text}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// update_checklist_item
+if (shouldRegisterTool("update_checklist_item")) {
+server.tool(
+  "update_checklist_item",
+  "Update the text of a checklist item.",
+  {
+    item_id: z.string().describe("Checklist item ID or prefix"),
+    text: z.string().describe("New text"),
+  },
+  async ({ item_id, text }) => {
+    try {
+      const db = getDatabase();
+      const row = db.query("SELECT id FROM task_checklists WHERE id LIKE ?").get(`${item_id}%`) as { id: string } | null;
+      if (!row) return { content: [{ type: "text" as const, text: `Checklist item not found: ${item_id}` }], isError: true };
+      const item = updateChecklistItemText(row.id, text);
+      if (!item) return { content: [{ type: "text" as const, text: "Update failed" }], isError: true };
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Updated: ${item.position + 1}. [${item.checked ? "x" : " "}] ${item.text}`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// remove_checklist_item
+if (shouldRegisterTool("remove_checklist_item")) {
+server.tool(
+  "remove_checklist_item",
+  "Remove a checklist item from a task.",
+  {
+    item_id: z.string().describe("Checklist item ID or prefix"),
+  },
+  async ({ item_id }) => {
+    try {
+      const db = getDatabase();
+      const row = db.query("SELECT id, text FROM task_checklists WHERE id LIKE ?").get(`${item_id}%`) as { id: string; text: string } | null;
+      if (!row) return { content: [{ type: "text" as const, text: `Checklist item not found: ${item_id}` }], isError: true };
+      removeChecklistItem(row.id);
+      return { content: [{ type: "text" as const, text: `Removed: ${row.text}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// get_checklist
+if (shouldRegisterTool("get_checklist")) {
+server.tool(
+  "get_checklist",
+  "Get all checklist items for a task with progress summary.",
+  {
+    task_id: z.string().describe("Task ID"),
+  },
+  async ({ task_id }) => {
+    try {
+      const resolvedId = resolveId(task_id, "tasks");
+      const items = getChecklist(resolvedId);
+      if (items.length === 0) {
+        return { content: [{ type: "text" as const, text: "No checklist items." }] };
+      }
+      const done = items.filter(i => i.checked).length;
+      const lines = [`Checklist (${done}/${items.length} done):`];
+      for (const item of items) {
+        lines.push(`  ${item.position + 1}. [${item.checked ? "x" : " "}] ${item.text}  (${item.id.slice(0, 8)})`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -2378,6 +2527,7 @@ server.tool(
       "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
       "add_dependency","remove_dependency","add_comment","log_progress",
       "create_project","list_projects","add_project_source","remove_project_source","list_project_sources",
+      "add_checklist_item","check_checklist_item","update_checklist_item","remove_checklist_item","get_checklist",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
       "register_agent","list_agents","get_agent","rename_agent","delete_agent",
       "get_my_tasks","get_org_chart","set_reports_to",
@@ -2432,6 +2582,13 @@ server.tool(
       // Projects
       create_project: "Register a new project. Auto-generates task prefix for short IDs (e.g. APP-00001).\n  Params: name(string, req), path(string, req — unique absolute path), description(string), task_list_id(string)\n  Example: {name: 'my-app', path: '/Users/dev/my-app'}",
       list_projects: "List all registered projects. No params.",
+      // Checklists
+      add_checklist_item: "Add a checklist item (numbered sub-step) to a task.\n  Params: task_id(string, req), text(string, req), position(number — 0-based, appended to end if omitted)\n  Example: {task_id: 'a1b2c3d4', text: 'Cancel Slack subscription'}",
+      check_checklist_item: "Mark a checklist item checked or unchecked.\n  Params: item_id(string, req — item ID or prefix), checked(boolean, req)\n  Example: {item_id: 'abc12345', checked: true}",
+      update_checklist_item: "Update the text of a checklist item.\n  Params: item_id(string, req), text(string, req)\n  Example: {item_id: 'abc12345', text: 'Cancel GitHub subscription'}",
+      remove_checklist_item: "Remove a checklist item permanently.\n  Params: item_id(string, req)\n  Example: {item_id: 'abc12345'}",
+      get_checklist: "Get all checklist items for a task with progress (done/total).\n  Params: task_id(string, req)\n  Example: {task_id: 'a1b2c3d4'}",
+
       add_project_source: "Add a data source to a project (S3, GDrive, local path, GitHub, Notion, HTTP, etc.).\n  Params: project_id(string, req), type(string, req — e.g. 's3','gdrive','local','github','notion','http'), name(string, req), uri(string, req), description(string), metadata(object)\n  Example: {project_id: 'a1b2c3d4', type: 's3', name: 'Assets bucket', uri: 's3://my-bucket/assets/', description: 'Project media files'}",
       remove_project_source: "Remove a data source from a project.\n  Params: source_id(string, req — source ID or prefix)\n  Example: {source_id: 'abc12345'}",
       list_project_sources: "List all data sources for a project.\n  Params: project_id(string, req)\n  Example: {project_id: 'a1b2c3d4'}",

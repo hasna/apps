@@ -24,6 +24,7 @@ import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { taskFromTemplate } from "./templates.js";
+import { getChecklist } from "./checklists.js";
 
 function rowToTask(row: TaskRow): Task {
   return {
@@ -156,6 +157,9 @@ export function getTaskWithRelations(
   // Get parent
   const parent = task.parent_id ? getTask(task.parent_id, d) : null;
 
+  // Get checklist items
+  const checklist = getChecklist(id, d);
+
   return {
     ...task,
     subtasks,
@@ -163,6 +167,7 @@ export function getTaskWithRelations(
     blocked_by,
     comments,
     parent,
+    checklist,
   };
 }
 

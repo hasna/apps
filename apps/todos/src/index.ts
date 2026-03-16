@@ -123,6 +123,17 @@ export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook
 // Templates
 export { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./db/templates.js";
 
+// Checklists
+export {
+  getChecklist,
+  addChecklistItem,
+  checkChecklistItem,
+  updateChecklistItemText,
+  removeChecklistItem,
+  clearChecklist,
+  getChecklistStats,
+} from "./db/checklists.js";
+
 // Handoffs
 export { createHandoff, listHandoffs, getLatestHandoff } from "./db/handoffs.js";
 export type { Handoff, CreateHandoffInput } from "./db/handoffs.js";
@@ -166,6 +177,9 @@ export type {
   ProjectSource,
   ProjectSourceRow,
   CreateProjectSourceInput,
+  ChecklistItem,
+  ChecklistItemRow,
+  CreateChecklistItemInput,
   Plan,
   CreatePlanInput,
   UpdatePlanInput,

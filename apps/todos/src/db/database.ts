@@ -402,7 +402,21 @@ const MIGRATIONS = [
   );
   INSERT OR IGNORE INTO _migrations (id) VALUES (20);
   `,
-  // Migration 21: Project sources — named data sources (S3, GDrive, local, etc.) per project
+  // Migration 21: Task checklists — ordered sub-steps per task
+  `
+  CREATE TABLE IF NOT EXISTS task_checklists (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    text TEXT NOT NULL,
+    checked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_checklists_task ON task_checklists(task_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (21);
+  `,
+  // Migration 22: Project sources — named data sources (S3, GDrive, local, etc.) per project
   `
   CREATE TABLE IF NOT EXISTS project_sources (
     id TEXT PRIMARY KEY,
@@ -417,7 +431,7 @@ const MIGRATIONS = [
   );
   CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id);
   CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type);
-  INSERT OR IGNORE INTO _migrations (id) VALUES (21);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (22);
   `,
 ];
 
@@ -563,6 +577,17 @@ function ensureSchema(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
 
+  ensureTable("task_checklists", `
+    CREATE TABLE task_checklists (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL DEFAULT 0,
+      text TEXT NOT NULL,
+      checked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
   ensureTable("project_sources", `
     CREATE TABLE project_sources (
       id TEXT PRIMARY KEY,
@@ -635,6 +660,7 @@ function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_history_agent ON task_history(agent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_parent ON tasks(recurrence_parent_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_rule ON tasks(recurrence_rule) WHERE recurrence_rule IS NOT NULL");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_checklists_task ON task_checklists(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type)");
 }

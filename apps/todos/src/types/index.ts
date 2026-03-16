@@ -256,6 +256,33 @@ export interface Task {
   spawned_from_session: string | null;
 }
 
+// Checklist item — ordered sub-steps within a task
+export interface ChecklistItem {
+  id: string;
+  task_id: string;
+  position: number;
+  text: string;
+  checked: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChecklistItemRow {
+  id: string;
+  task_id: string;
+  position: number;
+  text: string;
+  checked: number; // SQLite integer
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateChecklistItemInput {
+  task_id: string;
+  text: string;
+  position?: number; // appended to end if omitted
+}
+
 // Task with relations loaded
 export interface TaskWithRelations extends Task {
   subtasks: Task[];
@@ -263,6 +290,7 @@ export interface TaskWithRelations extends Task {
   blocked_by: Task[];
   comments: TaskComment[];
   parent: Task | null;
+  checklist: ChecklistItem[];
 }
 
 export interface CreateTaskInput {
