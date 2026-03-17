@@ -138,6 +138,10 @@ export {
 export { createHandoff, listHandoffs, getLatestHandoff } from "./db/handoffs.js";
 export type { Handoff, CreateHandoffInput } from "./db/handoffs.js";
 
+// Task Files
+export { addTaskFile, getTaskFile, listTaskFiles, findTasksByFile, updateTaskFileStatus, removeTaskFile, bulkAddTaskFiles } from "./db/task-files.js";
+export type { TaskFile, AddTaskFileInput } from "./db/task-files.js";
+
 // Locks
 export { acquireLock, releaseLock, checkLock, cleanExpiredLocks } from "./db/locks.js";
 export type { ResourceLock } from "./db/locks.js";

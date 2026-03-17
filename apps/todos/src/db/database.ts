@@ -453,6 +453,23 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_resource_locks_agent ON resource_locks(agent_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (24);
   `,
+  // Migration 25: Task files — track which files are associated with each task
+  `
+  CREATE TABLE IF NOT EXISTS task_files (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    agent_id TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_files_task ON task_files(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_files_path ON task_files(path);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_task_files_task_path ON task_files(task_id, path);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (25);
+  `,
 ];
 
 let _db: Database | null = null;

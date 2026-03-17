@@ -2859,6 +2859,77 @@ server.resource(
   },
 );
 
+// === TASK FILES ===
+
+if (shouldRegisterTool("add_task_file")) {
+server.tool(
+  "add_task_file",
+  "Link a file path to a task. Tracks which files an agent is working on. Upserts if same task+path exists.",
+  {
+    task_id: z.string().describe("Task ID"),
+    path: z.string().describe("File path (relative or absolute)"),
+    paths: z.array(z.string()).optional().describe("Multiple file paths to add at once"),
+    status: z.enum(["planned", "active", "modified", "reviewed", "removed"]).optional().describe("File status (default: active)"),
+    agent_id: z.string().optional().describe("Agent working on this file"),
+    note: z.string().optional().describe("Note about why this file is linked"),
+  },
+  async ({ task_id, path, paths: multiplePaths, status, agent_id, note }) => {
+    try {
+      const { addTaskFile, bulkAddTaskFiles } = require("../db/task-files.js") as any;
+      const resolvedId = resolveId(task_id);
+      if (multiplePaths && multiplePaths.length > 0) {
+        const allPaths = path ? [path, ...multiplePaths] : multiplePaths;
+        const files = bulkAddTaskFiles(resolvedId, allPaths, agent_id);
+        return { content: [{ type: "text" as const, text: `${files.length} file(s) linked to task ${resolvedId.slice(0, 8)}` }] };
+      }
+      const file = addTaskFile({ task_id: resolvedId, path, status, agent_id, note });
+      return { content: [{ type: "text" as const, text: `${file.status} ${file.path} → task ${resolvedId.slice(0, 8)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("list_task_files")) {
+server.tool(
+  "list_task_files",
+  "List all files linked to a task.",
+  { task_id: z.string().describe("Task ID") },
+  async ({ task_id }) => {
+    try {
+      const { listTaskFiles } = require("../db/task-files.js") as any;
+      const resolvedId = resolveId(task_id);
+      const files: any[] = listTaskFiles(resolvedId);
+      if (files.length === 0) return { content: [{ type: "text" as const, text: "No files linked." }] };
+      const lines = files.map((f: any) => `[${f.status}] ${f.path}${f.agent_id ? ` (${f.agent_id})` : ""}${f.note ? ` — ${f.note}` : ""}`);
+      return { content: [{ type: "text" as const, text: `${files.length} file(s):\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("find_tasks_by_file")) {
+server.tool(
+  "find_tasks_by_file",
+  "Find which tasks are linked to a specific file path. Shows who's working on what files.",
+  { path: z.string().describe("File path to search for") },
+  async ({ path }) => {
+    try {
+      const { findTasksByFile } = require("../db/task-files.js") as any;
+      const files: any[] = findTasksByFile(path);
+      if (files.length === 0) return { content: [{ type: "text" as const, text: `No tasks linked to ${path}` }] };
+      const lines = files.map((f: any) => `${f.task_id.slice(0, 8)} [${f.status}]${f.agent_id ? ` (${f.agent_id})` : ""}`);
+      return { content: [{ type: "text" as const, text: `${files.length} task(s) linked to ${path}:\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === HANDOFFS ===
 
 if (shouldRegisterTool("create_handoff")) {
