@@ -94,6 +94,16 @@ export {
   renameAgent,
 } from "./lib/presence.js";
 
+export {
+  acquireLock,
+  releaseLock,
+  checkLock,
+  cleanExpiredLocks,
+  listLocks,
+} from "./lib/locks.js";
+
+export type { ResourceLock } from "./lib/locks.js";
+
 export type {
   Message,
   Session,

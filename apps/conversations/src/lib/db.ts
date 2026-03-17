@@ -105,6 +105,22 @@ export function getDb(): Database {
     )
   `);
 
+  // Resource locks table (advisory + exclusive write coordination)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS resource_locks (
+      resource_type TEXT NOT NULL,
+      resource_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      lock_type TEXT NOT NULL DEFAULT 'advisory',
+      locked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      expires_at TEXT NOT NULL,
+      UNIQUE(resource_type, resource_id, lock_type)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_locks_resource ON resource_locks(resource_type, resource_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_locks_agent ON resource_locks(agent_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_locks_expires ON resource_locks(expires_at)");
+
   // Reactions table
   db.exec(`
     CREATE TABLE IF NOT EXISTS reactions (
