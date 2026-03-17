@@ -224,16 +224,17 @@ export function formatCostsTerminal(summary: CostSummary): string {
     }
   }
 
-  // Top scenarios by cost
+  // Top scenarios by cost (sorted descending — already ordered by SQL)
   if (summary.byScenario.length > 0) {
     lines.push("");
-    lines.push(chalk.bold("  Top Scenarios by Cost"));
-    lines.push(`  ${"Scenario".padEnd(40)} ${"Cost".padEnd(12)} ${"Tokens".padEnd(12)} Runs`);
-    lines.push(`  ${"─".repeat(40)} ${"─".repeat(12)} ${"─".repeat(12)} ${"─".repeat(6)}`);
+    lines.push(chalk.bold("  Scenarios by Cost (most expensive first)"));
+    lines.push(`  ${"Scenario".padEnd(40)} ${"Total Cost".padEnd(12)} ${"Avg/Run".padEnd(12)} ${"Runs".padEnd(6)} Tokens`);
+    lines.push(`  ${"─".repeat(40)} ${"─".repeat(12)} ${"─".repeat(12)} ${"─".repeat(6)} ${"─".repeat(10)}`);
     for (const s of summary.byScenario) {
       const label = s.name.length > 38 ? s.name.slice(0, 35) + "..." : s.name;
+      const avgPerRun = s.runs > 0 ? s.costCents / s.runs : 0;
       lines.push(
-        `  ${label.padEnd(40)} ${formatDollars(s.costCents).padEnd(12)} ${formatTokens(s.tokens).padEnd(12)} ${s.runs}`
+        `  ${label.padEnd(40)} ${formatDollars(s.costCents).padEnd(12)} ${formatDollars(avgPerRun).padEnd(12)} ${String(s.runs).padEnd(6)} ${formatTokens(s.tokens)}`
       );
     }
   }

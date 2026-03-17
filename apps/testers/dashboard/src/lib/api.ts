@@ -48,6 +48,17 @@ export const getResult = (id: string) =>
 // Screenshots
 export const getScreenshotUrl = (id: string) => `${BASE}/screenshots/${id}/file`;
 
+// Trigger a run
+export const triggerRun = (body: Record<string, unknown>) =>
+  fetchJSON<{ status: string; message: string }>("/runs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+// Scenario run history (sparkline)
+export const getScenarioHistory = (id: string, limit = 10) =>
+  fetchJSON<{ status: string; created_at: string }[]>(`/scenarios/${id}/history?limit=${limit}`);
+
 // Status
 export const getStatus = () =>
   fetchJSON<{ dbPath: string; apiKeySet: boolean; scenarioCount: number; runCount: number; version: string }>("/status");

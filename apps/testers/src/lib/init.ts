@@ -72,29 +72,178 @@ export function getStarterScenarios(
   framework: { name: string; features: string[] },
   projectId: string,
 ): CreateScenarioInput[] {
+  // Framework-specific starter scenarios
+  if (framework.name === "Next.js") {
+    const scenarios: CreateScenarioInput[] = [
+      {
+        name: "Homepage loads",
+        description:
+          "Navigate to the homepage and verify it loads correctly. Check that the main heading and content are visible, and there are no console errors.",
+        tags: ["smoke"],
+        priority: "high",
+        projectId,
+      },
+      {
+        name: "404 page works",
+        description:
+          "Navigate to a non-existent URL (e.g. /this-page-does-not-exist) and verify the Next.js 404 page renders correctly.",
+        tags: ["smoke"],
+        priority: "medium",
+        projectId,
+      },
+      {
+        name: "Navigation links work",
+        description:
+          "Click through the main navigation links and verify each page loads without errors. Check that client-side routing is working correctly.",
+        tags: ["smoke"],
+        priority: "medium",
+        projectId,
+      },
+    ];
+
+    if (framework.features.includes("hasAuth")) {
+      scenarios.push(
+        {
+          name: "Login flow",
+          description:
+            "Navigate to the login page, enter valid credentials, and verify successful authentication and redirect.",
+          tags: ["auth"],
+          priority: "critical",
+          projectId,
+        },
+        {
+          name: "Protected route redirect",
+          description:
+            "Try to access a protected route without authentication and verify you are redirected to the login page.",
+          tags: ["auth"],
+          priority: "high",
+          projectId,
+        },
+      );
+    }
+
+    if (framework.features.includes("hasForms")) {
+      scenarios.push({
+        name: "Form validation",
+        description:
+          "Submit forms with empty/invalid data and verify validation errors appear correctly.",
+        tags: ["forms"],
+        priority: "medium",
+        projectId,
+      });
+    }
+
+    return scenarios;
+  }
+
+  if (framework.name === "Vite" || framework.name === "SvelteKit") {
+    const scenarios: CreateScenarioInput[] = [
+      {
+        name: "Homepage loads",
+        description:
+          "Navigate to the homepage and verify it loads correctly with no console errors.",
+        tags: ["smoke"],
+        priority: "high",
+        projectId,
+      },
+      {
+        name: "Mobile viewport check",
+        description:
+          "Set the viewport to 375x812 (iPhone) and verify the homepage renders correctly without horizontal scrolling or layout issues.",
+        tags: ["responsive"],
+        priority: "medium",
+        projectId,
+      },
+      {
+        name: "No console errors",
+        description:
+          "Navigate through the app and verify there are no JavaScript errors or warnings in the browser console.",
+        tags: ["smoke"],
+        priority: "high",
+        projectId,
+      },
+    ];
+
+    if (framework.features.includes("hasAuth")) {
+      scenarios.push({
+        name: "Login flow",
+        description:
+          "Navigate to the login page, enter valid credentials, and verify successful authentication.",
+        tags: ["auth"],
+        priority: "critical",
+        projectId,
+      });
+    }
+
+    return scenarios;
+  }
+
+  if (framework.name === "Nuxt") {
+    const scenarios: CreateScenarioInput[] = [
+      {
+        name: "Homepage loads",
+        description:
+          "Navigate to the homepage and verify it loads correctly. Check that the main heading and content are visible.",
+        tags: ["smoke"],
+        priority: "high",
+        projectId,
+      },
+      {
+        name: "Navigation works",
+        description:
+          "Click through main navigation links and verify each page loads without errors.",
+        tags: ["smoke"],
+        priority: "medium",
+        projectId,
+      },
+      {
+        name: "Mobile viewport check",
+        description:
+          "Set the viewport to 375x812 and verify the homepage renders correctly on mobile.",
+        tags: ["responsive"],
+        priority: "medium",
+        projectId,
+      },
+    ];
+
+    if (framework.features.includes("hasAuth")) {
+      scenarios.push({
+        name: "Login flow",
+        description:
+          "Navigate to the login page, enter valid credentials, and verify successful authentication.",
+        tags: ["auth"],
+        priority: "critical",
+        projectId,
+      });
+    }
+
+    return scenarios;
+  }
+
+  // Generic / unknown framework
   const scenarios: CreateScenarioInput[] = [
     {
-      name: "Landing page loads",
+      name: "Homepage loads",
       description:
-        "Navigate to the landing page and verify it loads correctly with no console errors. Check that the main heading, navigation, and primary CTA are visible.",
+        "Navigate to the homepage and verify it loads correctly with no console errors. Check that the main heading, navigation, and primary CTA are visible.",
       tags: ["smoke"],
       priority: "high",
       projectId,
     },
     {
-      name: "Navigation works",
+      name: "Form submit works",
       description:
-        "Click through main navigation links and verify each page loads without errors.",
+        "Find the main form on the page, fill it in with valid test data, submit it, and verify the success state.",
       tags: ["smoke"],
       priority: "medium",
       projectId,
     },
     {
-      name: "No console errors",
+      name: "Mobile viewport check",
       description:
-        "Navigate through the main pages and check the browser console for any JavaScript errors or warnings.",
-      tags: ["smoke"],
-      priority: "high",
+        "Set the viewport to 375x812 (iPhone) and verify the homepage renders correctly without horizontal scrolling or layout issues.",
+      tags: ["responsive"],
+      priority: "medium",
       projectId,
     },
   ];

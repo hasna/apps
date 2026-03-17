@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Result, Screenshot } from "../types";
 import { getResult, getScreenshotUrl } from "../lib/api";
 
 export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBack: () => void }) {
   const [result, setResult] = useState<Result | null>(null);
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
-  const [selectedScreenshot, setSelectedScreenshot] = useState<Screenshot | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   useEffect(() => {
     getResult(resultId)
@@ -15,6 +15,21 @@ export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBac
       })
       .catch(console.error);
   }, [resultId]);
+
+  const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+  const prevSlide = useCallback(() => setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i)), []);
+  const nextSlide = useCallback(() => setLightboxIndex((i) => (i !== null && i < screenshots.length - 1 ? i + 1 : i)), [screenshots.length]);
+
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeLightbox();
+      else if (e.key === "ArrowLeft") prevSlide();
+      else if (e.key === "ArrowRight") nextSlide();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightboxIndex, closeLightbox, prevSlide, nextSlide]);
 
   if (!result) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading...</div>;
 
@@ -57,11 +72,11 @@ export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBac
         <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No screenshots captured.</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-          {screenshots.map((ss) => (
+          {screenshots.map((ss, idx) => (
             <div
               key={ss.id}
-              onClick={() => setSelectedScreenshot(ss)}
-              style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", cursor: "pointer" }}
+              onClick={() => setLightboxIndex(idx)}
+              style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", cursor: "pointer", transition: "border-color 0.15s" }}
             >
               <img
                 src={getScreenshotUrl(ss.id)}
@@ -81,27 +96,72 @@ export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBac
         </div>
       )}
 
-      {selectedScreenshot && (
-        <div
-          onClick={() => setSelectedScreenshot(null)}
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 100, cursor: "pointer",
-          }}
-        >
-          <div style={{ maxWidth: "90vw", maxHeight: "90vh" }}>
-            <img
-              src={getScreenshotUrl(selectedScreenshot.id)}
-              alt={selectedScreenshot.action}
-              style={{ maxWidth: "100%", maxHeight: "85vh", borderRadius: 8 }}
-            />
-            <div style={{ textAlign: "center", marginTop: 12, color: "#fff", fontSize: 14 }}>
-              Step {selectedScreenshot.stepNumber}: {selectedScreenshot.action}
+      {/* Lightbox modal */}
+      {lightboxIndex !== null && screenshots[lightboxIndex] && (() => {
+        const ss = screenshots[lightboxIndex]!;
+        return (
+          <div
+            onClick={closeLightbox}
+            style={{
+              position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              zIndex: 200,
+            }}
+          >
+            {/* Main content — stop propagation so clicking image doesn't close */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "90vw", maxHeight: "90vh" }}
+            >
+              {/* Step overlay */}
+              <div style={{ color: "#fff", fontSize: 13, marginBottom: 10, opacity: 0.7 }}>
+                Step {ss.stepNumber} of {screenshots.length}
+              </div>
+
+              <img
+                src={getScreenshotUrl(ss.id)}
+                alt={ss.action}
+                style={{ maxWidth: "80vw", maxHeight: "75vh", borderRadius: 8, display: "block" }}
+              />
+
+              {/* Description */}
+              <div style={{ marginTop: 12, color: "#fff", fontSize: 14, fontWeight: 500, textAlign: "center" }}>
+                {ss.action}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, marginTop: 4 }}>
+                {ss.width}×{ss.height}
+              </div>
+
+              {/* Prev / Next */}
+              <div style={{ display: "flex", gap: 16, marginTop: 16 }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); prevSlide(); }}
+                  disabled={lightboxIndex === 0}
+                  style={{ padding: "6px 18px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.08)", color: lightboxIndex === 0 ? "rgba(255,255,255,0.2)" : "#fff", cursor: lightboxIndex === 0 ? "default" : "pointer", fontSize: 13 }}
+                >
+                  ← Prev
+                </button>
+                <button
+                  onClick={closeLightbox}
+                  style={{ padding: "6px 18px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: 13 }}
+                >
+                  ✕ Close
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); nextSlide(); }}
+                  disabled={lightboxIndex === screenshots.length - 1}
+                  style={{ padding: "6px 18px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.08)", color: lightboxIndex === screenshots.length - 1 ? "rgba(255,255,255,0.2)" : "#fff", cursor: lightboxIndex === screenshots.length - 1 ? "default" : "pointer", fontSize: 13 }}
+                >
+                  Next →
+                </button>
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginTop: 8 }}>
+                ← → arrow keys to navigate · Esc to close
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

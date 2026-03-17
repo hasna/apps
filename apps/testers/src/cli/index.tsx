@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import chalk from "chalk";
+import { render, Box, Text, useInput, useApp } from "ink";
+import React, { useState } from "react";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -30,6 +32,162 @@ import { generateGitHubActionsWorkflow } from "../lib/ci.js";
 import type { ScenarioPriority } from "../types/index.js";
 import { parseAssertionString } from "../lib/assertions.js";
 import { existsSync, mkdirSync } from "node:fs";
+
+// ─── Interactive Add Prompt (Ink) ────────────────────────────────────────────
+
+type AddFormState = {
+  name: string;
+  url: string;
+  description: string;
+  priority: string;
+  tags: string;
+  field: "name" | "url" | "description" | "priority" | "tags" | "confirm";
+  buffer: string;
+};
+
+const PRIORITIES = ["low", "medium", "high", "critical"];
+
+function AddForm({ onComplete }: { onComplete: (data: AddFormState | null) => void }) {
+  const { exit } = useApp();
+  const [state, setState] = useState<AddFormState>({
+    name: "",
+    url: "",
+    description: "",
+    priority: "medium",
+    tags: "",
+    field: "name",
+    buffer: "",
+  });
+
+  useInput((input, key) => {
+    if (key.escape) {
+      onComplete(null);
+      exit();
+      return;
+    }
+
+    if (key.return) {
+      if (state.field === "name") {
+        const val = state.buffer.trim();
+        if (!val) return;
+        setState((s) => ({ ...s, name: val, buffer: "", field: "url" }));
+      } else if (state.field === "url") {
+        setState((s) => ({ ...s, url: s.buffer.trim(), buffer: "", field: "description" }));
+      } else if (state.field === "description") {
+        setState((s) => ({ ...s, description: s.buffer.trim(), buffer: "", field: "priority" }));
+      } else if (state.field === "priority") {
+        setState((s) => ({ ...s, buffer: "", field: "tags" }));
+      } else if (state.field === "tags") {
+        setState((s) => ({ ...s, tags: s.buffer.trim(), buffer: "", field: "confirm" }));
+      } else if (state.field === "confirm") {
+        onComplete(state);
+        exit();
+      }
+      return;
+    }
+
+    if (key.backspace || key.delete) {
+      if (state.field === "priority") return; // priority uses left/right
+      setState((s) => ({ ...s, buffer: s.buffer.slice(0, -1) }));
+      return;
+    }
+
+    if (state.field === "priority") {
+      if (key.leftArrow || key.rightArrow) {
+        const idx = PRIORITIES.indexOf(state.priority);
+        const next = key.rightArrow
+          ? PRIORITIES[(idx + 1) % PRIORITIES.length]!
+          : PRIORITIES[(idx - 1 + PRIORITIES.length) % PRIORITIES.length]!;
+        setState((s) => ({ ...s, priority: next }));
+      }
+      return;
+    }
+
+    if (!key.ctrl && !key.meta && input) {
+      setState((s) => ({ ...s, buffer: s.buffer + input }));
+    }
+  });
+
+  const fieldLabel = (label: string, field: AddFormState["field"], value: string, hint?: string) => {
+    const active = state.field === field;
+    const displayValue = active ? state.buffer + (active ? "█" : "") : value;
+    return (
+      <Box key={field} flexDirection="row" gap={1}>
+        <Text color={active ? "cyan" : "gray"}>{active ? "→" : " "}</Text>
+        <Text color={active ? "white" : "gray"} bold={active}>{label}:</Text>
+        <Text color={active ? "white" : "gray"}>{displayValue || (hint ? hint : "")}</Text>
+        {!displayValue && hint && <Text color="gray"> </Text>}
+      </Box>
+    );
+  };
+
+  return (
+    <Box flexDirection="column" gap={0} paddingY={1}>
+      <Text bold color="cyan"> New Test Scenario</Text>
+      <Text color="gray"> ─────────────────────────────</Text>
+      {fieldLabel("  Name       ", "name", state.name)}
+      {fieldLabel("  URL        ", "url", state.url, "(optional)")}
+      {fieldLabel("  Description", "description", state.description, "(optional)")}
+      <Box flexDirection="row" gap={1}>
+        <Text color={state.field === "priority" ? "cyan" : "gray"}>{state.field === "priority" ? "→" : " "}</Text>
+        <Text color={state.field === "priority" ? "white" : "gray"} bold={state.field === "priority"}>  Priority   :</Text>
+        {PRIORITIES.map((p) => (
+          <Text key={p} color={p === state.priority ? "cyan" : "gray"} bold={p === state.priority}>{p === state.priority ? `[${p}]` : ` ${p} `}</Text>
+        ))}
+        {state.field === "priority" && <Text color="gray"> ← →</Text>}
+      </Box>
+      {fieldLabel("  Tags       ", "tags", state.tags, "comma-separated, optional")}
+
+      {state.field === "confirm" && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="gray"> ─────────────────────────────</Text>
+          <Text bold color="white"> Preview:</Text>
+          <Text color="gray">   name:        <Text color="white">{state.name}</Text></Text>
+          {state.url && <Text color="gray">   url:         <Text color="white">{state.url}</Text></Text>}
+          {state.description && <Text color="gray">   description: <Text color="white">{state.description}</Text></Text>}
+          <Text color="gray">   priority:    <Text color="cyan">{state.priority}</Text></Text>
+          {state.tags && <Text color="gray">   tags:        <Text color="white">{state.tags}</Text></Text>}
+          <Text> </Text>
+          <Text color="green"> Press Enter to save, Escape to cancel</Text>
+        </Box>
+      )}
+
+      {state.field !== "confirm" && (
+        <Text color="gray" dimColor> Tab/Enter to advance · Escape to cancel</Text>
+      )}
+    </Box>
+  );
+}
+
+async function runInteractiveAdd(projectId: string | undefined): Promise<void> {
+  let savedResult: AddFormState | null = null;
+
+  const { waitUntilExit } = render(
+    React.createElement(AddForm, {
+      onComplete: (data) => {
+        savedResult = data;
+      },
+    })
+  );
+
+  await waitUntilExit();
+
+  if (savedResult) {
+    const result = savedResult as AddFormState;
+    const tags = result.tags ? result.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
+    const scenario = createScenario({
+      name: result.name,
+      description: result.description || result.name,
+      steps: [],
+      tags,
+      priority: result.priority as ScenarioPriority,
+      projectId,
+    });
+    console.log(chalk.green(`\nCreated scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+  } else {
+    console.log(chalk.dim("\nCancelled."));
+  }
+}
 
 function formatToolInput(input: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -72,8 +230,8 @@ function resolveProject(optProject?: string): string | undefined {
 // ─── testers add <name> ─────────────────────────────────────────────────────
 
 program
-  .command("add <name>")
-  .description("Create a new test scenario")
+  .command("add [name]")
+  .description("Create a new test scenario (interactive if no name/flags given)")
   .option("-d, --description <text>", "Scenario description", "")
   .option("-s, --steps <step>", "Test step (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("-t, --tag <tag>", "Tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
@@ -85,8 +243,21 @@ program
   .option("--project <id>", "Project ID")
   .option("--template <name>", "Seed scenarios from a template (auth, crud, forms, nav, a11y)")
   .option("--assert <assertion>", "Structured assertion (repeatable). Formats: selector:<sel> visible, text:<sel> contains:<text>, no-console-errors, url:contains:<path>, title:contains:<text>, count:<sel> eq:<n>", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .action((name: string, opts) => {
+  .action(async (name: string | undefined, opts) => {
     try {
+      // Interactive mode: no name and no meaningful flags provided
+      const hasFlags = opts.description || opts.steps?.length || opts.tag?.length || opts.model || opts.path || opts.auth || opts.timeout || opts.template || opts.assert?.length;
+      if (!name && !hasFlags) {
+        const projectId = resolveProject(opts.project);
+        await runInteractiveAdd(projectId);
+        return;
+      }
+
+      if (!name) {
+        console.error(chalk.red("Error: scenario name is required"));
+        process.exit(1);
+      }
+
       if (opts.template) {
         const template = getTemplate(opts.template);
         if (!template) {
@@ -274,6 +445,7 @@ program
   .option("-b, --background", "Start run in background and return immediately", false)
   .option("--browser <engine>", "Browser engine: playwright or lightpanda", "playwright")
   .option("--env <name>", "Use a named environment for the URL")
+  .option("--dry-run", "Print what would run without launching browser", false)
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -304,6 +476,52 @@ program
       if (opts.fromTodos) {
         const result = importFromTodos({ projectId });
         console.log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
+      }
+
+      // Dry-run mode — validate and print what would run, no browser
+      if (opts.dryRun) {
+        const dryScenarios = listScenarios({
+          tags: opts.tag.length > 0 ? opts.tag : undefined,
+          projectId,
+        }).filter((s) => {
+          if (opts.scenario && s.id !== opts.scenario && s.shortId !== opts.scenario) return false;
+          if (opts.priority && s.priority !== opts.priority) return false;
+          return true;
+        });
+
+        console.log("");
+        console.log(chalk.bold("  Dry Run — scenarios that would execute:"));
+        console.log("");
+        if (dryScenarios.length === 0) {
+          console.log(chalk.yellow("  No matching scenarios found."));
+        } else {
+          for (const s of dryScenarios) {
+            // Validate assertion syntax
+            const assertionErrors: string[] = [];
+            for (const a of (s.assertions ?? [])) {
+              try { parseAssertionString(a); } catch { assertionErrors.push(a); }
+            }
+            // Check auth preset exists if required
+            let authOk = true;
+            if (s.authPreset) {
+              const presets = listAuthPresets();
+              authOk = presets.some((p) => p.name === s.authPreset);
+            }
+            const statusIcon = (assertionErrors.length === 0 && authOk) ? chalk.green("✓") : chalk.red("✗");
+            console.log(`  ${statusIcon} ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+            if (assertionErrors.length > 0) {
+              console.log(chalk.red(`      Invalid assertions: ${assertionErrors.join(", ")}`));
+            }
+            if (!authOk) {
+              console.log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
+            }
+          }
+        }
+        console.log("");
+        console.log(chalk.dim(`  URL: ${url}`));
+        console.log(chalk.dim(`  Total: ${dryScenarios.length} scenarios`));
+        console.log("");
+        process.exit(0);
       }
 
       // Background mode — start async and return immediately
@@ -406,6 +624,14 @@ program
         }
 
         process.exit(getExitCode(run));
+      }
+
+      // If no filters provided, run all active scenarios
+      const noFilters = !opts.scenario && opts.tag.length === 0 && !opts.priority;
+      if (noFilters && !opts.json && !opts.output) {
+        const allScenarios = listScenarios({ projectId });
+        console.log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
+        console.log("");
       }
 
       // Run by filter
@@ -1303,6 +1529,7 @@ program
   .description("Generate HTML test report")
   .option("--latest", "Use most recent run", false)
   .option("-o, --output <file>", "Output file path", "report.html")
+  .option("--open", "Open the report in the browser after generating", false)
   .action((runId: string | undefined, opts) => {
     try {
       let html: string;
@@ -1312,7 +1539,12 @@ program
         html = generateHtmlReport(runId);
       }
       writeFileSync(opts.output, html, "utf-8");
-      console.log(chalk.green(`Report generated: ${opts.output}`));
+      const absPath = resolve(opts.output);
+      console.log(chalk.green(`Report generated: ${absPath}`));
+      if (opts.open) {
+        const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+        Bun.spawn([openCmd, absPath]);
+      }
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
@@ -1733,6 +1965,98 @@ program
       console.log(chalk.green(`Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
       console.log(chalk.dim(`  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`));
       console.log(chalk.dim(`  ${scenario.steps.length} steps generated`));
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers doctor ─────────────────────────────────────────────────────────
+
+program
+  .command("doctor")
+  .description("Check system setup and configuration")
+  .action(async () => {
+    let allPassed = true;
+
+    // 1. Check ANTHROPIC_API_KEY
+    const hasApiKey = Boolean(process.env["ANTHROPIC_API_KEY"]);
+    if (hasApiKey) {
+      console.log(chalk.green("✓") + " ANTHROPIC_API_KEY is set");
+    } else {
+      console.log(chalk.red("✗") + " ANTHROPIC_API_KEY is not set (required for AI-powered tests)");
+      allPassed = false;
+    }
+
+    // 2. Check DB is accessible
+    const dbPath = join(process.env["HOME"] ?? "~", ".testers", "testers.db");
+    try {
+      const { Database } = await import("bun:sqlite");
+      const db = new Database(dbPath, { create: true });
+      db.close();
+      console.log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
+    } catch (err) {
+      console.log(chalk.red("✗") + ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`);
+      allPassed = false;
+    }
+
+    // 3. Check Playwright/chromium is installed
+    try {
+      const { chromium } = await import("playwright");
+      const execPath = chromium.executablePath();
+      const { existsSync: fsExists } = await import("node:fs");
+      if (fsExists(execPath)) {
+        console.log(chalk.green("✓") + " Playwright chromium is installed");
+      } else {
+        console.log(chalk.red("✗") + ` Playwright chromium executable not found at ${execPath}. Run: testers install`);
+        allPassed = false;
+      }
+    } catch {
+      console.log(chalk.red("✗") + " Playwright is not installed. Run: testers install");
+      allPassed = false;
+    }
+
+    if (!allPassed) {
+      process.exit(1);
+    }
+  });
+
+// ─── testers serve ──────────────────────────────────────────────────────────
+
+program
+  .command("serve")
+  .description("Start the Open Testers web dashboard")
+  .option("--no-open", "Do not open the browser after starting", false)
+  .option("--port <port>", "Port to listen on", "19450")
+  .action(async (opts) => {
+    try {
+      const port = parseInt(opts.port, 10);
+      const url = `http://localhost:${port}`;
+
+      // Spawn the server process
+      const serverBin = join(resolve(process.execPath, ".."), "..", "dist", "server", "index.js");
+      // Fallback: try to run directly via bun
+      const { join: pathJoin, resolve: pathResolve, dirname } = await import("node:path");
+      const { fileURLToPath } = await import("node:url");
+      const serverPath = pathJoin(dirname(fileURLToPath(import.meta.url)), "..", "server", "index.js");
+
+      const proc = Bun.spawn(["bun", "run", serverPath], {
+        env: { ...process.env, TESTERS_PORT: String(port) },
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+
+      console.log(chalk.green(`Open Testers dashboard starting at ${url}`));
+
+      // Wait briefly then open browser
+      if (opts.open !== false) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+        Bun.spawn([openCmd, url]);
+      }
+
+      // Keep process alive until child exits
+      await proc.exited;
     } catch (error) {
       console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

@@ -2,6 +2,7 @@ import chalk from "chalk";
 import type { Run, Result, Screenshot } from "../types/index.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { getScenario } from "../db/scenarios.js";
+import { getDatabase } from "../db/database.js";
 
 export interface ReportOptions {
   json?: boolean;
@@ -164,7 +165,31 @@ export function formatRunList(runs: Run[]): string {
   return lines.join("\n");
 }
 
-export function formatScenarioList(scenarios: Array<{ shortId: string; name: string; priority: string; tags: string[] }>): string {
+export interface ScenarioRunStats {
+  lastStatus: "passed" | "failed" | "error" | "skipped" | null;
+  passRate: string; // e.g. "8/10"
+}
+
+export function getScenarioRunStats(scenarioId: string): ScenarioRunStats {
+  const db = getDatabase();
+
+  // Get last result for this scenario
+  const lastRow = db.query(
+    "SELECT status FROM results WHERE scenario_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(scenarioId) as { status: string } | null;
+
+  // Get all-time pass/total count
+  const statsRow = db.query(
+    "SELECT COUNT(*) as total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed FROM results WHERE scenario_id = ?"
+  ).get(scenarioId) as { total: number; passed: number } | null;
+
+  return {
+    lastStatus: lastRow ? (lastRow.status as ScenarioRunStats["lastStatus"]) : null,
+    passRate: statsRow && statsRow.total > 0 ? `${statsRow.passed}/${statsRow.total}` : "—",
+  };
+}
+
+export function formatScenarioList(scenarios: Array<{ id?: string; shortId: string; name: string; priority: string; tags: string[] }>): string {
   const lines: string[] = [];
   lines.push("");
   lines.push(chalk.bold("  Scenarios"));
@@ -186,7 +211,20 @@ export function formatScenarioList(scenarios: Array<{ shortId: string; name: str
           : chalk.dim;
 
     const tags = s.tags.length > 0 ? chalk.dim(` [${s.tags.join(", ")}]`) : "";
-    lines.push(`  ${chalk.cyan(s.shortId)}  ${s.name}  ${priorityColor(s.priority)}${tags}`);
+
+    // Run stats (last status + pass rate)
+    let lastStatusIcon = chalk.dim("—");
+    let passRateStr = chalk.dim("—");
+    if (s.id) {
+      const stats = getScenarioRunStats(s.id);
+      if (stats.lastStatus === "passed") lastStatusIcon = chalk.green("✓");
+      else if (stats.lastStatus === "failed") lastStatusIcon = chalk.red("✗");
+      else if (stats.lastStatus === "error") lastStatusIcon = chalk.yellow("!");
+      else if (stats.lastStatus === "skipped") lastStatusIcon = chalk.dim("~");
+      passRateStr = stats.passRate === "—" ? chalk.dim("—") : chalk.dim(stats.passRate);
+    }
+
+    lines.push(`  ${chalk.cyan(s.shortId)}  ${s.name}  ${priorityColor(s.priority)}${tags}  ${lastStatusIcon} ${passRateStr}`);
   }
 
   lines.push("");

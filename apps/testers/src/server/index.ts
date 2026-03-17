@@ -217,6 +217,25 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // ── Results ───────────────────────────────────────────────────────────
 
+  // GET /api/scenarios/:id/history — last N results for a scenario (sparkline data)
+  const scenarioHistoryMatch = pathname.match(/^\/api\/scenarios\/([^/]+)\/history$/);
+  if (scenarioHistoryMatch && method === "GET") {
+    const id = scenarioHistoryMatch[1]!;
+    const limit = parseInt(searchParams.get("limit") ?? "10", 10);
+    const db = getDatabase();
+    const rows = db
+      .query(
+        `SELECT r.status, r.created_at FROM results r
+         JOIN runs run ON r.run_id = run.id
+         WHERE r.scenario_id = ? OR r.scenario_id IN (
+           SELECT id FROM scenarios WHERE short_id = ?
+         )
+         ORDER BY r.created_at DESC LIMIT ?`,
+      )
+      .all(id, id, limit) as { status: string; created_at: string }[];
+    return jsonResponse(rows.reverse());
+  }
+
   // GET /api/results/:id
   const resultGetMatch = pathname.match(/^\/api\/results\/([^/]+)$/);
   if (resultGetMatch && method === "GET") {

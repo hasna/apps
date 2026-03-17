@@ -86,7 +86,7 @@ describe("init", () => {
   });
 
   describe("getStarterScenarios", () => {
-    test("returns base scenarios for any framework", () => {
+    test("returns base scenarios for generic/unknown framework", () => {
       const scenarios = getStarterScenarios(
         { name: "Unknown", features: [] },
         "project-123",
@@ -94,9 +94,9 @@ describe("init", () => {
 
       expect(scenarios.length).toBe(3);
       const names = scenarios.map((s) => s.name);
-      expect(names).toContain("Landing page loads");
-      expect(names).toContain("Navigation works");
-      expect(names).toContain("No console errors");
+      expect(names).toContain("Homepage loads");
+      expect(names).toContain("Form submit works");
+      expect(names).toContain("Mobile viewport check");
     });
 
     test("all base scenarios have the correct projectId", () => {
@@ -110,7 +110,20 @@ describe("init", () => {
       }
     });
 
-    test("adds auth scenarios when hasAuth feature present", () => {
+    test("returns Next.js-specific scenarios", () => {
+      const scenarios = getStarterScenarios(
+        { name: "Next.js", features: [] },
+        "project-123",
+      );
+
+      expect(scenarios.length).toBe(3); // Homepage, 404, Navigation
+      const names = scenarios.map((s) => s.name);
+      expect(names).toContain("Homepage loads");
+      expect(names).toContain("404 page works");
+      expect(names).toContain("Navigation links work");
+    });
+
+    test("adds auth scenarios for Next.js when hasAuth feature present", () => {
       const scenarios = getStarterScenarios(
         { name: "Next.js", features: ["hasAuth"] },
         "project-123",
@@ -119,10 +132,10 @@ describe("init", () => {
       expect(scenarios.length).toBe(5); // 3 base + 2 auth
       const names = scenarios.map((s) => s.name);
       expect(names).toContain("Login flow");
-      expect(names).toContain("Signup flow");
+      expect(names).toContain("Protected route redirect");
     });
 
-    test("adds forms scenario when hasForms feature present", () => {
+    test("adds forms scenario for Next.js when hasForms feature present", () => {
       const scenarios = getStarterScenarios(
         { name: "Next.js", features: ["hasForms"] },
         "project-123",
@@ -133,13 +146,23 @@ describe("init", () => {
       expect(names).toContain("Form validation");
     });
 
-    test("adds both auth and forms scenarios when both features present", () => {
+    test("adds both auth and forms scenarios for Next.js when both features present", () => {
       const scenarios = getStarterScenarios(
         { name: "Next.js", features: ["hasAuth", "hasForms"] },
         "project-123",
       );
 
       expect(scenarios.length).toBe(6); // 3 base + 2 auth + 1 forms
+    });
+
+    test("adds auth scenarios for generic framework when hasAuth feature present", () => {
+      const scenarios = getStarterScenarios(
+        { name: "Unknown", features: ["hasAuth"] },
+        "project-123",
+      );
+
+      const names = scenarios.map((s) => s.name);
+      expect(names).toContain("Login flow");
     });
   });
 });

@@ -8,6 +8,7 @@ import { Screenshotter } from "./screenshotter.js";
 import { createClient, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import { dispatchWebhooks } from "./webhooks.js";
+import { pushFailedRunToLogs } from "./logs-integration.js";
 import type { Browser, Page } from "playwright";
 
 export interface RunOptions {
@@ -296,6 +297,12 @@ export async function runBatch(
   // Dispatch webhooks (fire and forget)
   const eventType = finalRun.status === "failed" ? "failed" : "completed";
   dispatchWebhooks(eventType, finalRun).catch(() => {});
+
+  // Push failures to open-logs if LOGS_URL is set (fire and forget)
+  if (finalRun.status === "failed") {
+    const failedResults = results.filter(r => r.status === "failed" || r.status === "error");
+    pushFailedRunToLogs(finalRun, failedResults, scenarios).catch(() => {});
+  }
 
   return { run: finalRun, results };
 }
