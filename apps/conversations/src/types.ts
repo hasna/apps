@@ -6,6 +6,7 @@ export interface Message {
   from_agent: string;
   to_agent: string;
   space: string | null;
+  project_id: string | null;
   content: string;
   priority: Priority;
   working_dir: string | null;
@@ -90,6 +91,7 @@ export interface SendMessageOptions {
   content: string;
   session_id?: string;
   space?: string;
+  project_id?: string;
   priority?: Priority;
   working_dir?: string;
   repository?: string;
@@ -105,6 +107,7 @@ export interface ReadMessagesOptions {
   from?: string;
   to?: string;
   space?: string;
+  project_id?: string;
   since?: string;
   since_id?: number;
   limit?: number;

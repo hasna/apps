@@ -48,6 +48,16 @@ describe("sendMessage", () => {
     expect(msg.priority).toBe("urgent");
   });
 
+  test("stores project_id when provided", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "scoped", project_id: "proj-xyz" });
+    expect(msg.project_id).toBe("proj-xyz");
+  });
+
+  test("project_id defaults to null", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "no scope" });
+    expect(msg.project_id).toBeNull();
+  });
+
   test("supports space", () => {
     const msg = sendMessage({ from: "a", to: "general", content: "hello", space: "general" });
     expect(msg.space).toBe("general");
@@ -112,6 +122,14 @@ describe("readMessages", () => {
     sendMessage({ from: "a", to: "charlie", content: "2" });
     const msgs = readMessages({ to: "bob" });
     expect(msgs).toHaveLength(1);
+  });
+
+  test("filters by project_id", () => {
+    sendMessage({ from: "a", to: "b", content: "proj msg", project_id: "proj-abc" });
+    sendMessage({ from: "a", to: "b", content: "no proj" });
+    const msgs = readMessages({ project_id: "proj-abc" });
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].project_id).toBe("proj-abc");
   });
 
   test("filters by space", () => {

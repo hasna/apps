@@ -80,8 +80,8 @@ export function sendMessage(opts: SendMessageOptions): Message {
   const replyTo = opts.reply_to || null;
 
   const stmt = db.prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, space, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (session_id, from_agent, to_agent, space, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
 
@@ -90,6 +90,7 @@ export function sendMessage(opts: SendMessageOptions): Message {
     opts.from,
     opts.to,
     opts.space || null,
+    opts.project_id || null,
     opts.content,
     normalizedPriority,
     opts.working_dir || null,
@@ -151,6 +152,10 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   if (opts.space) {
     conditions.push("space = ?");
     params.push(opts.space);
+  }
+  if (opts.project_id) {
+    conditions.push("project_id = ?");
+    params.push(opts.project_id);
   }
   if (opts.since) {
     conditions.push("created_at > ?");

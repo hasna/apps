@@ -15,6 +15,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     from_agent: "alice",
     to_agent: "bob",
     space: null,
+    project_id: null,
     content: "hello",
     priority: "normal",
     working_dir: null,

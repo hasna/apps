@@ -28,6 +28,7 @@ export function getDb(): Database {
       from_agent TEXT NOT NULL,
       to_agent TEXT NOT NULL,
       space TEXT,
+      project_id TEXT,
       content TEXT NOT NULL,
       priority TEXT NOT NULL DEFAULT 'normal',
       working_dir TEXT,
@@ -213,6 +214,10 @@ export function getDb(): Database {
   if (!colNames2.includes("reply_to")) {
     db.exec("ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages(id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)");
+  }
+  if (!colNames2.includes("project_id")) {
+    db.exec("ALTER TABLE messages ADD COLUMN project_id TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id)");
   }
 
   // Migrate agent_presence: add id, session_id, role, created_at columns

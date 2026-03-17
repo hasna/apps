@@ -35,9 +35,10 @@ server.registerTool("send_message", {
     from: z.string().optional(),
     priority: z.string().optional(),
     blocking: z.coerce.boolean().optional(),
+    project_id: z.string().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const { from: fromParam, to, content, priority, blocking } = args;
+  const { from: fromParam, to, content, priority, blocking, project_id } = args;
   const from = resolveIdentity(fromParam);
 
   const msg = sendMessage({
@@ -46,6 +47,7 @@ server.registerTool("send_message", {
     content,
     priority,
     blocking,
+    project_id,
   });
 
   return {
@@ -60,6 +62,7 @@ server.registerTool("read_messages", {
     from: z.string().optional(),
     to: z.string().optional(),
     space: z.string().optional(),
+    project_id: z.string().optional(),
     since: z.string().optional(),
     limit: z.coerce.number().optional(),
     unread_only: z.coerce.boolean().optional(),
