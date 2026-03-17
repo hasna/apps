@@ -1,5 +1,5 @@
 import { getDb } from "./db.js";
-import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions } from "../types.js";
+import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
 import { randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync } from "fs";
 import { join, basename } from "path";
@@ -385,23 +385,33 @@ export function getThreadReplies(messageId: number): Message[] {
   return rows.map(parseMessage);
 }
 
-export function searchMessages(opts: SearchMessagesOptions): Message[] {
+export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   const db = getDb();
 
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
     ? Math.floor(opts.limit as number)
     : 20;
+  const sortByRelevance = opts.sort !== "recent";
 
-  // Try FTS5 first for proper full-text search (handles non-adjacent words)
+  // Priority weight map for scoring boost
+  const priorityWeights: Record<string, number> = { urgent: 10, high: 5, normal: 1, low: 0.5 };
+
+  // Try FTS5 first for proper full-text search with BM25 ranking
   try {
-    const ftsConditions: string[] = [];
     const ftsParams: (string | number)[] = [];
 
-    // Build FTS match expression — quote each word for prefix matching
-    const words = opts.query.trim().split(/\s+/).filter(Boolean);
-    const ftsQuery = words.map((w) => `"${w.replace(/"/g, '""')}"`).join(" ");
+    // Build FTS match expression — support phrase queries and prefix matching
+    const query = opts.query.trim();
+    let ftsQuery: string;
+    if (query.startsWith('"') && query.endsWith('"')) {
+      // Exact phrase query — pass through
+      ftsQuery = query;
+    } else {
+      // Quote each word for prefix matching
+      const words = query.split(/\s+/).filter(Boolean);
+      ftsQuery = words.map((w) => `"${w.replace(/"/g, '""')}"`).join(" ");
+    }
 
-    ftsConditions.push("messages_fts MATCH ?");
     ftsParams.push(ftsQuery);
 
     let extraWhere = "";
@@ -409,14 +419,30 @@ export function searchMessages(opts: SearchMessagesOptions): Message[] {
     if (opts.from) { extraWhere += " AND m.from_agent = ?"; ftsParams.push(opts.from); }
     if (opts.to) { extraWhere += " AND m.to_agent = ?"; ftsParams.push(opts.to); }
 
+    const orderClause = sortByRelevance ? "ORDER BY rank" : "ORDER BY m.created_at DESC, m.id DESC";
+
     const rows = db.prepare(
-      `SELECT m.* FROM messages m
+      `SELECT m.*, rank,
+        snippet(messages_fts, 0, '**', '**', '...', 20) as snippet
+       FROM messages m
        JOIN messages_fts ON messages_fts.rowid = m.id
-       WHERE ${ftsConditions.join(" AND ")}${extraWhere}
-       ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit}`
+       WHERE messages_fts MATCH ?${extraWhere}
+       ${orderClause} LIMIT ${limit}`
     ).all(...ftsParams) as Record<string, unknown>[];
 
-    return rows.map(parseMessage);
+    // Normalize: FTS5 rank is negative (closer to 0 = better). Convert to positive scale.
+    const maxRank = rows.reduce((max, r) => Math.max(max, Math.abs(r.rank as number || 0)), 0) || 1;
+
+    return rows.map((row) => {
+      const msg = parseMessage(row);
+      // Normalize FTS rank to 0-100 scale (higher = more relevant)
+      const ftsScore = maxRank > 0 ? (Math.abs(row.rank as number || 0) / maxRank) * 100 : 50;
+      const priorityBoost = priorityWeights[msg.priority] || 1;
+      const pinnedBoost = msg.pinned_at ? 20 : 0;
+      const blockingBoost = msg.blocking ? 15 : 0;
+      const relevance_score = Math.round((ftsScore * priorityBoost + pinnedBoost + blockingBoost) * 100) / 100;
+      return { ...msg, snippet: (row.snippet as string) || null, relevance_score };
+    });
   } catch {
     // Fallback to LIKE if FTS not available
   }
@@ -435,5 +461,8 @@ export function searchMessages(opts: SearchMessagesOptions): Message[] {
     `SELECT * FROM messages ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
   ).all(...params) as Record<string, unknown>[];
 
-  return rows.map(parseMessage);
+  return rows.map((row) => {
+    const msg = parseMessage(row);
+    return { ...msg, snippet: null, relevance_score: 0 };
+  });
 }

@@ -32,7 +32,10 @@ export {
 export {
   listSessions,
   getSession,
+  getSessionActivity,
 } from "./lib/sessions.js";
+
+export type { SessionActivity } from "./lib/sessions.js";
 
 export {
   createSpace,
@@ -107,6 +110,35 @@ export {
 
 export type { ResourceLock } from "./lib/locks.js";
 
+export {
+  computeHotness,
+  listHotSessions,
+} from "./lib/hot.js";
+
+export type { HotSession, HotSessionsOptions } from "./lib/hot.js";
+
+export {
+  extractTopics,
+  getSpaceTopics,
+  getSessionTopics,
+  getTrendingTopics,
+} from "./lib/topics.js";
+
+export type { TopicWeight } from "./lib/topics.js";
+
+export { getConversationSummary } from "./lib/summary.js";
+
+export {
+  buildGraph,
+  getRelated,
+  getAgentNetwork,
+  getGraphStats,
+} from "./lib/graph.js";
+
+export type { GraphEdge, RelatedEntity, AgentNetwork } from "./lib/graph.js";
+
+export type { ConversationSummary, SummaryOptions } from "./lib/summary.js";
+
 export type {
   Message,
   Session,
@@ -119,6 +151,7 @@ export type {
   SendMessageOptions,
   ReadMessagesOptions,
   SearchMessagesOptions,
+  SearchResult,
   AgentPresence,
   AgentConflictError,
   RegisterAgentResult,

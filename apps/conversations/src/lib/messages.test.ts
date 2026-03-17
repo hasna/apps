@@ -480,14 +480,31 @@ describe("searchMessages", () => {
     expect(results).toHaveLength(2);
   });
 
-  test("orders results by newest first (DESC)", () => {
+  test("orders results by newest first when sort=recent", () => {
     sendMessage({ from: "a", to: "b", content: "first match" });
     sendMessage({ from: "a", to: "b", content: "second match" });
     sendMessage({ from: "a", to: "b", content: "third match" });
-    const results = searchMessages({ query: "match" });
+    const results = searchMessages({ query: "match", sort: "recent" });
     expect(results).toHaveLength(3);
     expect(results[0].content).toBe("third match");
     expect(results[2].content).toBe("first match");
+  });
+
+  test("returns snippet and relevance_score", () => {
+    sendMessage({ from: "a", to: "b", content: "the deployment failed spectacularly at midnight" });
+    const results = searchMessages({ query: "deployment" });
+    expect(results).toHaveLength(1);
+    expect(results[0].relevance_score).toBeGreaterThan(0);
+    expect(results[0].snippet).toBeTruthy();
+  });
+
+  test("defaults to relevance sorting (BM25)", () => {
+    sendMessage({ from: "a", to: "b", content: "test alpha" });
+    sendMessage({ from: "a", to: "b", content: "test beta" });
+    const results = searchMessages({ query: "test" });
+    expect(results).toHaveLength(2);
+    // Both should have relevance scores
+    expect(results.every((r) => r.relevance_score >= 0)).toBe(true);
   });
 
   test("filters by space", () => {

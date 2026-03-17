@@ -122,6 +122,12 @@ export interface SearchMessagesOptions {
   from?: string;
   to?: string;
   limit?: number;
+  sort?: "relevance" | "recent";
+}
+
+export interface SearchResult extends Message {
+  snippet: string | null;
+  relevance_score: number;
 }
 
 export interface AgentPresence {

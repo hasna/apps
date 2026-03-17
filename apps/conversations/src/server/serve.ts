@@ -14,6 +14,8 @@ import { listProjects, getProject, getProjectByName, createProject, updateProjec
 import { getDb, getDbPath } from "../lib/db.js";
 import { listAgents } from "../lib/presence.js";
 import { getReactions, getReactionSummary } from "../lib/reactions.js";
+import { listHotSessions } from "../lib/hot.js";
+import { getRelated, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { listLocks } from "../lib/locks.js";
 import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
@@ -457,6 +459,32 @@ export function startDashboardServer(port = 0, host?: string) {
         const onlineOnly = url.searchParams.get("online_only") === "true";
         const agents = listAgents({ online_only: onlineOnly });
         return jsonResponse(applyFields(agents, url.searchParams.get("fields")));
+      }
+
+      // GET /api/sessions/hot[?limit=N&min_score=N&space=X]
+      if (path === "/api/sessions/hot" && req.method === "GET") {
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!) : undefined;
+        const min_score = url.searchParams.get("min_score") ? parseInt(url.searchParams.get("min_score")!) : undefined;
+        const space = url.searchParams.get("space") ?? undefined;
+        const project_id = url.searchParams.get("project_id") ?? undefined;
+        const sessions = listHotSessions({ limit, min_score, space, project_id });
+        return jsonResponse(sessions);
+      }
+
+      // GET /api/graph?entity_type=agent&entity_id=julius
+      if (path === "/api/graph" && req.method === "GET") {
+        const entityType = url.searchParams.get("entity_type");
+        const entityId = url.searchParams.get("entity_id");
+        if (entityType && entityId) {
+          return jsonResponse(getRelated(entityType, entityId));
+        }
+        return jsonResponse(getGraphStats());
+      }
+
+      // GET /api/graph/agent/:name
+      const agentNetMatch = path.match(/^\/api\/graph\/agent\/(.+)$/);
+      if (agentNetMatch && req.method === "GET") {
+        return jsonResponse(getAgentNetwork(decodeURIComponent(agentNetMatch[1])));
       }
 
       // GET /api/reactions?message_id=X[&summary=true]

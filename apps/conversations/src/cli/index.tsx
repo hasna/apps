@@ -11,6 +11,10 @@ import { getDb, getDbPath, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { addReaction, removeReaction, getReactionSummary } from "../lib/reactions.js";
+import { listHotSessions } from "../lib/hot.js";
+import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../lib/topics.js";
+import { getConversationSummary } from "../lib/summary.js";
+import { buildGraph, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { renderContent } from "../lib/terminal-markdown.js";
 import { App } from "./components/App.js";
 import pkg from "../../package.json";
@@ -228,6 +232,183 @@ program
           const content = renderContent(msg.content);
           console.log(`${time} ${from} ${where}${priority}${unread}`);
           console.log(`       ${content}\n`);
+        }
+      }
+    }
+    closeDb();
+  });
+
+// ---- graph ----
+const graph = program.command("graph").description("Knowledge graph operations");
+
+graph
+  .command("build")
+  .description("Build/rebuild knowledge graph from messages, spaces, projects")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const result = buildGraph();
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(chalk.green(`Graph built: ${result.edges_created} created, ${result.edges_updated} updated`));
+    }
+    closeDb();
+  });
+
+graph
+  .command("stats")
+  .description("Show knowledge graph statistics")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const stats = getGraphStats();
+    if (opts.json) {
+      console.log(JSON.stringify(stats, null, 2));
+    } else {
+      console.log(chalk.bold(`Knowledge Graph: ${stats.total_edges} edges\n`));
+      for (const [relation, count] of Object.entries(stats.by_relation)) {
+        console.log(`  ${chalk.cyan(relation.padEnd(20))} ${count}`);
+      }
+    }
+    closeDb();
+  });
+
+graph
+  .command("agent")
+  .description("Show an agent's communication network")
+  .argument("<name>", "Agent name")
+  .option("--json", "Output as JSON")
+  .action((name, opts) => {
+    const network = getAgentNetwork(name);
+    if (opts.json) {
+      console.log(JSON.stringify(network, null, 2));
+    } else {
+      console.log(chalk.bold(`Network for ${chalk.cyan(name)}\n`));
+      if (network.communicates_with.length > 0) {
+        console.log(chalk.bold("  Communicates with:"));
+        for (const c of network.communicates_with) {
+          console.log(`    ${chalk.cyan(c.agent.padEnd(20))} ${chalk.dim(`${c.message_count} msgs`)}`);
+        }
+      }
+      if (network.spaces.length > 0) {
+        console.log(chalk.bold("  Active spaces:"));
+        for (const s of network.spaces) {
+          console.log(`    ${chalk.magenta("#" + s.space.padEnd(19))} ${chalk.dim(`${s.message_count} msgs`)}`);
+        }
+      }
+      if (network.projects.length > 0) {
+        console.log(chalk.bold("  Projects:") + " " + network.projects.join(", "));
+      }
+    }
+    closeDb();
+  });
+
+// ---- summary ----
+program
+  .command("summary")
+  .description("Get a structured summary of a conversation")
+  .argument("<target>", "Session ID or space name")
+  .option("--json", "Output as JSON")
+  .action((target, opts) => {
+    const summary = getConversationSummary(target);
+    if (!summary) {
+      console.error(chalk.red(`No messages found for "${target}"`));
+      process.exit(1);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(summary, null, 2));
+    } else {
+      console.log(chalk.bold(`Summary: ${target}\n`));
+      console.log(`  ${chalk.bold("Participants:")} ${summary.participants.join(", ")}`);
+      console.log(`  ${chalk.bold("Messages:")} ${summary.message_count}`);
+      console.log(`  ${chalk.bold("Date range:")} ${summary.date_range.first.slice(0, 16)} → ${summary.date_range.last.slice(0, 16)}`);
+      console.log(`  ${chalk.bold("Replies:")} ${summary.activity.reply_count}  ${chalk.bold("Reactions:")} ${summary.activity.reaction_count}`);
+
+      if (summary.topics.length > 0) {
+        console.log(`\n  ${chalk.bold("Topics:")} ${summary.topics.slice(0, 5).map((t) => t.topic).join(", ")}`);
+      }
+
+      if (summary.key_messages.length > 0) {
+        console.log(`\n  ${chalk.bold("Key messages:")}`);
+        for (const k of summary.key_messages.slice(0, 5)) {
+          console.log(`    [#${k.id}] ${chalk.cyan(k.from)} (${chalk.yellow(k.reason)}): ${k.content.slice(0, 80)}`);
+        }
+      }
+
+      if (summary.unresolved_blockers.length > 0) {
+        console.log(`\n  ${chalk.red.bold("Unresolved blockers:")}`);
+        for (const b of summary.unresolved_blockers) {
+          console.log(`    ${chalk.red("[BLOCKER]")} [#${b.id}] ${chalk.cyan(b.from)}: ${b.content.slice(0, 80)}`);
+        }
+      }
+    }
+    closeDb();
+  });
+
+// ---- topics ----
+program
+  .command("topics")
+  .description("Extract topics from a space, session, or trending globally")
+  .option("--space <name>", "Topics for a specific space")
+  .option("--session <id>", "Topics for a specific session")
+  .option("--hours <n>", "Trending topics in last N hours", parseInt)
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    let topics;
+    if (opts.space) {
+      topics = getSpaceTopics(opts.space);
+    } else if (opts.session) {
+      topics = getSessionTopics(opts.session);
+    } else {
+      topics = getTrendingTopics({ hours: opts.hours ?? 24 });
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(topics, null, 2));
+    } else {
+      if (topics.length === 0) {
+        console.log(chalk.dim("No topics found."));
+      } else {
+        const label = opts.space ? `#${opts.space}` : opts.session ? opts.session : `last ${opts.hours ?? 24}h`;
+        console.log(chalk.bold(`Topics for ${label}\n`));
+        for (const t of topics) {
+          const bar = "█".repeat(Math.min(Math.round(t.weight * 50), 30));
+          console.log(`  ${chalk.cyan(t.topic.padEnd(20))} ${chalk.dim(`×${t.count}`)}  ${chalk.green(bar)}`);
+        }
+      }
+    }
+    closeDb();
+  });
+
+// ---- hot ----
+program
+  .command("hot")
+  .description("Show hot conversations ranked by activity")
+  .option("--limit <n>", "Max results", parseInt)
+  .option("--min-score <n>", "Minimum hotness score", parseInt)
+  .option("--space <name>", "Filter by space")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const sessions = listHotSessions({
+      limit: opts.limit ?? 10,
+      min_score: opts.minScore,
+      space: opts.space,
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify(sessions, null, 2));
+    } else {
+      if (sessions.length === 0) {
+        console.log(chalk.dim("No hot conversations."));
+      } else {
+        console.log(chalk.bold("Hot Conversations\n"));
+        for (const s of sessions) {
+          const score = s.hotness_score > 20 ? chalk.red(`🔥 ${s.hotness_score}`) : chalk.yellow(`  ${s.hotness_score}`);
+          const where = s.space ? chalk.magenta(`#${s.space}`) : chalk.cyan(s.participants.join(", "));
+          const time = chalk.dim(s.last_message_at.slice(11, 16));
+          const msgs = chalk.dim(`${s.message_count} msgs`);
+          const agents = chalk.dim(`${s.metrics.unique_agents} agents`);
+          console.log(`${score}  ${where}  ${time}  ${msgs}  ${agents}`);
         }
       }
     }

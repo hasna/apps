@@ -12,13 +12,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
-import { listSessions } from "../lib/sessions.js";
+import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { addReaction, removeReaction, getReactions, getReactionSummary } from "../lib/reactions.js";
 import { acquireLock, releaseLock, checkLock, listLocks } from "../lib/locks.js";
+import { listHotSessions } from "../lib/hot.js";
+import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../lib/topics.js";
+import { getConversationSummary } from "../lib/summary.js";
+import { buildGraph, getRelated, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 
 import pkg from "../../package.json";
 
@@ -746,6 +750,127 @@ server.registerTool("get_pinned_messages", {
   };
 });
 
+// ---- Graph Tools ----
+
+server.registerTool("build_graph", {
+  description: "Build/rebuild the knowledge graph from messages, spaces, and projects. Creates relationship edges between agents, spaces, and projects.",
+  inputSchema: {},
+}, async () => {
+  const result = buildGraph();
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
+server.registerTool("get_related", {
+  description: "Find all entities related to a given entity in the knowledge graph.",
+  inputSchema: {
+    entity_type: z.string(),
+    entity_id: z.string(),
+  },
+}, async (args: Record<string, any>) => {
+  const related = getRelated(args.entity_type, args.entity_id);
+  return { content: [{ type: "text", text: JSON.stringify(related) }] };
+});
+
+server.registerTool("get_agent_network", {
+  description: "Get an agent's communication network: who they talk to, spaces, projects.",
+  inputSchema: {
+    agent: z.string(),
+  },
+}, async (args: Record<string, any>) => {
+  const network = getAgentNetwork(args.agent);
+  return { content: [{ type: "text", text: JSON.stringify(network) }] };
+});
+
+server.registerTool("graph_stats", {
+  description: "Get knowledge graph statistics: total edges and counts by relation type.",
+  inputSchema: {},
+}, async () => {
+  const stats = getGraphStats();
+  return { content: [{ type: "text", text: JSON.stringify(stats) }] };
+});
+
+// ---- Summary Tools ----
+
+server.registerTool("get_summary", {
+  description: "Get a structured summary of a conversation (session or space): participants, topics, key messages, blockers, activity.",
+  inputSchema: {
+    session_id: z.string().optional(),
+    space: z.string().optional(),
+    limit: z.coerce.number().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const target = args.space || args.session_id;
+  if (!target) return { content: [{ type: "text", text: "session_id or space required" }], isError: true };
+  const summary = getConversationSummary(target, { limit: args.limit });
+  if (!summary) return { content: [{ type: "text", text: `No messages found for "${target}"` }], isError: true };
+  return { content: [{ type: "text", text: JSON.stringify(summary) }] };
+});
+
+// ---- Topic Tools ----
+
+server.registerTool("get_topics", {
+  description: "Extract topics from a space or session. Returns weighted keyword list.",
+  inputSchema: {
+    space: z.string().optional(),
+    session_id: z.string().optional(),
+    limit: z.coerce.number().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const topics = args.space
+    ? getSpaceTopics(args.space, { limit: args.limit })
+    : args.session_id
+    ? getSessionTopics(args.session_id, { limit: args.limit })
+    : getTrendingTopics({ top_n: args.limit });
+  return { content: [{ type: "text", text: JSON.stringify(topics) }] };
+});
+
+server.registerTool("trending_topics", {
+  description: "Get trending topics across all messages in the last N hours.",
+  inputSchema: {
+    hours: z.coerce.number().optional(),
+    project_id: z.string().optional(),
+    top_n: z.coerce.number().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const topics = getTrendingTopics({ hours: args.hours, project_id: args.project_id, top_n: args.top_n });
+  return { content: [{ type: "text", text: JSON.stringify(topics) }] };
+});
+
+// ---- Session Activity Tools ----
+
+server.registerTool("get_session_activity", {
+  description: "Get activity metrics for a session: message velocity, unique agents, reply ratio, reaction count, trending status.",
+  inputSchema: {
+    session_id: z.string(),
+  },
+}, async (args: Record<string, any>) => {
+  const activity = getSessionActivity(args.session_id);
+  if (!activity) {
+    return { content: [{ type: "text", text: `session "${args.session_id}" not found` }], isError: true };
+  }
+  return { content: [{ type: "text", text: JSON.stringify(activity) }] };
+});
+
+// ---- Hot Conversations Tools ----
+
+server.registerTool("hot_sessions", {
+  description: "List conversations ranked by activity hotness (message velocity, reactions, replies, priority, blockers).",
+  inputSchema: {
+    limit: z.coerce.number().optional(),
+    min_score: z.coerce.number().optional(),
+    space: z.string().optional(),
+    project_id: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const sessions = listHotSessions({
+    limit: args.limit,
+    min_score: args.min_score,
+    space: args.space,
+    project_id: args.project_id,
+  });
+  return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
+});
+
 // ---- Reaction Tools ----
 
 server.registerTool("add_reaction", {
@@ -1072,6 +1197,10 @@ server.registerTool("search_tools", {
     "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
     "create_project", "list_projects", "get_project", "update_project", "delete_project",
     "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
+    "build_graph", "get_related", "get_agent_network", "graph_stats",
+    "get_summary",
+    "get_topics", "trending_topics",
+    "get_session_activity", "hot_sessions",
     "add_reaction", "remove_reaction", "get_reactions", "get_reaction_summary",
     "acquire_lock", "release_lock", "check_lock", "list_locks",
     "get_thread_replies",
@@ -1121,6 +1250,20 @@ server.registerTool("describe_tools", {
     pin_message: "Pin a message. Required: id",
     unpin_message: "Unpin a message. Required: id",
     get_pinned_messages: "Get pinned messages. Optional: space?, session_id?, limit?",
+    // Graph
+    build_graph: "Build/rebuild knowledge graph from messages, spaces, projects. Returns edge counts.",
+    get_related: "Find entities related to a given entity. Required: entity_type, entity_id",
+    get_agent_network: "Agent's communication network: contacts, spaces, projects. Required: agent",
+    graph_stats: "Knowledge graph stats: total edges, by relation type",
+    // Summary
+    get_summary: "Structured conversation summary: participants, topics, key messages, blockers. Required: session_id? or space?. Optional: limit?",
+    // Topics
+    get_topics: "Extract topics from space or session. Optional: space?, session_id?, limit?",
+    trending_topics: "Trending topics across all messages. Optional: hours?, project_id?, top_n?",
+    // Session activity
+    get_session_activity: "Get activity metrics for a session: velocity, agents, reply ratio, reactions, trending. Required: session_id",
+    // Hot conversations
+    hot_sessions: "List conversations by hotness score (velocity, reactions, replies, priority, blockers). Optional: limit?, min_score?, space?, project_id?",
     // Reaction tools
     add_reaction: "Add emoji reaction to a message. Required: message_id, emoji. Optional: from?",
     remove_reaction: "Remove emoji reaction from a message. Required: message_id, emoji. Optional: from?",
