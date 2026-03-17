@@ -10,6 +10,7 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { getDb, getDbPath, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
 import { heartbeat, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
+import { addReaction, removeReaction, getReactionSummary } from "../lib/reactions.js";
 import { renderContent } from "../lib/terminal-markdown.js";
 import { App } from "./components/App.js";
 import pkg from "../../package.json";
@@ -191,6 +192,116 @@ program
     closeDb();
   });
 
+// ---- since ----
+program
+  .command("since")
+  .description("Show all activity (DMs + spaces) since a duration ago")
+  .argument("<duration>", "Duration: e.g. 30m, 2h, 1d")
+  .option("--json", "Output as JSON")
+  .action((duration, opts) => {
+    // Parse duration string: 30m, 2h, 1d
+    const match = duration.match(/^(\d+)([mhd])$/);
+    if (!match) {
+      console.error(chalk.red(`Invalid duration "${duration}". Use format: 30m, 2h, 1d`));
+      process.exit(1);
+    }
+    const value = parseInt(match[1]);
+    const unit = match[2] as "m" | "h" | "d";
+    const msMap = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
+
+    const messages = readMessages({ since, order: "asc", limit: 200 });
+
+    if (opts.json) {
+      console.log(JSON.stringify(messages, null, 2));
+    } else {
+      if (messages.length === 0) {
+        console.log(chalk.dim(`No activity in the last ${duration}.`));
+      } else {
+        console.log(chalk.bold(`Activity since ${duration} ago (${messages.length} message(s)):\n`));
+        for (const msg of messages) {
+          const time = chalk.dim(msg.created_at.slice(11, 19));
+          const from = chalk.cyan(msg.from_agent);
+          const where = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(`→ ${msg.to_agent}`);
+          const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
+          const unread = !msg.read_at ? chalk.green(" •") : "";
+          const content = renderContent(msg.content);
+          console.log(`${time} ${from} ${where}${priority}${unread}`);
+          console.log(`       ${content}\n`);
+        }
+      }
+    }
+    closeDb();
+  });
+
+// ---- context ----
+program
+  .command("context")
+  .description("One-shot session boot context for agents: online agents, unread DMs, spaces, recent activity")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const agent = resolveIdentity();
+    heartbeat(agent);
+    const db = getDb();
+
+    // Online agents
+    const onlineAgents = listAgents({ online_only: true });
+
+    // Unread DMs
+    const unreadDMs = readMessages({ to: agent, unread_only: true, limit: 5 });
+
+    // Spaces I'm in
+    const mySpaces = db.prepare(`
+      SELECT s.name, s.description,
+        (SELECT COUNT(*) FROM messages m WHERE m.space = s.name AND m.read_at IS NULL) as unread
+      FROM spaces s
+      JOIN space_members sm ON sm.space = s.name
+      WHERE sm.agent = ?
+      ORDER BY s.name
+    `).all(agent) as { name: string; description: string | null; unread: number }[];
+
+    // Recent DMs (last 3 messages to me)
+    const recentDMs = readMessages({ to: agent, limit: 3 });
+
+    const context = { agent, online_agents: onlineAgents, unread_dms: unreadDMs, spaces: mySpaces, recent_dms: recentDMs };
+
+    if (opts.json) {
+      console.log(JSON.stringify(context, null, 2));
+    } else {
+      console.log(chalk.bold(`Context for ${chalk.cyan(agent)}\n`));
+
+      // Online agents
+      if (onlineAgents.length > 0) {
+        const names = onlineAgents.map((a) => chalk.green(a.agent)).join(", ");
+        console.log(`${chalk.bold("Online agents:")} ${names}`);
+      } else {
+        console.log(`${chalk.bold("Online agents:")} ${chalk.dim("none")}`);
+      }
+
+      // Unread DMs
+      if (unreadDMs.length > 0) {
+        console.log(`${chalk.bold("Unread DMs:")} ${chalk.yellow(unreadDMs.length + " message(s)")}`);
+        for (const msg of unreadDMs.slice(0, 3)) {
+          console.log(`  ${chalk.dim(msg.created_at.slice(11, 16))} ${chalk.cyan(msg.from_agent)}: ${msg.content.slice(0, 80)}`);
+        }
+      } else {
+        console.log(`${chalk.bold("Unread DMs:")} ${chalk.dim("none")}`);
+      }
+
+      // Spaces
+      if (mySpaces.length > 0) {
+        console.log(`${chalk.bold("My spaces:")}`);
+        for (const sp of mySpaces) {
+          const unread = sp.unread > 0 ? chalk.yellow(` (${sp.unread} unread)`) : "";
+          console.log(`  ${chalk.magenta("#" + sp.name)}${unread}`);
+        }
+      } else {
+        console.log(`${chalk.bold("My spaces:")} ${chalk.dim("none")}`);
+      }
+    }
+    closeDb();
+  });
+
 // ---- sessions ----
 program
   .command("sessions")
@@ -361,6 +472,97 @@ program
       console.log(`  Unread:     ${stats.unread_messages}`);
     }
     closeDb();
+  });
+
+// ---- doctor ----
+program
+  .command("doctor")
+  .description("Check conversations setup and health")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const checks: { name: string; ok: boolean; message: string }[] = [];
+
+    // 1. DB accessible
+    try {
+      const db = getDb();
+      db.prepare("SELECT 1").get();
+      const dbPath = getDbPath();
+      checks.push({ name: "Database", ok: true, message: `OK — ${dbPath}` });
+    } catch (e: any) {
+      checks.push({ name: "Database", ok: false, message: `Cannot open DB: ${e.message}` });
+    }
+
+    // 2. WAL mode
+    try {
+      const db = getDb();
+      const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+      const isWal = mode.journal_mode === "wal";
+      checks.push({ name: "WAL mode", ok: isWal, message: isWal ? "OK — WAL mode enabled" : `WARNING — journal_mode is ${mode.journal_mode}` });
+    } catch {
+      checks.push({ name: "WAL mode", ok: false, message: "Could not check WAL mode" });
+    }
+
+    // 3. MCP binary on PATH
+    try {
+      const proc = Bun.spawn(["which", "conversations-mcp"], { stdout: "pipe", stderr: "pipe" });
+      const exit = await proc.exited;
+      const path = await new Response(proc.stdout).text();
+      checks.push({ name: "MCP binary", ok: exit === 0, message: exit === 0 ? `OK — ${path.trim()}` : "conversations-mcp not found in PATH — run: bun install -g @hasna/conversations" });
+    } catch {
+      checks.push({ name: "MCP binary", ok: false, message: "Could not check MCP binary" });
+    }
+
+    // 4. npm version check
+    try {
+      const current = pkg.version;
+      const res = await fetch("https://registry.npmjs.org/@hasna/conversations/latest");
+      const data = await res.json() as { version: string };
+      const latest = data.version;
+      const upToDate = current === latest;
+      checks.push({ name: "npm version", ok: upToDate, message: upToDate ? `OK — v${current} (latest)` : `Update available: v${current} → v${latest} — run: bun install -g @hasna/conversations@latest` });
+    } catch {
+      checks.push({ name: "npm version", ok: true, message: "Could not check npm registry (offline?)" });
+    }
+
+    // 5. Webhook config validity
+    const { homedir } = await import("os");
+    const { existsSync } = await import("fs");
+    const { join } = await import("path");
+    const configPath = process.env.CONVERSATIONS_CONFIG_PATH ?? join(homedir(), ".conversations", "config.json");
+    if (existsSync(configPath)) {
+      try {
+        const { readFileSync } = await import("fs");
+        JSON.parse(readFileSync(configPath, "utf8"));
+        checks.push({ name: "Webhook config", ok: true, message: `OK — ${configPath}` });
+      } catch (e: any) {
+        checks.push({ name: "Webhook config", ok: false, message: `Invalid JSON at ${configPath}: ${e.message}` });
+      }
+    } else {
+      checks.push({ name: "Webhook config", ok: true, message: "No webhook config (optional)" });
+    }
+
+    closeDb();
+
+    const allOk = checks.every((c) => c.ok);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: allOk, checks }, null, 2));
+    } else {
+      console.log(chalk.bold("Conversations Doctor\n"));
+      for (const check of checks) {
+        const icon = check.ok ? chalk.green("✓") : chalk.red("✗");
+        const label = chalk.bold(check.name.padEnd(16));
+        console.log(`  ${icon}  ${label}  ${check.message}`);
+      }
+      console.log();
+      if (allOk) {
+        console.log(chalk.green("All checks passed."));
+      } else {
+        const failed = checks.filter((c) => !c.ok).length;
+        console.log(chalk.red(`${failed} check(s) failed.`));
+        process.exit(1);
+      }
+    }
   });
 
 // ---- update ----
@@ -1069,6 +1271,97 @@ program
       } else {
         console.error(chalk.red(`Message #${id} not found.`));
         process.exit(1);
+      }
+    }
+    closeDb();
+  });
+
+// ---- pinned ----
+program
+  .command("pinned")
+  .description("List pinned messages")
+  .option("--space <name>", "Filter by space")
+  .option("--session <id>", "Filter by session ID")
+  .option("--limit <n>", "Max results", parseInt)
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const messages = getPinnedMessages({ space: opts.space, session_id: opts.session, limit: opts.limit });
+    if (opts.json) {
+      console.log(JSON.stringify(messages, null, 2));
+    } else {
+      if (messages.length === 0) {
+        console.log(chalk.dim("No pinned messages."));
+      } else {
+        console.log(chalk.dim(`${messages.length} pinned message(s):\n`));
+        for (const msg of messages) {
+          const time = chalk.dim(msg.created_at.slice(11, 19));
+          const from = chalk.cyan(msg.from_agent);
+          const where = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to_agent);
+          console.log(`${chalk.yellow("📌")} [#${msg.id}] ${time} ${from} → ${where}: ${msg.content}`);
+        }
+      }
+    }
+    closeDb();
+  });
+
+// ---- react ----
+program
+  .command("react")
+  .description("Add an emoji reaction to a message")
+  .argument("<id>", "Message ID", parseInt)
+  .argument("<emoji>", "Emoji to react with")
+  .option("--from <agent>", "Agent identity override")
+  .option("--json", "Output as JSON")
+  .action((id, emoji, opts) => {
+    const agent = resolveIdentity(opts.from);
+    const reaction = addReaction(id, agent, emoji);
+    if (opts.json) {
+      console.log(JSON.stringify(reaction, null, 2));
+    } else {
+      console.log(chalk.green(`${emoji} reaction added to message #${id}`));
+    }
+    closeDb();
+  });
+
+// ---- unreact ----
+program
+  .command("unreact")
+  .description("Remove an emoji reaction from a message")
+  .argument("<id>", "Message ID", parseInt)
+  .argument("<emoji>", "Emoji to remove")
+  .option("--from <agent>", "Agent identity override")
+  .option("--json", "Output as JSON")
+  .action((id, emoji, opts) => {
+    const agent = resolveIdentity(opts.from);
+    const removed = removeReaction(id, agent, emoji);
+    if (opts.json) {
+      console.log(JSON.stringify({ removed }, null, 2));
+    } else {
+      if (removed) {
+        console.log(chalk.green(`${emoji} reaction removed from message #${id}`));
+      } else {
+        console.log(chalk.dim(`No ${emoji} reaction found on message #${id}`));
+      }
+    }
+    closeDb();
+  });
+
+// ---- reactions ----
+program
+  .command("reactions")
+  .description("Show emoji reactions on a message")
+  .argument("<id>", "Message ID", parseInt)
+  .option("--json", "Output as JSON")
+  .action((id, opts) => {
+    const summary = getReactionSummary(id);
+    if (opts.json) {
+      console.log(JSON.stringify(summary, null, 2));
+    } else {
+      if (summary.length === 0) {
+        console.log(chalk.dim(`No reactions on message #${id}`));
+      } else {
+        const parts = summary.map((r) => `${r.emoji} ${r.count}`).join("  ");
+        console.log(`Message #${id}: ${parts}`);
       }
     }
     closeDb();

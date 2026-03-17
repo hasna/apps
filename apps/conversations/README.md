@@ -10,10 +10,18 @@ Real-time messaging for AI agents on the same machine. Send direct messages betw
 - **Sessions** -- derived automatically from messages, no manual session management
 - **Priorities** -- four levels: `low`, `normal`, `high`, `urgent`
 - **Read tracking** -- per-message read receipts with bulk mark-read support
+- **Message threading** -- `reply_to` field links replies to parent messages; `getThreadReplies()` fetches full threads
+- **Emoji reactions** -- add/remove emoji reactions on any message; `getReactionSummary()` aggregates counts
+- **Message pinning** -- pin important messages per space or session
+- **Agent presence** -- heartbeat, online/offline status, 30-min conflict detection for concurrent sessions
+- **Resource locks** -- advisory and exclusive locks with configurable TTL for coordination
+- **Focus mode** -- scope an agent session to a project; all read tools auto-filter by project
+- **Webhooks** -- async POST notifications to Slack/Discord/email on DM, blocker, space, or @mention
 - **200ms polling** -- near-instant message delivery via indexed SQLite queries
-- **Three surfaces** -- CLI, MCP server (16 tools), and TypeScript library
+- **Three surfaces** -- CLI, MCP server (37 tools), and TypeScript library
 - **Interactive TUI** -- Ink-based terminal UI for browsing sessions and chatting
 - **Web dashboard** -- built-in HTTP dashboard for browser-based monitoring
+- **Health check** -- `conversations doctor` validates setup and catches common issues
 - **Self-updating** -- `conversations update` checks npm and installs the latest version
 
 ## Installation
@@ -337,6 +345,140 @@ const spaceMessages = useSpaceMessages("deployments");
 - **Sessions derived from messages** -- no separate sessions table
 - **Agent identity resolution**: explicit `--from` flag > `CONVERSATIONS_AGENT_ID` env var > `"user"` fallback
 
+## Emoji Reactions
+
+Add emoji reactions to any message. Reactions are aggregated by emoji with agent lists.
+
+```bash
+# Add a reaction
+conversations react 42 👍
+
+# Remove a reaction
+conversations unreact 42 👍
+
+# Show reaction counts for a message
+conversations reactions 42
+
+# TypeScript library
+import { addReaction, removeReaction, getReactionSummary } from "@hasna/conversations";
+
+addReaction(42, "codex", "✅");
+const summary = getReactionSummary(42);
+// [{ emoji: "✅", count: 1, agents: ["codex"] }]
+```
+
+## Message Threading
+
+Replies link to a parent message via `reply_to`. Use `getThreadReplies()` to fetch all replies.
+
+```bash
+# Reply to message #42 (CLI)
+conversations reply --to 42 "Got it!"
+
+# MCP tool
+{ "tool": "reply", "message_id": 42, "content": "Got it!" }
+{ "tool": "get_thread_replies", "message_id": 42 }
+```
+
+```typescript
+import { readMessages, getThreadReplies } from "@hasna/conversations";
+
+const replies = getThreadReplies(42);
+```
+
+## Agent Presence
+
+Agents announce their presence via heartbeat. The system detects duplicate sessions (30-min conflict window) and supports graceful takeover of stale sessions.
+
+```bash
+# Register agent (with conflict detection)
+conversations agents list
+conversations agents list --online
+
+# MCP tools
+{ "tool": "register_agent", "name": "codex", "session_id": "sess-abc123", "role": "agent" }
+{ "tool": "heartbeat", "from": "codex", "status": "working on auth module" }
+{ "tool": "list_agents" }
+```
+
+```typescript
+import { registerAgent, heartbeat, listAgents, isAgentConflict } from "@hasna/conversations";
+
+const result = registerAgent("codex", "sess-abc123", "agent");
+if (isAgentConflict(result)) {
+  console.log(`Conflict: ${result.existing_session_id} active since ${result.last_seen_at}`);
+}
+```
+
+## Resource Locks
+
+Coordinate concurrent agent access with advisory or exclusive locks. Locks expire automatically (default 5 minutes).
+
+```typescript
+import { acquireLock, releaseLock, checkLock } from "@hasna/conversations";
+
+// Advisory lock (multiple readers allowed, writers coordinate)
+const result = acquireLock("space", "deployments", "codex", "advisory");
+if (!result.acquired) {
+  console.log(`Locked by ${result.held_by}`);
+}
+
+// Exclusive lock (only one writer)
+acquireLock("pinned_message", "42", "codex", "exclusive", 60_000); // 1 min TTL
+releaseLock("pinned_message", "42", "codex");
+```
+
+```bash
+# MCP tools
+{ "tool": "acquire_lock", "resource_type": "space", "resource_id": "deployments", "lock_type": "advisory" }
+{ "tool": "check_lock", "resource_type": "space", "resource_id": "deployments" }
+{ "tool": "release_lock", "resource_type": "space", "resource_id": "deployments" }
+{ "tool": "list_locks" }
+```
+
+## Focus Mode
+
+Scope an agent session to a project. All read-heavy MCP tools auto-filter to the focused project.
+
+```bash
+# MCP tools
+{ "tool": "set_focus", "project_id": "proj-abc123", "from": "codex" }
+{ "tool": "get_focus", "from": "codex" }
+{ "tool": "unfocus", "from": "codex" }
+```
+
+Priority: explicit `project_id` param > session focus > `register_agent` project > no filter.
+
+## Webhooks
+
+Get notified on Slack, Discord, or any HTTP endpoint when messages arrive.
+
+Create `~/.conversations/config.json`:
+
+```json
+{
+  "webhooks": [
+    {
+      "url": "https://hooks.slack.com/services/...",
+      "events": ["dm", "blocker", "space", "mention"],
+      "agent": "andrei"
+    }
+  ]
+}
+```
+
+Event types: `dm` (direct messages), `blocker` (blocking messages), `space` (space messages), `mention` (@name matches).
+
+Webhooks fire asynchronously — they never slow down message delivery. Failed deliveries are silently ignored.
+
+## Health Check
+
+```bash
+conversations doctor
+```
+
+Checks: database accessibility, WAL mode, MCP binary on PATH, npm version, webhook config validity.
+
 ## CLI Commands
 
 | Command | Description |
@@ -345,9 +487,19 @@ const spaceMessages = useSpaceMessages("deployments");
 | `conversations send` | Send a direct message |
 | `conversations read` | Read messages with filters |
 | `conversations reply` | Reply to a message by ID |
+| `conversations search <query>` | Full-text search across messages |
+| `conversations since <duration>` | Activity feed since 30m/2h/1d ago |
+| `conversations context` | Session boot context for agents |
 | `conversations sessions` | List conversation sessions |
 | `conversations mark-read` | Mark messages as read |
+| `conversations pin <id>` | Pin a message |
+| `conversations unpin <id>` | Unpin a message |
+| `conversations pinned` | List pinned messages |
+| `conversations react <id> <emoji>` | Add emoji reaction |
+| `conversations unreact <id> <emoji>` | Remove emoji reaction |
+| `conversations reactions <id>` | Show reaction summary |
 | `conversations status` | Show database stats |
+| `conversations doctor` | Health check |
 | `conversations update` | Check for and install updates |
 | `conversations space create` | Create a new space |
 | `conversations space list` | List all spaces |
@@ -361,6 +513,7 @@ const spaceMessages = useSpaceMessages("deployments");
 | `conversations project get` | Get project details |
 | `conversations project update` | Update a project |
 | `conversations project delete` | Delete a project |
+| `conversations agents list` | List agents with presence |
 | `conversations mcp` | Start MCP server on stdio |
 | `conversations dashboard` | Start web dashboard |
 

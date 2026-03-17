@@ -13,6 +13,8 @@ import { listSpaces, getSpace, createSpace, updateSpace, archiveSpace, unarchive
 import { listProjects, getProject, getProjectByName, createProject, updateProject, deleteProject } from "../lib/projects.js";
 import { getDb, getDbPath } from "../lib/db.js";
 import { listAgents } from "../lib/presence.js";
+import { getReactions, getReactionSummary } from "../lib/reactions.js";
+import { listLocks } from "../lib/locks.js";
 import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
 
@@ -455,6 +457,25 @@ export function startDashboardServer(port = 0, host?: string) {
         const onlineOnly = url.searchParams.get("online_only") === "true";
         const agents = listAgents({ online_only: onlineOnly });
         return jsonResponse(applyFields(agents, url.searchParams.get("fields")));
+      }
+
+      // GET /api/reactions?message_id=X[&summary=true]
+      if (path === "/api/reactions" && req.method === "GET") {
+        const messageIdStr = url.searchParams.get("message_id");
+        if (!messageIdStr) return jsonResponse({ error: "message_id required" }, 400);
+        const messageId = parseInt(messageIdStr);
+        if (isNaN(messageId)) return jsonResponse({ error: "message_id must be a number" }, 400);
+        const summary = url.searchParams.get("summary") === "true";
+        const result = summary ? getReactionSummary(messageId) : getReactions(messageId);
+        return jsonResponse(result);
+      }
+
+      // GET /api/locks[?resource_type=X&agent_id=Y]
+      if (path === "/api/locks" && req.method === "GET") {
+        const resource_type = url.searchParams.get("resource_type") ?? undefined;
+        const agent_id = url.searchParams.get("agent_id") ?? undefined;
+        const locks = listLocks({ resource_type, agent_id });
+        return jsonResponse(locks);
       }
 
       if (path === "/api/version" && req.method === "GET") {

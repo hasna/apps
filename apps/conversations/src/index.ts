@@ -65,6 +65,7 @@ export {
 
 export {
   startPolling,
+  useMessages,
   useSpaceMessages,
 } from "./lib/poll.js";
 
@@ -79,6 +80,8 @@ export {
   getReactions,
   getReactionSummary,
 } from "./lib/reactions.js";
+
+export type { ReactionSummary } from "./lib/reactions.js";
 
 export {
   fireWebhooks,

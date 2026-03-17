@@ -11,12 +11,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../lib/messages.js";
+import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
 import { listSessions } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
+import { addReaction, removeReaction, getReactions, getReactionSummary } from "../lib/reactions.js";
+import { acquireLock, releaseLock, checkLock, listLocks } from "../lib/locks.js";
 
 import pkg from "../../package.json";
 
@@ -744,6 +746,122 @@ server.registerTool("get_pinned_messages", {
   };
 });
 
+// ---- Reaction Tools ----
+
+server.registerTool("add_reaction", {
+  description: "Add an emoji reaction to a message.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+    emoji: z.string(),
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { message_id, emoji, from: fromParam } = args;
+  const agent = resolveIdentity(fromParam);
+  const reaction = addReaction(message_id, agent, emoji);
+  return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
+});
+
+server.registerTool("remove_reaction", {
+  description: "Remove an emoji reaction from a message.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+    emoji: z.string(),
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { message_id, emoji, from: fromParam } = args;
+  const agent = resolveIdentity(fromParam);
+  const removed = removeReaction(message_id, agent, emoji);
+  return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
+});
+
+server.registerTool("get_reactions", {
+  description: "Get all reactions for a message.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+  },
+}, async (args: Record<string, any>) => {
+  const reactions = getReactions(args.message_id);
+  return { content: [{ type: "text", text: JSON.stringify(reactions) }] };
+});
+
+server.registerTool("get_reaction_summary", {
+  description: "Get emoji reaction counts and agent lists for a message.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+  },
+}, async (args: Record<string, any>) => {
+  const summary = getReactionSummary(args.message_id);
+  return { content: [{ type: "text", text: JSON.stringify(summary) }] };
+});
+
+// ---- Lock Tools ----
+
+server.registerTool("acquire_lock", {
+  description: "Acquire an advisory or exclusive lock on a resource. Returns conflict info if another agent holds the lock.",
+  inputSchema: {
+    resource_type: z.string(),
+    resource_id: z.string(),
+    lock_type: z.enum(["advisory", "exclusive"]).optional(),
+    expiry_ms: z.coerce.number().optional(),
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { resource_type, resource_id, lock_type, expiry_ms, from: fromParam } = args;
+  const agent = resolveIdentity(fromParam);
+  const result = acquireLock(resource_type, resource_id, agent, lock_type ?? "advisory", expiry_ms);
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
+server.registerTool("release_lock", {
+  description: "Release a lock held by the agent on a resource.",
+  inputSchema: {
+    resource_type: z.string(),
+    resource_id: z.string(),
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { resource_type, resource_id, from: fromParam } = args;
+  const agent = resolveIdentity(fromParam);
+  const released = releaseLock(resource_type, resource_id, agent);
+  return { content: [{ type: "text", text: JSON.stringify({ released }) }] };
+});
+
+server.registerTool("check_lock", {
+  description: "Check if a resource is currently locked and who holds it.",
+  inputSchema: {
+    resource_type: z.string(),
+    resource_id: z.string(),
+  },
+}, async (args: Record<string, any>) => {
+  const lock = checkLock(args.resource_type, args.resource_id);
+  return { content: [{ type: "text", text: JSON.stringify(lock ?? { locked: false }) }] };
+});
+
+server.registerTool("list_locks", {
+  description: "List all active (non-expired) locks. Filter by resource_type or agent.",
+  inputSchema: {
+    resource_type: z.string().optional(),
+    agent_id: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const locks = listLocks({ resource_type: args.resource_type, agent_id: args.agent_id });
+  return { content: [{ type: "text", text: JSON.stringify(locks) }] };
+});
+
+// ---- Thread Tools ----
+
+server.registerTool("get_thread_replies", {
+  description: "Get all replies in a thread for a given parent message ID.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+  },
+}, async (args: Record<string, any>) => {
+  const replies = getThreadReplies(args.message_id);
+  return { content: [{ type: "text", text: JSON.stringify(replies) }] };
+});
+
 // ---- Focus Mode Tools ----
 
 server.registerTool("set_focus", {
@@ -954,6 +1072,9 @@ server.registerTool("search_tools", {
     "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
     "create_project", "list_projects", "get_project", "update_project", "delete_project",
     "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
+    "add_reaction", "remove_reaction", "get_reactions", "get_reaction_summary",
+    "acquire_lock", "release_lock", "check_lock", "list_locks",
+    "get_thread_replies",
     "set_focus", "get_focus", "unfocus",
     "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
     "search_tools", "describe_tools",
@@ -1000,6 +1121,18 @@ server.registerTool("describe_tools", {
     pin_message: "Pin a message. Required: id",
     unpin_message: "Unpin a message. Required: id",
     get_pinned_messages: "Get pinned messages. Optional: space?, session_id?, limit?",
+    // Reaction tools
+    add_reaction: "Add emoji reaction to a message. Required: message_id, emoji. Optional: from?",
+    remove_reaction: "Remove emoji reaction from a message. Required: message_id, emoji. Optional: from?",
+    get_reactions: "Get all reactions for a message. Required: message_id",
+    get_reaction_summary: "Get emoji counts + agent lists for a message. Required: message_id",
+    // Lock tools
+    acquire_lock: "Acquire advisory/exclusive lock on a resource. Required: resource_type, resource_id. Optional: lock_type?(advisory|exclusive), expiry_ms?, from?",
+    release_lock: "Release lock held by agent. Required: resource_type, resource_id. Optional: from?",
+    check_lock: "Check if resource is locked and who holds it. Required: resource_type, resource_id",
+    list_locks: "List active locks. Optional: resource_type?, agent_id?",
+    // Thread tools
+    get_thread_replies: "Get all replies in a thread. Required: message_id. Optional: limit?",
     // Focus mode tools
     set_focus: "Set agent focus to a project. All read tools default to this scope. Required: project_id. Optional: from?",
     get_focus: "Get current focus: session focus, DB project_id, effective project_id. Optional: from?",

@@ -591,6 +591,45 @@ describe("API /api/export", () => {
   });
 });
 
+describe("API /api/reactions", () => {
+  test("GET returns 400 without message_id", async () => {
+    const res = await fetch(`${base()}/api/reactions`);
+    expect(res.status).toBe(400);
+  });
+
+  test("GET returns reactions array for message", async () => {
+    const msg = sendMessage({ from: "reactor", to: "other", content: "reaction test" });
+    const res = await fetch(`${base()}/api/reactions?message_id=${msg.id}`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  test("GET with summary=true returns summary", async () => {
+    const msg = sendMessage({ from: "reactor", to: "other", content: "summary test" });
+    const res = await fetch(`${base()}/api/reactions?message_id=${msg.id}&summary=true`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+  });
+});
+
+describe("API /api/locks", () => {
+  test("GET returns active locks array", async () => {
+    const res = await fetch(`${base()}/api/locks`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  test("GET filters by resource_type", async () => {
+    const res = await fetch(`${base()}/api/locks?resource_type=space`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any[];
+    expect(Array.isArray(data)).toBe(true);
+  });
+});
+
 describe("Static files", () => {
   test("unknown paths return HTML (SPA fallback) or 404", async () => {
     const res = await fetch(`${base()}/some/random/path`);
