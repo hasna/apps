@@ -9,6 +9,7 @@ import { randomBytes } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
 import { getConnectorDocs } from "../lib/installer.js";
+import { withWriteLock } from "../lib/lock.js";
 
 /** Timeout for external HTTP requests (10 seconds) */
 const FETCH_TIMEOUT = 10_000;
@@ -243,7 +244,11 @@ export function getEnvVars(name: string): { variable: string; description: strin
 /**
  * Save an API key to a connector's profile
  */
-export function saveApiKey(name: string, key: string, field?: string): void {
+export async function saveApiKey(name: string, key: string, field?: string): Promise<void> {
+  return withWriteLock(name, () => _saveApiKey(name, key, field));
+}
+
+function _saveApiKey(name: string, key: string, field?: string): void {
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
 
@@ -458,9 +463,15 @@ function saveOAuthTokens(name: string, tokens: OAuthTokens): void {
 }
 
 /**
- * Refresh an OAuth token using the stored refresh token
+ * Refresh an OAuth token using the stored refresh token.
+ * Serialized with a per-connector write lock to prevent concurrent agents
+ * from racing on token refresh (double-refresh race condition).
  */
 export async function refreshOAuthToken(name: string): Promise<OAuthTokens> {
+  return withWriteLock(name, () => _refreshOAuthToken(name));
+}
+
+async function _refreshOAuthToken(name: string): Promise<OAuthTokens> {
   const oauthConfig = getOAuthConfig(name);
   const currentTokens = loadTokens(name);
 

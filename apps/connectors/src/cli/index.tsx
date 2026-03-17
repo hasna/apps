@@ -1209,7 +1209,7 @@ program
     // Handle API key / Bearer token connectors
     if (options.key) {
       // Non-interactive: save directly
-      saveApiKey(connector, options.key, options.field || undefined);
+      await saveApiKey(connector, options.key, options.field || undefined);
       const statusAfter = getAuthStatus(connector);
 
       if (options.json) {
@@ -1299,7 +1299,7 @@ program
       return;
     }
 
-    saveApiKey(connector, key.trim(), options.field || undefined);
+    await saveApiKey(connector, key.trim(), options.field || undefined);
     const statusAfter = getAuthStatus(connector);
 
     console.log(chalk.green(`\n✓ API key saved for ${meta.displayName}`));
@@ -2402,7 +2402,7 @@ program
       // OAuth: start server and open browser for auth flow
       if (options.key) {
         // Allow manual token setting even for OAuth connectors
-        saveApiKey(name, options.key, options.field || undefined);
+        await saveApiKey(name, options.key, options.field || undefined);
         authConfigured = true;
         if (!options.json) {
           console.log(`  ${chalk.green("✓")} Token saved`);
@@ -2463,7 +2463,7 @@ program
     } else {
       // API Key / Bearer Token
       if (options.key) {
-        saveApiKey(name, options.key, options.field || undefined);
+        await saveApiKey(name, options.key, options.field || undefined);
         authConfigured = true;
         if (!options.json) {
           console.log(`  ${chalk.green("✓")} ${authType === "bearer" ? "Bearer token" : "API key"} saved`);

@@ -339,7 +339,7 @@ server.registerTool(
   },
   async ({ name, key, field }) => {
     try {
-      saveApiKey(name, key, field);
+      await saveApiKey(name, key, field);
       return {
         content: [
           {
@@ -621,7 +621,7 @@ server.registerTool(
     // Step 2: Configure auth (if key provided)
     if (key) {
       try {
-        saveApiKey(name, key, field);
+        await saveApiKey(name, key, field);
       } catch (error) {
         return {
           content: [

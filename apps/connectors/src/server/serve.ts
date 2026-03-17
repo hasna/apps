@@ -299,7 +299,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
           const body = (await req.json()) as { key: string; field?: string };
           if (!body.key) return json({ error: "Missing 'key' in request body" }, 400, port);
-          saveApiKey(name, body.key, body.field);
+          await saveApiKey(name, body.key, body.field);
           logActivity("key_saved", name, body.field ? `Field: ${body.field}` : undefined);
           return json({ success: true }, 200, port);
         } catch (e) {

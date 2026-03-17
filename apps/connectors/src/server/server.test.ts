@@ -164,8 +164,8 @@ describe("auth", () => {
       cleanupTestConnectors(name1, name2, name3, name4);
     });
 
-    test("creates profile directory and saves key for new connector", () => {
-      saveApiKey(name1, "test-api-key-123");
+    test("creates profile directory and saves key for new connector", async () => {
+      await saveApiKey(name1, "test-api-key-123");
 
       const configFile = join(
         testConfigDir(name1),
@@ -179,8 +179,8 @@ describe("auth", () => {
       expect(content.apiKey).toBe("test-api-key-123");
     });
 
-    test("saves key with custom field name", () => {
-      saveApiKey(name2, "my-secret-token", "secretToken");
+    test("saves key with custom field name", async () => {
+      await saveApiKey(name2, "my-secret-token", "secretToken");
 
       const configFile = join(
         testConfigDir(name2),
@@ -194,7 +194,7 @@ describe("auth", () => {
       expect(content.secretToken).toBe("my-secret-token");
     });
 
-    test("updates existing profile file (pattern 1)", () => {
+    test("updates existing profile file (pattern 1)", async () => {
       const profilesDir = join(testConfigDir(name3), "profiles");
       mkdirSync(profilesDir, { recursive: true });
       writeFileSync(
@@ -202,7 +202,7 @@ describe("auth", () => {
         JSON.stringify({ existingField: "keep-me" }, null, 2)
       );
 
-      saveApiKey(name3, "new-key-456", "apiKey");
+      await saveApiKey(name3, "new-key-456", "apiKey");
 
       const content = JSON.parse(
         readFileSync(join(profilesDir, "default.json"), "utf-8")
@@ -211,7 +211,7 @@ describe("auth", () => {
       expect(content.existingField).toBe("keep-me");
     });
 
-    test("updates existing profile directory (pattern 2)", () => {
+    test("updates existing profile directory (pattern 2)", async () => {
       const profileDir = join(testConfigDir(name4), "profiles", "default");
       mkdirSync(profileDir, { recursive: true });
       writeFileSync(
@@ -219,7 +219,7 @@ describe("auth", () => {
         JSON.stringify({ oldKey: "old-value" }, null, 2)
       );
 
-      saveApiKey(name4, "updated-key", "apiKey");
+      await saveApiKey(name4, "updated-key", "apiKey");
 
       const content = JSON.parse(
         readFileSync(join(profileDir, "config.json"), "utf-8")
@@ -538,8 +538,8 @@ describe("auth", () => {
       cleanupTestConnectors(name1);
     });
 
-    test("defaults to 'apiKey' when no field specified and connector has no docs", () => {
-      saveApiKey(name1, "my-test-key");
+    test("defaults to 'apiKey' when no field specified and connector has no docs", async () => {
+      await saveApiKey(name1, "my-test-key");
 
       const configFile = join(
         testConfigDir(name1),
