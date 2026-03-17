@@ -167,7 +167,7 @@ describe("deleteAgent", () => {
 
 describe("isAgentConflict", () => {
   test("identifies conflict objects", () => {
-    expect(isAgentConflict({ conflict: true, existing_id: "x", existing_name: "y", last_seen_at: "z", session_hint: null, message: "m" })).toBe(true);
+    expect(isAgentConflict({ conflict: true, existing_id: "x", existing_name: "y", last_seen_at: "z", session_hint: null, working_dir: null, message: "m" })).toBe(true);
   });
 
   test("identifies agent objects", () => {

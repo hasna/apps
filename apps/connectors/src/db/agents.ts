@@ -23,6 +23,7 @@ export interface AgentConflictError {
   existing_name: string;
   last_seen_at: string;
   session_hint: string | null;
+  working_dir: null;
   message: string;
 }
 
@@ -63,6 +64,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
         existing_name: existing.name,
         last_seen_at: existing.last_seen_at,
         session_hint: existing.session_id ? existing.session_id.slice(0, 8) : null,
+        working_dir: null,
         message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago). Pass session_id="${existing.session_id}" to reclaim it, or choose a different name.`,
       };
     }
