@@ -19,17 +19,14 @@ import {
 } from "../lib/installer.js";
 import { getAuthStatus, saveApiKey } from "../server/auth.js";
 import { registerAgent, listAgents, isAgentConflict } from "../db/agents.js";
-import { createRequire } from "module";
+import pkg from "../../package.json" with { type: "json" };
 
 // Load versions at startup
 loadConnectorVersions();
 
-const require = createRequire(import.meta.url);
-const { version } = require("../../package.json") as { version: string };
-
 const server = new McpServer({
   name: "connectors",
-  version,
+  version: pkg.version,
 });
 
 // --- Tool: search_connectors ---
