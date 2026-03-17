@@ -165,7 +165,7 @@ function loadTokens(name: string): OAuthTokens | null {
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
 
-  // Pattern: profiles/<name>/tokens.json (e.g., Gmail)
+  // Pattern 1: profiles/<name>/tokens.json (e.g., Gmail directory pattern)
   const tokensFile = join(configDir, "profiles", profile, "tokens.json");
   if (existsSync(tokensFile)) {
     try {
@@ -173,6 +173,20 @@ function loadTokens(name: string): OAuthTokens | null {
     } catch {
       return null;
     }
+  }
+
+  // Pattern 2: tokens stored in the profile config file itself
+  // Some connectors (e.g. Google Calendar, Drive) store refreshToken/accessToken
+  // directly in profiles/<name>.json or profiles/<name>/config.json
+  const profileConfig = loadProfileConfig(name);
+  if (profileConfig.refreshToken || profileConfig.accessToken) {
+    return {
+      accessToken: profileConfig.accessToken as string | undefined,
+      refreshToken: profileConfig.refreshToken as string | undefined,
+      expiresAt: profileConfig.expiresAt as number | undefined,
+      tokenType: profileConfig.tokenType as string | undefined,
+      scope: profileConfig.scope as string | undefined,
+    };
   }
 
   return null;
