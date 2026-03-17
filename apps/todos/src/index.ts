@@ -138,6 +138,10 @@ export {
 export { createHandoff, listHandoffs, getLatestHandoff } from "./db/handoffs.js";
 export type { Handoff, CreateHandoffInput } from "./db/handoffs.js";
 
+// Locks
+export { acquireLock, releaseLock, checkLock, cleanExpiredLocks } from "./db/locks.js";
+export type { ResourceLock } from "./db/locks.js";
+
 // Orgs
 export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
 

@@ -433,6 +433,26 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type);
   INSERT OR IGNORE INTO _migrations (id) VALUES (22);
   `,
+  // Migration 23: Agent project session locking
+  `
+  ALTER TABLE agents ADD COLUMN active_project_id TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (23);
+  `,
+  // Migration 24: Resource locks table for multi-agent coordination
+  `
+  CREATE TABLE IF NOT EXISTS resource_locks (
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    lock_type TEXT NOT NULL DEFAULT 'advisory',
+    locked_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    UNIQUE(resource_type, resource_id, lock_type)
+  );
+  CREATE INDEX IF NOT EXISTS idx_resource_locks_type_id ON resource_locks(resource_type, resource_id);
+  CREATE INDEX IF NOT EXISTS idx_resource_locks_agent ON resource_locks(agent_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (24);
+  `,
 ];
 
 let _db: Database | null = null;

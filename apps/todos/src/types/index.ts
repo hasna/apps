@@ -170,6 +170,7 @@ export interface RegisterAgentInput {
   metadata?: Record<string, unknown>;
   session_id?: string;
   working_dir?: string;
+  project_id?: string;
 }
 
 export interface AgentConflictError {
