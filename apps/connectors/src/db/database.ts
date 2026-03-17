@@ -65,4 +65,58 @@ function migrate(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_resource_locks_agent ON resource_locks(agent_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_resource_locks_expires ON resource_locks(expires_at)`);
+
+  // Migration 3: connector_rate_usage table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS connector_rate_usage (
+      agent_id TEXT NOT NULL,
+      connector TEXT NOT NULL,
+      window_start TEXT NOT NULL,
+      call_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (agent_id, connector, window_start)
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_rate_usage_window ON connector_rate_usage(connector, window_start)`);
+
+  // Migration 4: connector_jobs — scheduled connector runs
+  db.run(`
+    CREATE TABLE IF NOT EXISTS connector_jobs (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      connector TEXT NOT NULL,
+      command TEXT NOT NULL,
+      args TEXT NOT NULL DEFAULT '[]',
+      cron TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      strip INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      last_run_at TEXT
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_jobs_enabled ON connector_jobs(enabled)`);
+
+  // Migration 5: connector_job_runs — output history per job
+  db.run(`
+    CREATE TABLE IF NOT EXISTS connector_job_runs (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES connector_jobs(id) ON DELETE CASCADE,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      exit_code INTEGER,
+      raw_output TEXT,
+      stripped_output TEXT
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_job_runs_job ON connector_job_runs(job_id, started_at DESC)`);
+
+  // Migration 6: connector_workflows — sequential pipelines
+  db.run(`
+    CREATE TABLE IF NOT EXISTS connector_workflows (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      steps TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    )
+  `);
 }

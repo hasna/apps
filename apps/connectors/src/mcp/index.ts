@@ -26,10 +26,16 @@ import {
 } from "../lib/runner.js";
 import { registerAgent, listAgents, isAgentConflict } from "../db/agents.js";
 import { checkRateBudget, getRateBudget, isRateExceeded } from "../db/rate.js";
+import { maybeStrip } from "../lib/strip.js";
 import pkg from "../../package.json" with { type: "json" };
 
 // Load versions at startup
 loadConnectorVersions();
+
+/** Wrap MCP tool text output through optional LLM stripping */
+async function stripped(text: string) {
+  return { content: [{ type: "text" as const, text: await maybeStrip(text) }] };
+}
 
 const server = new McpServer({
   name: "connectors",
@@ -46,24 +52,7 @@ server.registerTool(
   },
   async ({ query }) => {
     const results = searchConnectors(query);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            results.map((c) => ({
-              name: c.name,
-              displayName: c.displayName,
-              version: c.version,
-              category: c.category,
-              description: c.description,
-            })),
-            null,
-            2
-          ),
-        },
-      ],
-    };
+    return stripped(JSON.stringify(results.map((c) => ({ name: c.name, displayName: c.displayName, version: c.version, category: c.category, description: c.description })), null, 2));
   }
 );
 
@@ -109,9 +98,7 @@ server.registerTool(
           description: c.description,
         }));
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-    };
+    return stripped(JSON.stringify(data, null, 2));
   }
 );
 
@@ -719,6 +706,99 @@ server.registerTool(
     };
     const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
     return { content: [{ type: "text" as const, text: result }] };
+  }
+);
+
+// --- Tool: list_jobs ---
+server.registerTool("list_jobs", { title: "List Jobs", description: "List scheduled connector jobs.", inputSchema: {} },
+  async () => {
+    const { listJobs } = await import("../db/jobs.js");
+    const { getDatabase } = await import("../db/database.js");
+    return stripped(JSON.stringify(listJobs(getDatabase()), null, 2));
+  }
+);
+
+// --- Tool: get_latest_job_run ---
+server.registerTool("get_latest_job_run", { title: "Get Latest Job Run", description: "Get the most recent run output for a job.", inputSchema: { name: z.string() } },
+  async ({ name }) => {
+    const { getJobByName, getLatestRun } = await import("../db/jobs.js");
+    const { getDatabase } = await import("../db/database.js");
+    const db = getDatabase();
+    const job = getJobByName(name, db);
+    if (!job) return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Job "${name}" not found` }) }], isError: true };
+    const run = getLatestRun(job.id, db);
+    return stripped(JSON.stringify(run ?? { message: "No runs yet" }, null, 2));
+  }
+);
+
+// --- Tool: run_job ---
+server.registerTool("run_job", { title: "Run Job", description: "Manually trigger a scheduled job.", inputSchema: { name: z.string() } },
+  async ({ name }) => {
+    const { getJobByName } = await import("../db/jobs.js");
+    const { getDatabase } = await import("../db/database.js");
+    const { triggerJob } = await import("../lib/scheduler.js");
+    const db = getDatabase();
+    const job = getJobByName(name, db);
+    if (!job) return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Job "${name}" not found` }) }], isError: true };
+    const result = await triggerJob(job, db);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+// --- Tool: list_workflows ---
+server.registerTool("list_workflows", { title: "List Workflows", description: "List connector workflows.", inputSchema: {} },
+  async () => {
+    const { listWorkflows } = await import("../db/workflows.js");
+    const { getDatabase } = await import("../db/database.js");
+    return stripped(JSON.stringify(listWorkflows(getDatabase()), null, 2));
+  }
+);
+
+// --- Tool: run_workflow ---
+server.registerTool("run_workflow", { title: "Run Workflow", description: "Execute a connector workflow pipeline.", inputSchema: { name: z.string() } },
+  async ({ name }) => {
+    const { getWorkflowByName } = await import("../db/workflows.js");
+    const { getDatabase } = await import("../db/database.js");
+    const { runWorkflow } = await import("../lib/workflow-runner.js");
+    const wf = getWorkflowByName(name, getDatabase());
+    if (!wf) return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Workflow "${name}" not found` }) }], isError: true };
+    const result = await runWorkflow(wf);
+    return stripped(JSON.stringify(result, null, 2));
+  }
+);
+
+// --- Tool: get_llm_config ---
+server.registerTool(
+  "get_llm_config",
+  {
+    title: "Get LLM Config",
+    description: "Get current LLM provider config and strip status.",
+    inputSchema: {},
+  },
+  async () => {
+    const { getLlmConfig: getConfig, maskKey: mask } = await import("../lib/llm.js");
+    const config = getConfig();
+    if (!config) return { content: [{ type: "text" as const, text: JSON.stringify({ configured: false }) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify({ configured: true, provider: config.provider, model: config.model, key: mask(config.api_key), strip: config.strip }) }] };
+  }
+);
+
+// --- Tool: set_llm_strip ---
+server.registerTool(
+  "set_llm_strip",
+  {
+    title: "Set LLM Strip",
+    description: "Enable or disable global output stripping.",
+    inputSchema: { enabled: z.boolean() },
+  },
+  async ({ enabled }) => {
+    const { setLlmStrip } = await import("../lib/llm.js");
+    try {
+      setLlmStrip(enabled);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, strip: enabled }) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: e instanceof Error ? e.message : String(e) }) }], isError: true };
+    }
   }
 );
 

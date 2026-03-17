@@ -7,6 +7,13 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { registerAgent, listAgents, getAgentByName, deleteAgent, isAgentConflict } from "../db/agents.js";
 import { checkRateBudget, getRateBudget } from "../db/rate.js";
+import { maybeStrip } from "../lib/strip.js";
+import { getLlmConfig, saveLlmConfig, maskKey, LLMClient, type LLMProvider } from "../lib/llm.js";
+import { createJob, listJobs, getJobByName, updateJob, deleteJob, listJobRuns, createJobRun, finishJobRun } from "../db/jobs.js";
+import { createWorkflow, listWorkflows, getWorkflowByName, deleteWorkflow } from "../db/workflows.js";
+import { triggerJob } from "../lib/scheduler.js";
+import { runWorkflow } from "../lib/workflow-runner.js";
+import { getDatabase } from "../db/database.js";
 import { join, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -107,6 +114,20 @@ const SECURITY_HEADERS: Record<string, string> = {
 
 function json(data: unknown, status = 200, port?: number): Response {
   return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": port ? `http://localhost:${port}` : "*",
+      ...SECURITY_HEADERS,
+    },
+  });
+}
+
+/** Like json() but passes data through LLM stripping if enabled */
+async function jsonStripped(data: unknown, status = 200, port?: number): Promise<Response> {
+  const raw = JSON.stringify(data);
+  const body = await maybeStrip(raw);
+  return new Response(body, {
     status,
     headers: {
       "Content-Type": "application/json",
@@ -252,12 +273,12 @@ export async function startServer(requestedPort: number, options?: { open?: bool
 
         if (compact) {
           // Compact: name + category + installed only (~61% smaller)
-          return json(data.map((c) => ({ name: c.name, category: c.category, installed: c.installed })), 200, port);
+          return jsonStripped(data.map((c) => ({ name: c.name, category: c.category, installed: c.installed })), 200, port);
         }
 
         if (fields) {
           // Field filtering: return only requested fields
-          return json(data.map((c) => {
+          return jsonStripped(data.map((c) => {
             const out: Record<string, unknown> = {};
             for (const f of fields) {
               if (f in c) out[f] = (c as unknown as Record<string, unknown>)[f];
@@ -266,7 +287,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           }), 200, port);
         }
 
-        return json(data, 200, port);
+        return jsonStripped(data, 200, port);
       }
 
       // GET /api/connectors/:name
@@ -387,6 +408,108 @@ export async function startServer(requestedPort: number, options?: { open?: bool
       // GET /api/activity
       if (path === "/api/activity" && method === "GET") {
         return json(activityLog, 200, port);
+      }
+
+      // ── LLM Routes ──
+
+      // GET /api/llm
+      if (path === "/api/llm" && method === "GET") {
+        const config = getLlmConfig();
+        if (!config) return json({ configured: false }, 200, port);
+        return json({ configured: true, provider: config.provider, model: config.model, key: maskKey(config.api_key), strip: config.strip }, 200, port);
+      }
+
+      // POST /api/llm
+      if (path === "/api/llm" && method === "POST") {
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+        const validProviders: LLMProvider[] = ["cerebras", "groq", "openai", "anthropic"];
+        const provider = body.provider as LLMProvider;
+        if (!provider || !validProviders.includes(provider)) return json({ error: "provider must be one of: " + validProviders.join(", ") }, 400, port);
+        const api_key = body.api_key as string;
+        if (!api_key) return json({ error: "api_key is required" }, 400, port);
+        const model = (body.model as string) || getLlmConfig()?.model || "qwen-3-32b";
+        const strip = typeof body.strip === "boolean" ? body.strip : getLlmConfig()?.strip ?? false;
+        saveLlmConfig({ provider, model, api_key, strip });
+        return json({ success: true, provider, model, strip }, 200, port);
+      }
+
+      // POST /api/llm/test
+      if (path === "/api/llm/test" && method === "POST") {
+        const config = getLlmConfig();
+        if (!config) return json({ error: "No LLM configured" }, 400, port);
+        try {
+          const client = new LLMClient(config);
+          const result = await client.complete('Respond with exactly: {"status":"ok"}', "ping");
+          return json({ success: true, provider: result.provider, model: result.model, latency_ms: result.latency_ms, response: result.content }, 200, port);
+        } catch (e) {
+          return json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500, port);
+        }
+      }
+
+      // ── Jobs Routes ──
+
+      if (path === "/api/jobs" && method === "GET") {
+        return json(listJobs(getDatabase()), 200, port);
+      }
+      if (path === "/api/jobs" && method === "POST") {
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+        if (!body.name || !body.connector || !body.command || !body.cron) return json({ error: "name, connector, command, cron required" }, 400, port);
+        const job = createJob({ name: body.name as string, connector: body.connector as string, command: body.command as string, args: (body.args as string[] | undefined) ?? [], cron: body.cron as string, strip: !!body.strip }, getDatabase());
+        return json(job, 201, port);
+      }
+      const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
+      if (jobMatch) {
+        const db = getDatabase();
+        const job = getJobByName(jobMatch[1]) ?? (getDatabase().query("SELECT * FROM connector_jobs WHERE id = ?").get(jobMatch[1]) as null);
+        if (!job && method !== "DELETE") return json({ error: "Job not found" }, 404, port);
+        if (method === "GET") return json(listJobRuns((job as { id: string }).id, 20, db), 200, port);
+        if (method === "DELETE") {
+          const j = getJobByName(jobMatch[1], db);
+          if (!j) return json({ error: "Job not found" }, 404, port);
+          deleteJob(j.id, db);
+          return json({ success: true }, 200, port);
+        }
+        if (method === "PATCH") {
+          const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+          const j = getJobByName(jobMatch[1], db)!;
+          const updated = updateJob(j.id, { enabled: typeof body.enabled === "boolean" ? body.enabled : undefined, strip: typeof body.strip === "boolean" ? body.strip : undefined }, db);
+          return json(updated, 200, port);
+        }
+      }
+      const jobRunMatch = path.match(/^\/api\/jobs\/([^/]+)\/run$/);
+      if (jobRunMatch && method === "POST") {
+        const db = getDatabase();
+        const job = getJobByName(jobRunMatch[1], db);
+        if (!job) return json({ error: "Job not found" }, 404, port);
+        const result = await triggerJob(job, db);
+        return json(result, 200, port);
+      }
+
+      // ── Workflows Routes ──
+
+      if (path === "/api/workflows" && method === "GET") {
+        return json(listWorkflows(getDatabase()), 200, port);
+      }
+      if (path === "/api/workflows" && method === "POST") {
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+        if (!body.name || !body.steps) return json({ error: "name and steps required" }, 400, port);
+        const wf = createWorkflow({ name: body.name as string, steps: body.steps as Parameters<typeof createWorkflow>[0]["steps"] }, getDatabase());
+        return json(wf, 201, port);
+      }
+      const wfMatch = path.match(/^\/api\/workflows\/([^/]+)$/);
+      if (wfMatch) {
+        const db = getDatabase();
+        const wf = getWorkflowByName(wfMatch[1], db);
+        if (!wf) return json({ error: "Workflow not found" }, 404, port);
+        if (method === "GET") return json(wf, 200, port);
+        if (method === "DELETE") { deleteWorkflow(wf.id, db); return json({ success: true }, 200, port); }
+      }
+      const wfRunMatch = path.match(/^\/api\/workflows\/([^/]+)\/run$/);
+      if (wfRunMatch && method === "POST") {
+        const wf = getWorkflowByName(wfRunMatch[1], getDatabase());
+        if (!wf) return json({ error: "Workflow not found" }, 404, port);
+        const result = await runWorkflow(wf);
+        return json(result, 200, port);
       }
 
       // ── Agent Routes ──
@@ -697,6 +820,11 @@ export async function startServer(requestedPort: number, options?: { open?: bool
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+
+  // Start job scheduler
+  const { startScheduler } = await import("../lib/scheduler.js");
+  const { getDatabase } = await import("../db/database.js");
+  startScheduler(getDatabase());
 
   const url = `http://localhost:${port}`;
   console.log(`Connectors Dashboard running at ${url}`);
