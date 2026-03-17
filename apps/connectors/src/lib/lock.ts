@@ -12,7 +12,7 @@
  * Callers that cannot acquire the lock within the timeout receive a LockTimeoutError.
  */
 
-import { openSync, closeSync, unlinkSync, existsSync } from "fs";
+import { openSync, closeSync, unlinkSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync } from "fs";
@@ -39,7 +39,6 @@ function lockPath(connector: string): string {
 
 function isStale(path: string): boolean {
   try {
-    const { statSync } = require("fs") as typeof import("fs");
     const stat = statSync(path);
     return Date.now() - stat.mtimeMs > STALE_LOCK_MS;
   } catch {
