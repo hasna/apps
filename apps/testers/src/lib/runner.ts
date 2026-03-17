@@ -17,6 +17,7 @@ export interface RunOptions {
   headed?: boolean;
   parallel?: number;
   timeout?: number;
+  retry?: number;
   projectId?: string;
   apiKey?: string;
   screenshotDir?: string;
@@ -45,6 +46,8 @@ export interface RunEvent {
   toolResult?: string;
   thinking?: string;
   stepNumber?: number;
+  retryAttempt?: number;
+  maxRetries?: number;
 }
 
 export type RunEventHandler = (event: RunEvent) => void;
@@ -62,7 +65,7 @@ function emit(event: RunEvent): void {
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Scenario timeout after ${ms}ms: ${label}`));
+      reject(new Error(`Scenario '${label}' timed out after ${ms}ms. Try: testers run --timeout ${ms * 2} or simplify the scenario steps.`));
     }, ms);
     promise.then(
       (val) => { clearTimeout(timer); resolve(val); },
@@ -227,6 +230,8 @@ export async function runBatch(
     return true;
   };
 
+  const maxRetries = options.retry ?? 0;
+
   if (parallel <= 1) {
     // Sequential — respects dependency order
     for (const scenario of sortedScenarios) {
@@ -240,7 +245,13 @@ export async function runBatch(
         continue;
       }
 
-      const result = await runSingleScenario(scenario, run.id, options);
+      let result = await runSingleScenario(scenario, run.id, options);
+      let attempt = 1;
+      while ((result.status === "failed" || result.status === "error") && attempt <= maxRetries) {
+        emit({ type: "scenario:start", scenarioId: scenario.id, scenarioName: scenario.name, runId: run.id, retryAttempt: attempt + 1, maxRetries: maxRetries + 1 });
+        result = await runSingleScenario(scenario, run.id, options);
+        attempt++;
+      }
       results.push(result);
       if (result.status === "failed" || result.status === "error") {
         failedScenarioIds.add(scenario.id);

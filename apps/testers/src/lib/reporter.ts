@@ -4,6 +4,12 @@ import { listScreenshots } from "../db/screenshots.js";
 import { getScenario } from "../db/scenarios.js";
 import { getDatabase } from "../db/database.js";
 
+// ─── Color/emoji helpers ─────────────────────────────────────────────────────
+
+function useEmoji(): boolean {
+  return !process.env["NO_COLOR"] && process.argv.indexOf("--no-color") === -1;
+}
+
 export interface ReportOptions {
   json?: boolean;
   verbose?: boolean;
@@ -26,21 +32,22 @@ export function formatTerminal(run: Run, results: Result[]): string {
 
     let statusIcon: string;
     let statusColor: typeof chalk;
+    const emoji = useEmoji();
     switch (result.status) {
       case "passed":
-        statusIcon = chalk.green("PASS");
+        statusIcon = emoji ? "✅" : chalk.green("PASS");
         statusColor = chalk.green;
         break;
       case "failed":
-        statusIcon = chalk.red("FAIL");
+        statusIcon = emoji ? "❌" : chalk.red("FAIL");
         statusColor = chalk.red;
         break;
       case "error":
-        statusIcon = chalk.yellow("ERR ");
+        statusIcon = emoji ? "⚠️ " : chalk.yellow("ERR ");
         statusColor = chalk.yellow;
         break;
       default:
-        statusIcon = chalk.dim("SKIP");
+        statusIcon = emoji ? "⏭️ " : chalk.dim("SKIP");
         statusColor = chalk.dim;
         break;
     }
@@ -56,7 +63,7 @@ export function formatTerminal(run: Run, results: Result[]): string {
   }
 
   lines.push("");
-  lines.push(formatSummary(run));
+  lines.push(formatActionableSummary(run, results));
   lines.push("");
 
   return lines.join("\n");
@@ -72,6 +79,36 @@ export function formatSummary(run: Run): string {
   const totalStr = chalk.dim(` (${run.total} total)`);
 
   return `  ${passedStr}${failedStr}${totalStr} in ${duration}`;
+}
+
+export function formatActionableSummary(run: Run, results: Result[]): string {
+  const emoji = useEmoji();
+  const passedCount = results.filter((r) => r.status === "passed").length;
+  const failedCount = results.filter((r) => r.status === "failed" || r.status === "error").length;
+  const shortId = run.id.slice(0, 8);
+
+  const passStr = `${emoji ? "✅" : "PASS"} ${passedCount} passed`;
+  const failStr = failedCount > 0 ? `  ${emoji ? "❌" : "FAIL"} ${failedCount} failed` : "";
+
+  const lines: string[] = [];
+  lines.push(`  ${chalk.bold(passStr)}${failedCount > 0 ? chalk.bold(failStr) : ""}`);
+
+  if (failedCount > 0) {
+    lines.push(chalk.dim(`  retry failed: testers retry ${shortId}  |  view: testers results ${shortId}`));
+  } else {
+    lines.push(chalk.dim(`  view: testers results ${shortId}`));
+  }
+
+  // Cost line
+  const totalCostCents = results.reduce((sum, r) => sum + (r.costCents ?? 0), 0);
+  const totalTokens = results.reduce((sum, r) => sum + (r.tokensUsed ?? 0), 0);
+  if (totalTokens > 0) {
+    const costStr = `$${(totalCostCents / 100).toFixed(4)}`;
+    const tokensStr = totalTokens.toLocaleString();
+    lines.push(chalk.dim(`  ${emoji ? "💰" : "cost:"} Cost: ${costStr} (${tokensStr} tokens)`));
+  }
+
+  return lines.join("\n");
 }
 
 export function formatJSON(run: Run, results: Result[]): string {

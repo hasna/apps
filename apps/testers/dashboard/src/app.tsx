@@ -5,6 +5,7 @@ import { ScenariosPage } from "./components/ScenariosPage";
 import { RunsPage } from "./components/RunsPage";
 import { RunDetailPage } from "./components/RunDetailPage";
 import { ResultDetailPage } from "./components/ResultDetailPage";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 type Page =
   | { type: "scenarios" }
@@ -36,6 +37,15 @@ export function App() {
   const [onCloseModal, setOnCloseModal] = useState<(() => void) | null>(null);
   const [runToast, setRunToast] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    const saved = localStorage.getItem("theme");
+    return saved ? saved === "dark" : true; // default dark
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+  }, [isDark]);
 
   useEffect(() => {
     getScenarios().then(setScenarios).catch(console.error);
@@ -131,28 +141,47 @@ export function App() {
               Runs {status ? `(${status.runCount})` : ""}
             </NavButton>
           </nav>
+          <button
+            onClick={() => setIsDark((d) => !d)}
+            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            style={{
+              marginLeft: "auto",
+              background: "none",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "4px 8px",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: 1,
+              color: "var(--text-muted)",
+            }}
+          >
+            {isDark ? "☀️" : "🌙"}
+          </button>
         </header>
 
         <div style={{ flex: 1 }}>
-          {page.type === "scenarios" && (
-            <ScenariosPage scenarios={scenarios} onRefresh={refresh} />
-          )}
-          {page.type === "runs" && (
-            <RunsPage runs={runs} onSelectRun={(id) => setPage({ type: "run-detail", runId: id })} onRefresh={refresh} />
-          )}
-          {page.type === "run-detail" && (
-            <RunDetailPage
-              runId={page.runId}
-              onBack={() => setPage({ type: "runs" })}
-              onSelectResult={(id) => setPage({ type: "result-detail", resultId: id })}
-            />
-          )}
-          {page.type === "result-detail" && (
-            <ResultDetailPage
-              resultId={page.resultId}
-              onBack={() => setPage({ type: "runs" })}
-            />
-          )}
+          <ErrorBoundary>
+            {page.type === "scenarios" && (
+              <ScenariosPage scenarios={scenarios} onRefresh={refresh} />
+            )}
+            {page.type === "runs" && (
+              <RunsPage runs={runs} onSelectRun={(id) => setPage({ type: "run-detail", runId: id })} onRefresh={refresh} />
+            )}
+            {page.type === "run-detail" && (
+              <RunDetailPage
+                runId={page.runId}
+                onBack={() => setPage({ type: "runs" })}
+                onSelectResult={(id) => setPage({ type: "result-detail", resultId: id })}
+              />
+            )}
+            {page.type === "result-detail" && (
+              <ResultDetailPage
+                resultId={page.resultId}
+                onBack={() => setPage({ type: "runs" })}
+              />
+            )}
+          </ErrorBoundary>
         </div>
 
         {/* Run toast */}

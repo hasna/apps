@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Result, Screenshot } from "../types";
 import { getResult, getScreenshotUrl } from "../lib/api";
+import { Spinner } from "./Spinner";
 
 export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBack: () => void }) {
   const [result, setResult] = useState<Result | null>(null);
@@ -31,7 +32,7 @@ export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBac
     return () => window.removeEventListener("keydown", handler);
   }, [lightboxIndex, closeLightbox, prevSlide, nextSlide]);
 
-  if (!result) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading...</div>;
+  if (!result) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)", display: "flex", justifyContent: "center" }}><Spinner /></div>;
 
   return (
     <div>
@@ -111,8 +112,33 @@ export function ResultDetailPage({ resultId, onBack }: { resultId: string; onBac
             {/* Main content — stop propagation so clicking image doesn't close */}
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "90vw", maxHeight: "90vh" }}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "90vw", maxHeight: "90vh", position: "relative" }}
             >
+              {/* Download button */}
+              <a
+                href={getScreenshotUrl(ss.id)}
+                download={`step-${ss.stepNumber}.png`}
+                onClick={(e) => e.stopPropagation()}
+                title="Download screenshot"
+                style={{
+                  position: "absolute",
+                  top: -8,
+                  right: -8,
+                  background: "rgba(255,255,255,0.12)",
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  borderRadius: 6,
+                  color: "#fff",
+                  textDecoration: "none",
+                  fontSize: 16,
+                  lineHeight: 1,
+                  padding: "5px 8px",
+                  cursor: "pointer",
+                  zIndex: 10,
+                }}
+              >
+                ⬇
+              </a>
+
               {/* Step overlay */}
               <div style={{ color: "#fff", fontSize: 13, marginBottom: 10, opacity: 0.7 }}>
                 Step {ss.stepNumber} of {screenshots.length}

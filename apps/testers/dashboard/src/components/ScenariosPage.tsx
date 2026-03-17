@@ -2,6 +2,7 @@ import { useState, useContext, useRef, useEffect } from "react";
 import type { Scenario } from "../types";
 import { AppContext } from "../app";
 import { deleteScenario, triggerRun, getScenarioHistory } from "../lib/api";
+import { ConfirmModal } from "./ConfirmModal";
 
 const priorityColors: Record<string, string> = {
   critical: "var(--red)",
@@ -17,6 +18,7 @@ export function ScenariosPage({ scenarios, onRefresh }: { scenarios: Scenario[];
   const [bulkTagInput, setBulkTagInput] = useState("");
   const [showTagInput, setShowTagInput] = useState(false);
   const [actionToast, setActionToast] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ ids: string[] } | null>(null);
 
   const toast = (msg: string) => {
     setActionToast(msg);
@@ -62,7 +64,11 @@ export function ScenariosPage({ scenarios, onRefresh }: { scenarios: Scenario[];
   const handleDeleteSelected = () => {
     const ids = Array.from(checked);
     if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} scenario${ids.length > 1 ? "s" : ""}?`)) return;
+    setConfirmDelete({ ids });
+  };
+
+  const doDelete = (ids: string[]) => {
+    setConfirmDelete(null);
     Promise.all(ids.map((id) => deleteScenario(id)))
       .then(() => {
         toast(`Deleted ${ids.length} scenario${ids.length > 1 ? "s" : ""}`);
@@ -222,6 +228,17 @@ export function ScenariosPage({ scenarios, onRefresh }: { scenarios: Scenario[];
           )}
           <BulkButton color="var(--text-muted)" onClick={() => setChecked(new Set())}>Clear</BulkButton>
         </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <ConfirmModal
+          title={`Delete ${confirmDelete.ids.length} scenario${confirmDelete.ids.length > 1 ? "s" : ""}?`}
+          message="This action cannot be undone."
+          confirmLabel="Delete"
+          onConfirm={() => doDelete(confirmDelete.ids)}
+          onCancel={() => setConfirmDelete(null)}
+        />
       )}
 
       {/* Toast */}

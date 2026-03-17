@@ -117,3 +117,11 @@ export function updateResult(
 export function getResultsByRun(runId: string): Result[] {
   return listResults(runId);
 }
+
+export function countResultsByRun(runId: string): number {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT COUNT(*) as count FROM results WHERE run_id = ?")
+    .get(runId) as { count: number };
+  return row.count;
+}

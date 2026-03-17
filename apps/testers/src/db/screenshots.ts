@@ -57,3 +57,11 @@ export function listScreenshots(resultId: string): Screenshot[] {
 export function getScreenshotsByResult(resultId: string): Screenshot[] {
   return listScreenshots(resultId);
 }
+
+export function countScreenshots(resultId: string): number {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT COUNT(*) as count FROM screenshots WHERE result_id = ?")
+    .get(resultId) as { count: number };
+  return row.count;
+}

@@ -15,19 +15,19 @@ export async function pushFailedRunToLogs(
   const scenarioMap = new Map(scenarios.map(s => [s.id, s]));
 
   const entries = failedResults.map(result => {
-    const scenario = scenarioMap.get(result.scenario_id);
+    const scenario = scenarioMap.get(result.scenarioId);
     return {
       level: "error",
       source: "sdk",
       service: "testers",
-      message: `[testers] Scenario failed: ${scenario?.name ?? result.scenario_id}${result.error ? ` — ${result.error}` : ""}`,
+      message: `[testers] Scenario failed: ${scenario?.name ?? result.scenarioId}${result.error ? ` — ${result.error}` : ""}`,
       metadata: {
         run_id: run.id,
-        scenario_id: result.scenario_id,
+        scenario_id: result.scenarioId,
         scenario_name: scenario?.name,
         url: run.url,
         status: result.status,
-        duration_ms: result.duration_ms,
+        duration_ms: result.durationMs,
       },
     };
   });

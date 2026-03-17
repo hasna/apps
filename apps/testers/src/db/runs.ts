@@ -79,6 +79,27 @@ export function listRuns(filter?: RunFilter): Run[] {
   return rows.map(runFromRow);
 }
 
+export function countRuns(filter?: RunFilter): number {
+  const db = getDatabase();
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (filter?.projectId) {
+    conditions.push("project_id = ?");
+    params.push(filter.projectId);
+  }
+  if (filter?.status) {
+    conditions.push("status = ?");
+    params.push(filter.status);
+  }
+
+  let sql = "SELECT COUNT(*) as count FROM runs";
+  if (conditions.length > 0) sql += " WHERE " + conditions.join(" AND ");
+
+  const row = db.query(sql).get(...params) as { count: number };
+  return row.count;
+}
+
 export function updateRun(id: string, updates: Partial<RunRow>): Run {
   const db = getDatabase();
   const existing = getRun(id);

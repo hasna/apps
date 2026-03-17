@@ -2,10 +2,11 @@
 import { existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { listScenarios, createScenario, getScenario, getScenarioByShortId, updateScenario, deleteScenario } from "../db/scenarios.js";
-import { listRuns, getRun } from "../db/runs.js";
-import { getResult, getResultsByRun } from "../db/results.js";
-import { listScreenshots, getScreenshot } from "../db/screenshots.js";
+import { z } from "zod";
+import { listScenarios, createScenario, getScenario, getScenarioByShortId, updateScenario, deleteScenario, countScenarios } from "../db/scenarios.js";
+import { listRuns, getRun, countRuns } from "../db/runs.js";
+import { getResult, getResultsByRun, countResultsByRun } from "../db/results.js";
+import { listScreenshots, getScreenshot, countScreenshots } from "../db/screenshots.js";
 import { runByFilter } from "../lib/runner.js";
 import { loadConfig } from "../lib/config.js";
 import { VersionConflictError } from "../types/index.js";
@@ -20,7 +21,7 @@ function parseUrl(req: Request): { pathname: string; searchParams: URLSearchPara
   return { pathname: url.pathname, searchParams: url.searchParams };
 }
 
-function jsonResponse(data: unknown, status = 200): Response {
+function jsonResponse(data: unknown, status = 200, extra?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -28,6 +29,7 @@ function jsonResponse(data: unknown, status = 200): Response {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      ...extra,
     },
   });
 }
@@ -59,6 +61,66 @@ const CONTENT_TYPES: Record<string, string> = {
 function getContentType(filePath: string): string {
   const ext = filePath.slice(filePath.lastIndexOf("."));
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
+
+// ─── Zod schemas ────────────────────────────────────────────────────────────
+
+const CreateScenarioSchema = z.object({
+  name: z.string().min(1, "name is required"),
+  description: z.string().default(""),
+  steps: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+  model: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  targetPath: z.string().optional(),
+  requiresAuth: z.boolean().optional(),
+  authConfig: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  assertions: z.array(z.record(z.unknown())).optional(),
+  projectId: z.string().optional(),
+});
+
+const UpdateScenarioSchema = z.object({
+  version: z.number().int().nonnegative("version is required"),
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  steps: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+  model: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  targetPath: z.string().optional(),
+  requiresAuth: z.boolean().optional(),
+  authConfig: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  assertions: z.array(z.record(z.unknown())).optional(),
+});
+
+const CreateRunSchema = z.object({
+  url: z.string().url("url must be a valid URL"),
+  scenarioIds: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  headed: z.boolean().optional(),
+  parallel: z.number().int().positive().optional(),
+  projectId: z.string().optional(),
+});
+
+function validationError(issues: z.ZodIssue[]): Response {
+  return new Response(
+    JSON.stringify({
+      error: "Validation failed",
+      issues: issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+    }),
+    {
+      status: 400,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    },
+  );
 }
 
 // ─── Route handler ──────────────────────────────────────────────────────────
@@ -107,20 +169,24 @@ async function handleRequest(req: Request): Promise<Response> {
     const limit = searchParams.get("limit");
     const offset = searchParams.get("offset");
 
-    const scenarios = listScenarios({
+    const filter = {
       tags: tag ? [tag] : undefined,
       priority: priority as "low" | "medium" | "high" | "critical" | undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
       offset: offset ? parseInt(offset, 10) : undefined,
-    });
-    return jsonResponse(scenarios);
+    };
+    const scenarios = listScenarios(filter);
+    const total = countScenarios(filter);
+    return jsonResponse(scenarios, 200, { "X-Total-Count": String(total) });
   }
 
   // POST /api/scenarios
   if (pathname === "/api/scenarios" && method === "POST") {
     try {
       const body = await req.json();
-      const scenario = createScenario(body);
+      const parsed = CreateScenarioSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const scenario = createScenario(parsed.data as Parameters<typeof createScenario>[0]);
       return jsonResponse(scenario, 201);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -143,8 +209,10 @@ async function handleRequest(req: Request): Promise<Response> {
     const id = scenarioUpdateMatch[1]!;
     try {
       const body = await req.json();
-      const { version, ...updates } = body;
-      const scenario = updateScenario(id, updates, version);
+      const parsed = UpdateScenarioSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const { version, ...updates } = parsed.data;
+      const scenario = updateScenario(id, updates as Parameters<typeof updateScenario>[1], version);
       return jsonResponse(scenario);
     } catch (err) {
       if (err instanceof VersionConflictError) {
@@ -169,7 +237,10 @@ async function handleRequest(req: Request): Promise<Response> {
   // POST /api/runs — trigger a run (async: return run ID immediately)
   if (pathname === "/api/runs" && method === "POST") {
     try {
-      const body = await req.json();
+      const raw = await req.json();
+      const parsed = CreateRunSchema.safeParse(raw);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const body = parsed.data;
 
       // Start the run asynchronously
       const runPromise = runByFilter(body);
@@ -197,12 +268,16 @@ async function handleRequest(req: Request): Promise<Response> {
   if (pathname === "/api/runs" && method === "GET") {
     const status = searchParams.get("status");
     const limit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
 
-    const runs = listRuns({
+    const runFilter = {
       status: status as "pending" | "running" | "passed" | "failed" | "cancelled" | undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
-    });
-    return jsonResponse(runs);
+      offset: offset ? parseInt(offset, 10) : undefined,
+    };
+    const runs = listRuns(runFilter);
+    const total = countRuns(runFilter);
+    return jsonResponse(runs, 200, { "X-Total-Count": String(total) });
   }
 
   // GET /api/runs/:id
@@ -212,7 +287,8 @@ async function handleRequest(req: Request): Promise<Response> {
     const run = getRun(id);
     if (!run) return errorResponse("Run not found", 404);
     const results = getResultsByRun(id);
-    return jsonResponse({ ...run, results });
+    const total = countResultsByRun(id);
+    return jsonResponse({ ...run, results }, 200, { "X-Total-Count": String(total) });
   }
 
   // ── Results ───────────────────────────────────────────────────────────
@@ -243,7 +319,8 @@ async function handleRequest(req: Request): Promise<Response> {
     const result = getResult(id);
     if (!result) return errorResponse("Result not found", 404);
     const screenshots = listScreenshots(id);
-    return jsonResponse({ ...result, screenshots });
+    const total = countScreenshots(id);
+    return jsonResponse({ ...result, screenshots }, 200, { "X-Total-Count": String(total) });
   }
 
   // ── Screenshots ───────────────────────────────────────────────────────

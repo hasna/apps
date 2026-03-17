@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import type { Run, Result } from "../types";
 import { getRun } from "../lib/api";
+import { Spinner } from "./Spinner";
 
 const statusColors: Record<string, string> = {
   passed: "var(--green)",
@@ -22,7 +23,7 @@ export function RunDetailPage({ runId, onBack, onSelectResult }: { runId: string
       .catch(console.error);
   }, [runId]);
 
-  if (!run) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading...</div>;
+  if (!run) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)", display: "flex", justifyContent: "center" }}><Spinner /></div>;
 
   return (
     <div>

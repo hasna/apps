@@ -246,3 +246,14 @@ export function formatCostsTerminal(summary: CostSummary): string {
 export function formatCostsJSON(summary: CostSummary): string {
   return JSON.stringify(summary, null, 2);
 }
+
+export function formatCostsCsv(summary: CostSummary): string {
+  const lines: string[] = [];
+  lines.push("scenario,runs,total_cost_cents,avg_cost_cents,tokens");
+  for (const s of summary.byScenario) {
+    const avgCostCents = s.runs > 0 ? s.costCents / s.runs : 0;
+    const name = s.name.includes(",") ? `"${s.name.replace(/"/g, '""')}"` : s.name;
+    lines.push(`${name},${s.runs},${s.costCents},${avgCostCents.toFixed(2)},${s.tokens}`);
+  }
+  return lines.join("\n");
+}

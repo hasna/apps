@@ -220,6 +220,38 @@ export function updateScenario(id: string, input: UpdateScenarioInput, version: 
   return getScenario(existing.id)!;
 }
 
+export function countScenarios(filter?: ScenarioFilter): number {
+  const db = getDatabase();
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (filter?.projectId) {
+    conditions.push("project_id = ?");
+    params.push(filter.projectId);
+  }
+  if (filter?.tags && filter.tags.length > 0) {
+    for (const tag of filter.tags) {
+      conditions.push("tags LIKE ?");
+      params.push(`%"${tag}"%`);
+    }
+  }
+  if (filter?.priority) {
+    conditions.push("priority = ?");
+    params.push(filter.priority);
+  }
+  if (filter?.search) {
+    conditions.push("(name LIKE ? OR description LIKE ?)");
+    const term = `%${filter.search}%`;
+    params.push(term, term);
+  }
+
+  let sql = "SELECT COUNT(*) as count FROM scenarios";
+  if (conditions.length > 0) sql += " WHERE " + conditions.join(" AND ");
+
+  const row = db.query(sql).get(...params) as { count: number };
+  return row.count;
+}
+
 export function deleteScenario(id: string): boolean {
   const db = getDatabase();
   const scenario = getScenario(id);

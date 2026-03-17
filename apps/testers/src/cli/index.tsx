@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import chalk from "chalk";
+import pkg from "../../package.json";
 import { render, Box, Text, useInput, useApp } from "ink";
 import React, { useState } from "react";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario } from "../db/scenarios.js";
@@ -20,7 +22,7 @@ import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
-import { getCostSummary, formatCostsTerminal, formatCostsJSON } from "../lib/costs.js";
+import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget } from "../lib/costs.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
@@ -183,9 +185,9 @@ async function runInteractiveAdd(projectId: string | undefined): Promise<void> {
       priority: result.priority as ScenarioPriority,
       projectId,
     });
-    console.log(chalk.green(`\nCreated scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+    log(chalk.green(`\nCreated scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
   } else {
-    console.log(chalk.dim("\nCancelled."));
+    log(chalk.dim("\nCancelled."));
   }
 }
 
@@ -201,10 +203,35 @@ function formatToolInput(input: Record<string, unknown>): string {
 
 const program = new Command();
 
+// ─── Global flags ────────────────────────────────────────────────────────────
+
+let QUIET = false;
+let NO_COLOR = false;
+
+function log(...args: unknown[]) {
+  if (QUIET) return;
+  // eslint-disable-next-line no-console
+  console.log(...args);
+}
+
+function logError(...args: unknown[]) {
+  if (QUIET) return;
+  // eslint-disable-next-line no-console
+  console.error(...args);
+}
+
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1B\[[0-9;]*m/g, "");
+}
+
+
 program
   .name("testers")
-  .version("0.0.4")
-  .description("AI-powered browser testing CLI");
+  .version(pkg.version)
+  .description("AI-powered browser testing CLI")
+  .option("-q, --quiet", "Suppress all output", false)
+  .option("--no-color", "Disable color output");
 
 // ─── Helper: active project ─────────────────────────────────────────────────
 
@@ -231,6 +258,7 @@ function resolveProject(optProject?: string): string | undefined {
 
 program
   .command("add [name]")
+  .alias("create")
   .description("Create a new test scenario (interactive if no name/flags given)")
   .option("-d, --description <text>", "Scenario description", "")
   .option("-s, --steps <step>", "Test step (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
@@ -254,20 +282,20 @@ program
       }
 
       if (!name) {
-        console.error(chalk.red("Error: scenario name is required"));
+        logError(chalk.red("Error: scenario name is required"));
         process.exit(1);
       }
 
       if (opts.template) {
         const template = getTemplate(opts.template);
         if (!template) {
-          console.error(chalk.red(`Unknown template: ${opts.template}. Available: ${listTemplateNames().join(", ")}`));
+          logError(chalk.red(`Unknown template: ${opts.template}. Available: ${listTemplateNames().join(", ")}`));
           process.exit(1);
         }
         const projectId = resolveProject(opts.project);
         for (const input of template) {
           const s = createScenario({ ...input, projectId });
-          console.log(chalk.green(`  Created ${s.shortId}: ${s.name}`));
+          log(chalk.green(`  Created ${s.shortId}: ${s.name}`));
         }
         return;
       }
@@ -287,9 +315,9 @@ program
         assertions: assertions.length > 0 ? assertions : undefined,
         projectId,
       });
-      console.log(chalk.green(`Created scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+      log(chalk.green(`Created scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -298,11 +326,14 @@ program
 
 program
   .command("list")
+  .alias("ls")
   .description("List test scenarios")
   .option("-t, --tag <tag>", "Filter by tag")
   .option("-p, --priority <level>", "Filter by priority")
   .option("--project <id>", "Filter by project ID")
   .option("-l, --limit <n>", "Limit results", "50")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const scenarios = listScenarios({
@@ -310,10 +341,15 @@ program
         priority: opts.priority as ScenarioPriority | undefined,
         projectId: opts.project,
         limit: parseInt(opts.limit, 10),
+        offset: parseInt(opts.offset, 10) || undefined,
       });
-      console.log(formatScenarioList(scenarios));
+      if (opts.json) {
+        log(JSON.stringify(scenarios, null, 2));
+      } else {
+        log(formatScenarioList(scenarios));
+      }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -323,40 +359,46 @@ program
 program
   .command("show <id>")
   .description("Show scenario details")
-  .action((id: string) => {
+  .option("--json", "Output as JSON", false)
+  .action((id: string, opts) => {
     try {
       const scenario = getScenario(id) ?? getScenarioByShortId(id);
       if (!scenario) {
-        console.error(chalk.red(`Scenario not found: ${id}`));
+        logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
       }
 
-      console.log("");
-      console.log(chalk.bold(`  Scenario ${scenario.shortId}`));
-      console.log(`  Name:        ${scenario.name}`);
-      console.log(`  ID:          ${chalk.dim(scenario.id)}`);
-      console.log(`  Description: ${scenario.description}`);
-      console.log(`  Priority:    ${scenario.priority}`);
-      console.log(`  Model:       ${scenario.model ?? chalk.dim("default")}`);
-      console.log(`  Tags:        ${scenario.tags.length > 0 ? scenario.tags.join(", ") : chalk.dim("none")}`);
-      console.log(`  Path:        ${scenario.targetPath ?? chalk.dim("none")}`);
-      console.log(`  Auth:        ${scenario.requiresAuth ? "yes" : "no"}`);
-      console.log(`  Timeout:     ${scenario.timeoutMs ? `${scenario.timeoutMs}ms` : chalk.dim("default")}`);
-      console.log(`  Version:     ${scenario.version}`);
-      console.log(`  Created:     ${scenario.createdAt}`);
-      console.log(`  Updated:     ${scenario.updatedAt}`);
+      if (opts.json) {
+        log(JSON.stringify(scenario, null, 2));
+        return;
+      }
+
+      log("");
+      log(chalk.bold(`  Scenario ${scenario.shortId}`));
+      log(`  Name:        ${scenario.name}`);
+      log(`  ID:          ${chalk.dim(scenario.id)}`);
+      log(`  Description: ${scenario.description}`);
+      log(`  Priority:    ${scenario.priority}`);
+      log(`  Model:       ${scenario.model ?? chalk.dim("default")}`);
+      log(`  Tags:        ${scenario.tags.length > 0 ? scenario.tags.join(", ") : chalk.dim("none")}`);
+      log(`  Path:        ${scenario.targetPath ?? chalk.dim("none")}`);
+      log(`  Auth:        ${scenario.requiresAuth ? "yes" : "no"}`);
+      log(`  Timeout:     ${scenario.timeoutMs ? `${scenario.timeoutMs}ms` : chalk.dim("default")}`);
+      log(`  Version:     ${scenario.version}`);
+      log(`  Created:     ${scenario.createdAt}`);
+      log(`  Updated:     ${scenario.updatedAt}`);
 
       if (scenario.steps.length > 0) {
-        console.log("");
-        console.log(chalk.bold("  Steps:"));
+        log("");
+        log(chalk.bold("  Steps:"));
         for (let i = 0; i < scenario.steps.length; i++) {
-          console.log(`    ${i + 1}. ${scenario.steps[i]}`);
+          log(`    ${i + 1}. ${scenario.steps[i]}`);
         }
       }
 
-      console.log("");
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -376,7 +418,7 @@ program
     try {
       const scenario = getScenario(id) ?? getScenarioByShortId(id);
       if (!scenario) {
-        console.error(chalk.red(`Scenario not found: ${id}`));
+        logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
       }
 
@@ -393,9 +435,9 @@ program
         scenario.version,
       );
 
-      console.log(chalk.green(`Updated scenario ${chalk.bold(updated.shortId)}: ${updated.name}`));
+      log(chalk.green(`Updated scenario ${chalk.bold(updated.shortId)}: ${updated.name}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -405,23 +447,45 @@ program
 program
   .command("delete <id>")
   .description("Delete a scenario")
-  .action((id: string) => {
+  .option("-y, --yes", "Skip confirmation prompt", false)
+  .action(async (id: string, opts) => {
     try {
       const scenario = getScenario(id) ?? getScenarioByShortId(id);
       if (!scenario) {
-        console.error(chalk.red(`Scenario not found: ${id}`));
+        logError(chalk.red(`Scenario not found: ${id}`));
         process.exit(1);
+      }
+
+      if (!opts.yes) {
+        // Prompt for confirmation
+        process.stdout.write(chalk.yellow(`Delete scenario ${scenario.shortId} "${scenario.name}"? [y/N] `));
+        const answer = await new Promise<string>((resolve) => {
+          let buf = "";
+          process.stdin.setRawMode?.(true);
+          process.stdin.resume();
+          process.stdin.once("data", (chunk) => {
+            buf = chunk.toString().trim().toLowerCase();
+            process.stdin.setRawMode?.(false);
+            process.stdin.pause();
+            process.stdout.write("\n");
+            resolve(buf);
+          });
+        });
+        if (answer !== "y" && answer !== "yes") {
+          log(chalk.dim("Cancelled."));
+          return;
+        }
       }
 
       const deleted = deleteScenario(scenario.id);
       if (deleted) {
-        console.log(chalk.green(`Deleted scenario ${scenario.shortId}: ${scenario.name}`));
+        log(chalk.green(`Deleted scenario ${scenario.shortId}: ${scenario.name}`));
       } else {
-        console.error(chalk.red(`Failed to delete scenario: ${id}`));
+        logError(chalk.red(`Failed to delete scenario: ${id}`));
         process.exit(1);
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -430,6 +494,7 @@ program
 
 program
   .command("run [url] [description]")
+  .alias("test")
   .description("Run test scenarios against a URL")
   .option("-t, --tag <tag>", "Filter by tag (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("-s, --scenario <id>", "Run specific scenario ID")
@@ -446,6 +511,7 @@ program
   .option("--browser <engine>", "Browser engine: playwright or lightpanda", "playwright")
   .option("--env <name>", "Use a named environment for the URL")
   .option("--dry-run", "Print what would run without launching browser", false)
+  .option("--retry <n>", "Retry failed scenarios up to n times", "0")
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -455,7 +521,7 @@ program
       if (!url && opts.env) {
         const env = getEnvironment(opts.env);
         if (!env) {
-          console.error(chalk.red(`Environment not found: ${opts.env}`));
+          logError(chalk.red(`Environment not found: ${opts.env}`));
           process.exit(1);
         }
         url = env.url;
@@ -464,18 +530,34 @@ program
         const defaultEnv = getDefaultEnvironment();
         if (defaultEnv) {
           url = defaultEnv.url;
-          console.log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+          log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
         }
       }
       if (!url) {
-        console.error(chalk.red("No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'."));
+        logError(chalk.red("No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'."));
         process.exit(1);
+      }
+
+
+      // Budget warning check (OPE9-00080)
+      if (!opts.dryRun && !opts.background) {
+        const budgetResult = checkBudget(0); // 0 = just check daily threshold
+        if (budgetResult.warning) {
+          log(chalk.yellow(`  ⚠️  Budget warning: ${budgetResult.warning}`));
+          if (!budgetResult.allowed) {
+            if (!opts.yes) {
+              log(chalk.yellow("  Use --yes to run anyway, or check your budget config."));
+              process.exit(1);
+            }
+            log(chalk.yellow("  --yes passed, proceeding despite budget limit."));
+          }
+        }
       }
 
       // If --from-todos, import scenarios first
       if (opts.fromTodos) {
         const result = importFromTodos({ projectId });
-        console.log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
+        log(chalk.blue(`Imported ${result.imported} scenarios from todos (${result.skipped} skipped)`));
       }
 
       // Dry-run mode — validate and print what would run, no browser
@@ -489,11 +571,11 @@ program
           return true;
         });
 
-        console.log("");
-        console.log(chalk.bold("  Dry Run — scenarios that would execute:"));
-        console.log("");
+        log("");
+        log(chalk.bold("  Dry Run — scenarios that would execute:"));
+        log("");
         if (dryScenarios.length === 0) {
-          console.log(chalk.yellow("  No matching scenarios found."));
+          log(chalk.yellow("  No matching scenarios found."));
         } else {
           for (const s of dryScenarios) {
             // Validate assertion syntax
@@ -508,19 +590,19 @@ program
               authOk = presets.some((p) => p.name === s.authPreset);
             }
             const statusIcon = (assertionErrors.length === 0 && authOk) ? chalk.green("✓") : chalk.red("✗");
-            console.log(`  ${statusIcon} ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+            log(`  ${statusIcon} ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
             if (assertionErrors.length > 0) {
-              console.log(chalk.red(`      Invalid assertions: ${assertionErrors.join(", ")}`));
+              log(chalk.red(`      Invalid assertions: ${assertionErrors.join(", ")}`));
             }
             if (!authOk) {
-              console.log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
+              log(chalk.red(`      Auth preset not found: ${s.authPreset}`));
             }
           }
         }
-        console.log("");
-        console.log(chalk.dim(`  URL: ${url}`));
-        console.log(chalk.dim(`  Total: ${dryScenarios.length} scenarios`));
-        console.log("");
+        log("");
+        log(chalk.dim(`  URL: ${url}`));
+        log(chalk.dim(`  Total: ${dryScenarios.length} scenarios`));
+        log("");
         process.exit(0);
       }
 
@@ -541,10 +623,10 @@ program
           projectId,
           engine: opts.browser,
         });
-        console.log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
-        console.log(chalk.dim(`  Scenarios: ${scenarioCount}`));
-        console.log(chalk.dim(`  URL: ${url}`));
-        console.log(chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`));
+        log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
+        log(chalk.dim(`  Scenarios: ${scenarioCount}`));
+        log(chalk.dim(`  URL: ${url}`));
+        log(chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`));
         process.exit(0);
       }
 
@@ -553,42 +635,46 @@ program
         onRunEvent((event) => {
           switch (event.type) {
             case "scenario:start":
-              console.log(chalk.blue(`  [start] ${event.scenarioName ?? event.scenarioId}`));
+              if (event.retryAttempt) {
+                log(chalk.yellow(`  [retry] Retrying scenario ${event.scenarioName ?? event.scenarioId} (attempt ${event.retryAttempt}/${event.maxRetries})...`));
+              } else {
+                log(chalk.blue(`  [start] ${event.scenarioName ?? event.scenarioId}`));
+              }
               break;
             case "step:thinking":
               if (event.thinking) {
                 const preview = event.thinking.length > 120 ? event.thinking.slice(0, 120) + "..." : event.thinking;
-                console.log(chalk.dim(`    [think] ${preview}`));
+                log(chalk.dim(`    [think] ${preview}`));
               }
               break;
             case "step:tool_call":
-              console.log(chalk.cyan(`    [step ${event.stepNumber}] ${event.toolName}${event.toolInput ? ` ${formatToolInput(event.toolInput)}` : ""}`));
+              log(chalk.cyan(`    [step ${event.stepNumber}] ${event.toolName}${event.toolInput ? ` ${formatToolInput(event.toolInput)}` : ""}`));
               break;
             case "step:tool_result":
               if (event.toolName === "report_result") {
-                console.log(chalk.bold(`    [result] ${event.toolResult}`));
+                log(chalk.bold(`    [result] ${event.toolResult}`));
               } else {
                 const resultPreview = (event.toolResult ?? "").length > 100 ? (event.toolResult ?? "").slice(0, 100) + "..." : (event.toolResult ?? "");
-                console.log(chalk.dim(`    [done]  ${resultPreview}`));
+                log(chalk.dim(`    [done]  ${resultPreview}`));
               }
               break;
             case "screenshot:captured":
-              console.log(chalk.dim(`    [screenshot] ${event.screenshotPath}`));
+              log(chalk.dim(`    [screenshot] ${event.screenshotPath}`));
               break;
             case "scenario:pass":
-              console.log(chalk.green(`  [PASS] ${event.scenarioName}`));
+              log(chalk.green(`  [PASS] ${event.scenarioName}`));
               break;
             case "scenario:fail":
-              console.log(chalk.red(`  [FAIL] ${event.scenarioName}`));
+              log(chalk.red(`  [FAIL] ${event.scenarioName}`));
               break;
             case "scenario:error":
-              console.log(chalk.yellow(`  [ERR]  ${event.scenarioName}: ${event.error}`));
+              log(chalk.yellow(`  [ERR]  ${event.scenarioName}: ${event.error}`));
               break;
           }
         });
-        console.log("");
-        console.log(chalk.bold(`  Running tests against ${url}`));
-        console.log("");
+        log("");
+        log(chalk.bold(`  Running tests against ${url}`));
+        log("");
       }
 
       // If description provided, create an ad-hoc scenario and run it
@@ -606,6 +692,7 @@ program
           headed: opts.headed,
           parallel: parseInt(opts.parallel, 10),
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+          retry: parseInt(opts.retry ?? "0", 10),
           projectId,
           engine: opts.browser,
         });
@@ -614,13 +701,13 @@ program
           const jsonOutput = formatJSON(run, results);
           if (opts.output) {
             writeFileSync(opts.output, jsonOutput, "utf-8");
-            console.log(chalk.green(`Results written to ${opts.output}`));
+            log(chalk.green(`Results written to ${opts.output}`));
           }
           if (opts.json) {
-            console.log(jsonOutput);
+            log(jsonOutput);
           }
         } else {
-          console.log(formatTerminal(run, results));
+          log(formatTerminal(run, results));
         }
 
         process.exit(getExitCode(run));
@@ -630,8 +717,8 @@ program
       const noFilters = !opts.scenario && opts.tag.length === 0 && !opts.priority;
       if (noFilters && !opts.json && !opts.output) {
         const allScenarios = listScenarios({ projectId });
-        console.log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
-        console.log("");
+        log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
+        log("");
       }
 
       // Run by filter
@@ -644,6 +731,7 @@ program
         headed: opts.headed,
         parallel: parseInt(opts.parallel, 10),
         timeout: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        retry: parseInt(opts.retry ?? "0", 10),
         projectId,
         engine: opts.browser,
       });
@@ -652,18 +740,18 @@ program
         const jsonOutput = formatJSON(run, results);
         if (opts.output) {
           writeFileSync(opts.output, jsonOutput, "utf-8");
-          console.log(chalk.green(`Results written to ${opts.output}`));
+          log(chalk.green(`Results written to ${opts.output}`));
         }
         if (opts.json) {
-          console.log(jsonOutput);
+          log(jsonOutput);
         }
       } else {
-        console.log(formatTerminal(run, results));
+        log(formatTerminal(run, results));
       }
 
       process.exit(getExitCode(run));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -675,15 +763,22 @@ program
   .description("List past test runs")
   .option("--status <status>", "Filter by status")
   .option("-l, --limit <n>", "Limit results", "20")
+  .option("--offset <n>", "Skip first N results", "0")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const runs = listRuns({
         status: opts.status as "pending" | "running" | "passed" | "failed" | "cancelled" | undefined,
         limit: parseInt(opts.limit, 10),
+        offset: parseInt(opts.offset, 10) || undefined,
       });
-      console.log(formatRunList(runs));
+      if (opts.json) {
+        log(JSON.stringify(runs, null, 2));
+      } else {
+        log(formatRunList(runs));
+      }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -693,18 +788,23 @@ program
 program
   .command("results <run-id>")
   .description("Show results for a test run")
-  .action((runId: string) => {
+  .option("--json", "Output as JSON", false)
+  .action((runId: string, opts) => {
     try {
       const run = getRun(runId);
       if (!run) {
-        console.error(chalk.red(`Run not found: ${runId}`));
+        logError(chalk.red(`Run not found: ${runId}`));
         process.exit(1);
       }
 
       const results = getResultsByRun(run.id);
-      console.log(formatTerminal(run, results));
+      if (opts.json) {
+        log(formatJSON(run, results));
+      } else {
+        log(formatTerminal(run, results));
+      }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -721,27 +821,27 @@ program
       if (run) {
         const results = getResultsByRun(run.id);
         let total = 0;
-        console.log("");
-        console.log(chalk.bold(`  Screenshots for run ${run.id.slice(0, 8)}`));
-        console.log("");
+        log("");
+        log(chalk.bold(`  Screenshots for run ${run.id.slice(0, 8)}`));
+        log("");
 
         for (const result of results) {
           const screenshots = listScreenshots(result.id);
           if (screenshots.length > 0) {
             const scenario = getScenario(result.scenarioId);
             const label = scenario ? `${scenario.shortId}: ${scenario.name}` : result.scenarioId.slice(0, 8);
-            console.log(chalk.bold(`  ${label}`));
+            log(chalk.bold(`  ${label}`));
             for (const ss of screenshots) {
-              console.log(`    ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
+              log(`    ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
               total++;
             }
-            console.log("");
+            log("");
           }
         }
 
         if (total === 0) {
-          console.log(chalk.dim("  No screenshots found."));
-          console.log("");
+          log(chalk.dim("  No screenshots found."));
+          log("");
         }
         return;
       }
@@ -749,20 +849,20 @@ program
       // Try as result-id
       const screenshots = listScreenshots(id);
       if (screenshots.length > 0) {
-        console.log("");
-        console.log(chalk.bold(`  Screenshots for result ${id.slice(0, 8)}`));
-        console.log("");
+        log("");
+        log(chalk.bold(`  Screenshots for result ${id.slice(0, 8)}`));
+        log("");
         for (const ss of screenshots) {
-          console.log(`  ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
+          log(`  ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
         }
-        console.log("");
+        log("");
         return;
       }
 
-      console.error(chalk.red(`No screenshots found for: ${id}`));
+      logError(chalk.red(`No screenshots found for: ${id}`));
       process.exit(1);
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -778,7 +878,7 @@ program
       const files = readdirSync(absDir).filter((f) => f.endsWith(".md"));
 
       if (files.length === 0) {
-        console.log(chalk.dim("No .md files found in directory."));
+        log(chalk.dim("No .md files found in directory."));
         return;
       }
 
@@ -814,14 +914,14 @@ program
           steps,
         });
 
-        console.log(chalk.green(`  Imported ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+        log(chalk.green(`  Imported ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
         imported++;
       }
 
-      console.log("");
-      console.log(chalk.green(`Imported ${imported} scenario(s) from ${absDir}`));
+      log("");
+      log(chalk.green(`Imported ${imported} scenario(s) from ${absDir}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -834,9 +934,9 @@ program
   .action(() => {
     try {
       const config = loadConfig();
-      console.log(JSON.stringify(config, null, 2));
+      log(JSON.stringify(config, null, 2));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -852,16 +952,16 @@ program
       const hasApiKey = !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
       const dbPath = join(process.env["HOME"] ?? "~", ".testers", "testers.db");
 
-      console.log("");
-      console.log(chalk.bold("  Open Testers Status"));
-      console.log("");
-      console.log(`  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`);
-      console.log(`  Database:          ${dbPath}`);
-      console.log(`  Default model:     ${config.defaultModel}`);
-      console.log(`  Screenshots dir:   ${config.screenshots.dir}`);
-      console.log("");
+      log("");
+      log(chalk.bold("  Open Testers Status"));
+      log("");
+      log(`  ANTHROPIC_API_KEY: ${hasApiKey ? chalk.green("set") : chalk.red("not set")}`);
+      log(`  Database:          ${dbPath}`);
+      log(`  Default model:     ${config.defaultModel}`);
+      log(`  Screenshots dir:   ${config.screenshots.dir}`);
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -875,17 +975,17 @@ program
   .action(async (opts) => {
     try {
       if (opts.engine === "all" || opts.engine === "playwright") {
-        console.log(chalk.blue("Installing Playwright Chromium..."));
+        log(chalk.blue("Installing Playwright Chromium..."));
         await installBrowser("playwright");
-        console.log(chalk.green("Playwright Chromium installed."));
+        log(chalk.green("Playwright Chromium installed."));
       }
       if (opts.engine === "all" || opts.engine === "lightpanda") {
-        console.log(chalk.blue("Installing Lightpanda..."));
+        log(chalk.blue("Installing Lightpanda..."));
         await installBrowser("lightpanda");
-        console.log(chalk.green("Lightpanda installed."));
+        log(chalk.green("Lightpanda installed."));
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -907,9 +1007,9 @@ projectCmd
         path: opts.path,
         description: opts.description,
       });
-      console.log(chalk.green(`Created project ${chalk.bold(project.name)} (${project.id})`));
+      log(chalk.green(`Created project ${chalk.bold(project.name)} (${project.id})`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -921,20 +1021,20 @@ projectCmd
     try {
       const projects = listProjects();
       if (projects.length === 0) {
-        console.log(chalk.dim("No projects found."));
+        log(chalk.dim("No projects found."));
         return;
       }
-      console.log("");
-      console.log(chalk.bold("  Projects"));
-      console.log("");
-      console.log(`  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`);
-      console.log(`  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`);
+      log("");
+      log(chalk.bold("  Projects"));
+      log("");
+      log(`  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`);
+      log(`  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`);
       for (const p of projects) {
-        console.log(`  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`);
+        log(`  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`);
       }
-      console.log("");
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -946,19 +1046,19 @@ projectCmd
     try {
       const project = getProject(id);
       if (!project) {
-        console.error(chalk.red(`Project not found: ${id}`));
+        logError(chalk.red(`Project not found: ${id}`));
         process.exit(1);
       }
-      console.log("");
-      console.log(chalk.bold(`  Project: ${project.name}`));
-      console.log(`  ID:          ${project.id}`);
-      console.log(`  Path:        ${project.path ?? chalk.dim("none")}`);
-      console.log(`  Description: ${project.description ?? chalk.dim("none")}`);
-      console.log(`  Created:     ${project.createdAt}`);
-      console.log(`  Updated:     ${project.updatedAt}`);
-      console.log("");
+      log("");
+      log(chalk.bold(`  Project: ${project.name}`));
+      log(`  ID:          ${project.id}`);
+      log(`  Path:        ${project.path ?? chalk.dim("none")}`);
+      log(`  Description: ${project.description ?? chalk.dim("none")}`);
+      log(`  Created:     ${project.createdAt}`);
+      log(`  Updated:     ${project.updatedAt}`);
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -982,9 +1082,9 @@ projectCmd
       }
       config.activeProject = project.id;
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
-      console.log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
+      log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1022,12 +1122,12 @@ scheduleCmd
         timeoutMs: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
         projectId,
       });
-      console.log(chalk.green(`Created schedule ${chalk.bold(schedule.name)} (${schedule.id})`));
+      log(chalk.green(`Created schedule ${chalk.bold(schedule.name)} (${schedule.id})`));
       if (schedule.nextRunAt) {
-        console.log(chalk.dim(`  Next run at: ${schedule.nextRunAt}`));
+        log(chalk.dim(`  Next run at: ${schedule.nextRunAt}`));
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1037,6 +1137,7 @@ scheduleCmd
   .description("List schedules")
   .option("--project <id>", "Filter by project ID")
   .option("--enabled", "Show only enabled schedules")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -1044,24 +1145,28 @@ scheduleCmd
         projectId,
         enabled: opts.enabled ? true : undefined,
       });
-      if (schedules.length === 0) {
-        console.log(chalk.dim("No schedules found."));
+      if (opts.json) {
+        log(JSON.stringify(schedules, null, 2));
         return;
       }
-      console.log("");
-      console.log(chalk.bold("  Schedules"));
-      console.log("");
-      console.log(`  ${"Name".padEnd(20)} ${"Cron".padEnd(18)} ${"URL".padEnd(30)} ${"Enabled".padEnd(9)} ${"Next Run".padEnd(22)} Last Run`);
-      console.log(`  ${"─".repeat(20)} ${"─".repeat(18)} ${"─".repeat(30)} ${"─".repeat(9)} ${"─".repeat(22)} ${"─".repeat(22)}`);
+      if (schedules.length === 0) {
+        log(chalk.dim("No schedules found."));
+        return;
+      }
+      log("");
+      log(chalk.bold("  Schedules"));
+      log("");
+      log(`  ${"Name".padEnd(20)} ${"Cron".padEnd(18)} ${"URL".padEnd(30)} ${"Enabled".padEnd(9)} ${"Next Run".padEnd(22)} Last Run`);
+      log(`  ${"─".repeat(20)} ${"─".repeat(18)} ${"─".repeat(30)} ${"─".repeat(9)} ${"─".repeat(22)} ${"─".repeat(22)}`);
       for (const s of schedules) {
         const enabled = s.enabled ? chalk.green("yes") : chalk.red("no");
         const nextRun = s.nextRunAt ?? chalk.dim("—");
         const lastRun = s.lastRunAt ?? chalk.dim("—");
-        console.log(`  ${s.name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${s.url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`);
+        log(`  ${s.name.padEnd(20)} ${s.cronExpression.padEnd(18)} ${s.url.padEnd(30)} ${enabled.toString().padEnd(9)} ${nextRun.toString().padEnd(22)} ${lastRun}`);
       }
-      console.log("");
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1073,29 +1178,29 @@ scheduleCmd
     try {
       const schedule = getSchedule(id);
       if (!schedule) {
-        console.error(chalk.red(`Schedule not found: ${id}`));
+        logError(chalk.red(`Schedule not found: ${id}`));
         process.exit(1);
       }
-      console.log("");
-      console.log(chalk.bold(`  Schedule: ${schedule.name}`));
-      console.log(`  ID:          ${schedule.id}`);
-      console.log(`  Cron:        ${schedule.cronExpression}`);
-      console.log(`  URL:         ${schedule.url}`);
-      console.log(`  Enabled:     ${schedule.enabled ? chalk.green("yes") : chalk.red("no")}`);
-      console.log(`  Model:       ${schedule.model ?? chalk.dim("default")}`);
-      console.log(`  Headed:      ${schedule.headed ? "yes" : "no"}`);
-      console.log(`  Parallel:    ${schedule.parallel}`);
-      console.log(`  Timeout:     ${schedule.timeoutMs ? `${schedule.timeoutMs}ms` : chalk.dim("default")}`);
-      console.log(`  Project:     ${schedule.projectId ?? chalk.dim("none")}`);
-      console.log(`  Filter:      ${JSON.stringify(schedule.scenarioFilter)}`);
-      console.log(`  Next run:    ${schedule.nextRunAt ?? chalk.dim("not scheduled")}`);
-      console.log(`  Last run:    ${schedule.lastRunAt ?? chalk.dim("never")}`);
-      console.log(`  Last run ID: ${schedule.lastRunId ?? chalk.dim("none")}`);
-      console.log(`  Created:     ${schedule.createdAt}`);
-      console.log(`  Updated:     ${schedule.updatedAt}`);
-      console.log("");
+      log("");
+      log(chalk.bold(`  Schedule: ${schedule.name}`));
+      log(`  ID:          ${schedule.id}`);
+      log(`  Cron:        ${schedule.cronExpression}`);
+      log(`  URL:         ${schedule.url}`);
+      log(`  Enabled:     ${schedule.enabled ? chalk.green("yes") : chalk.red("no")}`);
+      log(`  Model:       ${schedule.model ?? chalk.dim("default")}`);
+      log(`  Headed:      ${schedule.headed ? "yes" : "no"}`);
+      log(`  Parallel:    ${schedule.parallel}`);
+      log(`  Timeout:     ${schedule.timeoutMs ? `${schedule.timeoutMs}ms` : chalk.dim("default")}`);
+      log(`  Project:     ${schedule.projectId ?? chalk.dim("none")}`);
+      log(`  Filter:      ${JSON.stringify(schedule.scenarioFilter)}`);
+      log(`  Next run:    ${schedule.nextRunAt ?? chalk.dim("not scheduled")}`);
+      log(`  Last run:    ${schedule.lastRunAt ?? chalk.dim("never")}`);
+      log(`  Last run ID: ${schedule.lastRunId ?? chalk.dim("none")}`);
+      log(`  Created:     ${schedule.createdAt}`);
+      log(`  Updated:     ${schedule.updatedAt}`);
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1106,9 +1211,9 @@ scheduleCmd
   .action((id: string) => {
     try {
       const schedule = updateSchedule(id, { enabled: true });
-      console.log(chalk.green(`Enabled schedule ${chalk.bold(schedule.name)}`));
+      log(chalk.green(`Enabled schedule ${chalk.bold(schedule.name)}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1119,9 +1224,9 @@ scheduleCmd
   .action((id: string) => {
     try {
       const schedule = updateSchedule(id, { enabled: false });
-      console.log(chalk.green(`Disabled schedule ${chalk.bold(schedule.name)}`));
+      log(chalk.green(`Disabled schedule ${chalk.bold(schedule.name)}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1133,13 +1238,13 @@ scheduleCmd
     try {
       const deleted = deleteSchedule(id);
       if (deleted) {
-        console.log(chalk.green(`Deleted schedule: ${id}`));
+        log(chalk.green(`Deleted schedule: ${id}`));
       } else {
-        console.error(chalk.red(`Schedule not found: ${id}`));
+        logError(chalk.red(`Schedule not found: ${id}`));
         process.exit(1);
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1152,12 +1257,12 @@ scheduleCmd
     try {
       const schedule = getSchedule(id);
       if (!schedule) {
-        console.error(chalk.red(`Schedule not found: ${id}`));
+        logError(chalk.red(`Schedule not found: ${id}`));
         process.exit(1);
         return;
       }
 
-      console.log(chalk.blue(`Running schedule ${chalk.bold(schedule.name)} against ${schedule.url}...`));
+      log(chalk.blue(`Running schedule ${chalk.bold(schedule.name)} against ${schedule.url}...`));
 
       const { run, results } = await runByFilter({
         url: schedule.url,
@@ -1172,14 +1277,14 @@ scheduleCmd
       });
 
       if (opts.json) {
-        console.log(formatJSON(run, results));
+        log(formatJSON(run, results));
       } else {
-        console.log(formatTerminal(run, results));
+        log(formatTerminal(run, results));
       }
 
       process.exit(getExitCode(run));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1194,8 +1299,8 @@ program
     try {
       const intervalMs = parseInt(opts.interval, 10) * 1000;
 
-      console.log(chalk.blue("Scheduler daemon started. Press Ctrl+C to stop."));
-      console.log(chalk.dim(`  Check interval: ${opts.interval}s`));
+      log(chalk.blue("Scheduler daemon started. Press Ctrl+C to stop."));
+      log(chalk.dim(`  Check interval: ${opts.interval}s`));
 
       let running = true;
 
@@ -1207,7 +1312,7 @@ program
 
             for (const schedule of schedules) {
               if (schedule.nextRunAt && schedule.nextRunAt <= now) {
-                console.log(chalk.blue(`[${new Date().toISOString()}] Triggering schedule: ${schedule.name}`));
+                log(chalk.blue(`[${new Date().toISOString()}] Triggering schedule: ${schedule.name}`));
                 try {
                   const { run } = await runByFilter({
                     url: schedule.url,
@@ -1222,17 +1327,17 @@ program
                   });
 
                   const statusColor = run.status === "passed" ? chalk.green : chalk.red;
-                  console.log(`  ${statusColor(run.status)} — ${run.passed}/${run.total} passed`);
+                  log(`  ${statusColor(run.status)} — ${run.passed}/${run.total} passed`);
 
                   // Update schedule with last run info
                   updateSchedule(schedule.id, {});
                 } catch (err) {
-                  console.error(chalk.red(`  Error running schedule ${schedule.name}: ${err instanceof Error ? err.message : String(err)}`));
+                  logError(chalk.red(`  Error running schedule ${schedule.name}: ${err instanceof Error ? err.message : String(err)}`));
                 }
               }
             }
           } catch (err) {
-            console.error(chalk.red(`Daemon error: ${err instanceof Error ? err.message : String(err)}`));
+            logError(chalk.red(`Daemon error: ${err instanceof Error ? err.message : String(err)}`));
           }
 
           // Wait for next check
@@ -1241,20 +1346,20 @@ program
       };
 
       process.on("SIGINT", () => {
-        console.log(chalk.yellow("\nShutting down scheduler daemon..."));
+        log(chalk.yellow("\nShutting down scheduler daemon..."));
         running = false;
         process.exit(0);
       });
 
       process.on("SIGTERM", () => {
-        console.log(chalk.yellow("\nShutting down scheduler daemon..."));
+        log(chalk.yellow("\nShutting down scheduler daemon..."));
         running = false;
         process.exit(0);
       });
 
       await checkAndRun();
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1268,33 +1373,33 @@ program
   .option("-u, --url <url>", "Base URL")
   .option("-p, --path <path>", "Project path")
   .option("--ci <provider>", "Generate CI workflow (github)")
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const { project, scenarios, framework } = initProject({
+      const { project, scenarios, framework, url } = initProject({
         name: opts.name,
         url: opts.url,
         path: opts.path,
       });
 
-      console.log("");
-      console.log(chalk.bold("  Project initialized!"));
-      console.log("");
+      log("");
+      log(chalk.bold("  Project initialized!"));
+      log("");
 
       if (framework) {
-        console.log(`  Framework:  ${chalk.cyan(framework.name)}`);
+        log(`  Framework:  ${chalk.cyan(framework.name)}`);
         if (framework.features.length > 0) {
-          console.log(`  Features:   ${chalk.dim(framework.features.join(", "))}`);
+          log(`  Features:   ${chalk.dim(framework.features.join(", "))}`);
         }
       } else {
-        console.log(`  Framework:  ${chalk.dim("not detected")}`);
+        log(`  Framework:  ${chalk.dim("not detected")}`);
       }
 
-      console.log(`  Project:    ${chalk.green(project.name)} ${chalk.dim(`(${project.id})`)}`);
-      console.log(`  Scenarios:  ${chalk.green(String(scenarios.length))} starter scenarios created`);
-      console.log("");
+      log(`  Project:    ${chalk.green(project.name)} ${chalk.dim(`(${project.id})`)}`);
+      log(`  Scenarios:  ${chalk.green(String(scenarios.length))} starter scenarios created`);
+      log("");
 
       for (const s of scenarios) {
-        console.log(`    ${chalk.dim(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+        log(`    ${chalk.dim(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
       }
 
       // Generate CI workflow if requested
@@ -1305,19 +1410,59 @@ program
         }
         const workflowPath = join(workflowDir, "testers.yml");
         writeFileSync(workflowPath, generateGitHubActionsWorkflow(), "utf-8");
-        console.log(`  CI:         ${chalk.green("GitHub Actions workflow written to .github/workflows/testers.yml")}`);
+        log(`  CI:         ${chalk.green("GitHub Actions workflow written to .github/workflows/testers.yml")}`);
       } else if (opts.ci) {
-        console.log(chalk.yellow(`  Unknown CI provider: ${opts.ci}. Supported: github`));
+        log(chalk.yellow(`  Unknown CI provider: ${opts.ci}. Supported: github`));
       }
 
-      console.log("");
-      console.log(chalk.bold("  Next steps:"));
-      console.log(`    1. Start your dev server`);
-      console.log(`    2. Run ${chalk.cyan("testers run <url>")} to execute tests`);
-      console.log(`    3. Add more scenarios with ${chalk.cyan("testers add <name>")}`);
-      console.log("");
+      log("");
+
+      // ── Interactive post-init wizard ───────────────────────────────────
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((resolve) => rl.question(q, resolve));
+
+      try {
+        // Step: configure environments
+        const envAnswer = await ask("  Would you like to configure environments? [y/N] ");
+        if (envAnswer.trim().toLowerCase() === "y") {
+          const envName = await ask("  Environment name (default: staging): ");
+          const envUrl = await ask(`  Base URL (default: ${url}): `);
+          const resolvedEnvName = envName.trim() || "staging";
+          const resolvedEnvUrl = envUrl.trim() || url;
+          createEnvironment({ name: resolvedEnvName, url: resolvedEnvUrl, projectId: project.id, isDefault: true });
+          log(chalk.green(`  ✓ Environment '${resolvedEnvName}' created (${resolvedEnvUrl})`));
+          log("");
+        }
+
+        // Step: create first scenario
+        const scenarioAnswer = await ask("  Would you like to create your first test scenario? [y/N] ");
+        if (scenarioAnswer.trim().toLowerCase() === "y") {
+          const scenarioName = await ask("  Scenario name: ");
+          const scenarioUrl = await ask(`  URL to test (default: ${url}): `);
+          const resolvedScenarioName = scenarioName.trim() || "My first scenario";
+          const resolvedScenarioUrl = scenarioUrl.trim() || url;
+          const newScenario = createScenario({
+            name: resolvedScenarioName,
+            description: `Navigate to ${resolvedScenarioUrl} and verify it loads correctly.`,
+            projectId: project.id,
+            targetPath: resolvedScenarioUrl,
+            tags: ["smoke"],
+            priority: "high",
+          });
+          log(chalk.green(`  ✓ Scenario '${newScenario.name}' created ${chalk.dim(`(${newScenario.shortId})`)}`));
+          log("");
+        }
+      } finally {
+        rl.close();
+      }
+
+      log(chalk.bold("  Next steps:"));
+      log(`    1. Start your dev server`);
+      log(`    2. Run ${chalk.cyan("testers run <url>")} to execute tests`);
+      log(`    3. Add more scenarios with ${chalk.cyan("testers add <name>")}`);
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1336,7 +1481,7 @@ program
     try {
       const originalRun = getRun(runId);
       if (!originalRun) {
-        console.error(chalk.red(`Run not found: ${runId}`));
+        logError(chalk.red(`Run not found: ${runId}`));
         process.exit(1);
       }
 
@@ -1344,11 +1489,11 @@ program
       const scenarioIds = originalResults.map(r => r.scenarioId);
 
       if (scenarioIds.length === 0) {
-        console.log(chalk.dim("No scenarios to replay."));
+        log(chalk.dim("No scenarios to replay."));
         return;
       }
 
-      console.log(chalk.blue(`Replaying ${scenarioIds.length} scenarios from run ${originalRun.id.slice(0, 8)}...`));
+      log(chalk.blue(`Replaying ${scenarioIds.length} scenarios from run ${originalRun.id.slice(0, 8)}...`));
 
       const { run, results } = await runByFilter({
         url: opts.url ?? originalRun.url,
@@ -1359,13 +1504,13 @@ program
       });
 
       if (opts.json) {
-        console.log(formatJSON(run, results));
+        log(formatJSON(run, results));
       } else {
-        console.log(formatTerminal(run, results));
+        log(formatTerminal(run, results));
       }
       process.exit(getExitCode(run));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1384,7 +1529,7 @@ program
     try {
       const originalRun = getRun(runId);
       if (!originalRun) {
-        console.error(chalk.red(`Run not found: ${runId}`));
+        logError(chalk.red(`Run not found: ${runId}`));
         process.exit(1);
       }
 
@@ -1394,11 +1539,11 @@ program
         .map(r => r.scenarioId);
 
       if (failedScenarioIds.length === 0) {
-        console.log(chalk.green("No failed scenarios to retry. All passed!"));
+        log(chalk.green("No failed scenarios to retry. All passed!"));
         return;
       }
 
-      console.log(chalk.blue(`Retrying ${failedScenarioIds.length} failed scenarios from run ${originalRun.id.slice(0, 8)}...`));
+      log(chalk.blue(`Retrying ${failedScenarioIds.length} failed scenarios from run ${originalRun.id.slice(0, 8)}...`));
 
       const { run, results } = await runByFilter({
         url: opts.url ?? originalRun.url,
@@ -1410,8 +1555,8 @@ program
 
       // Show comparison
       if (!opts.json) {
-        console.log("");
-        console.log(chalk.bold("  Comparison with original run:"));
+        log("");
+        log(chalk.bold("  Comparison with original run:"));
         for (const result of results) {
           const original = originalResults.find(r => r.scenarioId === result.scenarioId);
           if (original) {
@@ -1421,20 +1566,20 @@ program
               : chalk.dim(`${result.status} (unchanged)`);
             const icon = result.status === "passed" ? chalk.green("✓") : chalk.red("✗");
             // Get scenario name from the getScenario import
-            console.log(`  ${icon} ${result.scenarioId.slice(0, 8)}: ${arrow}`);
+            log(`  ${icon} ${result.scenarioId.slice(0, 8)}: ${arrow}`);
           }
         }
-        console.log("");
+        log("");
       }
 
       if (opts.json) {
-        console.log(formatJSON(run, results));
+        log(formatJSON(run, results));
       } else {
-        console.log(formatTerminal(run, results));
+        log(formatTerminal(run, results));
       }
       process.exit(getExitCode(run));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1453,8 +1598,8 @@ program
     try {
       const projectId = resolveProject(opts.project);
 
-      console.log(chalk.blue(`Running smoke test against ${chalk.bold(url)}...`));
-      console.log("");
+      log(chalk.blue(`Running smoke test against ${chalk.bold(url)}...`));
+      log("");
 
       const smokeResult = await runSmoke({
         url,
@@ -1465,14 +1610,14 @@ program
       });
 
       if (opts.json) {
-        console.log(JSON.stringify({
+        log(JSON.stringify({
           run: smokeResult.run,
           result: smokeResult.result,
           pagesVisited: smokeResult.pagesVisited,
           issues: smokeResult.issuesFound,
         }, null, 2));
       } else {
-        console.log(formatSmokeReport(smokeResult));
+        log(formatSmokeReport(smokeResult));
       }
 
       // Exit with non-zero if critical/high issues found
@@ -1481,7 +1626,7 @@ program
       );
       process.exit(hasCritical ? 1 : 0);
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1497,9 +1642,9 @@ program
     try {
       const diff = diffRuns(run1, run2);
       if (opts.json) {
-        console.log(formatDiffJSON(diff));
+        log(formatDiffJSON(diff));
       } else {
-        console.log(formatDiffTerminal(diff));
+        log(formatDiffTerminal(diff));
       }
 
       // Visual screenshot diff
@@ -1507,9 +1652,9 @@ program
       const visualResults = compareRunScreenshots(run2, run1, threshold);
       if (visualResults.length > 0) {
         if (opts.json) {
-          console.log(JSON.stringify({ visualDiff: visualResults }, null, 2));
+          log(JSON.stringify({ visualDiff: visualResults }, null, 2));
         } else {
-          console.log(formatVisualDiffTerminal(visualResults, threshold));
+          log(formatVisualDiffTerminal(visualResults, threshold));
         }
       }
 
@@ -1517,7 +1662,7 @@ program
       const hasVisualRegressions = visualResults.some((r) => r.isRegression);
       process.exit(diff.regressions.length > 0 || hasVisualRegressions ? 1 : 0);
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1540,13 +1685,13 @@ program
       }
       writeFileSync(opts.output, html, "utf-8");
       const absPath = resolve(opts.output);
-      console.log(chalk.green(`Report generated: ${absPath}`));
+      log(chalk.green(`Report generated: ${absPath}`));
       if (opts.open) {
         const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
         Bun.spawn([openCmd, absPath]);
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1569,9 +1714,9 @@ authCmd
         password: opts.password,
         loginPath: opts.loginPath,
       });
-      console.log(chalk.green(`Created auth preset ${chalk.bold(preset.name)} (${preset.email})`));
+      log(chalk.green(`Created auth preset ${chalk.bold(preset.name)} (${preset.email})`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1583,20 +1728,20 @@ authCmd
     try {
       const presets = listAuthPresets();
       if (presets.length === 0) {
-        console.log(chalk.dim("No auth presets found."));
+        log(chalk.dim("No auth presets found."));
         return;
       }
-      console.log("");
-      console.log(chalk.bold("  Auth Presets"));
-      console.log("");
-      console.log(`  ${"Name".padEnd(20)} ${"Email".padEnd(30)} ${"Login Path".padEnd(15)} Created`);
-      console.log(`  ${"─".repeat(20)} ${"─".repeat(30)} ${"─".repeat(15)} ${"─".repeat(22)}`);
+      log("");
+      log(chalk.bold("  Auth Presets"));
+      log("");
+      log(`  ${"Name".padEnd(20)} ${"Email".padEnd(30)} ${"Login Path".padEnd(15)} Created`);
+      log(`  ${"─".repeat(20)} ${"─".repeat(30)} ${"─".repeat(15)} ${"─".repeat(22)}`);
       for (const p of presets) {
-        console.log(`  ${p.name.padEnd(20)} ${p.email.padEnd(30)} ${p.loginPath.padEnd(15)} ${p.createdAt}`);
+        log(`  ${p.name.padEnd(20)} ${p.email.padEnd(30)} ${p.loginPath.padEnd(15)} ${p.createdAt}`);
       }
-      console.log("");
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1608,13 +1753,13 @@ authCmd
     try {
       const deleted = deleteAuthPreset(name);
       if (deleted) {
-        console.log(chalk.green(`Deleted auth preset: ${name}`));
+        log(chalk.green(`Deleted auth preset: ${name}`));
       } else {
-        console.error(chalk.red(`Auth preset not found: ${name}`));
+        logError(chalk.red(`Auth preset not found: ${name}`));
         process.exit(1);
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1627,16 +1772,19 @@ program
   .option("--project <id>", "Project ID")
   .option("--period <period>", "Time period", "month")
   .option("--json", "JSON output", false)
+  .option("--csv", "CSV output", false)
   .action((opts) => {
     try {
       const summary = getCostSummary({ projectId: resolveProject(opts.project), period: opts.period });
-      if (opts.json) {
-        console.log(formatCostsJSON(summary));
+      if (opts.csv) {
+        log(formatCostsCsv(summary));
+      } else if (opts.json) {
+        log(formatCostsJSON(summary));
       } else {
-        console.log(formatCostsTerminal(summary));
+        log(formatCostsTerminal(summary));
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1650,15 +1798,15 @@ program
   .action((scenarioId: string, opts) => {
     try {
       const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { console.error(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
 
       const dep = getScenario(opts.dependsOn) ?? getScenarioByShortId(opts.dependsOn);
-      if (!dep) { console.error(chalk.red(`Dependency scenario not found: ${opts.dependsOn}`)); process.exit(1); }
+      if (!dep) { logError(chalk.red(`Dependency scenario not found: ${opts.dependsOn}`)); process.exit(1); }
 
       addDependency(scenario.id, dep.id);
-      console.log(chalk.green(`${scenario.shortId} now depends on ${dep.shortId}`));
+      log(chalk.green(`${scenario.shortId} now depends on ${dep.shortId}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1670,15 +1818,15 @@ program
   .action((scenarioId: string, opts) => {
     try {
       const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { console.error(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
 
       const dep = getScenario(opts.from) ?? getScenarioByShortId(opts.from);
-      if (!dep) { console.error(chalk.red(`Dependency not found: ${opts.from}`)); process.exit(1); }
+      if (!dep) { logError(chalk.red(`Dependency not found: ${opts.from}`)); process.exit(1); }
 
       removeDependency(scenario.id, dep.id);
-      console.log(chalk.green(`Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`));
+      log(chalk.green(`Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1689,36 +1837,36 @@ program
   .action((scenarioId: string) => {
     try {
       const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
-      if (!scenario) { console.error(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
 
       const deps = getDependencies(scenario.id);
       const dependents = getDependents(scenario.id);
 
-      console.log("");
-      console.log(chalk.bold(`  Dependencies for ${scenario.shortId}: ${scenario.name}`));
-      console.log("");
+      log("");
+      log(chalk.bold(`  Dependencies for ${scenario.shortId}: ${scenario.name}`));
+      log("");
 
       if (deps.length > 0) {
-        console.log(chalk.dim("  Depends on:"));
+        log(chalk.dim("  Depends on:"));
         for (const depId of deps) {
           const s = getScenario(depId);
-          console.log(`    → ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
+          log(`    → ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
         }
       } else {
-        console.log(chalk.dim("  No dependencies"));
+        log(chalk.dim("  No dependencies"));
       }
 
       if (dependents.length > 0) {
-        console.log("");
-        console.log(chalk.dim("  Required by:"));
+        log("");
+        log(chalk.dim("  Required by:"));
         for (const depId of dependents) {
           const s = getScenario(depId);
-          console.log(`    ← ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
+          log(`    ← ${s ? `${s.shortId}: ${s.name}` : depId.slice(0, 8)}`);
         }
       }
-      console.log("");
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1736,7 +1884,7 @@ flowCmd
     try {
       const ids = opts.chain.split(",").map((id: string) => {
         const s = getScenario(id.trim()) ?? getScenarioByShortId(id.trim());
-        if (!s) { console.error(chalk.red(`Scenario not found: ${id.trim()}`)); process.exit(1); }
+        if (!s) { logError(chalk.red(`Scenario not found: ${id.trim()}`)); process.exit(1); }
         return s.id;
       });
 
@@ -1746,9 +1894,9 @@ flowCmd
       }
 
       const flow = createFlow({ name, scenarioIds: ids, projectId: resolveProject(opts.project) });
-      console.log(chalk.green(`Flow created: ${flow.id.slice(0, 8)} — ${flow.name} (${ids.length} scenarios)`));
+      log(chalk.green(`Flow created: ${flow.id.slice(0, 8)} — ${flow.name} (${ids.length} scenarios)`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1760,16 +1908,16 @@ flowCmd
   .action((opts) => {
     const flows = listFlows(resolveProject(opts.project) ?? undefined);
     if (flows.length === 0) {
-      console.log(chalk.dim("\n  No flows found.\n"));
+      log(chalk.dim("\n  No flows found.\n"));
       return;
     }
-    console.log("");
-    console.log(chalk.bold("  Flows"));
-    console.log("");
+    log("");
+    log(chalk.bold("  Flows"));
+    log("");
     for (const f of flows) {
-      console.log(`  ${chalk.dim(f.id.slice(0, 8))}  ${f.name}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`);
+      log(`  ${chalk.dim(f.id.slice(0, 8))}  ${f.name}  ${chalk.dim(`(${f.scenarioIds.length} scenarios)`)}`);
     }
-    console.log("");
+    log("");
   });
 
 flowCmd
@@ -1777,24 +1925,24 @@ flowCmd
   .description("Show flow details")
   .action((id: string) => {
     const flow = getFlow(id);
-    if (!flow) { console.error(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
-    console.log("");
-    console.log(chalk.bold(`  Flow: ${flow.name}`));
-    console.log(`  ID: ${chalk.dim(flow.id)}`);
-    console.log(`  Scenarios (in order):`);
+    if (!flow) { logError(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
+    log("");
+    log(chalk.bold(`  Flow: ${flow.name}`));
+    log(`  ID: ${chalk.dim(flow.id)}`);
+    log(`  Scenarios (in order):`);
     for (let i = 0; i < flow.scenarioIds.length; i++) {
       const s = getScenario(flow.scenarioIds[i]);
-      console.log(`    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`);
+      log(`    ${i + 1}. ${s ? `${s.shortId}: ${s.name}` : flow.scenarioIds[i].slice(0, 8)}`);
     }
-    console.log("");
+    log("");
   });
 
 flowCmd
   .command("delete <id>")
   .description("Delete a flow")
   .action((id: string) => {
-    if (deleteFlow(id)) console.log(chalk.green("Flow deleted."));
-    else { console.error(chalk.red("Flow not found.")); process.exit(1); }
+    if (deleteFlow(id)) log(chalk.green("Flow deleted."));
+    else { logError(chalk.red("Flow not found.")); process.exit(1); }
   });
 
 flowCmd
@@ -1807,10 +1955,10 @@ flowCmd
   .action(async (id: string, opts) => {
     try {
       const flow = getFlow(id);
-      if (!flow) { console.error(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
-      if (!opts.url) { console.error(chalk.red("--url is required for flow run")); process.exit(1); }
+      if (!flow) { logError(chalk.red(`Flow not found: ${id}`)); process.exit(1); }
+      if (!opts.url) { logError(chalk.red("--url is required for flow run")); process.exit(1); }
 
-      console.log(chalk.blue(`Running flow: ${flow.name} (${flow.scenarioIds.length} scenarios)`));
+      log(chalk.blue(`Running flow: ${flow.name} (${flow.scenarioIds.length} scenarios)`));
 
       const { run, results } = await runByFilter({
         url: opts.url,
@@ -1820,11 +1968,11 @@ flowCmd
         parallel: 1, // flows run sequentially by design
       });
 
-      if (opts.json) console.log(formatJSON(run, results));
-      else console.log(formatTerminal(run, results));
+      if (opts.json) log(formatJSON(run, results));
+      else log(formatTerminal(run, results));
       process.exit(getExitCode(run));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1851,9 +1999,9 @@ envCmd
         projectId: opts.project,
         isDefault: opts.default,
       });
-      console.log(chalk.green(`Environment added: ${env.name} → ${env.url}${env.isDefault ? " (default)" : ""}`));
+      log(chalk.green(`Environment added: ${env.name} → ${env.url}${env.isDefault ? " (default)" : ""}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1866,16 +2014,16 @@ envCmd
     try {
       const envs = listEnvironments(opts.project);
       if (envs.length === 0) {
-        console.log(chalk.dim("No environments configured. Add one with: testers env add <name> --url <url>"));
+        log(chalk.dim("No environments configured. Add one with: testers env add <name> --url <url>"));
         return;
       }
       for (const env of envs) {
         const marker = env.isDefault ? chalk.green(" ★ default") : "";
         const auth = env.authPresetName ? chalk.dim(` (auth: ${env.authPresetName})`) : "";
-        console.log(`  ${chalk.bold(env.name)}  ${env.url}${auth}${marker}`);
+        log(`  ${chalk.bold(env.name)}  ${env.url}${auth}${marker}`);
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1887,9 +2035,9 @@ envCmd
     try {
       setDefaultEnvironment(name);
       const env = getEnvironment(name)!;
-      console.log(chalk.green(`Default environment set: ${env.name} → ${env.url}`));
+      log(chalk.green(`Default environment set: ${env.name} → ${env.url}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1901,13 +2049,13 @@ envCmd
     try {
       const deleted = deleteEnvironment(name);
       if (deleted) {
-        console.log(chalk.green(`Environment deleted: ${name}`));
+        log(chalk.green(`Environment deleted: ${name}`));
       } else {
-        console.error(chalk.red(`Environment not found: ${name}`));
+        logError(chalk.red(`Environment not found: ${name}`));
         process.exit(1);
       }
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1921,9 +2069,9 @@ program
     try {
       setBaseline(runId);
       const run = getRun(runId);
-      console.log(chalk.green(`Baseline set: ${chalk.bold(runId.slice(0, 8))}${run ? ` (${run.status}, ${run.total} scenarios)` : ""}`));
+      log(chalk.green(`Baseline set: ${chalk.bold(runId.slice(0, 8))}${run ? ` (${run.status}, ${run.total} scenarios)` : ""}`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1938,13 +2086,13 @@ program
     try {
       const { importFromOpenAPI } = await import("../lib/openapi-import.js");
       const { imported, scenarios } = importFromOpenAPI(spec, resolveProject(opts.project) ?? undefined);
-      console.log(chalk.green(`\nImported ${imported} scenarios from API spec:`));
+      log(chalk.green(`\nImported ${imported} scenarios from API spec:`));
       for (const s of scenarios) {
-        console.log(`  ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
+        log(`  ${chalk.cyan(s.shortId)} ${s.name} ${chalk.dim(`[${s.tags.join(", ")}]`)}`);
       }
-      console.log("");
+      log("");
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1959,14 +2107,14 @@ program
   .action(async (url: string, opts) => {
     try {
       const { recordAndSave } = await import("../lib/recorder.js");
-      console.log(chalk.blue("Opening browser for recording..."));
+      log(chalk.blue("Opening browser for recording..."));
       const { recording, scenario } = await recordAndSave(url, opts.name, resolveProject(opts.project) ?? undefined);
-      console.log("");
-      console.log(chalk.green(`Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
-      console.log(chalk.dim(`  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`));
-      console.log(chalk.dim(`  ${scenario.steps.length} steps generated`));
+      log("");
+      log(chalk.green(`Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
+      log(chalk.dim(`  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`));
+      log(chalk.dim(`  ${scenario.steps.length} steps generated`));
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
@@ -1982,9 +2130,9 @@ program
     // 1. Check ANTHROPIC_API_KEY
     const hasApiKey = Boolean(process.env["ANTHROPIC_API_KEY"]);
     if (hasApiKey) {
-      console.log(chalk.green("✓") + " ANTHROPIC_API_KEY is set");
+      log(chalk.green("✓") + " ANTHROPIC_API_KEY is set");
     } else {
-      console.log(chalk.red("✗") + " ANTHROPIC_API_KEY is not set (required for AI-powered tests)");
+      log(chalk.red("✗") + " ANTHROPIC_API_KEY is not set (required for AI-powered tests)");
       allPassed = false;
     }
 
@@ -1994,9 +2142,9 @@ program
       const { Database } = await import("bun:sqlite");
       const db = new Database(dbPath, { create: true });
       db.close();
-      console.log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
+      log(chalk.green("✓") + ` Database accessible: ${dbPath}`);
     } catch (err) {
-      console.log(chalk.red("✗") + ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`);
+      log(chalk.red("✗") + ` Database not accessible at ${dbPath}: ${err instanceof Error ? err.message : String(err)}`);
       allPassed = false;
     }
 
@@ -2006,13 +2154,13 @@ program
       const execPath = chromium.executablePath();
       const { existsSync: fsExists } = await import("node:fs");
       if (fsExists(execPath)) {
-        console.log(chalk.green("✓") + " Playwright chromium is installed");
+        log(chalk.green("✓") + " Playwright chromium is installed");
       } else {
-        console.log(chalk.red("✗") + ` Playwright chromium executable not found at ${execPath}. Run: testers install`);
+        log(chalk.red("✗") + ` Playwright chromium executable not found at ${execPath}. Run: testers install`);
         allPassed = false;
       }
     } catch {
-      console.log(chalk.red("✗") + " Playwright is not installed. Run: testers install");
+      log(chalk.red("✗") + " Playwright is not installed. Run: testers install");
       allPassed = false;
     }
 
@@ -2046,7 +2194,7 @@ program
         stderr: "inherit",
       });
 
-      console.log(chalk.green(`Open Testers dashboard starting at ${url}`));
+      log(chalk.green(`Open Testers dashboard starting at ${url}`));
 
       // Wait briefly then open browser
       if (opts.open !== false) {
@@ -2058,9 +2206,20 @@ program
       // Keep process alive until child exits
       await proc.exited;
     } catch (error) {
-      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });
+
+// Apply global flags before any action runs
+program.hook("preAction", () => {
+  const opts = program.opts();
+  QUIET = opts.quiet === true;
+  NO_COLOR = opts.color === false || process.env["FORCE_COLOR"] === "0";
+  if (NO_COLOR) {
+    // Disable chalk colors globally
+    process.env["FORCE_COLOR"] = "0";
+  }
+});
 
 program.parse();
