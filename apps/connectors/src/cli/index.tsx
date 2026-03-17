@@ -3,9 +3,7 @@ import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
 import chalk from "chalk";
-import { createRequire } from "module";
-const _require = createRequire(import.meta.url);
-const _pkg = _require("../package.json") as { version: string };
+import _pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import {
   CONNECTORS,
