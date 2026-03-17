@@ -97,6 +97,7 @@ export function getDb(): Database {
       agent TEXT PRIMARY KEY,
       session_id TEXT,
       role TEXT NOT NULL DEFAULT 'agent',
+      project_id TEXT,
       status TEXT NOT NULL DEFAULT 'online',
       last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
@@ -220,6 +221,9 @@ export function getDb(): Database {
     // SQLite ALTER TABLE does not support non-constant defaults — use empty string, backfill from last_seen_at
     db.exec("ALTER TABLE agent_presence ADD COLUMN created_at TEXT NOT NULL DEFAULT ''");
     db.exec("UPDATE agent_presence SET created_at = last_seen_at WHERE created_at = ''");
+  }
+  if (!presenceColNames.includes("project_id")) {
+    db.exec("ALTER TABLE agent_presence ADD COLUMN project_id TEXT");
   }
 
   // FTS5 virtual table for full-text search

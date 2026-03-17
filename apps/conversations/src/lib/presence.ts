@@ -24,6 +24,7 @@ function parsePresence(row: Record<string, unknown>): AgentPresence {
     agent: row.agent as string,
     session_id: (row.session_id as string | null) ?? null,
     role: (row.role as string) || "agent",
+    project_id: (row.project_id as string | null) ?? null,
     status: row.status as string,
     last_seen_at: lastSeenAt,
     created_at: (row.created_at as string) || lastSeenAt,
@@ -45,53 +46,60 @@ export function isAgentConflict(result: RegisterAgentResult | AgentConflictError
 export function registerAgent(
   name: string,
   sessionId: string,
-  role?: string
+  role?: string,
+  projectId?: string
 ): RegisterAgentResult | AgentConflictError {
   const db = getDb();
   const normalizedName = name.trim().toLowerCase();
-  const existing = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown> | null;
 
-  if (existing) {
-    const lastSeenAt = existing.last_seen_at as string;
-    const existingSessionId = existing.session_id as string | null;
+  // BEGIN IMMEDIATE acquires write lock at start — eliminates TOCTOU race
+  const result = db.transaction(() => {
+    const existing = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown> | null;
 
-    // Active session with a different session_id — conflict
-    if (isActiveSession(lastSeenAt) && existingSessionId && existingSessionId !== sessionId) {
-      return {
-        conflict: true,
-        error: "agent_conflict",
-        message: `Agent "${normalizedName}" is already active (last seen: ${lastSeenAt}). Wait 30 minutes or use force takeover.`,
-        existing_id: existing.id as string,
-        existing_name: normalizedName,
-        existing_session_id: existingSessionId,
-        last_seen_at: lastSeenAt,
-        session_hint: existingSessionId ? existingSessionId.slice(0, 8) : null,
-        working_dir: null,
-      };
+    if (existing) {
+      const lastSeenAt = existing.last_seen_at as string;
+      const existingSessionId = existing.session_id as string | null;
+
+      // Active session with a different session_id — conflict
+      if (isActiveSession(lastSeenAt) && existingSessionId && existingSessionId !== sessionId) {
+        return {
+          conflict: true as const,
+          error: "agent_conflict" as const,
+          message: `Agent "${normalizedName}" is already active (last seen: ${lastSeenAt}). Wait 30 minutes or use force takeover.`,
+          existing_id: existing.id as string,
+          existing_name: normalizedName,
+          existing_session_id: existingSessionId,
+          last_seen_at: lastSeenAt,
+          session_hint: existingSessionId ? existingSessionId.slice(0, 8) : null,
+          working_dir: null,
+        };
+      }
+
+      // Stale or same session — takeover/update
+      const tookOver = existingSessionId !== sessionId;
+      db.prepare(`
+        UPDATE agent_presence
+        SET session_id = ?, role = ?, project_id = ?, last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+        WHERE agent = ?
+      `).run(sessionId, role || (existing.role as string) || "agent", projectId ?? (existing.project_id as string | null) ?? null, normalizedName);
+
+      const updated = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
+      return { agent: parsePresence(updated), created: false, took_over: tookOver };
     }
 
-    // Stale or same session — takeover/update
-    const tookOver = existingSessionId !== sessionId;
+    // New agent
+    const id = crypto.randomUUID().slice(0, 8);
+    const resolvedRole = role || "agent";
     db.prepare(`
-      UPDATE agent_presence
-      SET session_id = ?, role = ?, last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
-      WHERE agent = ?
-    `).run(sessionId, role || (existing.role as string) || "agent", normalizedName);
+      INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, ?, 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+    `).run(id, normalizedName, sessionId, resolvedRole, projectId ?? null);
 
-    const updated = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
-    return { agent: parsePresence(updated), created: false, took_over: tookOver };
-  }
+    const created = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
+    return { agent: parsePresence(created), created: true, took_over: false };
+  }).immediate();
 
-  // New agent
-  const id = crypto.randomUUID().slice(0, 8);
-  const resolvedRole = role || "agent";
-  db.prepare(`
-    INSERT INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
-    VALUES (?, ?, ?, ?, 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'))
-  `).run(id, normalizedName, sessionId, resolvedRole);
-
-  const created = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
-  return { agent: parsePresence(created), created: true, took_over: false };
+  return result;
 }
 
 export function heartbeat(agent: string, status?: string, metadata?: Record<string, unknown>, sessionId?: string): void {

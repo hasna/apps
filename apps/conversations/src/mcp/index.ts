@@ -723,15 +723,16 @@ server.registerTool("get_pinned_messages", {
 // ---- Presence Tools ----
 
 server.registerTool("register_agent", {
-  description: "Register an agent with conflict detection. Returns AgentConflictError if another active session exists (active = heartbeat within last 30 min).",
+  description: "Register an agent with conflict detection. Returns AgentConflictError if another active session exists (active = heartbeat within last 30 min). Optional project_id locks agent to a project for the session.",
   inputSchema: {
     name: z.string(),
     session_id: z.string(),
     role: z.string().optional(),
+    project_id: z.string().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const { name, session_id, role } = args;
-  const result = registerAgent(name, session_id, role);
+  const { name, session_id, role, project_id } = args;
+  const result = registerAgent(name, session_id, role, project_id);
   return {
     content: [{ type: "text", text: JSON.stringify(result) }],
   };

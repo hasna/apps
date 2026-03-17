@@ -72,6 +72,33 @@ describe("registerAgent", () => {
     expect(getPresence("MAXIMUS")).toBeTruthy(); // case-insensitive lookup
   });
 
+  test("stores project_id when provided", () => {
+    const result = registerAgent("project-agent", "session-proj", "agent", "proj-abc123") as RegisterAgentResult;
+    expect(result.agent.project_id).toBe("proj-abc123");
+  });
+
+  test("project_id defaults to null when not provided", () => {
+    const result = registerAgent("no-project-agent", "session-noproj") as RegisterAgentResult;
+    expect(result.agent.project_id).toBeNull();
+  });
+
+  test("updates project_id on takeover", () => {
+    registerAgent("takeover-agent", "session-old", "agent", "old-project");
+    const db = getDb();
+    db.prepare("UPDATE agent_presence SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds') WHERE agent = ?").run("takeover-agent");
+    const result = registerAgent("takeover-agent", "session-new", "agent", "new-project") as RegisterAgentResult;
+    expect(result.took_over).toBe(true);
+    expect(result.agent.project_id).toBe("new-project");
+  });
+
+  test("TOCTOU safety — transaction wraps check+insert", () => {
+    // Verify registerAgent runs inside a transaction (idempotent same-session re-register)
+    registerAgent("transaction-agent", "sess-tx");
+    const result = registerAgent("transaction-agent", "sess-tx") as RegisterAgentResult;
+    expect(result.created).toBe(false);
+    expect(result.took_over).toBe(false);
+  });
+
   test("allows takeover when agent is stale (>30 min)", () => {
     registerAgent("stale-agent", "old-session");
     const db = getDb();

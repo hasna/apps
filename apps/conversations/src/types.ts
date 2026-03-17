@@ -126,6 +126,7 @@ export interface AgentPresence {
   agent: string;
   session_id: string | null;
   role: string;
+  project_id: string | null;
   status: string;
   last_seen_at: string;
   created_at: string;
