@@ -8,6 +8,7 @@
 export interface GoogleDocsConfig {
   apiKey?: string;        // API key for read-only public documents
   accessToken?: string;   // OAuth2 access token for full access
+  autoRefresh?: boolean;  // Enable auto-refresh of access token (default: true)
   baseUrl?: string;       // Override default base URL
 }
 

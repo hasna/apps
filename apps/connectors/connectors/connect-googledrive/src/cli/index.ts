@@ -28,6 +28,7 @@ import {
 } from '../utils/auth.ts';
 import type { OutputFormat } from '../utils/output.ts';
 import { success, error, info, print, warn, formatBytes } from '../utils/output.ts';
+import { MIME_TYPES } from '../types/index.ts';
 import { writeFileSync } from 'fs';
 import { join, basename } from 'path';
 
@@ -56,7 +57,11 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 function requireAuth(): Drive {
-  if (!isAuthenticated()) {
+  // isAuthenticated() checks for both accessToken and refreshToken.
+  // If accessToken is missing/expired but refreshToken exists, the client's
+  // getValidAccessToken() will handle the refresh automatically.
+  const tokens = loadTokens();
+  if (!tokens || (!tokens.accessToken && !tokens.refreshToken)) {
     error('Not authenticated. Run "connect-googledrive auth login" first.');
     process.exit(1);
   }
@@ -493,24 +498,226 @@ filesCmd
   });
 
 filesCmd
-  .command('share <fileId>')
-  .description('Share a file with a user')
-  .requiredOption('--email <email>', 'Email address to share with')
-  .option('--role <role>', 'Permission role (reader, writer, commenter, owner)', 'reader')
-  .option('--no-notify', 'Do not send notification email')
-  .action(async (fileId: string, opts) => {
+  .command('rename <fileId> <newName>')
+  .description('Rename a file')
+  .action(async (fileId: string, newName: string) => {
     try {
       const drive = requireAuth();
-      const permission = await drive.files.share(fileId, opts.email, opts.role as 'reader' | 'writer' | 'commenter' | 'owner', {
-        sendNotificationEmail: opts.notify !== false,
-      });
-      success('Shared with: ' + opts.email);
-      info('Role: ' + opts.role);
+      const file = await drive.files.update(fileId, { name: newName });
+      success('Renamed to: ' + file.name);
     } catch (err) {
       error(String(err));
       process.exit(1);
     }
   });
+
+filesCmd
+  .command('share <fileId>')
+  .description('Share a file with a user, group, domain, or make it public')
+  .option('--email <email>', 'Email address to share with (required for user/group types)')
+  .option('--type <type>', 'Permission type (user, group, domain, anyone)', 'user')
+  .option('--domain <domain>', 'Domain to share with (required for domain type)')
+  .option('--role <role>', 'Permission role (reader, writer, commenter, owner)', 'reader')
+  .option('--no-notify', 'Do not send notification email')
+  .option('--allow-discovery', 'Allow file discovery (for anyone/domain types)')
+  .action(async (fileId: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const type = opts.type as 'user' | 'group' | 'domain' | 'anyone';
+
+      const validTypes = ['user', 'group', 'domain', 'anyone'];
+      if (!validTypes.includes(type)) {
+        error('Invalid type "' + type + '". Must be one of: user, group, domain, anyone');
+        process.exit(1);
+      }
+
+      if ((type === 'user' || type === 'group') && !opts.email) {
+        error('--email is required for type "' + type + '"');
+        process.exit(1);
+      }
+
+      if (type === 'domain' && !opts.domain) {
+        error('--domain is required for type "domain"');
+        process.exit(1);
+      }
+
+      if (type === 'anyone') {
+        // Create a public link permission directly
+        const permission: Record<string, unknown> = {
+          type: 'anyone',
+          role: opts.role,
+        };
+        if (opts.allowDiscovery) {
+          permission.allowFileDiscovery = true;
+        }
+        const params: Record<string, string | number | boolean | undefined> = {
+          supportsAllDrives: true,
+          sendNotificationEmail: false,
+        };
+        await drive.getClient().post(
+          '/files/' + fileId + '/permissions',
+          permission,
+          params
+        );
+        success('File is now publicly accessible');
+        info('Role: ' + opts.role);
+        info('Type: anyone');
+        if (opts.allowDiscovery) {
+          info('Allow discovery: yes');
+        }
+      } else if (type === 'domain') {
+        const permission: Record<string, unknown> = {
+          type: 'domain',
+          role: opts.role,
+          domain: opts.domain,
+        };
+        if (opts.allowDiscovery) {
+          permission.allowFileDiscovery = true;
+        }
+        const params: Record<string, string | number | boolean | undefined> = {
+          supportsAllDrives: true,
+          sendNotificationEmail: false,
+        };
+        await drive.getClient().post('/files/' + fileId + '/permissions', permission, params);
+        success('Shared with domain: ' + opts.domain);
+        info('Role: ' + opts.role);
+      } else {
+        await drive.files.share(fileId, opts.email, opts.role as 'reader' | 'writer' | 'commenter' | 'owner', {
+          sendNotificationEmail: opts.notify !== false,
+        });
+        success('Shared with: ' + opts.email);
+        info('Role: ' + opts.role);
+        info('Type: ' + type);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+filesCmd
+  .command('bulk-upload <directory>')
+  .description('Bulk-upload all files from a local directory to Google Drive')
+  .option('--folder <folderId>', 'Target Drive folder ID (uploads to root if omitted)')
+  .option('--recursive', 'Preserve subfolder structure (creates Drive folders for each subdir)')
+  .action(async (directory: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const { readdirSync, statSync } = await import('fs');
+      const { resolve: resolvePath, relative, join: joinPath } = await import('path');
+
+      const rootDir = resolvePath(directory);
+
+      // Verify directory exists
+      try {
+        const stat = statSync(rootDir);
+        if (!stat.isDirectory()) {
+          error('"' + rootDir + '" is not a directory');
+          process.exit(1);
+        }
+      } catch {
+        error('Directory not found: ' + rootDir);
+        process.exit(1);
+      }
+
+      const rootFolderId: string | undefined = opts.folder;
+      const recursive = !!opts.recursive;
+
+      info('Uploading from: ' + rootDir);
+      if (rootFolderId) info('Target folder ID: ' + rootFolderId);
+      if (recursive) info('Recursive: enabled (preserving subfolder structure)');
+
+      // Track Drive folder IDs for local subdirectories
+      const folderIdMap = new Map<string, string>();
+      if (rootFolderId) {
+        folderIdMap.set('', rootFolderId);
+      }
+
+      let totalUploaded = 0;
+      let totalErrors = 0;
+
+      /**
+       * Get or create a Drive folder for a given local relative path.
+       * e.g. 'images/2024' -> creates 'images' under root, then '2024' under that.
+       */
+      async function getDriveFolderId(relPath: string): Promise<string | undefined> {
+        if (!relPath) return rootFolderId;
+
+        if (folderIdMap.has(relPath)) return folderIdMap.get(relPath);
+
+        // Ensure parent exists first
+        const parts = relPath.split('/');
+        const parentRelPath = parts.slice(0, -1).join('/');
+        const folderName = parts[parts.length - 1];
+        const parentId = await getDriveFolderId(parentRelPath);
+
+        const folder = await drive.folders.create(folderName, parentId);
+        info('  Created folder: ' + relPath + ' (ID: ' + folder.id + ')');
+        const folderId = folder.id as string;
+        folderIdMap.set(relPath, folderId);
+        return folderId;
+      }
+
+      /**
+       * Upload all files in a directory, optionally recursing into subdirs.
+       */
+      async function uploadDir(localDir: string, relDir: string): Promise<void> {
+        let entries: string[];
+        try {
+          entries = readdirSync(localDir);
+        } catch (readErr) {
+          warn('Cannot read directory ' + localDir + ': ' + String(readErr));
+          return;
+        }
+
+        for (const entry of entries) {
+          const localPath = joinPath(localDir, entry);
+          const relPath = relDir ? relDir + '/' + entry : entry;
+
+          let stat;
+          try {
+            stat = statSync(localPath);
+          } catch {
+            warn('Cannot stat: ' + localPath);
+            continue;
+          }
+
+          if (stat.isDirectory()) {
+            if (recursive) {
+              await uploadDir(localPath, relPath);
+            }
+            // skip directories when not recursive
+          } else if (stat.isFile()) {
+            try {
+              const parentFolderId = await getDriveFolderId(relDir);
+              info('  Uploading: ' + relPath + ' (' + (stat.size / 1024).toFixed(1) + ' KB)...');
+
+              const file = await drive.files.upload(localPath, {
+                folderId: parentFolderId,
+              });
+
+              success('  ✓ ' + relPath + ' -> ' + file.name + ' (ID: ' + file.id + ')');
+              totalUploaded++;
+            } catch (uploadErr) {
+              warn('  ✗ ' + relPath + ': ' + String(uploadErr));
+              totalErrors++;
+            }
+          }
+        }
+      }
+
+      await uploadDir(rootDir, '');
+
+      info('');
+      success('Bulk upload complete:');
+      info('  Uploaded: ' + totalUploaded + ' file(s)');
+      if (totalErrors > 0) info('  Failed: ' + totalErrors + ' file(s)');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 
 // ============================================
 // Folders Commands
@@ -579,11 +786,85 @@ foldersCmd
   });
 
 foldersCmd
-  .command('contents <folderId>')
-  .description('List contents of a folder')
-  .action(async (folderId: string) => {
+  .command('rename <folderId> <newName>')
+  .description('Rename a folder')
+  .action(async (folderId: string, newName: string) => {
     try {
       const drive = requireAuth();
+      const folder = await drive.files.update(folderId, { name: newName });
+      success('Renamed to: ' + folder.name);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+foldersCmd
+  .command('contents <folderId>')
+  .description('List contents of a folder')
+  .option('-r, --recursive', 'List contents recursively (alias for "folders tree")')
+  .option('--depth <n>', 'Limit recursion depth when used with --recursive (default: unlimited)', '')
+  .action(async (folderId: string, opts) => {
+    try {
+      const drive = requireAuth();
+
+      if (opts.recursive) {
+        // Delegate to the tree rendering logic
+        const maxDepth = opts.depth ? parseInt(opts.depth) : Infinity;
+
+        interface TreeNode {
+          id: string;
+          name: string;
+          type: 'folder' | 'file';
+          size?: string;
+          children?: TreeNode[];
+        }
+
+        async function buildTree(id: string, depth: number): Promise<TreeNode[]> {
+          if (depth > maxDepth) return [];
+          const result = await drive.folders.listContents(id);
+          if (!result.files || result.files.length === 0) return [];
+
+          const nodes: TreeNode[] = [];
+          for (const f of result.files) {
+            const isFolder = f.mimeType === MIME_TYPES.FOLDER;
+            const node: TreeNode = {
+              id: f.id,
+              name: f.name,
+              type: isFolder ? 'folder' : 'file',
+              size: f.size ? formatBytes(f.size) : undefined,
+            };
+            if (isFolder) {
+              node.children = await buildTree(f.id, depth + 1);
+            }
+            nodes.push(node);
+          }
+          return nodes;
+        }
+
+        function renderTree(nodes: TreeNode[], indent: string): void {
+          for (const node of nodes) {
+            if (node.type === 'folder') {
+              console.log(indent + node.name + '/');
+              if (node.children && node.children.length > 0) {
+                renderTree(node.children, indent + '  ');
+              }
+            } else {
+              const sizeStr = node.size ? ' (' + node.size + ')' : '';
+              console.log(indent + node.name + sizeStr);
+            }
+          }
+        }
+
+        const tree = await buildTree(folderId, 1);
+        if (tree.length === 0) {
+          info('Folder is empty');
+          return;
+        }
+        renderTree(tree, '  ');
+        return;
+      }
+
       const result = await drive.folders.listContents(folderId);
 
       if (!result.files || result.files.length === 0) {
@@ -596,12 +877,105 @@ foldersCmd
       const items = result.files.map(f => ({
         id: f.id,
         name: f.name,
-        type: f.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file',
+        type: f.mimeType === MIME_TYPES.FOLDER ? 'folder' : 'file',
         size: f.size ? formatBytes(f.size) : '-',
         modified: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString() : '-',
       }));
 
       print(items, getFormat(foldersCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Folder Tree Command
+// ============================================
+
+interface FolderTreeNode {
+  id: string;
+  name: string;
+  type: 'folder' | 'file';
+  size?: string;
+  children?: FolderTreeNode[];
+}
+
+foldersCmd
+  .command('tree <folderId>')
+  .description('Show recursive folder tree with indentation')
+  .option('--depth <n>', 'Limit recursion depth (default: unlimited)')
+  .option('--json', 'Output structured JSON tree')
+  .action(async (folderId: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const maxDepth = opts.depth ? parseInt(opts.depth) : Infinity;
+
+      async function buildTree(id: string, depth: number): Promise<FolderTreeNode[]> {
+        if (depth > maxDepth) return [];
+        const result = await drive.folders.listContents(id);
+        if (!result.files || result.files.length === 0) return [];
+
+        const nodes: FolderTreeNode[] = [];
+        for (const f of result.files) {
+          const isFolder = f.mimeType === MIME_TYPES.FOLDER;
+          const node: FolderTreeNode = {
+            id: f.id,
+            name: f.name,
+            type: isFolder ? 'folder' : 'file',
+            size: f.size ? formatBytes(f.size) : undefined,
+          };
+          if (isFolder) {
+            node.children = await buildTree(f.id, depth + 1);
+          }
+          nodes.push(node);
+        }
+        return nodes;
+      }
+
+      function renderTree(nodes: FolderTreeNode[], indent: string): void {
+        for (const node of nodes) {
+          if (node.type === 'folder') {
+            console.log(indent + node.name + '/');
+            if (node.children && node.children.length > 0) {
+              renderTree(node.children, indent + '  ');
+            }
+          } else {
+            const sizeStr = node.size ? ' (' + node.size + ')' : '';
+            console.log(indent + node.name + sizeStr);
+          }
+        }
+      }
+
+      // Fetch the root folder name for display
+      let rootName = folderId;
+      try {
+        const rootFolder = await drive.folders.get(folderId);
+        rootName = rootFolder.name || folderId;
+      } catch {
+        // Fall back to using the ID if we can't fetch metadata
+      }
+
+      const tree = await buildTree(folderId, 1);
+
+      if (opts.json) {
+        const jsonTree: FolderTreeNode = {
+          id: folderId,
+          name: rootName,
+          type: 'folder',
+          children: tree,
+        };
+        console.log(JSON.stringify(jsonTree, null, 2));
+        return;
+      }
+
+      // Pretty tree output
+      console.log(rootName + '/');
+      if (tree.length === 0) {
+        console.log('  (empty)');
+      } else {
+        renderTree(tree, '  ');
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);

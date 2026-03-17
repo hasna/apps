@@ -7,6 +7,8 @@ import {
   setApiKey,
   getAccessToken,
   setAccessToken,
+  getRefreshToken,
+  getValidAccessToken,
   clearConfig,
   getConfigDir,
   setProfileOverride,
@@ -60,13 +62,27 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 // Helper to get authenticated client
-function getClient(): GoogleDocs {
-  const accessToken = getAccessToken();
+async function getClient(): Promise<GoogleDocs> {
+  let accessToken = getAccessToken();
   const apiKey = getApiKey();
+
+  // If no access token, try to refresh using refresh token
   if (!accessToken && !apiKey) {
-    error(`No credentials configured. Run "${CONNECTOR_NAME} config set-token <token>" or set GOOGLE_ACCESS_TOKEN environment variable.`);
-    process.exit(1);
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+      try {
+        accessToken = await getValidAccessToken();
+      } catch {
+        // Fall through to error below
+      }
+    }
+
+    if (!accessToken) {
+      error(`No credentials configured. Run "${CONNECTOR_NAME} config set-token <token>" or set GOOGLE_ACCESS_TOKEN environment variable.`);
+      process.exit(1);
+    }
   }
+
   return new GoogleDocs({ accessToken, apiKey });
 }
 
@@ -215,7 +231,7 @@ program
   .description('Get a document by ID')
   .action(async (documentId: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.documents.get(documentId);
       print(result, getFormat(program));
     } catch (err) {
@@ -229,7 +245,7 @@ program
   .description('Create a new document (requires OAuth token)')
   .action(async (title: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       if (!client.hasWriteAccess()) {
         error('Creating documents requires an OAuth access token. API key provides read-only access.');
         process.exit(1);
@@ -248,7 +264,7 @@ program
   .description('Append text to the end of a document (requires OAuth token)')
   .action(async (documentId: string, text: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       if (!client.hasWriteAccess()) {
         error('Modifying documents requires an OAuth access token. API key provides read-only access.');
         process.exit(1);
@@ -268,7 +284,7 @@ program
   .option('--match-case', 'Match case when finding text')
   .action(async (documentId: string, find: string, replace: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       if (!client.hasWriteAccess()) {
         error('Modifying documents requires an OAuth access token. API key provides read-only access.');
         process.exit(1);
@@ -292,7 +308,7 @@ program
   .description('Insert text at a specific position (requires OAuth token)')
   .action(async (documentId: string, text: string, index: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       if (!client.hasWriteAccess()) {
         error('Modifying documents requires an OAuth access token. API key provides read-only access.');
         process.exit(1);
@@ -316,7 +332,7 @@ program
   .description('Delete content within a range (requires OAuth token)')
   .action(async (documentId: string, startIndex: string, endIndex: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       if (!client.hasWriteAccess()) {
         error('Modifying documents requires an OAuth access token. API key provides read-only access.');
         process.exit(1);
@@ -341,7 +357,7 @@ program
   .description('Insert an image at a specific position (requires OAuth token)')
   .action(async (documentId: string, uri: string, index: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       if (!client.hasWriteAccess()) {
         error('Modifying documents requires an OAuth access token. API key provides read-only access.');
         process.exit(1);

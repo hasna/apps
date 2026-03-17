@@ -280,7 +280,8 @@ export function saveConfig(config: CliConfig): void {
 // ============================================
 
 export function getApiToken(): string | undefined {
-  return process.env.CLOUDFLARE_API_TOKEN || loadConfig().apiToken;
+  const config = loadConfig();
+  return process.env.CLOUDFLARE_API_TOKEN || config.apiToken || config.apiKey;
 }
 
 export function setApiToken(apiToken: string): void {
@@ -353,13 +354,16 @@ export function clearConfig(): void {
 
 export function isAuthenticated(): boolean {
   const config = loadConfig();
-  // Either API token OR (API key + email) is required
-  return !!(config.apiToken || (config.apiKey && config.email));
+  // API token (apiToken or standalone apiKey) OR legacy (apiKey + email)
+  return !!(config.apiToken || config.apiKey);
 }
 
 export function getAuthType(): 'token' | 'key' | null {
   const config = loadConfig();
   if (config.apiToken) return 'token';
   if (config.apiKey && config.email) return 'key';
+  // Standalone apiKey without email is treated as token auth
+  // (configure_auth saves to apiKey by default)
+  if (config.apiKey) return 'token';
   return null;
 }

@@ -31,3 +31,12 @@ export {
   type InstallOptions,
   type ConnectorDocs,
 } from "./lib/installer.js";
+
+export {
+  runConnectorCommand,
+  getConnectorOperations,
+  getConnectorCommandHelp,
+  getConnectorCliPath,
+  getConnectorsWithCli,
+  type RunResult,
+} from "./lib/runner.js";

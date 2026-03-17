@@ -66,22 +66,17 @@ function getFormat(cmd: Command): OutputFormat {
 async function getClient(): Promise<GoogleCalendar> {
   let accessToken = getAccessToken();
 
-  if (!accessToken) {
-    error(`No access token configured. Run "${CONNECTOR_NAME} auth login" to authenticate or set GOOGLE_CALENDAR_ACCESS_TOKEN environment variable.`);
-    process.exit(1);
-  }
-
-  // Check if token is expired and we have refresh token
-  if (isTokenExpired()) {
+  // If no access token or token is expired, try to refresh using refresh token
+  if (!accessToken || isTokenExpired()) {
     const refreshToken = getRefreshToken();
     const clientId = getClientId();
     const clientSecret = getClientSecret();
 
     if (refreshToken && clientId && clientSecret) {
-      info('Access token expired, refreshing...');
+      info(accessToken ? 'Access token expired, refreshing...' : 'No access token, attempting refresh...');
       try {
         const client = new GoogleCalendar({
-          accessToken,
+          accessToken: accessToken || '',
           refreshToken,
           clientId,
           clientSecret,
@@ -93,6 +88,12 @@ async function getClient(): Promise<GoogleCalendar> {
       } catch (err) {
         warn(`Failed to refresh token: ${err}. You may need to re-authenticate.`);
       }
+    }
+
+    // After refresh attempt, if still no access token, exit
+    if (!accessToken) {
+      error(`No access token configured. Run "${CONNECTOR_NAME} auth login" to authenticate or set GOOGLE_CALENDAR_ACCESS_TOKEN environment variable.`);
+      process.exit(1);
     }
   }
 

@@ -130,8 +130,17 @@ export async function refreshAccessToken(): Promise<OAuth2Tokens> {
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`Token refresh failed: ${error.error_description || error.error}`);
+    let errorMessage = `Token refresh failed: ${response.status} ${response.statusText}`;
+    try {
+      const errorBody = await response.json();
+      const detail = errorBody.error_description || errorBody.error;
+      if (detail) {
+        errorMessage = `Token refresh failed: ${detail}. Please run "connect-gmail auth login" again.`;
+      }
+    } catch {
+      // Response was not JSON; keep the status-based message
+    }
+    throw new Error(errorMessage);
   }
 
   const data = await response.json();

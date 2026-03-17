@@ -3,6 +3,15 @@ import type { GmailMessage, GmailLabel } from '../types';
 import { MessagesApi } from './messages';
 import { LabelsApi } from './labels';
 
+/**
+ * Returns true if the value looks like a Gmail label ID rather than a label name.
+ * User-created label IDs start with "Label_". System label IDs are all-uppercase
+ * ASCII (e.g. INBOX, SENT, UNREAD, STARRED, IMPORTANT, TRASH, SPAM, CATEGORY_*).
+ */
+function isLabelId(value: string): boolean {
+  return value.startsWith('Label_') || /^[A-Z0-9_]+$/.test(value);
+}
+
 // ============================================
 // Bulk Operation Types
 // ============================================
@@ -31,6 +40,10 @@ export interface BulkLabelOptions extends BulkOperationOptions {
   addLabels?: string[];
   /** Label names to remove (will be resolved to IDs) */
   removeLabels?: string[];
+  /** Skip messages that already have all the labels being added */
+  skipIfLabeled?: boolean;
+  /** Skip first N results (pagination offset) */
+  offset?: number;
 }
 
 export interface BulkMarkOptions extends BulkOperationOptions {
@@ -121,6 +134,8 @@ export class BulkApi {
       removeLabelIds = [],
       addLabels = [],
       removeLabels = [],
+      skipIfLabeled = false,
+      offset = 0,
       onProgress,
       onError,
     } = options;
@@ -130,19 +145,32 @@ export class BulkApi {
     const resolvedRemoveIds = [...removeLabelIds];
 
     if (addLabels.length > 0 || removeLabels.length > 0) {
-      const allLabels = await this.labels.list();
-      const labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
-
-      for (const name of addLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedAddIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      // Lazily fetch the label list only if we have names that need resolving
+      const needsLookup = [...addLabels, ...removeLabels].some(v => !isLabelId(v));
+      let labelMap: Map<string, string> = new Map();
+      if (needsLookup) {
+        const allLabels = await this.labels.list();
+        labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
       }
 
-      for (const name of removeLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedRemoveIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      for (const value of addLabels) {
+        if (isLabelId(value)) {
+          resolvedAddIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedAddIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
+      }
+
+      for (const value of removeLabels) {
+        if (isLabelId(value)) {
+          resolvedRemoveIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedRemoveIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
       }
     }
 
@@ -150,7 +178,27 @@ export class BulkApi {
       throw new Error('At least one label to add or remove is required');
     }
 
-    const messages = await this.fetchMessages(query, maxResults);
+    // Fetch enough messages to account for the offset
+    const fetchLimit = maxResults === Infinity ? Number.MAX_SAFE_INTEGER : maxResults + offset;
+    let messages = await this.fetchMessages(query, fetchLimit);
+
+    // Apply offset: skip first N results
+    if (offset > 0) {
+      messages = messages.slice(offset);
+    }
+
+    // Trim to requested maxResults after offset
+    if (maxResults !== Infinity && messages.length > maxResults) {
+      messages = messages.slice(0, maxResults);
+    }
+
+    // Skip messages that already have all the labels being added
+    if (skipIfLabeled && resolvedAddIds.length > 0) {
+      messages = messages.filter((msg) => {
+        const existing = msg.labelIds || [];
+        return !resolvedAddIds.every(id => existing.includes(id));
+      });
+    }
 
     return this.executeBatch(messages, {
       dryRun,
@@ -370,6 +418,8 @@ export class BulkApi {
     addLabels?: string[];
     removeLabels?: string[];
     dryRun?: boolean;
+    skipIfLabeled?: boolean;
+    offset?: number;
   }): Promise<BulkOperationResult> {
     const {
       query,
@@ -379,6 +429,8 @@ export class BulkApi {
       addLabels = [],
       removeLabels = [],
       dryRun = false,
+      skipIfLabeled = false,
+      offset = 0,
     } = options;
 
     // Resolve label names to IDs
@@ -386,24 +438,59 @@ export class BulkApi {
     const resolvedRemoveIds = [...removeLabelIds];
 
     if (addLabels.length > 0 || removeLabels.length > 0) {
-      const allLabels = await this.labels.list();
-      const labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
-
-      for (const name of addLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedAddIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      // Lazily fetch the label list only if we have names that need resolving
+      const needsLookup = [...addLabels, ...removeLabels].some(v => !isLabelId(v));
+      let labelMap: Map<string, string> = new Map();
+      if (needsLookup) {
+        const allLabels = await this.labels.list();
+        labelMap = new Map(allLabels.labels.map(l => [l.name.toLowerCase(), l.id]));
       }
 
-      for (const name of removeLabels) {
-        const id = labelMap.get(name.toLowerCase());
-        if (id) resolvedRemoveIds.push(id);
-        else throw new Error(`Label not found: ${name}`);
+      for (const value of addLabels) {
+        if (isLabelId(value)) {
+          resolvedAddIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedAddIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
+      }
+
+      for (const value of removeLabels) {
+        if (isLabelId(value)) {
+          resolvedRemoveIds.push(value);
+        } else {
+          const id = labelMap.get(value.toLowerCase());
+          if (id) resolvedRemoveIds.push(id);
+          else throw new Error(`Label not found: ${value}`);
+        }
       }
     }
 
-    // Fetch message IDs
-    const messages = await this.fetchMessageIds(query, maxResults);
+    // For skipIfLabeled, we need full metadata (label IDs), so use fetchMessages
+    // For plain offset/pagination without skip, fetchMessageIds is sufficient
+    let messageIds: string[];
+    if (skipIfLabeled && resolvedAddIds.length > 0) {
+      const fetchLimit = maxResults === Infinity ? Number.MAX_SAFE_INTEGER : maxResults + offset;
+      let msgs = await this.fetchMessages(query, fetchLimit);
+      if (offset > 0) msgs = msgs.slice(offset);
+      if (maxResults !== Infinity && msgs.length > maxResults) msgs = msgs.slice(0, maxResults);
+      msgs = msgs.filter((msg) => {
+        const existing = msg.labelIds || [];
+        return !resolvedAddIds.every(id => existing.includes(id));
+      });
+      messageIds = msgs.map(m => m.id);
+    } else {
+      // Fetch message IDs, accounting for offset
+      const fetchLimit = maxResults === Infinity ? Number.MAX_SAFE_INTEGER : maxResults + offset;
+      let ids = await this.fetchMessageIds(query, fetchLimit);
+      if (offset > 0) ids = ids.slice(offset);
+      if (maxResults !== Infinity && ids.length > maxResults) ids = ids.slice(0, maxResults);
+      messageIds = ids;
+    }
+
+    // Use local variable name to avoid conflict with outer scope
+    const messages = messageIds;
 
     const result: BulkOperationResult = {
       total: messages.length,

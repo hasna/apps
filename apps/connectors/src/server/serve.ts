@@ -147,13 +147,38 @@ function getAllConnectorsWithAuth(): ConnectorWithAuth[] {
   });
 }
 
-function errorPage(title: string, message: string, hint?: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:var(--bg,#0a0a0a);color:var(--fg,#e5e5e5);">
-    <style>@media(prefers-color-scheme:light){:root{--bg:#fff;--fg:#111;--sub:#666;--hint:#888}}:root{--bg:#0a0a0a;--fg:#e5e5e5;--sub:#888;--hint:#666}</style>
-    <div style="text-align:center;">
-      <h2 style="color:#ef4444;">${title}</h2>
-      <p style="color:var(--sub);">${message}</p>
-      ${hint ? `<p style="color:var(--hint);font-size:14px;">${hint}</p>` : ""}
+function oauthPage(type: "success" | "error" | "warning", title: string, message: string, hint?: string, extra?: { script?: string }): string {
+  const icons: Record<string, string> = {
+    success: `<div class="icon icon-success"><svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></div>`,
+    error: `<div class="icon icon-error"><svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></div>`,
+    warning: `<div class="icon icon-warning"><svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg></div>`,
+  };
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; display:flex; justify-content:center; align-items:center; min-height:100vh; background:#09090b; color:#fafafa; }
+      .card { background:#18181b; border:1px solid #27272a; border-radius:12px; padding:48px 40px; max-width:420px; width:100%; text-align:center; }
+      .icon { width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 24px; }
+      .icon svg { width:32px; height:32px; }
+      .icon-success { background:#052e16; }
+      .icon-success svg { color:#22c55e; }
+      .icon-error { background:#450a0a; }
+      .icon-error svg { color:#ef4444; }
+      .icon-warning { background:#422006; }
+      .icon-warning svg { color:#eab308; }
+      h2 { font-size:24px; font-weight:600; margin-bottom:8px; color:#fafafa; }
+      .subtitle { color:#a1a1aa; font-size:15px; margin-top:12px; line-height:1.5; }
+      .connector { color:#22c55e; font-weight:600; }
+      .hint { color:#52525b; font-size:13px; margin-top:24px; }
+      code, .cmd { background:#27272a; color:#e4e4e7; padding:2px 8px; border-radius:4px; font-family:ui-monospace,monospace; font-size:12px; }
+    </style>
+  </head><body>
+    <div class="card">
+      ${icons[type]}
+      <h2>${title}</h2>
+      <p class="subtitle">${message}</p>
+      ${hint ? `<p class="hint">${hint}</p>` : ""}
+      ${extra?.script ? `<script>${extra.script}</script>` : ""}
     </div>
   </body></html>`;
 }
@@ -558,9 +583,10 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         const authUrl = getOAuthStartUrl(name, redirectUri);
 
         if (!authUrl) {
-          return htmlResponse(errorPage(
+          return htmlResponse(oauthPage(
+            "warning",
             "OAuth Not Available",
-            `No OAuth client credentials found for <strong>${name}</strong>.`,
+            `No OAuth client credentials found for <span class="connector">${name}</span>.`,
             `Set up credentials at <code>~/.connectors/connect-${name}/credentials.json</code>`
           ));
         }
@@ -577,11 +603,12 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         const state = url.searchParams.get("state");
 
         if (error) {
-          return htmlResponse(errorPage("Authentication Failed", error, "You can close this window."));
+          return htmlResponse(oauthPage("error", "Authentication Failed", error, "You can close this window."));
         }
 
         if (!validateOAuthState(state, name)) {
-          return htmlResponse(errorPage(
+          return htmlResponse(oauthPage(
+            "error",
             "Invalid State",
             "CSRF validation failed. The OAuth state parameter is missing or invalid.",
             "Please try again from the dashboard."
@@ -589,7 +616,8 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         }
 
         if (!code) {
-          return htmlResponse(errorPage(
+          return htmlResponse(oauthPage(
+            "error",
             "Missing Authorization Code",
             "No code received from the OAuth provider.",
             "You can close this window and try again."
@@ -601,20 +629,16 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           await exchangeOAuthCode(name, code, redirectUri);
           logActivity("oauth_connected", name);
 
-          return htmlResponse(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#e5e5e5;">
-            <div style="text-align:center;">
-              <h2 style="color:#22c55e;">Connected!</h2>
-              <p style="color:#888;"><strong>${name}</strong> is now authenticated.</p>
-              <p style="color:#666;font-size:14px;">You can close this window and return to the dashboard.</p>
-              <script>
-                if (window.opener) {
-                  window.opener.postMessage({ type: 'oauth-complete', connector: '${name}' }, 'http://localhost:${port}');
-                }
-              </script>
-            </div>
-          </body></html>`);
+          return htmlResponse(oauthPage(
+            "success",
+            "Connected!",
+            `<span class="connector">${name}</span> is now authenticated and ready to use.`,
+            `You can close this window.<br>Try <code>connectors run ${name} --help</code>`,
+            { script: `if(window.opener){window.opener.postMessage({type:'oauth-complete',connector:'${name}'},'http://localhost:${port}');}` }
+          ));
         } catch (e) {
-          return htmlResponse(errorPage(
+          return htmlResponse(oauthPage(
+            "error",
             "Authentication Failed",
             e instanceof Error ? e.message : "Unknown error",
             "You can close this window."

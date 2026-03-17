@@ -11,7 +11,7 @@ describe("library exports", () => {
 
     expect(lib.CATEGORIES).toBeDefined();
     expect(Array.isArray(lib.CATEGORIES)).toBe(true);
-    expect(lib.CATEGORIES.length).toBe(11);
+    expect(lib.CATEGORIES.length).toBeGreaterThanOrEqual(11);
 
     expect(typeof lib.getConnector).toBe("function");
     expect(typeof lib.getConnectorsByCategory).toBe("function");

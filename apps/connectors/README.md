@@ -1,21 +1,42 @@
 # Connectors
 
-Open source library of 62 TypeScript API connectors. Install any connector with a single command.
+Open source library of 126 TypeScript API connectors. Set up any connector in 30 seconds.
 
-## Quick Start
+## 30-Second Quickstart
+
+```bash
+# Install globally
+bun install -g @hasna/connectors
+
+# Set up a connector (install + auth in one step)
+connectors setup stripe --key sk_test_your_key_here
+
+# Use it immediately
+connectors run stripe products list
+connectors run stripe customers create --email "test@example.com"
+
+# Discover what any connector can do
+connectors ops stripe
+connectors ops gmail
+connectors ops anthropic
+```
+
+**That's it.** `setup` installs the connector and saves your API key. `run` executes any operation. `ops` shows what's available.
+
+## Quick Start (Alternative Methods)
 
 ```bash
 # Interactive mode - browse and select connectors
 npx @hasna/connectors
 
 # Install specific connectors
-npx @hasna/connectors install figma stripe github
+connectors install figma stripe github
 
-# List all available connectors
-npx @hasna/connectors list
+# List all 126 connectors
+connectors list
 
 # Open the auth dashboard
-npx @hasna/connectors serve
+connectors serve
 ```
 
 ## Installation
@@ -69,7 +90,7 @@ connectors open                          # Open dashboard in browser
 connectors dashboard                     # Alias for serve
 ```
 
-The dashboard shows all 62 connectors with:
+The dashboard shows all 126 connectors with:
 - Install status and auth type (OAuth, API Key, Bearer)
 - Configure API keys via dialog
 - Run OAuth flows for Google connectors
@@ -93,7 +114,25 @@ Add to your MCP config:
 }
 ```
 
-Tools: `search_connectors`, `list_connectors`, `list_categories`, `connector_docs`, `connector_info`, `install_connector`, `remove_connector`, `list_installed`, `connector_auth_status`, `configure_auth`
+Tools: `search_connectors`, `list_connectors`, `list_categories`, `connector_docs`, `connector_info`, `install_connector`, `remove_connector`, `list_installed`, `connector_auth_status`, `configure_auth`, `setup_connector`, `list_connector_operations`, `run_connector_operation`
+
+### Use Connectors (ops + run)
+
+```bash
+# Discover what a connector can do
+connectors ops stripe                    # List all operations
+connectors ops stripe products           # Detailed help for products
+
+# Execute any operation
+connectors run stripe products list --limit 5
+connectors run anthropic models
+connectors run gmail messages list --limit 10
+connectors run github repo list
+
+# One-step setup (install + auth + verify)
+connectors setup anthropic --key your-anthropic-api-key
+connectors setup stripe --key sk_test_your-key
+```
 
 ### JSON Output (for scripts & agents)
 
@@ -106,7 +145,7 @@ connectors info stripe --json
 connectors docs gmail --json
 ```
 
-## Available Connectors (62)
+## Available Connectors (126)
 
 ### AI & ML (12)
 | Connector | Description |

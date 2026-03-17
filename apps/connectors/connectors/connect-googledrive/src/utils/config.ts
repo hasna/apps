@@ -259,18 +259,37 @@ export function ensureImportsDir(): string {
 
 export function loadConfig(): CliConfig {
   ensureConfigDir();
+
+  let config: CliConfig = {};
+
+  // Pattern 1: profiles/<name>.json (flat file)
+  const profileName = getCurrentProfile();
+  const flatPath = join(getProfilesDir(), `${profileName}.json`);
+  if (existsSync(flatPath)) {
+    try { config = JSON.parse(readFileSync(flatPath, 'utf-8')); } catch {}
+  }
+
+  // Pattern 2: profiles/<name>/config.json (directory)
   const configFile = join(getConfigDirInternal(), 'config.json');
-
-  if (!existsSync(configFile)) {
-    return {};
+  if (existsSync(configFile)) {
+    try {
+      const dirConfig = JSON.parse(readFileSync(configFile, 'utf-8'));
+      config = { ...config, ...dirConfig };
+    } catch {}
   }
 
-  try {
-    const content = readFileSync(configFile, 'utf-8');
-    return JSON.parse(content);
-  } catch {
-    return {};
+  // Pattern 3: profiles/<name>/tokens.json (OAuth tokens)
+  const tokensPath = join(getConfigDirInternal(), 'tokens.json');
+  if (existsSync(tokensPath)) {
+    try {
+      const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'));
+      if (tokens.accessToken && !config.tokens) {
+        config.tokens = tokens;
+      }
+    } catch {}
   }
+
+  return config;
 }
 
 export function saveConfig(config: CliConfig): void {

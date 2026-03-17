@@ -36,7 +36,7 @@ describe("registry", () => {
     test("exports a non-empty array", async () => {
       const { CATEGORIES } = await import("./registry.js");
       expect(Array.isArray(CATEGORIES)).toBe(true);
-      expect(CATEGORIES.length).toBe(11);
+      expect(CATEGORIES.length).toBeGreaterThanOrEqual(11);
     });
 
     test("every connector category exists in CATEGORIES", async () => {

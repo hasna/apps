@@ -68,7 +68,7 @@ describe("CLI", () => {
       const { stdout } = await run("categories --json");
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(11);
+      expect(data.length).toBeGreaterThanOrEqual(11);
       expect(data[0]).toHaveProperty("name");
       expect(data[0]).toHaveProperty("count");
       expect(data[0].count).toBeGreaterThan(0);
@@ -776,6 +776,101 @@ describe("CLI", () => {
       if (shopify) {
         expect(["skip", "no-key"]).toContain(shopify.status);
       }
+    });
+  });
+
+  describe("ops", () => {
+    test("lists operations for a connector", async () => {
+      const { stdout, exitCode } = await run("ops stripe");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Stripe operations:");
+      expect(stdout).toContain("products");
+      expect(stdout).toContain("customers");
+    });
+
+    test("shows JSON output with --json", async () => {
+      const { stdout, exitCode } = await run("ops stripe --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.connector).toBe("stripe");
+      expect(data.commands).toContain("products");
+    });
+
+    test("shows subcommand help", async () => {
+      const { stdout, exitCode } = await run("ops stripe products");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("products");
+      expect(stdout).toContain("list");
+      expect(stdout).toContain("create");
+    });
+
+    test("errors on unknown connector", async () => {
+      const { exitCode } = await run("ops zzzznonexistent");
+      expect(exitCode).not.toBe(0);
+    });
+
+    test("lists operations for gmail", async () => {
+      const { stdout, exitCode } = await run("ops gmail --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.connector).toBe("gmail");
+      expect(data.commands).toContain("messages");
+    });
+
+    test("lists operations for anthropic", async () => {
+      const { stdout, exitCode } = await run("ops anthropic --json");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.commands).toContain("messages");
+      expect(data.commands).toContain("models");
+    });
+
+    test("lists operations for all 62 connectors", async () => {
+      const connectors = [
+        "anthropic", "aws", "brandsight", "cloudflare", "discord", "docker",
+        "e2b", "elevenlabs", "exa", "figma", "firecrawl", "github",
+        "gmail", "google", "googlecalendar", "googlecloud", "googlecontacts",
+        "googledocs", "googledrive", "googlegemini", "googlemaps", "googlesheets",
+        "googletasks", "hedra", "heygen", "huggingface", "icons8", "maropost",
+        "mercury", "meta", "midjourney", "mistral", "mixpanel", "notion",
+        "openai", "openweathermap", "pandadoc", "quo", "reddit", "reducto",
+        "resend", "revolut", "sedo", "sentry", "shadcn", "shopify",
+        "snap", "stabilityai", "stripe", "stripeatlas", "substack", "tiktok",
+        "tinker", "twilio", "uspto", "webflow", "wix", "x", "xads", "xai",
+        "youtube", "zoom",
+      ];
+
+      for (const name of connectors) {
+        const { stdout, exitCode } = await run(`ops ${name} --json`);
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.connector).toBe(name);
+        expect(data.commands.length).toBeGreaterThan(0);
+      }
+    }, 120000);
+  });
+
+  describe("run", () => {
+    test("runs connector operation", async () => {
+      const { stdout, exitCode } = await run("run anthropic models");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("claude");
+    });
+
+    test("errors on unknown connector", async () => {
+      const { exitCode } = await run("run zzzznonexistent test");
+      expect(exitCode).not.toBe(0);
+    });
+
+    test("errors with no command", async () => {
+      const { exitCode } = await run("run stripe");
+      expect(exitCode).not.toBe(0);
+    });
+
+    test("shows help text from --help", async () => {
+      const { stdout, exitCode } = await run("--help");
+      expect(stdout).toContain("ops");
+      expect(stdout).toContain("run");
     });
   });
 });

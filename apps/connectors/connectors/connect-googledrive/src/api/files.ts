@@ -97,7 +97,7 @@ export class FilesApi {
       '/files',
       content,
       metadata,
-      { fields: DEFAULT_FILE_FIELDS },
+      { fields: DEFAULT_FILE_FIELDS, supportsAllDrives: true },
       mimeType
     );
   }
@@ -107,19 +107,19 @@ export class FilesApi {
    */
   async create(name: string, content: string | Buffer, options?: { folderId?: string; mimeType?: string }): Promise<DriveFile> {
     const metadata: Record<string, unknown> = { name };
-    
+
     if (options?.folderId) {
       metadata.parents = [options.folderId];
     }
 
     const buffer = typeof content === 'string' ? Buffer.from(content) : content;
     const mimeType = options?.mimeType || 'text/plain';
-    
+
     return this.client.upload<DriveFile>(
       '/files',
       buffer,
       metadata,
-      { fields: DEFAULT_FILE_FIELDS },
+      { fields: DEFAULT_FILE_FIELDS, supportsAllDrives: true },
       mimeType
     );
   }

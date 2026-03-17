@@ -1,5 +1,6 @@
 import type { GoogleDocsConfig, OutputFormat } from '../types';
 import { GoogleDocsApiError } from '../types';
+import { getValidAccessToken } from '../utils/config';
 
 const DEFAULT_BASE_URL = 'https://docs.googleapis.com/v1';
 
@@ -13,8 +14,9 @@ export interface RequestOptions {
 
 export class GoogleDocsClient {
   private readonly apiKey?: string;
-  private readonly accessToken?: string;
+  private accessToken?: string;
   private readonly baseUrl: string;
+  private readonly useAutoRefresh: boolean;
 
   constructor(config: GoogleDocsConfig) {
     if (!config.apiKey && !config.accessToken) {
@@ -22,6 +24,7 @@ export class GoogleDocsClient {
     }
     this.apiKey = config.apiKey;
     this.accessToken = config.accessToken;
+    this.useAutoRefresh = config.autoRefresh !== false; // defaults to true
     this.baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   }
 
@@ -50,6 +53,15 @@ export class GoogleDocsClient {
    */
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {} } = options;
+
+    // Auto-refresh token if enabled and using OAuth
+    if (this.accessToken && this.useAutoRefresh) {
+      try {
+        this.accessToken = await getValidAccessToken();
+      } catch {
+        // Fall through to use current token if refresh fails
+      }
+    }
 
     const url = this.buildUrl(path, params);
 

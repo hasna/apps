@@ -1,5 +1,6 @@
 import type { GoogleCalendarConfig, OutputFormat, GoogleApiErrorResponse } from '../types';
 import { GoogleCalendarApiError } from '../types';
+import { isTokenExpired, setTokens } from '../utils/config';
 
 const DEFAULT_BASE_URL = 'https://www.googleapis.com/calendar/v3';
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -141,6 +142,13 @@ export class GoogleCalendarClient {
     const data = await response.json();
     this.accessToken = data.access_token;
 
+    // Save refreshed tokens to disk
+    setTokens({
+      accessToken: data.access_token,
+      refreshToken: this.refreshToken,
+      expiresIn: data.expires_in,
+    });
+
     return {
       accessToken: data.access_token,
       expiresIn: data.expires_in,
@@ -166,6 +174,11 @@ export class GoogleCalendarClient {
    */
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {} } = options;
+
+    // Auto-refresh token if expired
+    if (isTokenExpired() && this.refreshToken && this.clientId && this.clientSecret) {
+      await this.refreshAccessToken();
+    }
 
     const url = this.buildUrl(path, params);
 

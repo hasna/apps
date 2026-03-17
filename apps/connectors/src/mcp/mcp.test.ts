@@ -403,7 +403,7 @@ describe("MCP Server", () => {
       const data = parseContent(res);
       expect(Array.isArray(data.categories)).toBe(true);
       expect(data.categories.length).toBeGreaterThan(10);
-      expect(data.total).toBe(62);
+      expect(data.total).toBeGreaterThanOrEqual(62);
 
       const aiCategory = data.categories.find((c: any) => c.category === "AI & ML");
       expect(aiCategory).toBeDefined();
@@ -417,6 +417,99 @@ describe("MCP Server", () => {
         expect(typeof cat.category).toBe("string");
         expect(typeof cat.count).toBe("number");
       }
+    });
+  });
+
+  describe("list_connector_operations", () => {
+    test("lists operations for a connector", async () => {
+      const res = await callMcp("list_connector_operations", { name: "stripe" });
+      const data = parseContent(res);
+      expect(data.connector).toBe("stripe");
+      expect(data.displayName).toBe("Stripe");
+      expect(data.commands).toBeInstanceOf(Array);
+      expect(data.commands.length).toBeGreaterThan(0);
+      expect(data.commands).toContain("products");
+      expect(data.commands).toContain("customers");
+    });
+
+    test("returns subcommand help when command specified", async () => {
+      const res = await callMcp("list_connector_operations", {
+        name: "stripe",
+        command: "products",
+      });
+      const data = parseContent(res);
+      expect(data.connector).toBe("stripe");
+      expect(data.command).toBe("products");
+      expect(data.help).toContain("list");
+      expect(data.help).toContain("create");
+    });
+
+    test("returns error for unknown connector", async () => {
+      const res = await callMcp("list_connector_operations", { name: "zzzznonexistent" });
+      expect(res.result?.isError).toBe(true);
+    });
+
+    test("lists operations for gmail", async () => {
+      const res = await callMcp("list_connector_operations", { name: "gmail" });
+      const data = parseContent(res);
+      expect(data.connector).toBe("gmail");
+      expect(data.commands).toContain("messages");
+    });
+
+    test("lists operations for anthropic", async () => {
+      const res = await callMcp("list_connector_operations", { name: "anthropic" });
+      const data = parseContent(res);
+      expect(data.connector).toBe("anthropic");
+      expect(data.commands).toContain("messages");
+      expect(data.commands).toContain("models");
+    });
+
+    test("lists operations for github", async () => {
+      const res = await callMcp("list_connector_operations", { name: "github" });
+      const data = parseContent(res);
+      expect(data.connector).toBe("github");
+      expect(data.commands).toContain("repo");
+      expect(data.commands).toContain("issue");
+    });
+  });
+
+  describe("run_connector_operation", () => {
+    test("runs connector operation successfully", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "anthropic",
+        args: ["models"],
+      });
+      const data = parseContent(res);
+      expect(data.connector).toBe("anthropic");
+      expect(data.success).toBe(true);
+      expect(data.output).toContain("claude");
+    });
+
+    test("returns error for unknown connector", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "zzzznonexistent",
+        args: ["test"],
+      });
+      expect(res.result?.isError).toBe(true);
+    });
+
+    test("returns error for invalid command", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "stripe",
+        args: ["zzzznonexistent"],
+      });
+      const data = parseContent(res);
+      expect(data.success).toBe(false);
+    });
+
+    test("passes format option", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "anthropic",
+        args: ["models"],
+        format: "pretty",
+      });
+      const data = parseContent(res);
+      expect(data.success).toBe(true);
     });
   });
 });

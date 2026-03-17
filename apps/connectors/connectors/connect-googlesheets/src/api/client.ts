@@ -1,5 +1,6 @@
 import type { GoogleSheetsConfig, OutputFormat } from '../types';
 import { GoogleSheetsApiError } from '../types';
+import { setAccessToken as saveAccessToken } from '../utils/config';
 
 const DEFAULT_BASE_URL = 'https://sheets.googleapis.com/v4';
 
@@ -88,6 +89,9 @@ export class GoogleSheetsClient {
     const data = await response.json() as { access_token: string; expires_in: number };
     this.accessToken = data.access_token;
     this.tokenExpiresAt = Date.now() + data.expires_in * 1000;
+
+    // Persist refreshed token to disk so it survives process exit
+    saveAccessToken(data.access_token, this.tokenExpiresAt);
 
     return data.access_token;
   }

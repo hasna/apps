@@ -1,5 +1,6 @@
 import type { GoogleConfig, OutputFormat } from '../types';
 import { GoogleApiError } from '../types';
+import { getValidAccessToken } from '../utils/config';
 
 // Google API base URLs
 const BASE_URLS = {
@@ -21,14 +22,16 @@ export interface RequestOptions {
 }
 
 export class GoogleClient {
-  private readonly accessToken: string;
+  private accessToken: string;
   private readonly baseUrls: Record<GoogleService, string>;
+  private readonly useAutoRefresh: boolean;
 
   constructor(config: GoogleConfig) {
     if (!config.accessToken) {
       throw new Error('Access token is required');
     }
     this.accessToken = config.accessToken;
+    this.useAutoRefresh = config.autoRefresh !== false; // defaults to true
     this.baseUrls = {
       gmail: config.baseUrls?.gmail || BASE_URLS.gmail,
       drive: config.baseUrls?.drive || BASE_URLS.drive,
@@ -57,6 +60,15 @@ export class GoogleClient {
    */
   async request<T>(service: GoogleService, path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {} } = options;
+
+    // Auto-refresh token if enabled
+    if (this.useAutoRefresh) {
+      try {
+        this.accessToken = await getValidAccessToken();
+      } catch {
+        // Fall through to use current token if refresh fails
+      }
+    }
 
     const url = this.buildUrl(service, path, params);
 

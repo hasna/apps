@@ -167,18 +167,36 @@ export function ensureConfigDir(): void {
 export function loadProfile(profile?: string): ProfileConfig {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  const profileDir = join(getProfilesDir(), profileName);
-  const configFile = join(profileDir, 'config.json');
 
-  if (!existsSync(configFile)) {
-    return {};
+  let config: ProfileConfig = {};
+
+  // Pattern 1: profiles/<name>.json (flat file)
+  const flatPath = join(getProfilesDir(), `${profileName}.json`);
+  if (existsSync(flatPath)) {
+    try { config = JSON.parse(readFileSync(flatPath, 'utf-8')); } catch {}
   }
 
-  try {
-    return JSON.parse(readFileSync(configFile, 'utf-8'));
-  } catch {
-    return {};
+  // Pattern 2: profiles/<name>/config.json (directory)
+  const dirConfigPath = join(getProfilesDir(), profileName, 'config.json');
+  if (existsSync(dirConfigPath)) {
+    try {
+      const dirConfig = JSON.parse(readFileSync(dirConfigPath, 'utf-8'));
+      config = { ...config, ...dirConfig };
+    } catch {}
   }
+
+  // Pattern 3: profiles/<name>/tokens.json (OAuth tokens)
+  const tokensPath = join(getProfilesDir(), profileName, 'tokens.json');
+  if (existsSync(tokensPath)) {
+    try {
+      const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'));
+      if (tokens.accessToken && !config.accessToken) config.accessToken = tokens.accessToken;
+      if (tokens.refreshToken && !config.refreshToken) config.refreshToken = tokens.refreshToken;
+      if (tokens.expiresAt && !config.tokenExpiry) config.tokenExpiry = tokens.expiresAt;
+    } catch {}
+  }
+
+  return config;
 }
 
 export function saveProfile(config: ProfileConfig, profile?: string): void {
@@ -194,27 +212,70 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 }
 
 // ============================================
+// OAuth2 Credentials (Client ID/Secret) - Root credentials.json (shared across profiles)
+// ============================================
+
+const CREDENTIALS_FILE = join(BASE_CONFIG_DIR, 'credentials.json');
+
+interface CredentialsConfig {
+  clientId?: string;
+  clientSecret?: string;
+}
+
+function loadCredentials(): CredentialsConfig {
+  ensureBaseConfigDir();
+
+  if (!existsSync(CREDENTIALS_FILE)) {
+    // Migration: check if credentials exist in any profile and copy to base
+    const profiles = listProfiles();
+    for (const prof of profiles) {
+      const profileConfig = loadProfile(prof);
+      if (profileConfig.clientId && profileConfig.clientSecret) {
+        const creds = {
+          clientId: profileConfig.clientId,
+          clientSecret: profileConfig.clientSecret,
+        };
+        writeFileSync(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 });
+        return creds;
+      }
+    }
+    return {};
+  }
+
+  try {
+    return JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveCredentials(creds: CredentialsConfig): void {
+  ensureBaseConfigDir();
+  writeFileSync(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 });
+}
+
+// ============================================
 // OAuth Credentials
 // ============================================
 
 export function getClientId(): string | undefined {
-  return process.env.GOOGLE_CLIENT_ID || loadProfile().clientId;
+  return process.env.GOOGLE_TASKS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || loadCredentials().clientId || loadProfile().clientId;
 }
 
 export function setClientId(clientId: string): void {
-  const config = loadProfile();
-  config.clientId = clientId;
-  saveProfile(config);
+  const creds = loadCredentials();
+  creds.clientId = clientId;
+  saveCredentials(creds);
 }
 
 export function getClientSecret(): string | undefined {
-  return process.env.GOOGLE_CLIENT_SECRET || loadProfile().clientSecret;
+  return process.env.GOOGLE_TASKS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || loadCredentials().clientSecret || loadProfile().clientSecret;
 }
 
 export function setClientSecret(clientSecret: string): void {
-  const config = loadProfile();
-  config.clientSecret = clientSecret;
-  saveProfile(config);
+  const creds = loadCredentials();
+  creds.clientSecret = clientSecret;
+  saveCredentials(creds);
 }
 
 export function getAccessToken(): string | undefined {
@@ -248,10 +309,7 @@ export function setTokenExpiry(expiry: number): void {
 }
 
 export function setCredentials(clientId: string, clientSecret: string): void {
-  const config = loadProfile();
-  config.clientId = clientId;
-  config.clientSecret = clientSecret;
-  saveProfile(config);
+  saveCredentials({ clientId, clientSecret });
 }
 
 export function setTokens(accessToken: string, refreshToken: string | undefined, expiresIn: number): void {

@@ -8,6 +8,10 @@ const DEFAULT_PROFILE = 'default';
 export interface ProfileConfig {
   apiKey?: string;
   accessToken?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  expiresAt?: number;
 }
 
 // Store for --profile flag override (set by CLI before commands run)
@@ -189,6 +193,100 @@ export function setAccessToken(accessToken: string): void {
   const config = loadProfile();
   config.accessToken = accessToken;
   saveProfile(config);
+}
+
+// ============================================
+// Token Refresh
+// ============================================
+
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+export function getClientId(): string | undefined {
+  return process.env.GOOGLE_CLIENT_ID || loadProfile().clientId;
+}
+
+export function getClientSecret(): string | undefined {
+  return process.env.GOOGLE_CLIENT_SECRET || loadProfile().clientSecret;
+}
+
+export function getRefreshToken(): string | undefined {
+  return process.env.GOOGLE_REFRESH_TOKEN || loadProfile().refreshToken;
+}
+
+/**
+ * Refresh the access token using the refresh token and client credentials
+ */
+export async function refreshAccessToken(): Promise<ProfileConfig> {
+  const profile = loadProfile();
+  const clientId = process.env.GOOGLE_CLIENT_ID || profile.clientId;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || profile.clientSecret;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || profile.refreshToken;
+
+  if (!clientId || !clientSecret) {
+    throw new Error('OAuth client credentials not configured. Set clientId/clientSecret in profile or GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET env vars.');
+  }
+
+  if (!refreshToken) {
+    throw new Error('No refresh token available. Please re-authenticate.');
+  }
+
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json() as { error_description?: string; error?: string };
+    throw new Error(`Token refresh failed: ${error.error_description || error.error}`);
+  }
+
+  const data = await response.json() as { access_token: string; expires_in: number };
+
+  const updatedProfile: ProfileConfig = {
+    ...profile,
+    accessToken: data.access_token,
+    refreshToken: refreshToken, // Keep original refresh token
+    expiresAt: Date.now() + data.expires_in * 1000,
+  };
+
+  saveProfile(updatedProfile);
+  return updatedProfile;
+}
+
+/**
+ * Get a valid access token, refreshing if necessary.
+ * Returns the current token if not expired, otherwise refreshes it.
+ */
+export async function getValidAccessToken(): Promise<string> {
+  // Env var override always wins (no refresh possible)
+  if (process.env.GOOGLE_ACCESS_TOKEN) {
+    return process.env.GOOGLE_ACCESS_TOKEN;
+  }
+
+  const profile = loadProfile();
+
+  if (!profile.accessToken) {
+    throw new Error('Not authenticated. Run "connect-googledocs config set-token <token>" or set GOOGLE_ACCESS_TOKEN.');
+  }
+
+  // If we have expiry info and a refresh token, check if refresh is needed
+  if (profile.expiresAt && profile.refreshToken) {
+    // Refresh if token expires within 5 minutes
+    if (Date.now() >= profile.expiresAt - 5 * 60 * 1000) {
+      const updated = await refreshAccessToken();
+      return updated.accessToken!;
+    }
+  }
+
+  return profile.accessToken;
 }
 
 // ============================================

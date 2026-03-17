@@ -62,10 +62,10 @@ function getFormat(cmd: Command): OutputFormat {
 }
 
 // Helper to get authenticated client
-function getClient(): GoogleContacts {
+async function getClient(): Promise<GoogleContacts> {
   const clientId = getClientId();
   const clientSecret = getClientSecret();
-  const accessToken = getAccessToken();
+  let accessToken = getAccessToken();
   const refreshToken = getRefreshToken();
   const redirectUri = getRedirectUri();
 
@@ -74,9 +74,34 @@ function getClient(): GoogleContacts {
     process.exit(1);
   }
 
+  // If no access token, try to refresh using refresh token
   if (!accessToken) {
-    error(`No access token. Run "${CONNECTOR_NAME} auth login" to authenticate.`);
-    process.exit(1);
+    if (refreshToken) {
+      try {
+        info('No access token, attempting refresh...');
+        const client = new GoogleContacts({
+          clientId,
+          clientSecret,
+          accessToken: '',
+          refreshToken,
+          redirectUri,
+        });
+        const tokens = await client.refreshAccessToken();
+        saveTokens({
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresIn: tokens.expiresIn,
+        });
+        accessToken = tokens.accessToken;
+        success('Token refreshed successfully');
+      } catch (err) {
+        error(`Failed to refresh token: ${err}. Run "${CONNECTOR_NAME} auth login" to re-authenticate.`);
+        process.exit(1);
+      }
+    } else {
+      error(`No access token. Run "${CONNECTOR_NAME} auth login" to authenticate.`);
+      process.exit(1);
+    }
   }
 
   return new GoogleContacts({
@@ -462,7 +487,7 @@ contactsCmd
   .option('--normalize', 'Output in normalized format')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.contacts.list({
         pageSize: parseInt(opts.max),
         pageToken: opts.pageToken,
@@ -491,7 +516,7 @@ contactsCmd
   .option('--normalize', 'Output in normalized format')
   .action(async (resourceName: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.contacts.get(resourceName);
 
       if (opts.normalize) {
@@ -516,7 +541,7 @@ contactsCmd
   .option('--title <title>', 'Job title')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.contacts.create({
         givenName: opts.givenName,
         familyName: opts.familyName,
@@ -547,7 +572,7 @@ contactsCmd
   .option('--title <title>', 'Job title')
   .action(async (resourceName: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.contacts.update(resourceName, {
         givenName: opts.givenName,
         familyName: opts.familyName,
@@ -572,7 +597,7 @@ contactsCmd
   .description('Delete a contact')
   .action(async (resourceName: string) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       await client.contacts.delete(resourceName);
       success(`Contact ${resourceName} deleted.`);
     } catch (err) {
@@ -588,7 +613,7 @@ contactsCmd
   .option('--normalize', 'Output in normalized format')
   .action(async (query: string, opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.contacts.search({
         query,
         pageSize: parseInt(opts.max),
@@ -613,7 +638,7 @@ contactsCmd
   .option('--normalize', 'Export in normalized format')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const file = Bun.file(opts.output);
       const writer = file.writer();
 
@@ -641,7 +666,7 @@ contactsCmd
   .option('-n, --max <number>', 'Maximum results', '100')
   .action(async (opts) => {
     try {
-      const client = getClient();
+      const client = await getClient();
       const result = await client.contacts.listGroups(parseInt(opts.max));
       print(result, getFormat(contactsCmd));
     } catch (err) {
