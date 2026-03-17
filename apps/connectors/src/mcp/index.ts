@@ -18,13 +18,18 @@ import {
   getConnectorDocs,
 } from "../lib/installer.js";
 import { getAuthStatus, saveApiKey } from "../server/auth.js";
+import { registerAgent, listAgents, isAgentConflict } from "../db/agents.js";
+import { createRequire } from "module";
 
 // Load versions at startup
 loadConnectorVersions();
 
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json") as { version: string };
+
 const server = new McpServer({
   name: "connectors",
-  version: "0.3.1",
+  version,
 });
 
 // --- Tool: search_connectors ---
@@ -430,6 +435,41 @@ server.registerTool(
     };
     const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
     return { content: [{ type: "text" as const, text: result }] };
+  }
+);
+
+// --- Tool: register_agent ---
+server.registerTool(
+  "register_agent",
+  {
+    title: "Register Agent",
+    description: "Register or heartbeat an agent. Returns agent or conflict error.",
+    inputSchema: {
+      name: z.string(),
+      session_id: z.string().optional(),
+      role: z.string().optional(),
+    },
+  },
+  async ({ name, session_id, role }) => {
+    const result = registerAgent({ name, session_id, role });
+    if (isAgentConflict(result)) {
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+// --- Tool: list_agents ---
+server.registerTool(
+  "list_agents",
+  {
+    title: "List Agents",
+    description: "List all registered agents.",
+    inputSchema: {},
+  },
+  async () => {
+    const agents = listAgents();
+    return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
   }
 );
 

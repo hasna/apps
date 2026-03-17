@@ -5,6 +5,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { registerAgent, listAgents, getAgentByName, deleteAgent, isAgentConflict } from "../db/agents.js";
 import { join, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -360,6 +361,36 @@ export async function startServer(requestedPort: number, options?: { open?: bool
       // GET /api/activity
       if (path === "/api/activity" && method === "GET") {
         return json(activityLog, 200, port);
+      }
+
+      // ── Agent Routes ──
+
+      // GET /api/agents
+      if (path === "/api/agents" && method === "GET") {
+        return json(listAgents(), 200, port);
+      }
+
+      // POST /api/agents/register
+      if (path === "/api/agents/register" && method === "POST") {
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+        const name = typeof body.name === "string" ? body.name : null;
+        if (!name) return json({ error: "name is required" }, 400, port);
+        const result = registerAgent({
+          name,
+          session_id: typeof body.session_id === "string" ? body.session_id : undefined,
+          role: typeof body.role === "string" ? body.role : undefined,
+        });
+        if (isAgentConflict(result)) return json(result, 409, port);
+        return json(result, 200, port);
+      }
+
+      // DELETE /api/agents/:name
+      if (path.startsWith("/api/agents/") && method === "DELETE") {
+        const agentName = path.slice("/api/agents/".length);
+        const agent = getAgentByName(agentName);
+        if (!agent) return json({ error: "Agent not found" }, 404, port);
+        deleteAgent(agent.id);
+        return json({ success: true }, 200, port);
       }
 
       // ── Profile Routes ──
