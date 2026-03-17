@@ -17,6 +17,8 @@ export {
   loadConnectorVersions,
   type ConnectorMeta,
   type Category,
+  type ScoredResult,
+  type SearchContext,
 } from "./lib/registry.js";
 
 export {

@@ -410,6 +410,37 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         return json(activityLog, 200, port);
       }
 
+      // ── Hot Connectors Routes ──
+
+      // GET /api/hot
+      if (path === "/api/hot" && method === "GET") {
+        const { getTopConnectors } = await import("../db/usage.js");
+        const { getPromotedConnectors } = await import("../db/promotions.js");
+        const limit = parseInt(url.searchParams.get("limit") || "10", 10);
+        const days = parseInt(url.searchParams.get("days") || "7", 10);
+        const db = getDatabase();
+        const top = getTopConnectors(limit, days, db);
+        const promoted = new Set(getPromotedConnectors(db));
+        return json(top.map((t: { connector: string; count: number }) => ({ ...t, promoted: promoted.has(t.connector) })), 200, port);
+      }
+
+      // POST /api/connectors/:name/promote
+      const promoteMatch = path.match(/^\/api\/connectors\/([^/]+)\/promote$/);
+      if (promoteMatch && method === "POST") {
+        const name = promoteMatch[1];
+        if (!getConnector(name)) return json({ error: "Connector not found" }, 404, port);
+        const { promoteConnector } = await import("../db/promotions.js");
+        promoteConnector(name, getDatabase());
+        return json({ success: true, connector: name }, 200, port);
+      }
+
+      // DELETE /api/connectors/:name/promote
+      if (promoteMatch && method === "DELETE") {
+        const { demoteConnector } = await import("../db/promotions.js");
+        const removed = demoteConnector(promoteMatch[1], getDatabase());
+        return json({ success: removed, connector: promoteMatch[1] }, 200, port);
+      }
+
       // ── LLM Routes ──
 
       // GET /api/llm

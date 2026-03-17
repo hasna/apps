@@ -51,8 +51,15 @@ server.registerTool(
     inputSchema: { query: z.string() },
   },
   async ({ query }) => {
-    const results = searchConnectors(query);
-    return stripped(JSON.stringify(results.map((c) => ({ name: c.name, displayName: c.displayName, version: c.version, category: c.category, description: c.description })), null, 2));
+    const { getInstalledConnectors } = await import("../lib/installer.js");
+    const { getPromotedConnectors } = await import("../db/promotions.js");
+    const { getUsageMap } = await import("../db/usage.js");
+    const results = searchConnectors(query, {
+      installed: getInstalledConnectors(),
+      promoted: getPromotedConnectors(),
+      usage: getUsageMap(),
+    });
+    return stripped(JSON.stringify(results.map((c) => ({ name: c.name, displayName: c.displayName, version: c.version, category: c.category, description: c.description, score: c.score, badges: c.badges })), null, 2));
   }
 );
 
@@ -489,6 +496,9 @@ server.registerTool(
       };
     }
 
+    // Track usage
+    try { const { logUsage } = await import("../db/usage.js"); logUsage(name, "run"); } catch {}
+
     // Prepend --format json by default for structured output
     const finalArgs = [...args];
     if (format) {
@@ -706,6 +716,38 @@ server.registerTool(
     };
     const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
     return { content: [{ type: "text" as const, text: result }] };
+  }
+);
+
+// --- Tool: get_hot_connectors ---
+server.registerTool("get_hot_connectors", { title: "Get Hot Connectors", description: "Top connectors by usage.", inputSchema: { limit: z.number().optional(), days: z.number().optional() } },
+  async ({ limit, days }) => {
+    const { getTopConnectors } = await import("../db/usage.js");
+    const { getPromotedConnectors } = await import("../db/promotions.js");
+    const top = getTopConnectors(limit ?? 10, days ?? 7);
+    const promoted = new Set(getPromotedConnectors());
+    const result = top.map((t) => ({ ...t, promoted: promoted.has(t.connector) }));
+    return stripped(JSON.stringify(result, null, 2));
+  }
+);
+
+// --- Tool: promote_connector ---
+server.registerTool("promote_connector", { title: "Promote Connector", description: "Boost a connector in search rankings.", inputSchema: { name: z.string() } },
+  async ({ name }) => {
+    const meta = getConnector(name);
+    if (!meta) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Connector not found" }) }], isError: true };
+    const { promoteConnector } = await import("../db/promotions.js");
+    promoteConnector(name);
+    return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, connector: name }) }] };
+  }
+);
+
+// --- Tool: demote_connector ---
+server.registerTool("demote_connector", { title: "Demote Connector", description: "Remove search ranking boost.", inputSchema: { name: z.string() } },
+  async ({ name }) => {
+    const { demoteConnector } = await import("../db/promotions.js");
+    const removed = demoteConnector(name);
+    return { content: [{ type: "text" as const, text: JSON.stringify({ success: removed, connector: name }) }] };
   }
 );
 

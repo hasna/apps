@@ -115,11 +115,9 @@ describe("registry", () => {
 
     test("returns empty array for empty query", async () => {
       const { searchConnectors } = await import("./registry.js");
-      // Empty string should match nothing since all fields have content
       const results = searchConnectors("");
-      // Actually empty string is a substring of everything, so it matches all
-      // This is expected behavior
-      expect(results.length).toBeGreaterThan(0);
+      // New ranked search returns [] for empty/whitespace queries
+      expect(results).toEqual([]);
     });
   });
 

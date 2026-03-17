@@ -5,6 +5,8 @@
 import { existsSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { bestFuzzyScore } from "./fuzzy.js";
+import { expandQuery } from "./synonyms.js";
 
 export interface ConnectorMeta {
   name: string;
@@ -6038,15 +6040,178 @@ export function getConnectorsByCategory(category: Category): ConnectorMeta[] {
   return CONNECTORS.filter((c) => c.category === category);
 }
 
-export function searchConnectors(query: string): ConnectorMeta[] {
-  const q = query.toLowerCase();
-  return CONNECTORS.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      c.displayName.toLowerCase().includes(q) ||
-      c.description.toLowerCase().includes(q) ||
-      c.tags.some((t) => t.includes(q))
-  );
+export interface SearchContext {
+  installed?: string[];
+  promoted?: string[];
+  usage?: Map<string, number>;
+}
+
+export interface ScoredResult extends ConnectorMeta {
+  score: number;
+  matchReasons: string[];
+  badges: string[];
+}
+
+/**
+ * Ranked connector search with multi-token AND, scoring, and context signals.
+ *
+ * Score formula:
+ *   relevance (name/tag/displayName/description matches)
+ *   + installed boost (+50)
+ *   + promoted boost (+30)
+ *   + usage boost (min(count * 2, 40))
+ */
+export function searchConnectors(
+  query: string,
+  context?: SearchContext & { limit?: number }
+): ScoredResult[] {
+  const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+
+  const limit = context?.limit ?? 20;
+  const installed = new Set(context?.installed ?? []);
+  const promoted = new Set(context?.promoted ?? []);
+  const usage = context?.usage ?? new Map<string, number>();
+
+  const results: ScoredResult[] = [];
+
+  for (const c of CONNECTORS) {
+    const nameLow = c.name.toLowerCase();
+    const displayLow = c.displayName.toLowerCase();
+    const descLow = c.description.toLowerCase();
+    const tagsLow = c.tags.map((t) => t.toLowerCase());
+
+    let score = 0;
+    const matchReasons: string[] = [];
+    let allTokensMatch = true;
+
+    for (const token of tokens) {
+      let tokenMatched = false;
+
+      // Exact name match
+      if (nameLow === token) {
+        score += 100;
+        matchReasons.push(`name="${token}"`);
+        tokenMatched = true;
+      } else if (nameLow.includes(token)) {
+        score += 10;
+        matchReasons.push(`name~${token}`);
+        tokenMatched = true;
+      }
+
+      // Tag exact match
+      if (tagsLow.includes(token)) {
+        score += 8;
+        if (!tokenMatched) matchReasons.push(`tag="${token}"`);
+        tokenMatched = true;
+      } else if (tagsLow.some((t) => t.includes(token))) {
+        score += 5;
+        if (!tokenMatched) matchReasons.push(`tag~${token}`);
+        tokenMatched = true;
+      }
+
+      // displayName
+      if (displayLow.includes(token)) {
+        score += 3;
+        if (!tokenMatched) matchReasons.push(`display~${token}`);
+        tokenMatched = true;
+      }
+
+      // description
+      if (descLow.includes(token)) {
+        score += 1;
+        if (!tokenMatched) matchReasons.push(`desc~${token}`);
+        tokenMatched = true;
+      }
+
+      // Fuzzy fallback (only for tokens >= 3 chars)
+      if (!tokenMatched && token.length >= 3) {
+        const nameFuzzy = bestFuzzyScore(token, [nameLow], 1);
+        if (nameFuzzy > 0) {
+          score += nameFuzzy * 6;
+          matchReasons.push(`fuzzy:name≈${token}`);
+          tokenMatched = true;
+        }
+        if (!tokenMatched) {
+          const tagFuzzy = bestFuzzyScore(token, tagsLow, 2);
+          if (tagFuzzy > 0) {
+            score += tagFuzzy * 3;
+            matchReasons.push(`fuzzy:tag≈${token}`);
+            tokenMatched = true;
+          }
+        }
+        if (!tokenMatched) {
+          const displayFuzzy = bestFuzzyScore(token, [displayLow], 2);
+          if (displayFuzzy > 0) {
+            score += displayFuzzy * 2;
+            matchReasons.push(`fuzzy:display≈${token}`);
+            tokenMatched = true;
+          }
+        }
+      }
+
+      if (!tokenMatched) {
+        allTokensMatch = false;
+        break;
+      }
+    }
+
+    // Multi-token AND: all tokens must match somewhere
+    if (!allTokensMatch) continue;
+
+    // Context boosts
+    const badges: string[] = [];
+    if (installed.has(c.name)) {
+      score += 50;
+      badges.push("installed");
+    }
+    if (promoted.has(c.name)) {
+      score += 30;
+      badges.push("promoted");
+    }
+    const usageCount = usage.get(c.name) ?? 0;
+    if (usageCount > 0) {
+      score += Math.min(usageCount * 2, 40);
+      if (usageCount >= 5) badges.push("hot");
+    }
+
+    results.push({ ...c, score, matchReasons, badges });
+  }
+
+  // Synonym expansion: if few direct results, search again with expanded terms
+  const matchedNames = new Set(results.map((r) => r.name));
+  if (results.length < limit) {
+    const { expanded } = expandQuery(tokens);
+    if (expanded.length > 0) {
+      for (const c of CONNECTORS) {
+        if (matchedNames.has(c.name)) continue; // skip already matched
+        const nameLow2 = c.name.toLowerCase();
+        const tagsLow2 = c.tags.map((t) => t.toLowerCase());
+        const descLow2 = c.description.toLowerCase();
+
+        let synScore = 0;
+        const synReasons: string[] = [];
+
+        for (const syn of expanded) {
+          if (nameLow2.includes(syn)) { synScore += 2; synReasons.push(`syn:name~${syn}`); }
+          else if (tagsLow2.some((t) => t.includes(syn))) { synScore += 1; synReasons.push(`syn:tag~${syn}`); }
+          else if (descLow2.includes(syn)) { synScore += 1; synReasons.push(`syn:desc~${syn}`); }
+        }
+
+        if (synScore > 0) {
+          const badges: string[] = [];
+          if (installed.has(c.name)) { synScore += 50; badges.push("installed"); }
+          if (promoted.has(c.name)) { synScore += 30; badges.push("promoted"); }
+          const usageCount = usage.get(c.name) ?? 0;
+          if (usageCount > 0) { synScore += Math.min(usageCount * 2, 40); if (usageCount >= 5) badges.push("hot"); }
+          results.push({ ...c, score: synScore, matchReasons: synReasons, badges });
+        }
+      }
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, limit);
 }
 
 export function getConnector(name: string): ConnectorMeta | undefined {

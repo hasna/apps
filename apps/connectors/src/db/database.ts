@@ -119,4 +119,24 @@ function migrate(db: Database): void {
       created_at TEXT NOT NULL
     )
   `);
+
+  // Migration 7: connector_usage — track connector usage for hot ranking
+  db.run(`
+    CREATE TABLE IF NOT EXISTS connector_usage (
+      id TEXT PRIMARY KEY,
+      connector TEXT NOT NULL,
+      action TEXT NOT NULL,
+      agent_id TEXT,
+      timestamp TEXT NOT NULL
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_usage_connector ON connector_usage(connector, timestamp DESC)`);
+
+  // Migration 8: connector_promotions — manual hot connector promotion
+  db.run(`
+    CREATE TABLE IF NOT EXISTS connector_promotions (
+      connector TEXT UNIQUE NOT NULL,
+      promoted_at TEXT NOT NULL
+    )
+  `);
 }

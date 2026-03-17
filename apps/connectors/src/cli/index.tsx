@@ -483,12 +483,21 @@ program
   .command("search")
   .argument("<query>", "Search term")
   .option("--json", "Output as JSON", false)
-  .description("Search for connectors")
-  .action((query: string, options: { json: boolean }) => {
-    const results = searchConnectors(query);
+  .option("--limit <n>", "Max results", "20")
+  .description("Search for connectors (ranked with fuzzy matching)")
+  .action((query: string, options: { json: boolean; limit: string }) => {
+    const installed = getInstalledConnectors();
+    const { getPromotedConnectors } = require("../db/promotions.js");
+    const { getUsageMap } = require("../db/usage.js");
+    const results = searchConnectors(query, {
+      installed,
+      promoted: getPromotedConnectors(),
+      usage: getUsageMap(),
+      limit: parseInt(options.limit),
+    });
 
     if (options.json) {
-      console.log(JSON.stringify(results));
+      console.log(JSON.stringify(results.map((c) => ({ name: c.name, displayName: c.displayName, version: c.version, category: c.category, description: c.description, score: c.score, badges: c.badges, matchReasons: c.matchReasons }))));
       return;
     }
 
@@ -497,10 +506,12 @@ program
       return;
     }
     console.log(chalk.bold(`\nFound ${results.length} connector(s):\n`));
-    console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Category".padEnd(20))}${chalk.dim("Description")}`);
-    console.log(chalk.dim(`  ${"─".repeat(70)}`));
+    console.log(`  ${chalk.dim("Name".padEnd(22))}${chalk.dim("Score".padEnd(7))}${chalk.dim("Category".padEnd(20))}${chalk.dim("Description")}`);
+    console.log(chalk.dim(`  ${"─".repeat(75)}`));
     for (const c of results) {
-      console.log(`  ${chalk.cyan(c.name.padEnd(20))}${chalk.dim((c.version || "-").padEnd(10))}${chalk.dim(c.category.padEnd(20))}${c.description}`);
+      const badges = c.badges.map((b: string) => b === "installed" ? chalk.green("[INS]") : b === "hot" ? chalk.red("[HOT]") : b === "promoted" ? chalk.yellow("[PRO]") : "").join(" ");
+      const badgeStr = badges ? " " + badges : "";
+      console.log(`  ${chalk.cyan(c.name.padEnd(22))}${String(c.score).padEnd(7)}${chalk.dim(c.category.padEnd(20))}${c.description}${badgeStr}`);
     }
   });
 
@@ -2521,6 +2532,59 @@ program
     }
 
     process.exit(0);
+  });
+
+// ── Hot Connectors Commands ───────────────────────────────────────────────────
+
+program
+  .command("hot")
+  .description("Show top connectors by usage")
+  .option("--limit <n>", "Max results", "10")
+  .option("--days <n>", "Time window in days", "7")
+  .option("--json", "Output as JSON")
+  .action((options) => {
+    const { getTopConnectors } = require("../db/usage.js");
+    const { getPromotedConnectors } = require("../db/promotions.js");
+    const top = getTopConnectors(parseInt(options.limit), parseInt(options.days), getDatabase());
+    const promoted = new Set(getPromotedConnectors(getDatabase()));
+
+    if (options.json) { console.log(JSON.stringify(top.map((t: { connector: string; count: number }) => ({ ...t, promoted: promoted.has(t.connector) })))); return; }
+
+    if (top.length === 0) { console.log(chalk.dim("No usage data yet. Use connectors to build up stats.")); return; }
+    console.log(chalk.bold(`\nTop connectors (last ${options.days} days):\n`));
+    console.log(`  ${chalk.dim("#".padEnd(4))}${chalk.dim("Connector".padEnd(22))}${chalk.dim("Usage".padEnd(8))}${chalk.dim("Badges")}`);
+    console.log(chalk.dim(`  ${"─".repeat(45)}`));
+    for (let i = 0; i < top.length; i++) {
+      const t = top[i] as { connector: string; count: number };
+      const badges = [
+        t.count >= 5 ? chalk.red("[HOT]") : "",
+        promoted.has(t.connector) ? chalk.yellow("[PRO]") : "",
+      ].filter(Boolean).join(" ");
+      console.log(`  ${String(i + 1).padEnd(4)}${chalk.cyan(t.connector.padEnd(22))}${String(t.count).padEnd(8)}${badges}`);
+    }
+  });
+
+program
+  .command("promote")
+  .argument("<connector>", "Connector to promote")
+  .description("Mark a connector as promoted (boosted in search)")
+  .action((connector) => {
+    const meta = getConnector(connector);
+    if (!meta) { console.error(chalk.red(`Connector '${connector}' not found`)); process.exit(1); }
+    const { promoteConnector } = require("../db/promotions.js");
+    promoteConnector(connector, getDatabase());
+    console.log(chalk.green("✓") + ` ${meta.displayName} promoted — will rank higher in search`);
+  });
+
+program
+  .command("demote")
+  .argument("<connector>", "Connector to demote")
+  .description("Remove promotion from a connector")
+  .action((connector) => {
+    const { demoteConnector } = require("../db/promotions.js");
+    const removed = demoteConnector(connector, getDatabase());
+    if (removed) console.log(chalk.green("✓") + ` ${connector} demoted`);
+    else console.log(chalk.dim(`${connector} was not promoted`));
   });
 
 // ── Jobs Commands ─────────────────────────────────────────────────────────────
