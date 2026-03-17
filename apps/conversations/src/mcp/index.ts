@@ -16,7 +16,7 @@ import { listSessions } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
-import { heartbeat, registerAgent, listAgents, removePresence, renameAgent } from "../lib/presence.js";
+import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 
 import pkg from "../../package.json";
 
@@ -24,6 +24,23 @@ export const server = new McpServer({
   name: "conversations",
   version: pkg.version,
 });
+
+// ---- Focus Mode (session-level, in-memory) ----
+// Priority: per-call param > session focus > agent_presence.project_id > no filter
+const agentFocus = new Map<string, { project_id: string | null }>();
+
+function getAgentFocus(agentId: string): string | null {
+  if (agentFocus.has(agentId)) return agentFocus.get(agentId)!.project_id;
+  // Fall back to DB-stored active project
+  const presence = getPresence(agentId);
+  return presence?.project_id ?? null;
+}
+
+function resolveProjectId(explicitProjectId: string | undefined, agentId: string): string | undefined {
+  if (explicitProjectId) return explicitProjectId;
+  const focused = getAgentFocus(agentId);
+  return focused ?? undefined;
+}
 
 // ---- DM Tools ----
 
@@ -68,7 +85,11 @@ server.registerTool("read_messages", {
     unread_only: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const messages = readMessages(args);
+  const agent = resolveIdentity(args.from);
+  const messages = readMessages({
+    ...args,
+    project_id: args.project_id ?? resolveProjectId(undefined, agent),
+  });
 
   return {
     content: [{ type: "text", text: JSON.stringify(messages) }],
@@ -723,6 +744,70 @@ server.registerTool("get_pinned_messages", {
   };
 });
 
+// ---- Focus Mode Tools ----
+
+server.registerTool("set_focus", {
+  description: "Set agent focus to a project. All read-heavy tools will default to this project scope. Stores in MCP session memory AND updates agent_presence.project_id in DB.",
+  inputSchema: {
+    project_id: z.string(),
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { project_id, from: fromParam } = args;
+  const agent = resolveIdentity(fromParam);
+  agentFocus.set(agent, { project_id });
+
+  // Also persist to DB
+  const db = (await import("../lib/db.js")).getDb();
+  db.prepare("UPDATE agent_presence SET project_id = ? WHERE agent = ?").run(project_id, agent);
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ agent, focused: true, project_id }) }],
+  };
+});
+
+server.registerTool("get_focus", {
+  description: "Get the current focus state for an agent. Returns session focus, DB project_id, and effective project_id used for filtering.",
+  inputSchema: {
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const agent = resolveIdentity(args.from);
+  const sessionFocus = agentFocus.get(agent) ?? null;
+  const presence = getPresence(agent);
+  const effective = getAgentFocus(agent);
+
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        agent,
+        session_focus: sessionFocus?.project_id ?? null,
+        db_project_id: presence?.project_id ?? null,
+        effective_project_id: effective,
+      }),
+    }],
+  };
+});
+
+server.registerTool("unfocus", {
+  description: "Clear agent focus. Removes session focus and clears agent_presence.project_id in DB.",
+  inputSchema: {
+    from: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const agent = resolveIdentity(args.from);
+  agentFocus.delete(agent);
+
+  // Clear from DB too
+  const db = (await import("../lib/db.js")).getDb();
+  db.prepare("UPDATE agent_presence SET project_id = NULL WHERE agent = ?").run(agent);
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ agent, focused: false, project_id: null }) }],
+  };
+});
+
 // ---- Presence Tools ----
 
 server.registerTool("register_agent", {
@@ -869,6 +954,7 @@ server.registerTool("search_tools", {
     "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
     "create_project", "list_projects", "get_project", "update_project", "delete_project",
     "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
+    "set_focus", "get_focus", "unfocus",
     "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
     "search_tools", "describe_tools",
   ];
@@ -914,6 +1000,10 @@ server.registerTool("describe_tools", {
     pin_message: "Pin a message. Required: id",
     unpin_message: "Unpin a message. Required: id",
     get_pinned_messages: "Get pinned messages. Optional: space?, session_id?, limit?",
+    // Focus mode tools
+    set_focus: "Set agent focus to a project. All read tools default to this scope. Required: project_id. Optional: from?",
+    get_focus: "Get current focus: session focus, DB project_id, effective project_id. Optional: from?",
+    unfocus: "Clear agent focus (session + DB). Optional: from?",
     // Presence tools
     register_agent: "Register agent with conflict detection (30min active window). Required: name, session_id. Optional: role?. Returns AgentConflictError if another session is active.",
     heartbeat: "Register/refresh agent presence. Optional: from?, status?(online|busy|idle, default: online)",
