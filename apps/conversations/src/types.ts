@@ -122,9 +122,26 @@ export interface SearchMessagesOptions {
 }
 
 export interface AgentPresence {
+  id: string;
   agent: string;
+  session_id: string | null;
+  role: string;
   status: string;
   last_seen_at: string;
+  created_at: string;
   online: boolean;
   metadata: Record<string, unknown> | null;
+}
+
+export interface AgentConflictError {
+  error: "agent_conflict";
+  message: string;
+  existing_session_id: string | null;
+  last_seen_at: string;
+}
+
+export interface RegisterAgentResult {
+  agent: AgentPresence;
+  created: boolean;
+  took_over: boolean;
 }

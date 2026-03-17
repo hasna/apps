@@ -93,9 +93,13 @@ export function getDb(): Database {
   // Agent presence table
   db.exec(`
     CREATE TABLE IF NOT EXISTS agent_presence (
+      id TEXT NOT NULL,
       agent TEXT PRIMARY KEY,
+      session_id TEXT,
+      role TEXT NOT NULL DEFAULT 'agent',
       status TEXT NOT NULL DEFAULT 'online',
       last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
       metadata TEXT
     )
   `);
@@ -192,6 +196,28 @@ export function getDb(): Database {
   if (!colNames2.includes("reply_to")) {
     db.exec("ALTER TABLE messages ADD COLUMN reply_to INTEGER REFERENCES messages(id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)");
+  }
+
+  // Migrate agent_presence: add id, session_id, role, created_at columns
+  const presenceCols = db.prepare("PRAGMA table_info(agent_presence)").all() as { name: string }[];
+  const presenceColNames = presenceCols.map((c) => c.name);
+  if (!presenceColNames.includes("id")) {
+    db.exec("ALTER TABLE agent_presence ADD COLUMN id TEXT NOT NULL DEFAULT ''");
+    // Backfill existing rows with generated IDs
+    const rows = db.prepare("SELECT agent FROM agent_presence").all() as { agent: string }[];
+    for (const row of rows) {
+      const id = crypto.randomUUID().slice(0, 8);
+      db.prepare("UPDATE agent_presence SET id = ? WHERE agent = ?").run(id, row.agent);
+    }
+  }
+  if (!presenceColNames.includes("session_id")) {
+    db.exec("ALTER TABLE agent_presence ADD COLUMN session_id TEXT");
+  }
+  if (!presenceColNames.includes("role")) {
+    db.exec("ALTER TABLE agent_presence ADD COLUMN role TEXT NOT NULL DEFAULT 'agent'");
+  }
+  if (!presenceColNames.includes("created_at")) {
+    db.exec("ALTER TABLE agent_presence ADD COLUMN created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))");
   }
 
   // FTS5 virtual table for full-text search

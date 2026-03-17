@@ -16,7 +16,7 @@ import { listSessions } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
-import { heartbeat, listAgents, removePresence, renameAgent } from "../lib/presence.js";
+import { heartbeat, registerAgent, listAgents, removePresence, renameAgent } from "../lib/presence.js";
 
 import pkg from "../../package.json";
 
@@ -722,6 +722,21 @@ server.registerTool("get_pinned_messages", {
 
 // ---- Presence Tools ----
 
+server.registerTool("register_agent", {
+  description: "Register an agent with conflict detection. Returns AgentConflictError if another active session exists (active = heartbeat within last 30 min).",
+  inputSchema: {
+    name: z.string(),
+    session_id: z.string(),
+    role: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { name, session_id, role } = args;
+  const result = registerAgent(name, session_id, role);
+  return {
+    content: [{ type: "text", text: JSON.stringify(result) }],
+  };
+});
+
 server.registerTool("heartbeat", {
   description: "Send presence heartbeat.",
   inputSchema: {
@@ -850,7 +865,7 @@ server.registerTool("search_tools", {
     "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
     "create_project", "list_projects", "get_project", "update_project", "delete_project",
     "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
-    "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
+    "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
     "search_tools", "describe_tools",
   ];
   const q = query?.toLowerCase();
@@ -896,6 +911,7 @@ server.registerTool("describe_tools", {
     unpin_message: "Unpin a message. Required: id",
     get_pinned_messages: "Get pinned messages. Optional: space?, session_id?, limit?",
     // Presence tools
+    register_agent: "Register agent with conflict detection (30min active window). Required: name, session_id. Optional: role?. Returns AgentConflictError if another session is active.",
     heartbeat: "Register/refresh agent presence. Optional: from?, status?(online|busy|idle, default: online)",
     list_agents: "List agents with presence timestamps. Optional: online_only?(only agents seen in last 60s)",
     get_blockers: "Get unread blocking messages for agent. Optional: from?",

@@ -86,6 +86,7 @@ export {
 
 export {
   heartbeat,
+  registerAgent,
   getPresence,
   listAgents,
   removePresence,
@@ -105,6 +106,8 @@ export type {
   ReadMessagesOptions,
   SearchMessagesOptions,
   AgentPresence,
+  AgentConflictError,
+  RegisterAgentResult,
   Reaction,
   Attachment,
 } from "./types.js";

@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { heartbeat, getPresence, listAgents, removePresence, renameAgent } from "./presence";
+import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent } from "./presence";
 import { closeDb, getDb } from "./db";
+import type { AgentConflictError, RegisterAgentResult } from "../types";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -19,6 +20,62 @@ afterEach(() => {
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
 });
 
+describe("registerAgent", () => {
+  test("creates new agent and returns created=true", () => {
+    const result = registerAgent("brutus", "session-abc") as RegisterAgentResult;
+    expect(result.created).toBe(true);
+    expect(result.took_over).toBe(false);
+    expect(result.agent.agent).toBe("brutus");
+    expect(result.agent.session_id).toBe("session-abc");
+    expect(result.agent.role).toBe("agent");
+    expect(result.agent.id).toHaveLength(8);
+    expect(result.agent.created_at).toBeTruthy();
+  });
+
+  test("sets custom role", () => {
+    const result = registerAgent("maximus", "session-xyz", "coordinator") as RegisterAgentResult;
+    expect(result.agent.role).toBe("coordinator");
+  });
+
+  test("same session re-registration updates last_seen_at and returns took_over=false", () => {
+    registerAgent("julius", "session-1");
+    const result = registerAgent("julius", "session-1") as RegisterAgentResult;
+    expect(result.created).toBe(false);
+    expect(result.took_over).toBe(false);
+  });
+
+  test("returns AgentConflictError when active agent has different session", () => {
+    registerAgent("titus", "session-active");
+    const result = registerAgent("titus", "session-new") as AgentConflictError;
+    expect(result.error).toBe("agent_conflict");
+    expect(result.existing_session_id).toBe("session-active");
+    expect(result.last_seen_at).toBeTruthy();
+  });
+
+  test("allows takeover when agent is stale (>30 min)", () => {
+    registerAgent("stale-agent", "old-session");
+    const db = getDb();
+    db.prepare(
+      "UPDATE agent_presence SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds') WHERE agent = ?"
+    ).run("stale-agent");
+
+    const result = registerAgent("stale-agent", "new-session") as RegisterAgentResult;
+    expect(result.created).toBe(false);
+    expect(result.took_over).toBe(true);
+    expect(result.agent.session_id).toBe("new-session");
+  });
+
+  test("idempotent — no session conflict when re-registering same session after stale", () => {
+    registerAgent("agent-x", "ses-1");
+    const db = getDb();
+    db.prepare(
+      "UPDATE agent_presence SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds') WHERE agent = ?"
+    ).run("agent-x");
+    const result = registerAgent("agent-x", "ses-1") as RegisterAgentResult;
+    expect(result.took_over).toBe(false);
+  });
+});
+
 describe("heartbeat", () => {
   test("creates presence for new agent", () => {
     heartbeat("agent-1");
@@ -28,6 +85,8 @@ describe("heartbeat", () => {
     expect(p!.status).toBe("online");
     expect(p!.online).toBe(true);
     expect(p!.last_seen_at).toBeTruthy();
+    expect(p!.id).toBeTruthy();
+    expect(p!.created_at).toBeTruthy();
   });
 
   test("updates presence for existing agent", () => {
@@ -106,14 +165,14 @@ describe("listAgents", () => {
     const db = getDb();
     // Insert with explicit timestamps to guarantee order
     db.prepare(
-      "INSERT INTO agent_presence (agent, status, last_seen_at) VALUES (?, ?, ?)"
-    ).run("oldest", "online", "2024-01-01T00:00:00.000");
+      "INSERT INTO agent_presence (id, agent, status, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run("aaaaaaaa", "oldest", "online", "2024-01-01T00:00:00.000", "2024-01-01T00:00:00.000");
     db.prepare(
-      "INSERT INTO agent_presence (agent, status, last_seen_at) VALUES (?, ?, ?)"
-    ).run("newest", "online", "2024-12-31T23:59:59.999");
+      "INSERT INTO agent_presence (id, agent, status, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run("bbbbbbbb", "newest", "online", "2024-12-31T23:59:59.999", "2024-12-31T23:59:59.999");
     db.prepare(
-      "INSERT INTO agent_presence (agent, status, last_seen_at) VALUES (?, ?, ?)"
-    ).run("middle", "online", "2024-06-15T12:00:00.000");
+      "INSERT INTO agent_presence (id, agent, status, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run("cccccccc", "middle", "online", "2024-06-15T12:00:00.000", "2024-06-15T12:00:00.000");
 
     const agents = listAgents();
     expect(agents).toHaveLength(3);
@@ -127,7 +186,7 @@ describe("listAgents", () => {
     // Insert an old heartbeat to simulate offline agent
     const db = getDb();
     db.prepare(
-      "INSERT INTO agent_presence (agent, status, last_seen_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'))"
+      "INSERT INTO agent_presence (id, agent, status, last_seen_at, created_at) VALUES ('dddddddd', ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'))"
     ).run("offline-agent", "online");
 
     const all = listAgents();
