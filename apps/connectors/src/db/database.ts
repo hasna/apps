@@ -28,7 +28,13 @@ export function now(): string {
   return new Date().toISOString();
 }
 
+/** 8-char UUID prefix */
+export function shortUuid(): string {
+  return crypto.randomUUID().slice(0, 8);
+}
+
 function migrate(db: Database): void {
+  // Migration 1: agents table
   db.run(`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
@@ -39,4 +45,24 @@ function migrate(db: Database): void {
       created_at TEXT NOT NULL
     )
   `);
+
+  // Migration 2: resource_locks table for concurrent multi-agent coordination
+  db.run(`
+    CREATE TABLE IF NOT EXISTS resource_locks (
+      id TEXT PRIMARY KEY,
+      resource_type TEXT NOT NULL CHECK(resource_type IN ('connector', 'agent', 'profile', 'token')),
+      resource_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      lock_type TEXT NOT NULL DEFAULT 'exclusive' CHECK(lock_type IN ('advisory', 'exclusive')),
+      locked_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL
+    )
+  `);
+  db.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_locks_exclusive
+      ON resource_locks(resource_type, resource_id)
+      WHERE lock_type = 'exclusive'
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_resource_locks_agent ON resource_locks(agent_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_resource_locks_expires ON resource_locks(expires_at)`);
 }
