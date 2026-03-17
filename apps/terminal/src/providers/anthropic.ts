@@ -17,7 +17,9 @@ export class AnthropicProvider implements LLMProvider {
     const message = await this.client.messages.create({
       model: options.model ?? "claude-haiku-4-5-20251001",
       max_tokens: options.maxTokens ?? 256,
-      system: options.system,
+      temperature: options.temperature ?? 0,
+      ...(options.stop ? { stop_sequences: options.stop } : {}),
+      system: [{ type: "text", text: options.system, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: prompt }],
     });
     const block = message.content[0];
@@ -30,7 +32,9 @@ export class AnthropicProvider implements LLMProvider {
     const stream = await this.client.messages.stream({
       model: options.model ?? "claude-haiku-4-5-20251001",
       max_tokens: options.maxTokens ?? 256,
-      system: options.system,
+      temperature: options.temperature ?? 0,
+      ...(options.stop ? { stop_sequences: options.stop } : {}),
+      system: [{ type: "text", text: options.system, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: prompt }],
     });
     for await (const chunk of stream) {

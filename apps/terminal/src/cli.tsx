@@ -446,7 +446,7 @@ else if (args.length > 0) {
   const { rewriteCommand } = await import("./command-rewriter.js");
   const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
   const { saveOutput, formatOutputHint } = await import("./output-store.js");
-  const { parseOutput, estimateTokens } = await import("./parsers/index.js");
+  const { estimateTokens } = await import("./tokens.js");
   const { recordSaving, recordUsage } = await import("./economy.js");
   const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
   const { detectLoop } = await import("./loop-detector.js");

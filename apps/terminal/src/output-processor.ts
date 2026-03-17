@@ -2,10 +2,12 @@
 // NOTHING is hardcoded. The AI decides what's important, what's noise, what to keep.
 
 import { getProvider } from "./providers/index.js";
-import { estimateTokens } from "./parsers/index.js";
+import { estimateTokens } from "./tokens.js";
 import { recordSaving } from "./economy.js";
 import { discoverOutputHints } from "./context-hints.js";
 import { formatProfileHints } from "./tool-profiles.js";
+import { stripAnsi } from "./compression.js";
+import { stripNoise } from "./noise-filter.js";
 
 export interface ProcessedOutput {
   /** AI-generated summary (concise, structured) */
@@ -29,7 +31,9 @@ export interface ProcessedOutput {
 }
 
 const MIN_LINES_TO_PROCESS = 15;
-const MAX_OUTPUT_FOR_AI = 8000; // chars to send to AI (truncate if longer)
+// Reserve ~2000 chars for system prompt + hints + profile + overhead
+const PROMPT_OVERHEAD_CHARS = 2000;
+const MAX_OUTPUT_FOR_AI = 6000; // chars of output to send to AI (leaves room for prompt overhead)
 
 const SUMMARIZE_PROMPT = `You are an intelligent terminal assistant. Given a user's original question and the command output, ANSWER THE QUESTION directly.
 
@@ -70,8 +74,10 @@ export async function processOutput(
     };
   }
 
-  // Truncate very long output before sending to AI
-  let toSummarize = output;
+  // Clean output before AI processing — strip ANSI codes and noise
+  let toSummarize = stripAnsi(output);
+  toSummarize = stripNoise(toSummarize).cleaned;
+
   if (toSummarize.length > MAX_OUTPUT_FOR_AI) {
     const headChars = Math.floor(MAX_OUTPUT_FOR_AI * 0.6);
     const tailChars = Math.floor(MAX_OUTPUT_FOR_AI * 0.3);
@@ -97,16 +103,13 @@ export async function processOutput(
       {
         system: SUMMARIZE_PROMPT,
         maxTokens: 300,
+        temperature: 0.2,
       }
     );
 
     const originalTokens = estimateTokens(output);
     const summaryTokens = estimateTokens(summary);
     const saved = Math.max(0, originalTokens - summaryTokens);
-
-    if (saved > 0) {
-      recordSaving("compressed", saved);
-    }
 
     // Try to extract structured JSON if the AI returned it
     let structured: Record<string, unknown> | undefined;

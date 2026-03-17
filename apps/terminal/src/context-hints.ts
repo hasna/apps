@@ -43,16 +43,29 @@ export function discoverProjectHints(cwd: string): string[] {
     }
   }
 
-  // Extract rich metadata from package.json
+  // Extract metadata from package.json — trimmed to save tokens
   const pkgPath = join(cwd, "package.json");
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      if (pkg.name) hints.push(`Package name: ${pkg.name}@${pkg.version ?? "unknown"}`);
+      if (pkg.name) hints.push(`Package: ${pkg.name}@${pkg.version ?? "?"}`);
       if (pkg.scripts) {
-        hints.push(`Available scripts: ${Object.entries(pkg.scripts).map(([k, v]) => `${k}: ${v}`).slice(0, 10).join(", ")}`);
+        // Only top-5 most useful scripts
+        const priority = ["dev", "build", "test", "lint", "start", "typecheck", "check"];
+        const scripts = Object.keys(pkg.scripts);
+        const top = priority.filter(s => scripts.includes(s));
+        const rest = scripts.filter(s => !priority.includes(s)).slice(0, Math.max(0, 5 - top.length));
+        hints.push(`Scripts: ${[...top, ...rest].join(", ")}`);
       }
-      if (pkg.dependencies) hints.push(`Dependencies: ${Object.keys(pkg.dependencies).join(", ")}`);
+      if (pkg.dependencies) {
+        // Only framework/major deps — skip utility libs
+        const major = ["react", "next", "express", "fastify", "hono", "vue", "angular", "svelte",
+          "prisma", "drizzle", "mongoose", "typeorm", "zod", "trpc", "graphql", "tailwindcss",
+          "electron", "bun", "elysia", "nest", "nuxt", "remix", "astro", "vite"];
+        const deps = Object.keys(pkg.dependencies);
+        const found = deps.filter(d => major.some(m => d.includes(m)));
+        if (found.length > 0) hints.push(`Key deps: ${found.slice(0, 10).join(", ")}`);
+      }
     } catch {}
   }
 
@@ -107,23 +120,20 @@ export function discoverProjectHints(cwd: string): string[] {
     } catch {}
   }
 
-  // Source directory structure
+  // Source directory structure — max 20 files to save tokens
   try {
     const { execSync } = require("child_process");
     const srcDirs = ["src", "lib", "app", "packages"];
     for (const dir of srcDirs) {
       if (existsSync(join(cwd, dir))) {
         const tree = execSync(
-          `find ${dir} -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name '*.test.*' 2>/dev/null | sort | head -60`,
-          { cwd, encoding: "utf8", timeout: 3000 }
+          `find ${dir} -maxdepth 2 -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name '*.test.*' -not -name '*.spec.*' 2>/dev/null | sort | head -20`,
+          { cwd, encoding: "utf8", timeout: 2000 }
         ).trim();
         if (tree) hints.push(`Files in ${dir}/:\n${tree}`);
         break;
       }
     }
-    // Top-level files
-    const topLevel = execSync("ls -1", { cwd, encoding: "utf8", timeout: 1000 }).trim();
-    hints.push(`Top-level: ${topLevel.split("\n").join(", ")}`);
   } catch {}
 
   return hints;

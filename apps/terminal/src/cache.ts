@@ -20,12 +20,13 @@ function persistCache() {
   try { writeFileSync(CACHE_FILE, JSON.stringify(mem)); } catch {}
 }
 
-/** Normalize a natural language query for cache lookup */
+/** Normalize a natural language query for cache lookup.
+ *  Keeps . / - _ which are meaningful in file paths and shell context. */
 export function normalizeNl(nl: string): string {
   return nl
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9\s]/g, "")   // strip punctuation
+    .replace(/[^a-z0-9\s.\/_-]/g, "")   // keep meaningful shell chars
     .replace(/\s+/g, " ");
 }
 

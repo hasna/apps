@@ -107,12 +107,19 @@ function loadUserProfiles(): ToolProfile[] {
   return profiles;
 }
 
-/** Get all profiles — user profiles override builtins by name */
+/** Get all profiles — user profiles override builtins by name (cached 30s) */
+let _cachedProfiles: ToolProfile[] | null = null;
+let _cachedProfilesAt = 0;
+
 export function getProfiles(): ToolProfile[] {
+  const now = Date.now();
+  if (_cachedProfiles && now - _cachedProfilesAt < 30_000) return _cachedProfiles;
   const user = loadUserProfiles();
   const userNames = new Set(user.map(p => p.name));
   const builtins = BUILTIN_PROFILES.filter(p => !userNames.has(p.name));
-  return [...user, ...builtins];
+  _cachedProfiles = [...user, ...builtins];
+  _cachedProfilesAt = now;
+  return _cachedProfiles;
 }
 
 /** Find the matching profile for a command */

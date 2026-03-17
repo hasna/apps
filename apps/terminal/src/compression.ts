@@ -1,19 +1,18 @@
 // Token compression engine — reduces CLI output to fit within token budgets
+// No regex parsing — just ANSI stripping, deduplication, and smart truncation.
+// All intelligent output processing goes through AI via processOutput().
 
-import { parseOutput, estimateTokens, tokenSavings } from "./parsers/index.js";
+import { estimateTokens } from "./tokens.js";
 
 export interface CompressOptions {
   /** Max tokens for the output (default: unlimited) */
   maxTokens?: number;
-  /** Output format */
-  format?: "text" | "json" | "summary";
   /** Strip ANSI escape codes (default: true) */
   stripAnsi?: boolean;
 }
 
 export interface CompressedOutput {
   content: string;
-  format: "text" | "json" | "summary";
   originalTokens: number;
   compressedTokens: number;
   tokensSaved: number;
@@ -36,7 +35,6 @@ function deduplicateLines(lines: string[]): string[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Extract a "pattern" — the line without numbers, paths, specific identifiers
     const pattern = line.replace(/[0-9]+/g, "N").replace(/\/\S+/g, "/PATH").replace(/\s+/g, " ").trim();
 
     if (pattern === repeatPattern) {
@@ -45,7 +43,6 @@ function deduplicateLines(lines: string[]): string[] {
       if (repeatCount > 2) {
         result.push(`  ... (${repeatCount} similar lines)`);
       } else if (repeatCount > 0) {
-        // Push the skipped lines back
         for (let j = i - repeatCount; j < i; j++) {
           result.push(lines[j]);
         }
@@ -67,14 +64,13 @@ function deduplicateLines(lines: string[]): string[] {
   return result;
 }
 
-/** Smart truncation: keep first N + last M lines */
+/** Smart truncation: keep first 60% + last 40% of lines */
 function smartTruncate(text: string, maxTokens: number): string {
   const lines = text.split("\n");
   const currentTokens = estimateTokens(text);
 
   if (currentTokens <= maxTokens) return text;
 
-  // Keep proportional first/last, with first getting more
   const targetLines = Math.floor((maxTokens * lines.length) / currentTokens);
   const firstCount = Math.ceil(targetLines * 0.6);
   const lastCount = Math.floor(targetLines * 0.4);
@@ -88,42 +84,20 @@ function smartTruncate(text: string, maxTokens: number): string {
   return [...first, `\n--- ${hiddenCount} lines hidden ---\n`, ...last].join("\n");
 }
 
-/** Compress command output to fit within a token budget */
+/** Compress command output — ANSI strip, dedup, truncate. No parsing. */
 export function compress(command: string, output: string, options: CompressOptions = {}): CompressedOutput {
-  const { maxTokens, format = "text", stripAnsi: doStrip = true } = options;
+  const { maxTokens, stripAnsi: doStrip = true } = options;
   const originalTokens = estimateTokens(output);
 
   // Step 1: Strip ANSI codes
   let text = doStrip ? stripAnsi(output) : output;
 
-  // Step 2: Try structured parsing (format=json or when it saves tokens)
-  if (format === "json" || format === "summary") {
-    const parsed = parseOutput(command, text);
-    if (parsed) {
-      const json = JSON.stringify(parsed.data, null, format === "summary" ? 0 : 2);
-      const savings = tokenSavings(output, parsed.data);
-      const compressedTokens = estimateTokens(json);
-
-      // ONLY use JSON if it actually saves tokens (never return larger output)
-      if (savings.saved > 0 && (!maxTokens || compressedTokens <= maxTokens)) {
-        return {
-          content: json,
-          format: "json",
-          originalTokens,
-          compressedTokens,
-          tokensSaved: savings.saved,
-          savingsPercent: savings.percent,
-        };
-      }
-    }
-  }
-
-  // Step 3: Deduplicate similar lines
+  // Step 2: Deduplicate similar lines
   const lines = text.split("\n");
   const deduped = deduplicateLines(lines);
   text = deduped.join("\n");
 
-  // Step 4: Smart truncation if over budget
+  // Step 3: Smart truncation if over budget
   if (maxTokens) {
     text = smartTruncate(text, maxTokens);
   }
@@ -131,7 +105,6 @@ export function compress(command: string, output: string, options: CompressOptio
   const compressedTokens = estimateTokens(text);
   return {
     content: text,
-    format: "text",
     originalTokens,
     compressedTokens,
     tokensSaved: Math.max(0, originalTokens - compressedTokens),

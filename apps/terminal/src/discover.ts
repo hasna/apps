@@ -4,7 +4,7 @@
 
 import { readdirSync, readFileSync, statSync, existsSync } from "fs";
 import { join } from "path";
-import { estimateTokens } from "./parsers/index.js";
+import { estimateTokens } from "./tokens.js";
 
 export interface DiscoveredCommand {
   command: string;

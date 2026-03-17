@@ -3,6 +3,8 @@
 export interface ProviderOptions {
   model?: string;
   maxTokens?: number;
+  temperature?: number;
+  stop?: string[];
   system: string;
 }
 

@@ -1,6 +1,6 @@
 // Diff-aware output caching — when same command runs again, return only what changed
 
-import { estimateTokens } from "./parsers/index.js";
+import { estimateTokens } from "./tokens.js";
 
 interface CachedOutput {
   command: string;

@@ -62,12 +62,29 @@ function loadStats(): EconomyStats {
   return stats;
 }
 
+let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+
 function saveStats() {
-  ensureDir();
-  if (stats) {
-    writeFileSync(ECONOMY_FILE, JSON.stringify(stats, null, 2));
-  }
+  // Debounce: coalesce multiple writes within 1 second
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    ensureDir();
+    if (stats) {
+      writeFileSync(ECONOMY_FILE, JSON.stringify(stats, null, 2));
+    }
+  }, 1000);
 }
+
+// Flush on exit
+process.on("exit", () => {
+  if (_saveTimer) {
+    clearTimeout(_saveTimer);
+    _saveTimer = null;
+    ensureDir();
+    if (stats) writeFileSync(ECONOMY_FILE, JSON.stringify(stats, null, 2));
+  }
+});
 
 /** Record token savings from a feature */
 export function recordSaving(feature: keyof EconomyStats["savingsByFeature"], tokensSaved: number) {
@@ -112,12 +129,27 @@ const PROVIDER_PRICING: Record<string, { input: number; output: number }> = {
   "anthropic-opus":   { input: 5.00, output: 25.00 },
 };
 
+/** Load configurable turns-before-compaction from ~/.terminal/config.json */
+function loadTurnsMultiplier(): number {
+  try {
+    const configPath = join(DIR, "config.json");
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      return config.economy?.turnsBeforeCompaction ?? 5;
+    }
+  } catch {}
+  return 5; // Default: tokens saved are repeated ~5 turns before agent compacts context
+}
+
 /** Estimate USD savings from compressed tokens */
 export function estimateSavingsUsd(
   tokensSaved: number,
   consumerModel: string = "anthropic-opus",
-  avgTurnsBeforeCompaction: number = 5,
+  avgTurnsBeforeCompaction?: number,
 ): { savingsUsd: number; multipliedTokens: number; ratePerMillion: number } {
+  if (avgTurnsBeforeCompaction === undefined) {
+    avgTurnsBeforeCompaction = loadTurnsMultiplier();
+  }
   const pricing = PROVIDER_PRICING[consumerModel] ?? PROVIDER_PRICING["anthropic-opus"];
   const multipliedTokens = tokensSaved * avgTurnsBeforeCompaction;
   const savingsUsd = (multipliedTokens * pricing.input) / 1_000_000;

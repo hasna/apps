@@ -26,16 +26,25 @@ const MODEL_DEFAULTS: Record<string, { fast: string; smart: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001",       smart: "claude-sonnet-4-6" },
 };
 
-/** Load user model overrides from ~/.terminal/config.json */
+/** Load user model overrides from ~/.terminal/config.json (cached 30s) */
+let _modelOverrides: Record<string, { fast?: string; smart?: string }> | null = null;
+let _modelOverridesAt = 0;
+
 function loadModelOverrides(): Record<string, { fast?: string; smart?: string }> {
+  const now = Date.now();
+  if (_modelOverrides && now - _modelOverridesAt < 30_000) return _modelOverrides;
   try {
     const configPath = join(process.env.HOME ?? "~", ".terminal", "config.json");
     if (existsSync(configPath)) {
       const config = JSON.parse(readFileSync(configPath, "utf8"));
-      return config.models ?? {};
+      _modelOverrides = config.models ?? {};
+      _modelOverridesAt = now;
+      return _modelOverrides!;
     }
   } catch {}
-  return {};
+  _modelOverrides = {};
+  _modelOverridesAt = now;
+  return _modelOverrides;
 }
 
 /** Model routing per provider — config-driven with defaults */
@@ -148,6 +157,8 @@ function detectProjectContext(): string {
 // ── system prompt ─────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[], currentPrompt?: string): string {
+  const nl = currentPrompt?.toLowerCase() ?? "";
+
   const restrictions: string[] = [];
   if (!perms.destructive)
     restrictions.push("- NEVER generate commands that delete, remove, or overwrite files/data");
@@ -178,7 +189,6 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[], c
 
   const projectContext = detectProjectContext();
 
-  // Inject safety hints for the command being generated (AI sees what's risky)
   const safetyBlock = sessionEntries.length > 0
     ? (() => {
         const lastCmd = sessionEntries[sessionEntries.length - 1]?.cmd;
@@ -190,70 +200,32 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[], c
       })()
     : "";
 
+  // ── Conditional sections (only included when relevant) ──
+  const wantsStructure = /\b(function|class|interface|export|symbol|structure|hierarchy|outline)\b/i.test(nl);
+  const astBlock = wantsStructure ? `\nAST-POWERED QUERIES: For code STRUCTURE questions, use "terminal symbols" instead of grep. It uses AST parsing for TypeScript, Python, Go, Rust.` : "";
+
+  const wantsMultiple = /\b(and|both|also|plus|as well)\b/i.test(nl);
+  const compoundBlock = wantsMultiple ? `\nCOMPOUND QUESTIONS: Prefer ONE command that captures all info. NEVER split into separate expensive commands.` : "";
+
+  const wantsAnalysis = /\b(quality|lint|coverage|complexity|unused|dead code|security|audit|scan|dependency)\b/i.test(nl);
+  const blockedAltBlock = wantsAnalysis ? `\nBLOCKED ALTERNATIVES: If your preferred command needs installing packages, try READ-ONLY alternatives (grep, cat, wc, awk). NEVER give up on analysis questions.` : "";
+
   return `You are a terminal assistant. Output ONLY the exact shell command — no explanation, no markdown, no backticks.
-The user describes what they want in plain English. You translate to the exact shell command.
 
 RULES:
-- SIMPLICITY FIRST: Use the simplest command that works. Prefer grep | sort | head over 10-pipe chains. Complex pipelines are OK when needed, but NEVER pass file:line output to wc or xargs without cleaning it first.
-- ALWAYS use grep -rn (with -r) when searching directories. NEVER use grep without -r on src/ or any directory.
-- When user refers to items from previous output, use the EXACT names shown (e.g., "feature/auth" not "auth", "open-skills" not "open_skills")
-- When user says "the largest/smallest/first/second", look at the previous output to identify the correct item
-- When user says "them all" or "combine them", refer to items from the most recent command output
-- For "show who changed each line" use git blame, for "show remote urls" use git remote -v
-- For text search in code, use grep -rn, NOT nm or objdump (those are for compiled binaries)
-- On macOS: for memory use vm_stat or top -l 1, for disk use df -h, for processes use ps aux
-- macOS uses BSD tools, NOT GNU. Use: du -d 1 (not --max-depth), ls (not ls --color), sort -r (not sort --reverse), ps aux (not ps --sort)
-- NEVER use grep -P (PCRE). macOS grep has NO -P flag. Use grep -E for extended regex, or sed/awk for complex extraction.
-- NEVER invent commands that don't exist. Stick to standard Unix/macOS commands.
-- NEVER install packages (npx, npm install, pip install, brew install). This is a READ-ONLY terminal.
-- NEVER modify source code (sed -i, codemod, awk with redirect). Only observe, never change.
-- Search src/ directory, NOT dist/ or node_modules/ for code queries.
-- Use exact file paths from the project context below. Do NOT guess paths.
-- For "what would break if I deleted X": use grep -rn "from.*X\\|import.*X\\|require.*X" src/ to find all importers.
-- For "find where X is defined": use grep -rn "export.*function X\\|export.*class X\\|export.*const X" src/
-- For "show me the code of function X": if you know the file, use grep -A 30 "function X" src/file.ts. If not, use grep -rn -A 30 "function X" src/ --include="*.ts"
-- ALWAYS use grep -rn (recursive) when searching directories. NEVER use grep without -r on a directory — it will fail.
-- For conceptual questions about what code does: use cat on the relevant file, the AI summary will explain it.
-- For DESTRUCTIVE requests (delete, remove, install, push): output BLOCKED: <reason>. NEVER try to execute destructive commands.
-
-AST-POWERED QUERIES: For code STRUCTURE questions, use the built-in AST tool instead of grep:
-- "find all exported functions" → terminal symbols src/ (lists all functions, classes, interfaces with line numbers)
-- "show all interfaces" → terminal symbols src/ | grep interface
-- "what does file X export" → terminal symbols src/file.ts
-- "show me the class hierarchy" → terminal symbols src/
-The "terminal symbols" command uses AST parsing (not regex) — it understands TypeScript, Python, Go, Rust code structure.
-For TEXT search (TODO, string matches, imports) → use grep as normal.
-
-COMPOUND QUESTIONS: For questions asking multiple things, prefer ONE command that captures all info. Extract multiple answers from a single output.
-- "how many tests and do they pass" → bun test (extract count AND pass/fail from output)
-- "what files changed and how many lines" → git log --stat -3 (shows files AND line counts)
-- "what version of node and bun" → node -v && bun -v (only use && for trivial non-failing commands)
-NEVER split into separate test runs or expensive commands chained with &&.
-
-BLOCKED ALTERNATIVES: If your preferred command would require installing packages (npx, npm install), ALWAYS try a READ-ONLY alternative:
-- Code quality analysis → grep -rn "TODO\\|FIXME\\|HACK\\|XXX" src/
-- Linting → check if "lint" or "typecheck" exists in package.json scripts, run that
-- Security scan → grep -rn "eval\\|exec\\|spawn\\|password\\|secret" src/
-- Dependency audit → cat package.json | grep -A 50 dependencies
-- Test coverage → bun test --coverage (or npm run test:coverage if available)
-NEVER give up. NEVER output BLOCKED for analysis questions. Always try a grep/find/cat/wc/awk read-only alternative.
-- Cyclomatic complexity → grep -rn "if\\|else\\|for\\|while\\|switch\\|case\\|catch\\|&&\\|||" src/ --include="*.ts" | wc -l
-- Unused exports → grep -rn "export function\|export const\|export class" src/ --include="*.ts" | sed 's/.*export [a-z]* //' | sed 's/[(<:].*//' | sort -u
-- Dead code → for each exported name, grep -rn "name" src/ --include="*.ts" | wc -l (if only 1 match = unused)
-- Dependency graph → grep -rn "from " src/ --include="*.ts" | sed 's/:.*from "/→/' | sed 's/".*//' | sort -u
-- Most parameters → grep -rn "function " src/ --include="*.ts" | awk -F'[()]' '{print gsub(/,/,",",$2)+1, $0}' | sort -nr | head -10
-ALWAYS try a heuristic shell approach before giving up. NEVER say BLOCKED for analysis questions.
-
-SEMANTIC MAPPING: When the user references a concept, search the file tree for RELATED terms:
-- Look at directory names: src/agent/ likely contains "agentic" code
-- Look at file names: lazy-executor.ts likely handles "lazy mode"
-- When uncertain: grep -rn "keyword" src/ --include="*.ts" -l (list matching files)
-
-ACTION vs CONCEPTUAL: If the prompt starts with "run", "execute", "check", "test", "build", "show output of" — ALWAYS generate an executable command. NEVER read README for action requests. Only read docs for "explain why", "what does X mean", "how was X designed".
-
-EXISTENCE CHECKS: If the prompt starts with "is there", "does this have", "do we have", "does X exist" — NEVER run/start/launch anything. Use ls, find, or test -d to CHECK existence. These are READ-ONLY questions.
-
-MONOREPO: If the project context says "MONOREPO", search packages/ or apps/ NOT src/. Use: grep -rn "pattern" packages/ --include="*.ts". For specific packages, use packages/PKGNAME/src/.
+- SIMPLICITY FIRST: Use the simplest command. Prefer grep | sort | head over 10-pipe chains.
+- ALWAYS use grep -rn when searching directories. NEVER grep without -r on a directory.
+- When user refers to items from previous output, use EXACT names shown.
+- For text search use grep -rn, NOT nm or objdump.
+- macOS/BSD tools: du -d 1 (not --max-depth), NEVER grep -P, use grep -E for extended regex.
+- NEVER invent commands. Stick to standard Unix/macOS.
+- NEVER install packages. READ-ONLY terminal.
+- NEVER modify source code. Only observe.
+- Search src/ not dist/ or node_modules/.
+- Use exact file paths from project context. Do NOT guess paths.
+- For DESTRUCTIVE requests: output BLOCKED: <reason>.
+- ACTION vs CONCEPTUAL: "run/test/build/check" → executable command. "explain/what does X mean" → read docs.
+- EXISTENCE CHECKS: "is there/does X exist" → use ls/find/test, NEVER run/launch.${astBlock}${compoundBlock}${blockedAltBlock}
 cwd: ${process.cwd()}
 shell: zsh / macOS${projectContext}${safetyBlock}${restrictionBlock}${contextBlock}${currentPrompt ? loadCorrectionHints(currentPrompt) : ""}`;
 }
@@ -280,11 +252,11 @@ export async function translateToCommand(
   let text: string;
 
   if (onToken) {
-    text = await provider.stream(nl, { model, maxTokens: 256, system }, {
+    text = await provider.stream(nl, { model, maxTokens: 256, temperature: 0, stop: ["\n"], system }, {
       onToken: (partial) => onToken(partial),
     });
   } else {
-    text = await provider.complete(nl, { model, maxTokens: 256, system });
+    text = await provider.complete(nl, { model, maxTokens: 256, temperature: 0, stop: ["\n"], system });
   }
 
   if (text.startsWith("BLOCKED:")) throw new Error(text);
@@ -334,6 +306,7 @@ export async function explainCommand(command: string): Promise<string> {
   return provider.complete(command, {
     model: routing.fast,
     maxTokens: 128,
+    temperature: 0,
     system: "Explain what this shell command does in one plain English sentence. No markdown, no code blocks.",
   });
 }
@@ -345,37 +318,34 @@ export async function fixCommand(
   failedCommand: string,
   errorOutput: string,
   perms: Permissions,
-  sessionEntries: SessionEntry[]
+  _sessionEntries: SessionEntry[]
 ): Promise<string> {
   const provider = getProvider();
   const routing = pickModel(originalNl);
+
+  // Lightweight fix prompt — no full project context, just rules + restrictions
+  const restrictions: string[] = [];
+  if (!perms.destructive) restrictions.push("- NEVER delete/remove/overwrite files");
+  if (!perms.network) restrictions.push("- NEVER make network requests");
+  if (!perms.install) restrictions.push("- NEVER install packages");
+
+  const fixSystem = `You are a terminal assistant. Output ONLY the corrected shell command — no explanation.
+macOS/BSD tools. NEVER use grep -P. Use grep -E for extended regex.
+NEVER install packages. READ-ONLY terminal.
+cwd: ${process.cwd()}${restrictions.length > 0 ? `\nRESTRICTIONS:\n${restrictions.join("\n")}` : ""}`;
+
   const text = await provider.complete(
-    `I wanted to: ${originalNl}\nI ran: ${failedCommand}\nError:\n${errorOutput}\n\nGive me the corrected command only.`,
+    `I wanted to: ${originalNl}\nI ran: ${failedCommand}\nError:\n${errorOutput.slice(0, 2000)}\n\nGive me the corrected command only.`,
     {
-      model: routing.smart, // always use smart model for fixes
+      model: routing.smart,
       maxTokens: 256,
-      system: buildSystemPrompt(perms, sessionEntries, originalNl),
+      temperature: 0,
+      stop: ["\n"],
+      system: fixSystem,
     }
   );
   if (text.startsWith("BLOCKED:")) throw new Error(text);
-  return text;
+  return text.trim();
 }
 
-// ── summarize output (for MCP/agent use) ──────────────────────────────────────
-
-export async function summarizeOutput(
-  command: string,
-  output: string,
-  maxTokens: number = 200
-): Promise<string> {
-  const provider = getProvider();
-  const routing = pickModel("summarize");
-  return provider.complete(
-    `Command: ${command}\nOutput:\n${output}\n\nSummarize this output concisely for an AI agent. Focus on: status, key results, errors. Be terse.`,
-    {
-      model: routing.fast,
-      maxTokens,
-      system: "You summarize command output for AI agents. Be extremely concise. Return structured info. No prose.",
-    }
-  );
-}
+// summarizeOutput() removed — all output processing goes through processOutput() in output-processor.ts

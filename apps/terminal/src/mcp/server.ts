@@ -6,17 +6,16 @@ import { z } from "zod";
 import { spawn } from "child_process";
 import { compress, stripAnsi } from "../compression.js";
 import { stripNoise } from "../noise-filter.js";
-import { parseOutput, tokenSavings, estimateTokens } from "../parsers/index.js";
-import { summarizeOutput } from "../ai.js";
+import { estimateTokens } from "../tokens.js";
+import { processOutput } from "../output-processor.js";
 import { searchFiles, searchContent, semanticSearch } from "../search/index.js";
 import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipes/storage.js";
 import { substituteVariables } from "../recipes/model.js";
 import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../supervisor.js";
 import { diffOutput } from "../diff-cache.js";
-import { processOutput } from "../output-processor.js";
 import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
 import { cachedRead, cacheStats } from "../file-cache.js";
-import { getBootContext } from "../session-boot.js";
+import { getBootContext, invalidateBootCache } from "../session-boot.js";
 import { storeOutput, expandOutput } from "../expand-store.js";
 import { rewriteCommand } from "../command-rewriter.js";
 import { shouldBeLazy, toLazy } from "../lazy-executor.js";
@@ -49,6 +48,10 @@ function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCo
       // Strip noise before returning (npm fund, progress bars, etc.)
       const cleanStdout = stripNoise(stdout).cleaned;
       const cleanStderr = stripNoise(stderr).cleaned;
+      // Invalidate boot cache after state-changing git commands
+      if (/\bgit\s+(commit|checkout|branch|merge|reset|push|pull|rebase|stash)\b/.test(actualCommand)) {
+        invalidateBootCache();
+      }
       resolve({ exitCode: code ?? 0, stdout: cleanStdout, stderr: cleanStderr, duration: Date.now() - start, rewritten: rw.changed ? rw.rewritten : undefined });
     });
   });
@@ -100,44 +103,20 @@ export function createServer(): McpServer {
         };
       }
 
-      // JSON mode — structured parsing (only if it actually saves tokens)
-      if (format === "json") {
-        const parsed = parseOutput(command, output);
-        if (parsed) {
-          const savings = tokenSavings(output, parsed.data);
-          if (savings.saved > 0) {
-            return {
-              content: [{ type: "text" as const, text: JSON.stringify({
-                exitCode: result.exitCode, parsed: parsed.data, parser: parsed.parser,
-                duration: result.duration, tokensSaved: savings.saved, savingsPercent: savings.percent,
-              }) }],
-            };
-          }
-          // JSON was larger — fall through to compression
-        }
-      }
-
-      // Compressed mode (also fallback for json when no parser matches)
-      if (format === "compressed" || format === "json") {
-        const compressed = compress(command, output, { maxTokens, format: "json" });
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({
-            exitCode: result.exitCode, output: compressed.content, format: compressed.format,
-            duration: result.duration, tokensSaved: compressed.tokensSaved, savingsPercent: compressed.savingsPercent,
-          }) }],
-        };
-      }
-
-      // Summary mode — AI-powered
-      if (format === "summary") {
+      // JSON and Summary modes — both go through AI processing
+      if (format === "json" || format === "summary") {
         try {
-          const summary = await summarizeOutput(command, output, maxTokens ?? 200);
-          const rawTokens = estimateTokens(output);
-          const summaryTokens = estimateTokens(summary);
+          const processed = await processOutput(command, output);
+          const detailKey = output.split("\n").length > 15 ? storeOutput(command, output) : undefined;
           return {
             content: [{ type: "text" as const, text: JSON.stringify({
-              exitCode: result.exitCode, summary, duration: result.duration,
-              tokensSaved: rawTokens - summaryTokens,
+              exitCode: result.exitCode,
+              summary: processed.summary,
+              structured: processed.structured,
+              duration: result.duration,
+              tokensSaved: processed.tokensSaved,
+              aiProcessed: processed.aiProcessed,
+              ...(detailKey ? { detailKey, expandable: true } : {}),
             }) }],
           };
         } catch {
@@ -149,6 +128,17 @@ export function createServer(): McpServer {
             }) }],
           };
         }
+      }
+
+      // Compressed mode — fast non-AI: strip + dedup + truncate
+      if (format === "compressed") {
+        const compressed = compress(command, output, { maxTokens });
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({
+            exitCode: result.exitCode, output: compressed.content, duration: result.duration,
+            tokensSaved: compressed.tokensSaved, savingsPercent: compressed.savingsPercent,
+          }) }],
+        };
       }
 
       return { content: [{ type: "text" as const, text: output }] };
@@ -230,16 +220,8 @@ export function createServer(): McpServer {
       }
 
       const result = await exec(command);
-      const parsed = parseOutput(command, result.stdout);
-
-      if (parsed) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ cwd: target, ...parsed.data as object, parser: parsed.parser }) }],
-        };
-      }
-
       const files = result.stdout.split("\n").filter(l => l.trim());
-      return { content: [{ type: "text" as const, text: JSON.stringify({ cwd: target, files }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ cwd: target, files, count: files.length }) }] };
     }
   );
 
@@ -253,14 +235,13 @@ export function createServer(): McpServer {
       command: z.string().optional().describe("The command that produced the error"),
     },
     async ({ error, command }) => {
-      const { errorParser } = await import("../parsers/errors.js");
-      if (errorParser.detect(command ?? "", error)) {
-        const info = errorParser.parse(command ?? "", error);
-        return { content: [{ type: "text" as const, text: JSON.stringify(info) }] };
-      }
+      // AI processes the error — no regex guessing
+      const processed = await processOutput(command ?? "unknown", error);
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          type: "unknown", message: error.split("\n")[0]?.trim() ?? "Unknown error",
+          summary: processed.summary,
+          structured: processed.structured,
+          aiProcessed: processed.aiProcessed,
         }) }],
       };
     }
@@ -274,9 +255,8 @@ export function createServer(): McpServer {
     async () => {
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          name: "open-terminal", version: "0.2.0", cwd: process.cwd(),
-          parsers: ["ls", "find", "test", "git-log", "git-status", "build", "npm-install", "error"],
-          features: ["structured-output", "token-compression", "ai-summary", "error-diagnosis"],
+          name: "open-terminal", version: "0.3.0", cwd: process.cwd(),
+          features: ["ai-output-processing", "token-compression", "noise-filtering", "diff-caching", "lazy-execution", "progressive-disclosure"],
         }) }],
       };
     }
@@ -376,20 +356,12 @@ export function createServer(): McpServer {
       const result = await exec(command, cwd, 30000);
       const output = (result.stdout + result.stderr).trim();
 
-      if (format === "json") {
-        const parsed = parseOutput(command, output);
-        if (parsed) {
-          return { content: [{ type: "text" as const, text: JSON.stringify({
-            recipe: name, exitCode: result.exitCode, parsed: parsed.data, duration: result.duration,
-          }) }] };
-        }
-      }
-
-      if (format === "compressed") {
-        const compressed = compress(command, output, { format: "json" });
+      if (format === "json" || format === "compressed") {
+        const processed = await processOutput(command, output);
         return { content: [{ type: "text" as const, text: JSON.stringify({
-          recipe: name, exitCode: result.exitCode, output: compressed.content, duration: result.duration,
-          tokensSaved: compressed.tokensSaved,
+          recipe: name, exitCode: result.exitCode, summary: processed.summary,
+          structured: processed.structured, duration: result.duration,
+          tokensSaved: processed.tokensSaved, aiProcessed: processed.aiProcessed,
         }) }] };
       }
 
@@ -534,10 +506,10 @@ export function createServer(): McpServer {
         }) }] };
       }
 
-      // First run — return full output
-      const compressed = compress(command, output, { format: "json" });
+      // First run — return full output (ANSI stripped)
+      const clean = stripAnsi(output);
       return { content: [{ type: "text" as const, text: JSON.stringify({
-        exitCode: result.exitCode, output: compressed.content,
+        exitCode: result.exitCode, output: clean,
         diffSummary: "first run", duration: result.duration,
       }) }] };
     }

@@ -26,6 +26,11 @@ export function storeOutput(command: string, output: string): string {
   return key;
 }
 
+/** Escape regex special characters for safe use in new RegExp() */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Retrieve full output by key, optionally filtered */
 export function expandOutput(key: string, grep?: string): { found: boolean; output?: string; lines?: number } {
   const entry = store.get(key);
@@ -33,7 +38,9 @@ export function expandOutput(key: string, grep?: string): { found: boolean; outp
 
   let output = entry.output;
   if (grep) {
-    const pattern = new RegExp(grep, "i");
+    // Escape metacharacters so user input like "[error" or "func()" doesn't crash
+    const safe = escapeRegex(grep);
+    const pattern = new RegExp(safe, "i");
     output = output.split("\n").filter(l => pattern.test(l)).join("\n");
   }
 
