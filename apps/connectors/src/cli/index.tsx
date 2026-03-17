@@ -3,6 +3,9 @@ import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
 import chalk from "chalk";
+import { createRequire } from "module";
+const _require = createRequire(import.meta.url);
+const _pkg = _require("../package.json") as { version: string };
 import { App } from "./components/App.js";
 import {
   CONNECTORS,
@@ -48,7 +51,7 @@ const program = new Command();
 program
   .name("connectors")
   .description("Install API connectors for your project")
-  .version("1.1.6")
+  .version(_pkg.version)
   .enablePositionalOptions();
 
 // Interactive mode (default)
