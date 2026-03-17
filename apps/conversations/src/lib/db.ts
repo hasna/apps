@@ -217,7 +217,9 @@ export function getDb(): Database {
     db.exec("ALTER TABLE agent_presence ADD COLUMN role TEXT NOT NULL DEFAULT 'agent'");
   }
   if (!presenceColNames.includes("created_at")) {
-    db.exec("ALTER TABLE agent_presence ADD COLUMN created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))");
+    // SQLite ALTER TABLE does not support non-constant defaults — use empty string, backfill from last_seen_at
+    db.exec("ALTER TABLE agent_presence ADD COLUMN created_at TEXT NOT NULL DEFAULT ''");
+    db.exec("UPDATE agent_presence SET created_at = last_seen_at WHERE created_at = ''");
   }
 
   // FTS5 virtual table for full-text search
