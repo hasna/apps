@@ -115,6 +115,39 @@ function shouldRegisterTool(name: string): boolean {
   return true; // "full" or any unknown value = all tools
 }
 
+// === FOCUS MODE ===
+
+interface AgentFocus {
+  agent_id: string;
+  project_id?: string;
+  task_list_id?: string;
+}
+
+const agentFocusMap = new Map<string, AgentFocus>();
+
+function getAgentFocus(agentId: string): AgentFocus | undefined {
+  // Session focus takes priority
+  const sessionFocus = agentFocusMap.get(agentId);
+  if (sessionFocus) return sessionFocus;
+  // Fall back to DB active_project_id
+  try {
+    const agent = getAgentByName(agentId) || getAgent(agentId);
+    if (agent && (agent as any).active_project_id) {
+      return { agent_id: agentId, project_id: (agent as any).active_project_id };
+    }
+  } catch {}
+  return undefined;
+}
+
+export function applyFocus(params: Record<string, any>, agentId?: string): void {
+  if (!agentId) return;
+  if (params.project_id) return; // explicit param takes priority
+  const focus = getAgentFocus(agentId);
+  if (focus?.project_id) {
+    params.project_id = focus.project_id;
+  }
+}
+
 function formatError(error: unknown): string {
   if (error instanceof VersionConflictError) {
     return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
@@ -1175,6 +1208,74 @@ server.tool(
 }
 
 // === AGENT TOOLS ===
+
+// set_focus
+if (shouldRegisterTool("set_focus")) {
+server.tool(
+  "set_focus",
+  "Focus this agent on a project. All list/search/status tools will default to this project.",
+  {
+    agent_id: z.string().describe("Agent ID or name"),
+    project_id: z.string().optional().describe("Project to focus on. Omit to clear."),
+    task_list_id: z.string().optional().describe("Task list to focus on"),
+  },
+  async ({ agent_id, project_id, task_list_id }) => {
+    try {
+      const resolvedProject = project_id ? resolveId(project_id, "projects") : undefined;
+      const focus: AgentFocus = { agent_id, project_id: resolvedProject, task_list_id };
+      agentFocusMap.set(agent_id, focus);
+      // Sync to DB
+      try {
+        const agent = getAgentByName(agent_id) || getAgent(agent_id);
+        if (agent) {
+          const db = getDatabase();
+          db.run("UPDATE agents SET active_project_id = ? WHERE id = ?", [resolvedProject || null, agent.id]);
+        }
+      } catch {}
+      const projectName = resolvedProject ? ` (${resolvedProject.slice(0, 8)})` : "";
+      return { content: [{ type: "text" as const, text: `Focused on project${projectName}. Read tools will default to this scope. Pass explicit project_id to override.` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// get_focus
+if (shouldRegisterTool("get_focus")) {
+server.tool(
+  "get_focus",
+  "Get the current focus for an agent.",
+  { agent_id: z.string().describe("Agent ID or name") },
+  async ({ agent_id }) => {
+    const focus = getAgentFocus(agent_id);
+    if (!focus?.project_id) {
+      return { content: [{ type: "text" as const, text: "No focus set. Showing all projects." }] };
+    }
+    return { content: [{ type: "text" as const, text: `Focused on project: ${focus.project_id}${focus.task_list_id ? `, task list: ${focus.task_list_id}` : ""}` }] };
+  },
+);
+}
+
+// unfocus
+if (shouldRegisterTool("unfocus")) {
+server.tool(
+  "unfocus",
+  "Clear focus — show all projects and tasks.",
+  { agent_id: z.string().describe("Agent ID or name") },
+  async ({ agent_id }) => {
+    agentFocusMap.delete(agent_id);
+    try {
+      const agent = getAgentByName(agent_id) || getAgent(agent_id);
+      if (agent) {
+        const db = getDatabase();
+        db.run("UPDATE agents SET active_project_id = NULL WHERE id = ?", [agent.id]);
+      }
+    } catch {}
+    return { content: [{ type: "text" as const, text: "Focus cleared. Showing all projects." }] };
+  },
+);
+}
 
 // register_agent
 if (shouldRegisterTool("register_agent")) {
