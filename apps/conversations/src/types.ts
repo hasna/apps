@@ -134,10 +134,15 @@ export interface AgentPresence {
 }
 
 export interface AgentConflictError {
+  conflict: true;
   error: "agent_conflict";
   message: string;
+  existing_id: string;
+  existing_name: string;
   existing_session_id: string | null;
   last_seen_at: string;
+  session_hint: string | null;
+  working_dir: string | null;
 }
 
 export interface RegisterAgentResult {

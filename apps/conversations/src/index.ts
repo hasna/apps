@@ -87,6 +87,7 @@ export {
 export {
   heartbeat,
   registerAgent,
+  isAgentConflict,
   getPresence,
   listAgents,
   removePresence,

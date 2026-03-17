@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent } from "./presence";
+import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent, isAgentConflict } from "./presence";
 import { closeDb, getDb } from "./db";
 import type { AgentConflictError, RegisterAgentResult } from "../types";
 import { unlinkSync } from "fs";
@@ -47,9 +47,29 @@ describe("registerAgent", () => {
   test("returns AgentConflictError when active agent has different session", () => {
     registerAgent("titus", "session-active");
     const result = registerAgent("titus", "session-new") as AgentConflictError;
+    expect(result.conflict).toBe(true);
     expect(result.error).toBe("agent_conflict");
     expect(result.existing_session_id).toBe("session-active");
+    expect(result.existing_name).toBe("titus");
+    expect(result.existing_id).toHaveLength(8);
+    expect(result.session_hint).toBe("session-");
+    expect(result.working_dir).toBeNull();
     expect(result.last_seen_at).toBeTruthy();
+  });
+
+  test("isAgentConflict type guard works", () => {
+    registerAgent("cassius", "session-1");
+    const conflict = registerAgent("cassius", "session-2");
+    const success = registerAgent("new-agent-x", "session-3") as RegisterAgentResult;
+    expect(isAgentConflict(conflict)).toBe(true);
+    expect(isAgentConflict(success)).toBe(false);
+  });
+
+  test("normalizes name to lowercase on insert", () => {
+    const result = registerAgent("MAXIMUS", "session-upper") as RegisterAgentResult;
+    expect(result.agent.agent).toBe("maximus");
+    expect(getPresence("maximus")).toBeTruthy();
+    expect(getPresence("MAXIMUS")).toBeTruthy(); // case-insensitive lookup
   });
 
   test("allows takeover when agent is stale (>30 min)", () => {
