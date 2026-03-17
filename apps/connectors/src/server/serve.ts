@@ -6,6 +6,7 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { registerAgent, listAgents, getAgentByName, deleteAgent, isAgentConflict } from "../db/agents.js";
+import { checkRateBudget, getRateBudget } from "../db/rate.js";
 import { join, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -416,6 +417,19 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         if (!agent) return json({ error: "Agent not found" }, 404, port);
         deleteAgent(agent.id);
         return json({ success: true }, 200, port);
+      }
+
+
+      // GET /api/rate/:agent_id/:connector?limit=N
+      const rateMatch = path.match(/^\/api\/rate\/([^/]+)\/([^/]+)$/);
+      if (rateMatch && method === 'GET') {
+        const [, agentId, connector] = rateMatch;
+        const limit = parseInt(url.searchParams.get('limit') || '60', 10);
+        const consume = url.searchParams.get('consume') === 'true';
+        const result = consume
+          ? checkRateBudget(agentId, connector, limit)
+          : getRateBudget(agentId, connector, limit);
+        return json(result, 200, port);
       }
 
       // ── Profile Routes ──
