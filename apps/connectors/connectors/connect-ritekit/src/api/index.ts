@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// RiteKit Connector — Social media hashtag suggestions and content optimization
+import { RiteKitClient } from './client';
+import type { RiteKitConfig, RKHashtagSuggestion, RKAutoHashtag, RKImageText } from '../types';
+export { RiteKitClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class RiteKit {
+  private readonly client: RiteKitClient;
+  constructor(config: RiteKitConfig) { this.client = new RiteKitClient(config); }
+  static fromEnv(): RiteKit {
+    const clientId = process.env.RITEKIT_CLIENT_ID;
+    if (!clientId) throw new Error('RITEKIT_CLIENT_ID is required');
+    return new RiteKit({ clientId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async suggestHashtags(text: string): Promise<{ data: RKHashtagSuggestion[] }> {
+    return this.client.request('/search/trending', { tag: text });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getHashtagStats(hashtag: string): Promise<{ data: RKHashtagSuggestion }> {
+    return this.client.request('/stats/hashtag-stats', { tags: hashtag });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async autoHashtag(text: string, options?: { maxHashtags?: number }): Promise<RKAutoHashtag> {
+    return this.client.request<RKAutoHashtag>('/stats/auto-hashtag', { post: text, maxHashtags: options?.maxHashtags });
   }
+
+  async getHistoryForHashtag(hashtag: string): Promise<{ data: { date: string; tweets: number; retweets: number }[] }> {
+    return this.client.request('/stats/history', { tag: hashtag });
+  }
+
+  async textToImage(text: string, options?: { fontSize?: number; textColor?: string; bgColor?: string }): Promise<RKImageText> {
+    return this.client.request<RKImageText>('/images/quote', { quote: text, fontSize: options?.fontSize, textColor: options?.textColor, backgroundColor: options?.bgColor });
+  }
+
+  async animateImage(url: string, type: string): Promise<{ url: string }> {
+    return this.client.request('/images/animate', { url, type });
+  }
+
+  getClient(): RiteKitClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
