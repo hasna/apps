@@ -69,7 +69,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "execute",
-    "Run a shell command and return the result. Supports structured output parsing (json), token compression (compressed), and AI summarization (summary).",
+    "Run a shell command and return raw output. Prefer execute_smart for most tasks — it AI-summarizes output, saving 80% tokens. Use execute only when you need the full unprocessed output (e.g., to parse it yourself).",
     {
       command: z.string().describe("Shell command to execute"),
       cwd: z.string().optional().describe("Working directory (default: server cwd)"),
@@ -638,14 +638,28 @@ export function createServer(): McpServer {
 
   server.tool(
     "read_file",
-    "Read a file with session caching. Second read of unchanged file returns instantly from cache. Supports offset/limit for pagination without re-reading.",
+    "Read a file with session caching. Use summarize=true to get an AI-generated outline (~90% fewer tokens) instead of full content — ideal when you just want to understand what a file does without reading every line.",
     {
       path: z.string().describe("File path"),
       offset: z.number().optional().describe("Start line (0-indexed)"),
       limit: z.number().optional().describe("Max lines to return"),
+      summarize: z.boolean().optional().describe("Return AI summary instead of full content (saves ~90% tokens)"),
     },
-    async ({ path, offset, limit }) => {
+    async ({ path, offset, limit, summarize }) => {
       const result = cachedRead(path, { offset, limit });
+
+      if (summarize && result.content.length > 500) {
+        const processed = await processOutput(`cat ${path}`, result.content);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({
+            summary: processed.summary,
+            lines: result.content.split("\n").length,
+            tokensSaved: processed.tokensSaved,
+            cached: result.cached,
+          }) }],
+        };
+      }
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
           content: result.content,

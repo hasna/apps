@@ -123,7 +123,10 @@ RULES:
 - Keep errors/failures verbatim
 - Be direct and concise — the user wants an ANSWER, not a data dump
 - For TEST OUTPUT: look for "X pass" and "X fail" lines. These are DEFINITIVE. If you see "42 pass, 0 fail" in the output, the answer is "42 tests pass, 0 fail." NEVER say "no tests found" or "incomplete" when pass/fail counts are visible.
-- For BUILD OUTPUT: if tsc/build exits 0 with no output, it SUCCEEDED. Empty output = success.`;
+- For BUILD OUTPUT: if tsc/build exits 0 with no output, it SUCCEEDED. Empty output = success.
+- For GREP/SEARCH OUTPUT (file:line:match format): List ALL matches grouped by file. NEVER summarize into one sentence. Format: "N matches in M files:" then list each match. The agent needs every match, not a prose interpretation.
+- For FILE LISTINGS (ls, find): show count + key entries. "23 files: src/ai.ts, src/cli.tsx, ..."
+- For GIT LOG/DIFF: preserve commit hashes, file names, and +/- line counts.`;
 
 /**
  * Process command output through AI summarization.
