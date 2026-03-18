@@ -1,51 +1,46 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Jenkins Connector — Open-source CI/CD automation server
+import { JenkinsClient } from './client';
+import type { JenkinsConfig, JKJob, JKBuild, JKQueue, JKNode, JKView } from '../types';
+export { JenkinsClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Jenkins {
+  private readonly client: JenkinsClient;
+  constructor(config: JenkinsConfig) { this.client = new JenkinsClient(config); }
+  static fromEnv(): Jenkins {
+    const url = process.env.JENKINS_URL;
+    const username = process.env.JENKINS_USERNAME;
+    const apiToken = process.env.JENKINS_API_TOKEN;
+    if (!url || !username || !apiToken) throw new Error('JENKINS_URL, JENKINS_USERNAME, and JENKINS_API_TOKEN are required');
+    return new Jenkins({ url, username, apiToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listJobs(): Promise<{ jobs: JKJob[] }> { return this.client.request('/api/json', { params: { tree: 'jobs[name,url,color,fullName,description,buildable,lastBuild[number,url],lastSuccessfulBuild[number,url],lastFailedBuild[number,url]]' } }); }
+  async getJob(jobName: string): Promise<JKJob> { return this.client.request<JKJob>(`/job/${encodeURIComponent(jobName)}/api/json`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getBuild(jobName: string, buildNumber: number): Promise<JKBuild> {
+    return this.client.request<JKBuild>(`/job/${encodeURIComponent(jobName)}/${buildNumber}/api/json`);
+  }
+  async getLastBuild(jobName: string): Promise<JKBuild> {
+    return this.client.request<JKBuild>(`/job/${encodeURIComponent(jobName)}/lastBuild/api/json`);
+  }
+  async triggerBuild(jobName: string, parameters?: Record<string, string>): Promise<void> {
+    const path = parameters ? `/job/${encodeURIComponent(jobName)}/buildWithParameters` : `/job/${encodeURIComponent(jobName)}/build`;
+    const params = parameters as Record<string, string | number | undefined> | undefined;
+    await this.client.request(path, { method: 'POST', params });
+  }
+  async stopBuild(jobName: string, buildNumber: number): Promise<void> {
+    await this.client.request(`/job/${encodeURIComponent(jobName)}/${buildNumber}/stop`, { method: 'POST' });
+  }
+  async getBuildLog(jobName: string, buildNumber: number): Promise<string> {
+    const response = await fetch(`${(this.client as unknown as { baseUrl: string }).baseUrl}/job/${encodeURIComponent(jobName)}/${buildNumber}/consoleText`);
+    return response.text();
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async getQueue(): Promise<JKQueue> { return this.client.request<JKQueue>('/queue/api/json'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listNodes(): Promise<{ computer: JKNode[] }> { return this.client.request('/computer/api/json'); }
+
+  async listViews(): Promise<{ views: JKView[] }> { return this.client.request('/api/json', { params: { tree: 'views[name,url,jobs[name,url,color]]' } }); }
+
+  getClient(): JenkinsClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
