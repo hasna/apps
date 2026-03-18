@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Crossmint Connector — NFT minting and Web3 wallet infrastructure
+import { CrossmintClient } from './client';
+import type { CrossmintConfig, CMWallet, CMCollection, CMNft, CMMintResult } from '../types';
+export { CrossmintClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Crossmint {
+  private readonly client: CrossmintClient;
+  constructor(config: CrossmintConfig) { this.client = new CrossmintClient(config); }
+  static fromEnv(): Crossmint {
+    const apiKey = process.env.CROSSMINT_API_KEY;
+    if (!apiKey) throw new Error('CROSSMINT_API_KEY environment variable is required');
+    return new Crossmint({ apiKey, environment: (process.env.CROSSMINT_ENV as 'staging' | 'production') || 'production' });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async createWallet(chain: string, options?: { type?: 'custodial' | 'non-custodial' }): Promise<CMWallet> {
+    return this.client.request<CMWallet>('/wallets', { method: 'POST', body: { chain, type: options?.type || 'custodial' } });
+  }
+  async getWallet(walletId: string): Promise<CMWallet> { return this.client.request<CMWallet>(`/wallets/${walletId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listCollections(): Promise<CMCollection[]> { return this.client.request<CMCollection[]>('/collections'); }
+  async getCollection(collectionId: string): Promise<CMCollection> { return this.client.request<CMCollection>(`/collections/${collectionId}`); }
+  async createCollection(data: { chain: string; metadata: { name: string; description?: string; image?: string } }): Promise<CMCollection> {
+    return this.client.request<CMCollection>('/collections', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async mintNft(collectionId: string, data: { recipient: string; metadata: Record<string, unknown> }): Promise<CMMintResult> {
+    return this.client.request<CMMintResult>(`/collections/${collectionId}/nfts`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async getNft(collectionId: string, nftId: string): Promise<CMNft> {
+    return this.client.request<CMNft>(`/collections/${collectionId}/nfts/${nftId}`);
+  }
+  async getMintStatus(collectionId: string, mintId: string): Promise<CMMintResult> {
+    return this.client.request<CMMintResult>(`/collections/${collectionId}/nfts/${mintId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CrossmintClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

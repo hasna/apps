@@ -1,51 +1,55 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// UptimeRobot Connector — Website uptime monitoring
+import { UptimeRobotClient } from './client';
+import type { UptimeRobotConfig, URMonitor, URAlertContact, URAccount } from '../types';
+export { UptimeRobotClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class UptimeRobot {
+  private readonly client: UptimeRobotClient;
+  constructor(config: UptimeRobotConfig) { this.client = new UptimeRobotClient(config); }
+  static fromEnv(): UptimeRobot {
+    const apiKey = process.env.UPTIMEROBOT_API_KEY;
+    if (!apiKey) throw new Error('UPTIMEROBOT_API_KEY environment variable is required');
+    return new UptimeRobot({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getAccount(): Promise<URAccount> {
+    const r = await this.client.request<{ account: URAccount }>('/getAccountDetails');
+    return r.account;
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listMonitors(options?: { types?: string; statuses?: string; logs?: boolean; custom_uptime_ranges?: string }): Promise<URMonitor[]> {
+    const r = await this.client.request<{ monitors: URMonitor[] }>('/getMonitors', {
+      types: options?.types, statuses: options?.statuses,
+      logs: options?.logs ? '1' : undefined,
+      custom_uptime_ranges: options?.custom_uptime_ranges,
+    });
+    return r.monitors ?? [];
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async createMonitor(data: { friendly_name: string; url: string; type: number; interval?: number; alert_contacts?: string }): Promise<{ id: number }> {
+    return this.client.request('/newMonitor', data as Record<string, string | number | undefined>);
   }
+
+  async editMonitor(id: number, data: { friendly_name?: string; url?: string; interval?: number; status?: number }): Promise<{ id: number }> {
+    return this.client.request('/editMonitor', { id, ...data } as Record<string, string | number | undefined>);
+  }
+
+  async deleteMonitor(id: number): Promise<{ id: number }> {
+    return this.client.request('/deleteMonitor', { id });
+  }
+
+  async pauseMonitor(id: number): Promise<{ id: number }> {
+    return this.client.request('/editMonitor', { id, status: 0 });
+  }
+
+  async resumeMonitor(id: number): Promise<{ id: number }> {
+    return this.client.request('/editMonitor', { id, status: 1 });
+  }
+
+  async listAlertContacts(): Promise<URAlertContact[]> {
+    const r = await this.client.request<{ alert_contacts: URAlertContact[] }>('/getAlertContacts');
+    return r.alert_contacts ?? [];
+  }
+
+  getClient(): UptimeRobotClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
