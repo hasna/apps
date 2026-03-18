@@ -1,51 +1,50 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Azure Cosmos DB Connector — Globally distributed multi-model database
+import { AzureCosmosDBClient } from './client';
+import type { AzureCosmosDBConfig, CosmosDatabase, CosmosDatabaseList, CosmosContainer, CosmosContainerList, CosmosDocument, CosmosQueryResult } from '../types';
+export { AzureCosmosDBClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AzureCosmosDB {
+  private readonly client: AzureCosmosDBClient;
+  constructor(config: AzureCosmosDBConfig) { this.client = new AzureCosmosDBClient(config); }
+  static fromEnv(): AzureCosmosDB {
+    const endpoint = process.env.COSMOS_ENDPOINT;
+    const key = process.env.COSMOS_KEY;
+    if (!endpoint || !key) throw new Error('COSMOS_ENDPOINT and COSMOS_KEY are required');
+    return new AzureCosmosDB({ endpoint, key });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listDatabases(): Promise<CosmosDatabaseList> {
+    return this.client.request<CosmosDatabaseList>('/dbs', { resourceType: 'dbs', resourceLink: '' });
+  }
+  async getDatabase(dbId: string): Promise<CosmosDatabase> {
+    return this.client.request<CosmosDatabase>(`/dbs/${dbId}`, { resourceType: 'dbs', resourceLink: `dbs/${dbId}` });
+  }
+  async createDatabase(id: string): Promise<CosmosDatabase> {
+    return this.client.request<CosmosDatabase>('/dbs', { method: 'POST', resourceType: 'dbs', resourceLink: '', body: { id } });
+  }
+  async deleteDatabase(dbId: string): Promise<void> {
+    await this.client.request(`/dbs/${dbId}`, { method: 'DELETE', resourceType: 'dbs', resourceLink: `dbs/${dbId}` });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listContainers(dbId: string): Promise<CosmosContainerList> {
+    return this.client.request<CosmosContainerList>(`/dbs/${dbId}/colls`, { resourceType: 'colls', resourceLink: `dbs/${dbId}` });
+  }
+  async createContainer(dbId: string, id: string, partitionKey: string): Promise<CosmosContainer> {
+    return this.client.request<CosmosContainer>(`/dbs/${dbId}/colls`, { method: 'POST', resourceType: 'colls', resourceLink: `dbs/${dbId}`, body: { id, partitionKey: { paths: [partitionKey], kind: 'Hash' } } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async queryDocuments(dbId: string, containerId: string, query: string, parameters?: { name: string; value: unknown }[]): Promise<CosmosQueryResult> {
+    return this.client.request<CosmosQueryResult>(`/dbs/${dbId}/colls/${containerId}/docs`, { method: 'POST', resourceType: 'docs', resourceLink: `dbs/${dbId}/colls/${containerId}`, body: { query, parameters: parameters || [] } });
   }
+  async getDocument(dbId: string, containerId: string, docId: string): Promise<CosmosDocument> {
+    return this.client.request<CosmosDocument>(`/dbs/${dbId}/colls/${containerId}/docs/${docId}`, { resourceType: 'docs', resourceLink: `dbs/${dbId}/colls/${containerId}/docs/${docId}` });
+  }
+  async createDocument(dbId: string, containerId: string, doc: Record<string, unknown>): Promise<CosmosDocument> {
+    return this.client.request<CosmosDocument>(`/dbs/${dbId}/colls/${containerId}/docs`, { method: 'POST', resourceType: 'docs', resourceLink: `dbs/${dbId}/colls/${containerId}`, body: doc });
+  }
+  async deleteDocument(dbId: string, containerId: string, docId: string): Promise<void> {
+    await this.client.request(`/dbs/${dbId}/colls/${containerId}/docs/${docId}`, { method: 'DELETE', resourceType: 'docs', resourceLink: `dbs/${dbId}/colls/${containerId}/docs/${docId}` });
+  }
+
+  getClient(): AzureCosmosDBClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

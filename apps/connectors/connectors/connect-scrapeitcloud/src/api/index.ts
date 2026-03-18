@@ -1,51 +1,30 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ScrapeIt Cloud Connector — Cloud-based web scraping and data extraction
+import { ScrapeItCloudClient } from './client';
+import type { ScrapeItCloudConfig, SICResult, SICScreenshot, SICExtractResult, SICCredits } from '../types';
+export { ScrapeItCloudClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ScrapeItCloud {
+  private readonly client: ScrapeItCloudClient;
+  constructor(config: ScrapeItCloudConfig) { this.client = new ScrapeItCloudClient(config); }
+  static fromEnv(): ScrapeItCloud {
+    const apiKey = process.env.SCRAPEITCLOUD_API_KEY;
+    if (!apiKey) throw new Error('SCRAPEITCLOUD_API_KEY is required');
+    return new ScrapeItCloud({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async scrape(url: string, options?: { proxy_country?: string; render_js?: boolean; wait_for?: string; block_resources?: boolean }): Promise<SICResult> {
+    return this.client.request<SICResult>('/scrape', { body: { url, proxy_country: options?.proxy_country, render_js: options?.render_js, wait_for: options?.wait_for, block_resources: options?.block_resources } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async screenshot(url: string, options?: { full_page?: boolean; width?: number; height?: number; format?: string }): Promise<SICScreenshot> {
+    return this.client.request<SICScreenshot>('/screenshot', { body: { url, full_page: options?.full_page, width: options?.width, height: options?.height, format: options?.format } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async extract(url: string, rules: Record<string, { selector: string; type?: string; attribute?: string }>): Promise<SICExtractResult> {
+    return this.client.request<SICExtractResult>('/extract', { body: { url, rules } as Record<string, unknown> });
   }
+
+  async getCredits(): Promise<SICCredits> { return this.client.request<SICCredits>('/account/credits', { method: 'GET' }); }
+
+  getClient(): ScrapeItCloudClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
