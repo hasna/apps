@@ -1,36 +1,37 @@
 // Grain Connector — Meeting recording and highlights
 import { GrainClient } from './client';
-import type { GrainConfig, GrainRecording, GrainHighlight, GrainStory } from '../types';
+import type { GrainConfig, GrainRecording, GrainRecordingList, GrainHighlight, GrainHighlightList, GrainCollection } from '../types';
 export { GrainClient } from './client';
 
 export class Grain {
   private readonly client: GrainClient;
   constructor(config: GrainConfig) { this.client = new GrainClient(config); }
   static fromEnv(): Grain {
-    const apiKey = process.env.GRAIN_API_KEY;
-    if (!apiKey) throw new Error('GRAIN_API_KEY environment variable is required');
-    return new Grain({ apiKey });
+    const token = process.env.GRAIN_TOKEN;
+    if (!token) throw new Error('GRAIN_TOKEN is required');
+    return new Grain({ token });
   }
-  async listRecordings(options?: { limit?: number; page?: number }): Promise<GrainRecording[]> {
-    const r = await this.client.request<{ recordings: GrainRecording[] }>('/recordings', { params: options as Record<string, number | undefined> });
-    return r.recordings ?? [];
+
+  async listRecordings(options?: { page?: number; per_page?: number }): Promise<GrainRecordingList> {
+    return this.client.request<GrainRecordingList>('/recordings', { params: { page: options?.page, per_page: options?.per_page } });
   }
-  async getRecording(id: string): Promise<GrainRecording> { return this.client.request<GrainRecording>(`/recordings/${id}`); }
-  async getTranscript(recordingId: string): Promise<string> {
-    const r = await this.client.request<{ transcript: string }>(`/recordings/${recordingId}/transcript`);
-    return r.transcript;
+  async getRecording(recordingId: string): Promise<GrainRecording> { return this.client.request<GrainRecording>(`/recordings/${recordingId}`); }
+  async deleteRecording(recordingId: string): Promise<void> { await this.client.request(`/recordings/${recordingId}`, { method: 'DELETE' }); }
+
+  async listHighlights(recordingId: string): Promise<GrainHighlightList> {
+    return this.client.request<GrainHighlightList>(`/recordings/${recordingId}/highlights`);
   }
-  async listHighlights(options?: { recordingId?: string; limit?: number }): Promise<GrainHighlight[]> {
-    const r = await this.client.request<{ highlights: GrainHighlight[] }>('/highlights', {
-      params: { recording_id: options?.recordingId, limit: options?.limit },
-    });
-    return r.highlights ?? [];
+  async getHighlight(highlightId: string): Promise<GrainHighlight> { return this.client.request<GrainHighlight>(`/highlights/${highlightId}`); }
+  async createHighlight(recordingId: string, data: { title: string; start_time: number; end_time: number; tags?: string[] }): Promise<GrainHighlight> {
+    return this.client.request<GrainHighlight>(`/recordings/${recordingId}/highlights`, { method: 'POST', body: data as Record<string, unknown> });
   }
-  async getHighlight(id: string): Promise<GrainHighlight> { return this.client.request<GrainHighlight>(`/highlights/${id}`); }
-  async listStories(options?: { limit?: number }): Promise<GrainStory[]> {
-    const r = await this.client.request<{ stories: GrainStory[] }>('/stories', { params: options as Record<string, number | undefined> });
-    return r.stories ?? [];
+  async deleteHighlight(highlightId: string): Promise<void> { await this.client.request(`/highlights/${highlightId}`, { method: 'DELETE' }); }
+
+  async listCollections(): Promise<GrainCollection[]> { return this.client.request<GrainCollection[]>('/collections'); }
+  async getCollection(collectionId: string): Promise<GrainCollection> { return this.client.request<GrainCollection>(`/collections/${collectionId}`); }
+  async addHighlightToCollection(collectionId: string, highlightId: string): Promise<void> {
+    await this.client.request(`/collections/${collectionId}/highlights`, { method: 'POST', body: { highlight_id: highlightId } });
   }
-  async getStory(id: string): Promise<GrainStory> { return this.client.request<GrainStory>(`/stories/${id}`); }
+
   getClient(): GrainClient { return this.client; }
 }

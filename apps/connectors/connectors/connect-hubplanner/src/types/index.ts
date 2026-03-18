@@ -1,9 +1,10 @@
-export interface HubPlannerConfig { apiKey: string; baseUrl?: string; }
+export interface HubPlannerConfig { apiKey: string; }
 
-export interface HPResource { _id: string; firstName: string; lastName: string; email: string; role: string; resourceRates?: Array<{ internalRate: number; externalRate: number }>; }
-export interface HPProject { _id: string; name: string; description?: string; status: 'STATUS_ACTIVE' | 'STATUS_DONE' | 'STATUS_ARCHIVED'; startDate?: string; endDate?: string; }
-export interface HPBooking { _id: string; project: string; resource: string; start: string; end: string; duration: number; type: 'TIME_OFF' | 'BOOKING'; note?: string; }
-export interface HPEvent { _id: string; title: string; start: string; end: string; resource?: string; project?: string; }
+export interface HPResource { _id: string; firstName: string; lastName: string; email: string; role: string; status: string; department: string; created: string; updated: string; }
+export interface HPProject { _id: string; name: string; status: string; budget: { type: string; hours: number }; start: string; end: string; clients: string[]; tags: string[]; created: string; }
+export interface HPBooking { _id: string; resource: string; project: string; start: string; end: string; allDay: boolean; hours: number; status: string; note: string; created: string; }
+export interface HPTimeEntry { _id: string; resource: string; project: string; date: string; hours: number; note: string; status: string; created: string; }
+export interface HPEvent { _id: string; name: string; start: string; end: string; allDay: boolean; resources: string[]; }
 
 export class HubPlannerApiError extends Error {
   public readonly statusCode: number;
