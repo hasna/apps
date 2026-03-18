@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Hunter Connector — Email finder and verification
+import { HunterClient } from './client';
+import type { HunterConfig, HunterDomainSearch, HunterEmailFinder, HunterVerification, HunterAccount } from '../types';
+export { HunterClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Hunter {
+  private readonly client: HunterClient;
+  constructor(config: HunterConfig) { this.client = new HunterClient(config); }
+  static fromEnv(): Hunter {
+    const apiKey = process.env.HUNTER_API_KEY;
+    if (!apiKey) throw new Error('HUNTER_API_KEY is required');
+    return new Hunter({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async domainSearch(domain: string, options?: { limit?: number; offset?: number; type?: string; department?: string }): Promise<HunterDomainSearch> {
+    return this.client.request<HunterDomainSearch>('/domain-search', { domain, limit: options?.limit, offset: options?.offset, type: options?.type, department: options?.department });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async emailFinder(domain: string, firstName: string, lastName: string): Promise<HunterEmailFinder> {
+    return this.client.request<HunterEmailFinder>('/email-finder', { domain, first_name: firstName, last_name: lastName });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async verifyEmail(email: string): Promise<HunterVerification> {
+    return this.client.request<HunterVerification>('/email-verifier', { email });
   }
+
+  async emailCount(domain: string): Promise<{ total: number; personal_emails: number; generic_emails: number }> {
+    return this.client.request('/email-count', { domain });
+  }
+
+  async getAccount(): Promise<HunterAccount> { return this.client.request<HunterAccount>('/account'); }
+
+  getClient(): HunterClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

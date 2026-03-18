@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// LINE Connector — LINE messaging platform and bot API
+import { LINEClient } from './client';
+import type { LINEConfig, LINEProfile, LINEMessage, LINESendResult, LINERichMenu, LINEGroupSummary, LINEQuota } from '../types';
+export { LINEClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class LINE {
+  private readonly client: LINEClient;
+  constructor(config: LINEConfig) { this.client = new LINEClient(config); }
+  static fromEnv(): LINE {
+    const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    if (!channelAccessToken) throw new Error('LINE_CHANNEL_ACCESS_TOKEN is required');
+    return new LINE({ channelAccessToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async pushMessage(to: string, messages: LINEMessage[]): Promise<LINESendResult> {
+    return this.client.request<LINESendResult>('/message/push', { method: 'POST', body: { to, messages } as Record<string, unknown> });
+  }
+  async replyMessage(replyToken: string, messages: LINEMessage[]): Promise<LINESendResult> {
+    return this.client.request<LINESendResult>('/message/reply', { method: 'POST', body: { replyToken, messages } as Record<string, unknown> });
+  }
+  async broadcastMessage(messages: LINEMessage[]): Promise<LINESendResult> {
+    return this.client.request<LINESendResult>('/message/broadcast', { method: 'POST', body: { messages } as Record<string, unknown> });
+  }
+  async multicastMessage(to: string[], messages: LINEMessage[]): Promise<LINESendResult> {
+    return this.client.request<LINESendResult>('/message/multicast', { method: 'POST', body: { to, messages } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async getProfile(userId: string): Promise<LINEProfile> { return this.client.request<LINEProfile>(`/profile/${userId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async getGroupSummary(groupId: string): Promise<LINEGroupSummary> { return this.client.request<LINEGroupSummary>(`/group/${groupId}/summary`); }
+  async getGroupMemberCount(groupId: string): Promise<{ count: number }> { return this.client.request(`/group/${groupId}/members/count`); }
+  async leaveGroup(groupId: string): Promise<void> { await this.client.request(`/group/${groupId}/leave`, { method: 'POST' }); }
+
+  async listRichMenus(): Promise<{ richmenus: LINERichMenu[] }> { return this.client.request('/richmenu/list'); }
+  async getRichMenu(richMenuId: string): Promise<LINERichMenu> { return this.client.request<LINERichMenu>(`/richmenu/${richMenuId}`); }
+
+  async getMessageQuota(): Promise<LINEQuota> { return this.client.request<LINEQuota>('/message/quota'); }
+  async getMessageQuotaConsumption(): Promise<{ totalUsage: number }> { return this.client.request('/message/quota/consumption'); }
+
+  getClient(): LINEClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
