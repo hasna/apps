@@ -1,51 +1,31 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Handwrytten Connector — Handwritten notes and cards via robot
+import { HandwryttenClient } from './client';
+import type { HandwryttenConfig, HWCard, HWFont, HWOrder, HWRecipient, HWSender } from '../types';
+export { HandwryttenClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Handwrytten {
+  private readonly client: HandwryttenClient;
+  constructor(config: HandwryttenConfig) { this.client = new HandwryttenClient(config); }
+  static fromEnv(): Handwrytten {
+    const apiKey = process.env.HANDWRYTTEN_API_KEY;
+    if (!apiKey) throw new Error('HANDWRYTTEN_API_KEY is required');
+    return new Handwrytten({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listCards(options?: { category?: string }): Promise<HWCard[]> {
+    return this.client.request<HWCard[]>('/cards', { params: { category: options?.category } });
+  }
+  async getCard(cardId: string): Promise<HWCard> { return this.client.request<HWCard>(`/cards/${cardId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listFonts(): Promise<HWFont[]> { return this.client.request<HWFont[]>('/fonts'); }
+
+  async createOrder(data: { card_id: string; message: string; font_id?: string; recipient: HWRecipient; sender: HWSender }): Promise<HWOrder> {
+    return this.client.request<HWOrder>('/orders', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async getOrder(orderId: string): Promise<HWOrder> { return this.client.request<HWOrder>(`/orders/${orderId}`); }
+  async listOrders(options?: { page?: number; per_page?: number }): Promise<HWOrder[]> {
+    return this.client.request<HWOrder[]>('/orders', { params: { page: options?.page, per_page: options?.per_page } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): HandwryttenClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

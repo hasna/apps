@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SwagUp Connector — Corporate swag and branded merchandise management
+import { SwagUpClient } from './client';
+import type { SwagUpConfig, SUProduct, SUOrder, SUPack, SURecipient, SUAddress } from '../types';
+export { SwagUpClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SwagUp {
+  private readonly client: SwagUpClient;
+  constructor(config: SwagUpConfig) { this.client = new SwagUpClient(config); }
+  static fromEnv(): SwagUp {
+    const apiKey = process.env.SWAGUP_API_KEY;
+    if (!apiKey) throw new Error('SWAGUP_API_KEY is required');
+    return new SwagUp({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProducts(options?: { category?: string; page?: number }): Promise<{ results: SUProduct[] }> {
+    return this.client.request('/products', { params: { category: options?.category, page: options?.page } });
+  }
+  async getProduct(productId: number): Promise<SUProduct> { return this.client.request<SUProduct>(`/products/${productId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listPacks(): Promise<{ results: SUPack[] }> { return this.client.request('/packs'); }
+  async getPack(packId: number): Promise<SUPack> { return this.client.request<SUPack>(`/packs/${packId}`); }
+
+  async createOrder(data: { pack_id?: number; items?: { product_id: number; quantity: number; size?: string; color?: string }[]; shipping_address: SUAddress }): Promise<SUOrder> {
+    return this.client.request<SUOrder>('/orders', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async getOrder(orderId: number): Promise<SUOrder> { return this.client.request<SUOrder>(`/orders/${orderId}`); }
+  async listOrders(options?: { page?: number; status?: string }): Promise<{ results: SUOrder[] }> {
+    return this.client.request('/orders', { params: { page: options?.page, status: options?.status } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listRecipients(options?: { page?: number }): Promise<{ results: SURecipient[] }> {
+    return this.client.request('/recipients', { params: { page: options?.page } });
+  }
+  async createRecipient(data: { name: string; email: string; address: SUAddress }): Promise<SURecipient> {
+    return this.client.request<SURecipient>('/recipients', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SwagUpClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
