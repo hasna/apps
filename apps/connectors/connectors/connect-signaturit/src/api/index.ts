@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Signaturit Connector — Electronic signature and digital contract management
+import { SignaturitClient } from './client';
+import type { SignaturitConfig, SGSignature, SGSignatureRequest, SGTemplate, SGCertifiedEmail } from '../types';
+export { SignaturitClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Signaturit {
+  private readonly client: SignaturitClient;
+  constructor(config: SignaturitConfig) { this.client = new SignaturitClient(config); }
+  static fromEnv(): Signaturit {
+    const token = process.env.SIGNATURIT_TOKEN;
+    if (!token) throw new Error('SIGNATURIT_TOKEN is required');
+    return new Signaturit({ token, sandbox: process.env.SIGNATURIT_SANDBOX === 'true' });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listSignatures(options?: { page?: number; per_page?: number; status?: string }): Promise<SGSignature[]> {
+    return this.client.request<SGSignature[]>('/signatures.json', { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
+  }
+  async getSignature(signatureId: string): Promise<SGSignature> { return this.client.request<SGSignature>(`/signatures/${signatureId}.json`); }
+  async createSignature(data: { recipients: { name: string; email: string; phone?: string }[]; subject?: string; body?: string; template_id?: string }): Promise<SGSignatureRequest> {
+    return this.client.request<SGSignatureRequest>('/signatures.json', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async cancelSignature(signatureId: string): Promise<void> { await this.client.request(`/signatures/${signatureId}/cancel.json`, { method: 'PATCH' }); }
+  async sendReminder(signatureId: string): Promise<void> { await this.client.request(`/signatures/${signatureId}/reminder.json`, { method: 'POST' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async downloadSignedDocument(signatureId: string, documentId: string): Promise<{ url: string }> {
+    return this.client.request(`/signatures/${signatureId}/documents/${documentId}/download/signed`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTemplates(): Promise<SGTemplate[]> { return this.client.request<SGTemplate[]>('/templates.json'); }
+
+  async listCertifiedEmails(options?: { page?: number }): Promise<SGCertifiedEmail[]> {
+    return this.client.request<SGCertifiedEmail[]>('/emails.json', { params: { page: options?.page } });
+  }
+  async sendCertifiedEmail(data: { recipients: { name: string; email: string }[]; subject: string; body: string }): Promise<SGCertifiedEmail> {
+    return this.client.request<SGCertifiedEmail>('/emails.json', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SignaturitClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
