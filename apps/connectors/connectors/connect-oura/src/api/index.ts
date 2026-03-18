@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Oura Connector — Oura Ring health and sleep tracking data
+import { OuraClient } from './client';
+import type { OuraConfig, OuraSleep, OuraActivity, OuraReadiness, OuraHeartRate, OuraPersonalInfo, OuraDataList } from '../types';
+export { OuraClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Oura {
+  private readonly client: OuraClient;
+  constructor(config: OuraConfig) { this.client = new OuraClient(config); }
+  static fromEnv(): Oura {
+    const token = process.env.OURA_TOKEN;
+    if (!token) throw new Error('OURA_TOKEN is required');
+    return new Oura({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getSleepPeriods(options?: { start_date?: string; end_date?: string; next_token?: string }): Promise<OuraDataList<OuraSleep>> {
+    return this.client.request<OuraDataList<OuraSleep>>('/usercollection/sleep', { start_date: options?.start_date, end_date: options?.end_date, next_token: options?.next_token });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getDailyActivity(options?: { start_date?: string; end_date?: string; next_token?: string }): Promise<OuraDataList<OuraActivity>> {
+    return this.client.request<OuraDataList<OuraActivity>>('/usercollection/daily_activity', { start_date: options?.start_date, end_date: options?.end_date, next_token: options?.next_token });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getDailyReadiness(options?: { start_date?: string; end_date?: string; next_token?: string }): Promise<OuraDataList<OuraReadiness>> {
+    return this.client.request<OuraDataList<OuraReadiness>>('/usercollection/daily_readiness', { start_date: options?.start_date, end_date: options?.end_date, next_token: options?.next_token });
   }
+
+  async getHeartRate(options?: { start_datetime?: string; end_datetime?: string; next_token?: string }): Promise<OuraDataList<OuraHeartRate>> {
+    return this.client.request<OuraDataList<OuraHeartRate>>('/usercollection/heartrate', { start_datetime: options?.start_datetime, end_datetime: options?.end_datetime, next_token: options?.next_token });
+  }
+
+  async getPersonalInfo(): Promise<OuraPersonalInfo> { return this.client.request<OuraPersonalInfo>('/usercollection/personal_info'); }
+
+  getClient(): OuraClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

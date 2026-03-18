@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// npm Connector — npm registry API for package search, metadata, and downloads
+import { NpmClient } from './client';
+import type { NpmConfig, NpmPackage, NpmVersion, NpmSearchResult, NpmDownloads, NpmDownloadsRange } from '../types';
+export { NpmClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Npm {
+  private readonly client: NpmClient;
+  constructor(config: NpmConfig = {}) { this.client = new NpmClient(config); }
+  static fromEnv(): Npm {
+    return new Npm({ token: process.env.NPM_TOKEN });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getPackage(name: string): Promise<NpmPackage> { return this.client.registryRequest<NpmPackage>(`/${encodeURIComponent(name)}`); }
+  async getVersion(name: string, version: string): Promise<NpmVersion> { return this.client.registryRequest<NpmVersion>(`/${encodeURIComponent(name)}/${version}`); }
+  async getLatest(name: string): Promise<NpmVersion> { return this.client.registryRequest<NpmVersion>(`/${encodeURIComponent(name)}/latest`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async search(query: string, options?: { size?: number; from?: number }): Promise<NpmSearchResult> {
+    const params = new URLSearchParams({ text: query });
+    if (options?.size) params.append('size', String(options.size));
+    if (options?.from) params.append('from', String(options.from));
+    return this.client.registryRequest<NpmSearchResult>(`/-/v1/search?${params}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getDownloads(name: string, period?: string): Promise<NpmDownloads> {
+    return this.client.apiRequest<NpmDownloads>(`/downloads/point/${period || 'last-week'}/${encodeURIComponent(name)}`);
+  }
+  async getDownloadsRange(name: string, period?: string): Promise<NpmDownloadsRange> {
+    return this.client.apiRequest<NpmDownloadsRange>(`/downloads/range/${period || 'last-month'}/${encodeURIComponent(name)}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): NpmClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
