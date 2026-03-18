@@ -1,51 +1,56 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ApiFlash Connector — Website screenshot API
+import { ApiFlashClient } from './client';
+import type { ApiFlashConfig, ApiFlashOptions, ApiFlashScreenshot, ApiFlashQuota } from '../types';
+export { ApiFlashClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ApiFlash {
+  private readonly client: ApiFlashClient;
+  constructor(config: ApiFlashConfig) { this.client = new ApiFlashClient(config); }
+  static fromEnv(): ApiFlash {
+    const accessKey = process.env.APIFLASH_ACCESS_KEY;
+    if (!accessKey) throw new Error('APIFLASH_ACCESS_KEY is required');
+    return new ApiFlash({ accessKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async screenshot(options: ApiFlashOptions): Promise<ApiFlashScreenshot> {
+    const params: Record<string, string | number | boolean | undefined> = {
+      url: options.url,
+      format: options.format,
+      width: options.width,
+      height: options.height,
+      full_page: options.full_page,
+      fresh: options.fresh,
+      quality: options.quality,
+      delay: options.delay,
+      scroll_page: options.scroll_page,
+      css: options.css,
+      js: options.js,
+      wait_until: options.wait_until,
+      response_type: options.response_type || 'json',
+      thumbnail_width: options.thumbnail_width,
+      no_cookie_banners: options.no_cookie_banners,
+      no_ads: options.no_ads,
+      no_tracking: options.no_tracking,
+      element: options.element,
+      transparent: options.transparent,
+    };
+    return this.client.request<ApiFlashScreenshot>('/urltoimage', params);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getQuota(): Promise<ApiFlashQuota> {
+    return this.client.request<ApiFlashQuota>('/urltoimage/quota');
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  screenshotUrl(options: ApiFlashOptions): string {
+    const url = new URL('https://api.apiflash.com/v1/urltoimage');
+    url.searchParams.append('access_key', this.client.getAccessKey());
+    url.searchParams.append('url', options.url);
+    if (options.format) url.searchParams.append('format', options.format);
+    if (options.width) url.searchParams.append('width', String(options.width));
+    if (options.height) url.searchParams.append('height', String(options.height));
+    if (options.full_page) url.searchParams.append('full_page', 'true');
+    return url.toString();
   }
+
+  getClient(): ApiFlashClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

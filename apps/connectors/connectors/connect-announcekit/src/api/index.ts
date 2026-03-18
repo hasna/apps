@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// AnnounceKit Connector — In-app changelog and announcements
+import { AnnounceKitClient } from './client';
+import type { AnnounceKitConfig, AKProject, AKPost, AKLabel, AKFeedback, AKWidget } from '../types';
+export { AnnounceKitClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AnnounceKit {
+  private readonly client: AnnounceKitClient;
+  constructor(config: AnnounceKitConfig) { this.client = new AnnounceKitClient(config); }
+  static fromEnv(): AnnounceKit {
+    const token = process.env.ANNOUNCEKIT_TOKEN;
+    if (!token) throw new Error('ANNOUNCEKIT_TOKEN is required');
+    return new AnnounceKit({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<AKProject[]> { return this.client.request<AKProject[]>('/projects'); }
+  async getProject(projectId: string): Promise<AKProject> { return this.client.request<AKProject>(`/projects/${projectId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listPosts(projectId: string): Promise<AKPost[]> { return this.client.request<AKPost[]>(`/projects/${projectId}/posts`); }
+  async getPost(projectId: string, postId: string): Promise<AKPost> { return this.client.request<AKPost>(`/projects/${projectId}/posts/${postId}`); }
+  async createPost(projectId: string, data: { title: string; body: string; visible?: boolean; is_draft?: boolean; labels?: string[] }): Promise<AKPost> {
+    return this.client.request<AKPost>(`/projects/${projectId}/posts`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updatePost(projectId: string, postId: string, data: { title?: string; body?: string; visible?: boolean; is_draft?: boolean }): Promise<AKPost> {
+    return this.client.request<AKPost>(`/projects/${projectId}/posts/${postId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async deletePost(projectId: string, postId: string): Promise<void> { await this.client.request(`/projects/${projectId}/posts/${postId}`, { method: 'DELETE' }); }
+
+  async listLabels(projectId: string): Promise<AKLabel[]> { return this.client.request<AKLabel[]>(`/projects/${projectId}/labels`); }
+  async createLabel(projectId: string, data: { name: string; color: string }): Promise<AKLabel> {
+    return this.client.request<AKLabel>(`/projects/${projectId}/labels`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listFeedback(projectId: string, postId: string): Promise<AKFeedback[]> { return this.client.request<AKFeedback[]>(`/projects/${projectId}/posts/${postId}/feedback`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listWidgets(projectId: string): Promise<AKWidget[]> { return this.client.request<AKWidget[]>(`/projects/${projectId}/widgets`); }
+
+  getClient(): AnnounceKitClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
