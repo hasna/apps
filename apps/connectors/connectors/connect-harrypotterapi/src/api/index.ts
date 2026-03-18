@@ -1,51 +1,21 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Harry Potter API Connector — Harry Potter universe data and characters
+import { HarryPotterClient } from './client';
+import type { HarryPotterConfig, HPCharacter, HPSpell } from '../types';
+export { HarryPotterClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class HarryPotterAPI {
+  private readonly client: HarryPotterClient;
+  constructor(config: HarryPotterConfig = {}) { this.client = new HarryPotterClient(config); }
+  static fromEnv(): HarryPotterAPI { return new HarryPotterAPI(); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
+  async getAllCharacters(): Promise<HPCharacter[]> { return this.client.request<HPCharacter[]>('/characters'); }
+  async getStudents(): Promise<HPCharacter[]> { return this.client.request<HPCharacter[]>('/characters/students'); }
+  async getStaff(): Promise<HPCharacter[]> { return this.client.request<HPCharacter[]>('/characters/staff'); }
+  async getCharacter(characterId: string): Promise<HPCharacter[]> { return this.client.request<HPCharacter[]>(`/character/${characterId}`); }
 
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
-  }
+  async getHouseMembers(house: string): Promise<HPCharacter[]> { return this.client.request<HPCharacter[]>(`/characters/house/${house}`); }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getAllSpells(): Promise<HPSpell[]> { return this.client.request<HPSpell[]>('/spells'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
-  }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): HarryPotterClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
