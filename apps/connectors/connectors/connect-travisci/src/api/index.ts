@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Travis CI Connector — CI/CD for testing and deploying software
+import { TravisCIClient } from './client';
+import type { TravisCIConfig, TCRepo, TCBuild, TCJob, TCUser } from '../types';
+export { TravisCIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TravisCI {
+  private readonly client: TravisCIClient;
+  constructor(config: TravisCIConfig) { this.client = new TravisCIClient(config); }
+  static fromEnv(): TravisCI {
+    const token = process.env.TRAVISCI_TOKEN;
+    if (!token) throw new Error('TRAVISCI_TOKEN is required');
+    return new TravisCI({ token, baseUrl: process.env.TRAVISCI_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getUser(): Promise<TCUser> { return this.client.request<TCUser>('/user'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listRepos(options?: { limit?: number; offset?: number; active?: boolean }): Promise<{ repositories: TCRepo[] }> {
+    return this.client.request('/repos', { params: { limit: options?.limit, offset: options?.offset, active: options?.active === true ? 'true' : undefined } });
   }
+  async getRepo(slug: string): Promise<TCRepo> { return this.client.request<TCRepo>(`/repo/${encodeURIComponent(slug)}`); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listBuilds(repoSlug: string, options?: { limit?: number; offset?: number; state?: string }): Promise<{ builds: TCBuild[] }> {
+    return this.client.request(`/repo/${encodeURIComponent(repoSlug)}/builds`, { params: { limit: options?.limit, offset: options?.offset, 'state[]': options?.state } });
   }
+  async getBuild(buildId: number): Promise<TCBuild> { return this.client.request<TCBuild>(`/build/${buildId}`); }
+  async triggerBuild(repoSlug: string, data: { branch?: string; message?: string }): Promise<{ request: { id: number } }> {
+    return this.client.request(`/repo/${encodeURIComponent(repoSlug)}/requests`, { method: 'POST', body: { request: { branch: data.branch || 'main', message: data.message } } });
+  }
+  async cancelBuild(buildId: number): Promise<void> { await this.client.request(`/build/${buildId}/cancel`, { method: 'POST' }); }
+  async restartBuild(buildId: number): Promise<void> { await this.client.request(`/build/${buildId}/restart`, { method: 'POST' }); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async getJob(jobId: number): Promise<TCJob> { return this.client.request<TCJob>(`/job/${jobId}`); }
+  async getJobLog(jobId: number): Promise<{ content: string }> { return this.client.request(`/job/${jobId}/log`); }
+
+  getClient(): TravisCIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
