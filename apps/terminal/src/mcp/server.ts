@@ -698,22 +698,25 @@ export function createServer(): McpServer {
       offset: z.number().optional().describe("Start line (0-indexed)"),
       limit: z.number().optional().describe("Max lines to return"),
       summarize: z.boolean().optional().describe("Return AI summary instead of full content (saves ~90% tokens)"),
+      focus: z.string().optional().describe("Focus hint for summary (e.g., 'public API', 'error handling', 'auth logic')"),
     },
-    async ({ path: rawPath, offset, limit, summarize }) => {
+    async ({ path: rawPath, offset, limit, summarize, focus }) => {
       const start = Date.now();
       const path = resolvePath(rawPath);
       const result = cachedRead(path, { offset, limit });
 
       if (summarize && result.content.length > 500) {
-        // AI-native file summary — ask directly what the file does
         const provider = getOutputProvider();
         const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
         const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
+        const focusInstruction = focus
+          ? `Focus specifically on: ${focus}. Describe only aspects related to "${focus}".`
+          : `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose.`;
         const summary = await provider.complete(
           `File: ${path}\n\n${content}`,
           {
             model: outputModel,
-            system: `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose. Be specific — name the actual functions and what they do. Never just say "N lines of code."`,
+            system: `${focusInstruction} Be specific — name the actual functions and what they do. Never just say "N lines of code."`,
             maxTokens: 300,
             temperature: 0.2,
           }
@@ -1567,6 +1570,87 @@ Be specific, not generic. Only flag real problems.`,
       );
 
       return { content: [{ type: "text" as const, text: recommendation }] };
+    }
+  );
+
+  // ── batch: multiple operations in one round trip ───────────────────────────
+
+  server.tool(
+    "batch",
+    "Run multiple operations in ONE call. Saves N-1 round trips. Each op can be: execute (run command), read (file read/summarize), search (grep pattern), or symbols (file outline).",
+    {
+      ops: z.array(z.object({
+        type: z.enum(["execute", "read", "search", "symbols"]).describe("Operation type"),
+        command: z.string().optional().describe("Shell command (for execute)"),
+        path: z.string().optional().describe("File path (for read/symbols)"),
+        pattern: z.string().optional().describe("Search pattern (for search)"),
+        summarize: z.boolean().optional().describe("AI summarize (for read)"),
+        format: z.enum(["raw", "summary"]).optional().describe("Output format (for execute)"),
+      })).describe("Array of operations to run"),
+      cwd: z.string().optional().describe("Working directory for all ops"),
+    },
+    async ({ ops, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+      const results: Record<string, any>[] = [];
+
+      for (let i = 0; i < ops.slice(0, 10).length; i++) {
+        const op = ops[i];
+        try {
+          if (op.type === "execute" && op.command) {
+            const result = await exec(op.command, workDir, 30000);
+            const output = (result.stdout + result.stderr).trim();
+            if (op.format === "summary" && output.split("\n").length > 15) {
+              const processed = await processOutput(op.command, output);
+              results.push({ op: i, type: "execute", summary: processed.summary, exitCode: result.exitCode, tokensSaved: processed.tokensSaved });
+            } else {
+              results.push({ op: i, type: "execute", output: stripAnsi(output).slice(0, 2000), exitCode: result.exitCode });
+            }
+          } else if (op.type === "read" && op.path) {
+            const filePath = resolvePath(op.path, workDir);
+            const result = cachedRead(filePath, {});
+            if (op.summarize && result.content.length > 500) {
+              const provider = getOutputProvider();
+              const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+              const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
+              const summary = await provider.complete(`File: ${filePath}\n\n${content}`, {
+                model: outputModel,
+                system: `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose. Be specific.`,
+                maxTokens: 300, temperature: 0.2,
+              });
+              results.push({ op: i, type: "read", path: op.path, summary, lines: result.content.split("\n").length });
+            } else {
+              results.push({ op: i, type: "read", path: op.path, content: result.content, lines: result.content.split("\n").length });
+            }
+          } else if (op.type === "search" && op.pattern) {
+            const result = await searchContent(op.pattern, op.path ? resolvePath(op.path, workDir) : workDir, {});
+            results.push({ op: i, type: "search", pattern: op.pattern, totalMatches: result.totalMatches, files: result.files.slice(0, 10) });
+          } else if (op.type === "symbols" && op.path) {
+            const filePath = resolvePath(op.path, workDir);
+            const result = cachedRead(filePath, {});
+            if (result.content && !result.content.startsWith("Error:")) {
+              const provider = getOutputProvider();
+              const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+              const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
+              const summary = await provider.complete(`File: ${filePath}\n\n${content}`, {
+                model: outputModel,
+                system: `Extract all symbols. Return ONLY a JSON array. Each: {"name":"x","kind":"function|class|method|interface|type","line":N,"signature":"brief"}. For class methods use "Class.method". Exclude imports.`,
+                maxTokens: 2000, temperature: 0,
+              });
+              let symbols: any[] = [];
+              try { const m = summary.match(/\[[\s\S]*\]/); if (m) symbols = JSON.parse(m[0]); } catch {}
+              results.push({ op: i, type: "symbols", path: op.path, symbols });
+            } else {
+              results.push({ op: i, type: "symbols", path: op.path, error: "Cannot read file" });
+            }
+          }
+        } catch (err: any) {
+          results.push({ op: i, type: op.type, error: err.message?.slice(0, 200) });
+        }
+      }
+
+      logCall("batch", { command: `${ops.length} ops`, durationMs: Date.now() - start, aiProcessed: true });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ results, total: results.length, durationMs: Date.now() - start }) }] };
     }
   );
 
