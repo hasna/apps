@@ -58,6 +58,14 @@ function exec(command: string, cwd?: string, timeout?: number, allowRewrite: boo
   });
 }
 
+/** Resolve a path — supports relative paths against cwd, just like a shell */
+function resolvePath(p: string, cwd?: string): string {
+  if (!p) return cwd ?? process.cwd();
+  if (p.startsWith("/") || p.startsWith("~")) return p;
+  const { join } = require("path");
+  return join(cwd ?? process.cwd(), p);
+}
+
 // ── server ───────────────────────────────────────────────────────────────────
 
 export function createServer(): McpServer {
@@ -685,8 +693,9 @@ export function createServer(): McpServer {
       limit: z.number().optional().describe("Max lines to return"),
       summarize: z.boolean().optional().describe("Return AI summary instead of full content (saves ~90% tokens)"),
     },
-    async ({ path, offset, limit, summarize }) => {
+    async ({ path: rawPath, offset, limit, summarize }) => {
       const start = Date.now();
+      const path = resolvePath(rawPath);
       const result = cachedRead(path, { offset, limit });
 
       if (summarize && result.content.length > 500) {
@@ -782,8 +791,9 @@ export function createServer(): McpServer {
     {
       path: z.string().describe("File path to extract symbols from"),
     },
-    async ({ path: filePath }) => {
+    async ({ path: rawPath }) => {
       const start = Date.now();
+      const filePath = resolvePath(rawPath);
       const result = cachedRead(filePath, {});
       if (!result.content || result.content.startsWith("Error:")) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot read ${filePath}` }) }] };
@@ -836,8 +846,9 @@ Line numbers must be accurate (count from 1).`,
       path: z.string().describe("Source file path"),
       name: z.string().describe("Symbol name (function, class, interface)"),
     },
-    async ({ path: filePath, name }) => {
+    async ({ path: rawPath, name }) => {
       const start = Date.now();
+      const filePath = resolvePath(rawPath);
       const result = cachedRead(filePath, {});
       if (!result.content || result.content.startsWith("Error:")) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot read ${filePath}` }) }] };
@@ -966,8 +977,9 @@ Match by function name, class name, method name (including ClassName.method), in
       replace: z.string().describe("Replacement text"),
       all: z.boolean().optional().describe("Replace all occurrences (default: first only)"),
     },
-    async ({ file, find, replace, all }) => {
+    async ({ file: rawFile, find, replace, all }) => {
       const start = Date.now();
+      const file = resolvePath(rawFile);
       const { readFileSync, writeFileSync } = await import("fs");
       try {
         let content = readFileSync(file, "utf8");
@@ -997,8 +1009,9 @@ Match by function name, class name, method name (including ClassName.method), in
       items: z.array(z.string()).describe("Names or patterns to look up"),
       context: z.number().optional().describe("Lines of context around each match (default: 3)"),
     },
-    async ({ file, items, context }) => {
+    async ({ file: rawFile, items, context }) => {
       const start = Date.now();
+      const file = resolvePath(rawFile);
       const { readFileSync } = await import("fs");
       try {
         const content = readFileSync(file, "utf8");
