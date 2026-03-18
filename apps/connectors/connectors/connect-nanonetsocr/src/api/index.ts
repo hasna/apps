@@ -1,51 +1,31 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Nanonets OCR Connector — AI-powered OCR and intelligent document processing
+import { NanonetsClient } from './client';
+import type { NanonetsConfig, NNModel, NNPrediction, NNFile } from '../types';
+export { NanonetsClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class NanonetsOCR {
+  private readonly client: NanonetsClient;
+  constructor(config: NanonetsConfig) { this.client = new NanonetsClient(config); }
+  static fromEnv(): NanonetsOCR {
+    const apiKey = process.env.NANONETS_API_KEY;
+    if (!apiKey) throw new Error('NANONETS_API_KEY is required');
+    return new NanonetsOCR({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listModels(): Promise<NNModel[]> { return this.client.request<NNModel[]>('/OCR/Model/'); }
+  async getModel(modelId: string): Promise<NNModel> { return this.client.request<NNModel>(`/OCR/Model/${modelId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async predictFromUrl(modelId: string, urls: string[]): Promise<NNPrediction> {
+    return this.client.request<NNPrediction>(`/OCR/Model/${modelId}/LabelUrls/`, { method: 'POST', body: { urls } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getPrediction(modelId: string, fileId: string): Promise<NNPrediction> {
+    return this.client.request<NNPrediction>(`/OCR/Model/${modelId}/LabelFile/${fileId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listFiles(modelId: string, options?: { page?: number; per_page?: number }): Promise<{ data: NNFile[] }> {
+    return this.client.request(`/OCR/Model/${modelId}/FileList/`, { params: { page_number: options?.page, results_per_page: options?.per_page } });
   }
+
+  getClient(): NanonetsClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

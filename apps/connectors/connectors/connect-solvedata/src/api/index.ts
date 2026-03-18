@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Solve.io Connector — Customer data platform for retail analytics
+import { SolveDataClient } from './client';
+import type { SolveDataConfig, SDCustomer, SDCustomerList, SDSegment, SDEvent } from '../types';
+export { SolveDataClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SolveData {
+  private readonly client: SolveDataClient;
+  constructor(config: SolveDataConfig) { this.client = new SolveDataClient(config); }
+  static fromEnv(): SolveData {
+    const apiKey = process.env.SOLVEDATA_API_KEY;
+    if (!apiKey) throw new Error('SOLVEDATA_API_KEY is required');
+    return new SolveData({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listCustomers(options?: { page?: number; per_page?: number; segment_id?: string }): Promise<SDCustomerList> {
+    return this.client.request<SDCustomerList>('/customers', { params: { page: options?.page, per_page: options?.per_page, segment_id: options?.segment_id } });
+  }
+  async getCustomer(customerId: string): Promise<SDCustomer> { return this.client.request<SDCustomer>(`/customers/${customerId}`); }
+  async searchCustomers(query: string): Promise<SDCustomerList> {
+    return this.client.request<SDCustomerList>('/customers/search', { params: { q: query } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listSegments(): Promise<SDSegment[]> { return this.client.request<SDSegment[]>('/segments'); }
+  async getSegment(segmentId: string): Promise<SDSegment> { return this.client.request<SDSegment>(`/segments/${segmentId}`); }
+
+  async trackEvent(data: { customer_id: string; event_type: string; properties?: Record<string, unknown> }): Promise<SDEvent> {
+    return this.client.request<SDEvent>('/events', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async listEvents(customerId: string, options?: { page?: number }): Promise<{ events: SDEvent[] }> {
+    return this.client.request(`/customers/${customerId}/events`, { params: { page: options?.page } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SolveDataClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
