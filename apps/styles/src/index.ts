@@ -78,7 +78,13 @@ export type {
   StyleRule,
   FileViolation,
   HealthCheckResult,
+  FileCacheEntry,
+  HealthCheckOptions,
 } from "./lib/health.js";
+
+// ── Health diff ───────────────────────────────────────────────────────────────
+export { getHealthDiff } from "./lib/healthdiff.js";
+export type { HealthDiffResult } from "./lib/healthdiff.js";
 
 // ── AI inspector ──────────────────────────────────────────────────────────────
 export {
@@ -100,3 +106,21 @@ export {
   isHookInstalled,
 } from "./lib/hookmanager.js";
 export type { InjectResult } from "./lib/hookmanager.js";
+
+// ── Project detection ─────────────────────────────────────────────────────────
+export { detectProjectPath } from "./lib/detect.js";
+
+// ── Context injector ──────────────────────────────────────────────────────────
+export {
+  buildContextSection,
+  injectIntoClaudeMd,
+  removeFromClaudeMd,
+} from "./lib/contextinjector.js";
+
+// ── Fixer ─────────────────────────────────────────────────────────────────────
+export { getFixSuggestions, applyFixes } from "./lib/fixer.js";
+export type { FixSuggestion, FixResult } from "./lib/fixer.js";
+
+// ── Examples ──────────────────────────────────────────────────────────────────
+export { getExample, listExamples, PATTERNS } from "./lib/examples.js";
+export type { Pattern } from "./lib/examples.js";

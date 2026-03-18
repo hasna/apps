@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync, statSync, existsSync } from "fs";
+import { readdirSync, readFileSync, statSync, existsSync, writeFileSync } from "fs";
 import { join, extname, relative } from "path";
 import { getDb } from "./db.js";
+import { getProjectDir } from "./fs.js";
 import type { StyleProfile } from "./profiles.js";
 
 export interface StyleRule {
@@ -247,10 +248,54 @@ function getStatus(score: number): "pass" | "warn" | "fail" {
   return "fail";
 }
 
+// ── File cache ────────────────────────────────────────────────────────────────
+
+export interface FileCacheEntry {
+  mtime: number;
+  violations: FileViolation[];
+}
+
+interface FileCacheMeta {
+  profileName: string;
+  builtAt: number;
+}
+
+interface FileCache {
+  _meta: FileCacheMeta;
+  [filePath: string]: FileCacheEntry | FileCacheMeta;
+}
+
+function loadFileCache(cachePath: string): FileCache {
+  if (!existsSync(cachePath)) {
+    return { _meta: { profileName: "", builtAt: 0 } };
+  }
+  try {
+    return JSON.parse(readFileSync(cachePath, "utf-8")) as FileCache;
+  } catch {
+    return { _meta: { profileName: "", builtAt: 0 } };
+  }
+}
+
+function saveFileCache(cachePath: string, cache: FileCache): void {
+  try {
+    writeFileSync(cachePath, JSON.stringify(cache, null, 2), "utf-8");
+  } catch {
+    // Non-fatal — caching is best-effort
+  }
+}
+
+// ── Health check options ───────────────────────────────────────────────────────
+
+export interface HealthCheckOptions {
+  noCache?: boolean;
+  sinceLast?: boolean;
+}
+
 // ── Health check runner ───────────────────────────────────────────────────────
 
 export async function runHealthCheck(
-  projectPath: string
+  projectPath: string,
+  options: HealthCheckOptions = {}
 ): Promise<HealthCheckResult> {
   const db = getDb();
 
@@ -258,13 +303,93 @@ export async function runHealthCheck(
   const { getActiveProfile } = await import("./profiles.js");
   const profile = getActiveProfile(projectPath);
   const rules = getDefaultRules(profile);
+  const profileName = profile?.name ?? "";
+
+  // Determine last run time for --since-last
+  let lastRunAt = 0;
+  if (options.sinceLast) {
+    const lastRow = db
+      .query(
+        `SELECT run_at FROM health_checks WHERE project_path = ? ORDER BY run_at DESC LIMIT 1`
+      )
+      .get(projectPath) as { run_at: number } | null;
+    lastRunAt = lastRow?.run_at ?? 0;
+  }
+
+  // Load file cache
+  const projectDir = getProjectDir(projectPath);
+  const cachePath = join(projectDir, "file-cache.json");
+  let cache = loadFileCache(cachePath);
+
+  // Invalidate cache if profile changed
+  const cacheMeta = cache._meta as FileCacheMeta;
+  if (cacheMeta.profileName !== profileName) {
+    cache = { _meta: { profileName, builtAt: Date.now() } };
+  }
 
   const files = collectFiles(projectPath);
   const allViolations: FileViolation[] = [];
+  let cacheUpdated = false;
 
   for (const file of files) {
-    const fileViolations = checkFile(file, rules);
-    allViolations.push(...fileViolations);
+    // --since-last: only scan files modified since last run
+    if (options.sinceLast && lastRunAt > 0) {
+      let mtime = 0;
+      try {
+        mtime = statSync(file).mtimeMs;
+      } catch {
+        // file disappeared, skip
+        continue;
+      }
+      if (mtime <= lastRunAt) {
+        // Use cached violations if available, else skip file (assume clean)
+        const cached = cache[file] as FileCacheEntry | undefined;
+        if (cached) {
+          allViolations.push(...cached.violations);
+        }
+        continue;
+      }
+    }
+
+    // --no-cache: always scan
+    if (!options.noCache) {
+      let mtime = 0;
+      try {
+        mtime = statSync(file).mtimeMs;
+      } catch {
+        // skip unreadable files
+      }
+
+      const cached = cache[file] as FileCacheEntry | undefined;
+      if (cached && cached.mtime === mtime && mtime > 0) {
+        // Cache hit — use stored violations
+        allViolations.push(...cached.violations);
+        continue;
+      }
+
+      // Cache miss — scan and update cache
+      const fileViolations = checkFile(file, rules);
+      allViolations.push(...fileViolations);
+
+      if (mtime > 0) {
+        (cache as Record<string, FileCacheEntry | FileCacheMeta>)[file] = {
+          mtime,
+          violations: fileViolations,
+        };
+        cacheUpdated = true;
+      }
+    } else {
+      // noCache mode — scan without reading or writing cache
+      const fileViolations = checkFile(file, rules);
+      allViolations.push(...fileViolations);
+    }
+  }
+
+  // Persist updated cache to disk (skip in noCache mode)
+  if (!options.noCache && cacheUpdated) {
+    (cache._meta as FileCacheMeta).builtAt = Date.now();
+    (cache._meta as FileCacheMeta).profileName = profileName;
+    saveFileCache(cachePath, cache);
   }
 
   const score = calculateScore(allViolations);
