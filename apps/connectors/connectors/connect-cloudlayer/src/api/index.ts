@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// CloudLayer Connector — HTML to PDF and image generation API
+import { CloudLayerClient } from './client';
+import type { CloudLayerConfig, CLPdfResult, CLImageResult, CLPdfOptions, CLImageOptions, CLUsage } from '../types';
+export { CloudLayerClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CloudLayer {
+  private readonly client: CloudLayerClient;
+  constructor(config: CloudLayerConfig) { this.client = new CloudLayerClient(config); }
+  static fromEnv(): CloudLayer {
+    const apiKey = process.env.CLOUDLAYER_API_KEY;
+    if (!apiKey) throw new Error('CLOUDLAYER_API_KEY is required');
+    return new CloudLayer({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async htmlToPdf(options: CLPdfOptions): Promise<CLPdfResult> {
+    return this.client.request<CLPdfResult>('/url/pdf', { method: 'POST', body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async htmlToImage(options: CLImageOptions): Promise<CLImageResult> {
+    return this.client.request<CLImageResult>('/url/image', { method: 'POST', body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async templateToPdf(templateId: string, data: Record<string, unknown>, options?: Omit<CLPdfOptions, 'html' | 'url'>): Promise<CLPdfResult> {
+    return this.client.request<CLPdfResult>('/template/pdf', { method: 'POST', body: { templateId, data, ...options } as Record<string, unknown> });
   }
+
+  async templateToImage(templateId: string, data: Record<string, unknown>, options?: Omit<CLImageOptions, 'html' | 'url'>): Promise<CLImageResult> {
+    return this.client.request<CLImageResult>('/template/image', { method: 'POST', body: { templateId, data, ...options } as Record<string, unknown> });
+  }
+
+  async getUsage(): Promise<CLUsage> { return this.client.request<CLUsage>('/usage'); }
+
+  getClient(): CloudLayerClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

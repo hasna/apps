@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Demio Connector — Webinar platform for events and attendee management
+import { DemioClient } from './client';
+import type { DemioConfig, DemioEvent, DemioDate, DemioRegistrant, DemioParticipant } from '../types';
+export { DemioClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Demio {
+  private readonly client: DemioClient;
+  constructor(config: DemioConfig) { this.client = new DemioClient(config); }
+  static fromEnv(): Demio {
+    const apiKey = process.env.DEMIO_API_KEY;
+    const apiSecret = process.env.DEMIO_API_SECRET;
+    if (!apiKey || !apiSecret) throw new Error('DEMIO_API_KEY and DEMIO_API_SECRET are required');
+    return new Demio({ apiKey, apiSecret });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listEvents(options?: { type?: string }): Promise<DemioEvent[]> {
+    return this.client.request<DemioEvent[]>('/events', { params: { type: options?.type } });
+  }
+  async getEvent(eventId: number): Promise<DemioEvent> { return this.client.request<DemioEvent>(`/event/${eventId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listDates(eventId: number): Promise<DemioDate[]> { return this.client.request<DemioDate[]>(`/event/${eventId}/dates`); }
+  async getDate(dateId: number): Promise<DemioDate> { return this.client.request<DemioDate>(`/event/date/${dateId}`); }
+
+  async register(dateId: number, data: { name: string; email: string }): Promise<DemioRegistrant> {
+    return this.client.request<DemioRegistrant>(`/event/date/${dateId}/register`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async listRegistrants(dateId: number): Promise<DemioRegistrant[]> {
+    return this.client.request<DemioRegistrant[]>(`/event/date/${dateId}/registrants`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listParticipants(dateId: number): Promise<DemioParticipant[]> {
+    return this.client.request<DemioParticipant[]>(`/event/date/${dateId}/participants`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async ping(): Promise<{ status: string }> { return this.client.request('/ping'); }
+
+  getClient(): DemioClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
