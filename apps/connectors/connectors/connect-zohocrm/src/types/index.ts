@@ -1,16 +1,14 @@
-export interface ZohoCRMConfig { accessToken: string; region?: 'com' | 'eu' | 'in' | 'au' | 'jp'; baseUrl?: string; }
+export interface ZohoCRMConfig { token: string; baseUrl?: string; }
 
 export interface ZohoRecord { id: string; [key: string]: unknown; }
-export interface ZohoLead extends ZohoRecord { First_Name?: string; Last_Name: string; Email?: string; Phone?: string; Company?: string; Lead_Source?: string; Status?: string; }
-export interface ZohoContact extends ZohoRecord { First_Name?: string; Last_Name: string; Email?: string; Phone?: string; Account_Name?: string; Title?: string; }
-export interface ZohoDeal extends ZohoRecord { Deal_Name: string; Account_Name?: string; Stage: string; Amount?: number; Closing_Date?: string; Owner?: { id: string; name: string }; }
-export interface ZohoAccount extends ZohoRecord { Account_Name: string; Phone?: string; Website?: string; Industry?: string; Annual_Revenue?: number; }
-export interface ZohoActivity extends ZohoRecord { Subject: string; Due_Date?: string; Status?: string; Priority?: string; }
-
-export interface ZohoListResponse<T> { data: T[]; info: { page: number; per_page: number; count: number; more_records: boolean }; }
-export interface ZohoCreateResponse { data: Array<{ code: string; details: { id: string }; message: string; status: string }>; }
+export interface ZohoRecordList { data: ZohoRecord[]; info: { per_page: number; count: number; page: number; more_records: boolean }; }
+export interface ZohoModule { api_name: string; module_name: string; singular_label: string; plural_label: string; id: string; }
+export interface ZohoField { id: string; api_name: string; field_label: string; data_type: string; length: number; required: boolean; read_only: boolean; }
+export interface ZohoUser { id: string; name: string; email: string; role: { id: string; name: string }; profile: { id: string; name: string }; status: string; }
+export interface ZohoNote { id: string; Note_Title: string; Note_Content: string; Parent_Id: { id: string; name: string }; Created_Time: string; }
 
 export class ZohoCRMApiError extends Error {
   public readonly statusCode: number;
-  constructor(message: string, statusCode: number) { super(message); this.name = 'ZohoCRMApiError'; this.statusCode = statusCode; }
+  public readonly code?: string;
+  constructor(message: string, statusCode: number, code?: string) { super(message); this.name = 'ZohoCRMApiError'; this.statusCode = statusCode; this.code = code; }
 }
