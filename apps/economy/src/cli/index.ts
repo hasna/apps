@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, listBudgets, getBudgetStatuses, upsertBudget, deleteBudget, listProjects, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
+import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
@@ -23,6 +24,7 @@ async function autoSync(): Promise<void> {
   ensurePricingSeeded(db)
   await ingestClaude(db)
   await ingestCodex(db)
+  await ingestGemini(db)
 }
 
 // ── Sparkline helper ──────────────────────────────────────────────────────────
@@ -41,8 +43,14 @@ function fmt(usd: number): string {
   let formatted: string
   if (usd >= 0.01) {
     formatted = '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  } else if (usd >= 0.0001) {
+    // Show as cents: 0.3¢
+    const cents = usd * 100
+    formatted = cents.toFixed(2).replace(/\.?0+$/, '') + '¢'
+  } else if (usd > 0) {
+    formatted = '<0.01¢'
   } else {
-    formatted = '$' + usd.toFixed(6)
+    formatted = '$0.00'
   }
   return chalk.green(formatted)
 }
@@ -73,6 +81,21 @@ function printTable(headers: string[], rows: string[][]): void {
     console.log(`│${line}│`)
   }
   console.log(`└${sep.replace(/┼/g, '┴')}┘`)
+}
+
+// ── parseSinceDate ─────────────────────────────────────────────────────────────
+
+function parseSinceDate(since: string): string {
+  // Relative shorthand: 7d, 30d, 90d
+  const relMatch = since.match(/^(\d+)d$/)
+  if (relMatch) {
+    const days = parseInt(relMatch[1]!, 10)
+    const d = new Date()
+    d.setDate(d.getDate() - days)
+    return d.toISOString().substring(0, 10)
+  }
+  // ISO date: 2026-03-01
+  return since
 }
 
 function printSummary(label: string, period: Period): void {
@@ -136,20 +159,23 @@ program.action(async () => {
 
 program
   .command('sync')
-  .description('Ingest cost data from Claude Code and Codex')
+  .description('Ingest cost data from Claude Code, Codex, and Gemini')
   .option('--claude', 'Only ingest Claude Code telemetry')
   .option('--codex', 'Only ingest Codex sessions')
+  .option('--gemini', 'Only ingest Gemini CLI sessions')
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
-  .action(async (opts: { claude?: boolean; codex?: boolean; verbose?: boolean; force?: boolean }) => {
+  .action(async (opts: { claude?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
     if (opts.force) {
       db.exec(`DELETE FROM ingest_state WHERE source = 'claude'`)
       if (opts.verbose) console.log(chalk.dim('Cleared ingest cache'))
     }
-    const doClaude = opts.claude || (!opts.claude && !opts.codex)
-    const doCodex = opts.codex || (!opts.claude && !opts.codex)
+    const anySpecific = opts.claude || opts.codex || opts.gemini
+    const doClaude = opts.claude || !anySpecific
+    const doCodex = opts.codex || !anySpecific
+    const doGemini = opts.gemini || !anySpecific
     if (doClaude) {
       process.stdout.write(chalk.cyan('→ Ingesting Claude Code telemetry... '))
       const r = await ingestClaude(db, opts.verbose)
@@ -158,6 +184,11 @@ program
     if (doCodex) {
       process.stdout.write(chalk.cyan('→ Ingesting Codex sessions... '))
       const r = await ingestCodex(db, opts.verbose)
+      console.log(chalk.green(`✓ ${r.sessions} sessions`))
+    }
+    if (doGemini) {
+      process.stdout.write(chalk.cyan('→ Ingesting Gemini CLI sessions... '))
+      const r = await ingestGemini(db, opts.verbose)
       console.log(chalk.green(`✓ ${r.sessions} sessions`))
     }
     // Fire webhooks after sync
@@ -183,13 +214,18 @@ program
   .option('--project <path>', 'Filter by project path')
   .option('--limit <n>', 'Number of sessions', '20')
   .option('--format <fmt>', 'Output format: table|compact|csv|json', 'table')
-  .action(async (opts: { agent?: string; project?: string; limit?: string; format?: string }) => {
+  .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
+  .option('--search <query>', 'Search by project name, session id prefix, or agent')
+  .action(async (opts: { agent?: string; project?: string; limit?: string; format?: string; since?: string; search?: string }) => {
     await autoSync()
     const db = openDatabase()
-    const sessions = querySessions(db, {
+    const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
+    let sessions = querySessions(db, {
       agent: opts.agent as Agent | undefined,
       project: opts.project,
       limit: Number(opts.limit ?? 20),
+      since: sinceDate,
+      search: opts.search,
     })
     if (sessions.length === 0) { console.log(chalk.yellow('No sessions found.')); return }
     const f = opts.format ?? 'table'
@@ -226,9 +262,12 @@ program
   .description('Most expensive sessions')
   .option('-n <n>', 'Number of sessions', '10')
   .option('--agent <agent>', 'Filter by agent')
-  .action((opts: { n?: string; agent?: string }) => {
+  .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
+  .action((opts: { n?: string; agent?: string; since?: string }) => {
     const db = openDatabase()
-    const sessions = queryTopSessions(db, Number(opts.n ?? 10), opts.agent)
+    const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
+    let sessions = queryTopSessions(db, Number(opts.n ?? 10), opts.agent)
+    if (sinceDate) sessions = sessions.filter(s => s.started_at >= sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
       return
@@ -254,11 +293,24 @@ program
   .command('breakdown')
   .description('Cost breakdown by model, agent, or project')
   .option('--by <dimension>', 'Dimension: model|agent|project', 'model')
-  .action((opts: { by?: string }) => {
+  .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
+  .action((opts: { by?: string; since?: string }) => {
     const db = openDatabase()
+    const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
     console.log()
     if (opts.by === 'project') {
-      const rows = queryProjectBreakdown(db)
+      const rows = sinceDate
+        ? db.prepare(`
+          SELECT project_path, project_name,
+                 COUNT(*) as sessions,
+                 COALESCE(SUM(total_tokens), 0) as total_tokens,
+                 COALESCE(SUM(request_count), 0) as requests,
+                 COALESCE(SUM(total_cost_usd), 0) as cost_usd,
+                 MAX(started_at) as last_active
+          FROM sessions WHERE started_at >= ?
+          GROUP BY project_path ORDER BY cost_usd DESC
+        `).all(sinceDate) as Array<{ project_path: string; project_name: string; sessions: number; total_tokens: number; requests: number; cost_usd: number; last_active: string }>
+        : queryProjectBreakdown(db)
       printTable(
         ['Project', 'Sessions', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
@@ -270,7 +322,18 @@ program
         ]),
       )
     } else {
-      const rows = queryModelBreakdown(db)
+      const rows = sinceDate
+        ? db.prepare(`
+          SELECT model, agent,
+                 COUNT(*) as requests,
+                 COALESCE(SUM(input_tokens), 0) as input_tokens,
+                 COALESCE(SUM(output_tokens), 0) as output_tokens,
+                 COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
+                 COALESCE(SUM(cost_usd), 0) as cost_usd
+          FROM requests WHERE timestamp >= ?
+          GROUP BY model, agent ORDER BY cost_usd DESC
+        `).all(sinceDate) as Array<{ model: string; agent: string; requests: number; total_tokens: number; cost_usd: number }>
+        : queryModelBreakdown(db)
       printTable(
         ['Model', 'Agent', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
@@ -292,9 +355,10 @@ program
   .description('Live stream of incoming costs')
   .option('--interval <seconds>', 'Poll interval in seconds', '10')
   .option('--agent <agent>', 'Filter by agent')
-  .action(async (opts: { interval?: string; agent?: string }) => {
+  .option('--notify <amount>', 'Fire macOS notification when cumulative cost crosses this USD threshold')
+  .action(async (opts: { interval?: string; agent?: string; notify?: string }) => {
     const { watchCosts } = await import('./commands/watch.js')
-    await watchCosts({ interval: Number(opts.interval ?? 10), agent: opts.agent as Agent | undefined })
+    await watchCosts({ interval: Number(opts.interval ?? 10), agent: opts.agent as Agent | undefined, notify: opts.notify ? Number(opts.notify) : undefined })
   })
 
 // ── budget ────────────────────────────────────────────────────────────────────
@@ -509,6 +573,39 @@ configCmd
   })
 
 configCmd
+  .command('webhook-test')
+  .description('Send a test payload to the configured webhook URL')
+  .action(async () => {
+    const { loadConfig } = await import('../lib/config.js')
+    const config = loadConfig()
+    const url = config['webhook-url'] as string | undefined
+    if (!url) { console.log(chalk.yellow('No webhook-url configured. Run: economy config set webhook-url <url>')); return }
+    const payload = {
+      event: 'test',
+      message: 'Economy webhook test',
+      timestamp: new Date().toISOString(),
+    }
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5000),
+      })
+      const text = await res.text().catch(() => '')
+      if (res.ok) {
+        console.log(chalk.green(`✓ Webhook responded: HTTP ${res.status}`))
+        if (text) console.log(chalk.dim(text.slice(0, 200)))
+      } else {
+        console.log(chalk.red(`✗ Webhook failed: HTTP ${res.status}`))
+        if (text) console.log(chalk.dim(text.slice(0, 200)))
+      }
+    } catch (e) {
+      console.log(chalk.red(`✗ Request failed: ${e instanceof Error ? e.message : String(e)}`))
+    }
+  })
+
+configCmd
   .action(async () => {
     const { loadConfig } = await import('../lib/config.js')
     const config = loadConfig()
@@ -530,13 +627,14 @@ pricingCmd
     const rows = listModelPricing(db)
     console.log()
     printTable(
-      ['Model', 'Input/1M', 'Output/1M', 'CacheRead/1M', 'CacheWrite/1M'],
+      ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'Out/1k'],
       rows.map(r => [
         chalk.white(r.model),
         fmt(r.input_per_1m),
         fmt(r.output_per_1m),
         fmt(r.cache_read_per_1m),
         fmt(r.cache_write_per_1m),
+        chalk.dim(fmt(r.output_per_1m / 1000)),
       ]),
     )
     console.log()
@@ -581,7 +679,7 @@ program
   .option('-p, --port <port>', 'Port', '3456')
   .action(async (opts: { port?: string }) => {
     const port = Number(opts.port ?? 3456)
-    const { startServer } = await import('../server/index.js')
+    const { startServer } = await import('../server/serve.js')
     startServer(port)
   })
 
@@ -837,7 +935,6 @@ program
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
     const dayOfMonth = now.getDate()
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-    const today = now.toISOString().substring(0, 10)
 
     const monthSoFar = db.prepare(`SELECT COALESCE(SUM(cost_usd),0) as cost FROM requests WHERE DATE(timestamp) >= ?`).get(monthStart) as { cost: number }
     const dailyAvg = dayOfMonth > 0 ? monthSoFar.cost / dayOfMonth : 0

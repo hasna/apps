@@ -40,7 +40,7 @@ export function saveConfig(config: EconomyConfig): void {
 
 export function getConfigValue(key: string): unknown {
   const config = loadConfig()
-  return (config as Record<string, unknown>)[key] ?? null
+  return (config as unknown as Record<string, unknown>)[key] ?? null
 }
 
 export function setConfigValue(key: string, value: string): void {
@@ -52,6 +52,6 @@ export function setConfigValue(key: string, value: string): void {
   else if (value === 'null') parsed = null
   else if (!isNaN(Number(value))) parsed = Number(value)
   else if (value.startsWith('[')) { try { parsed = JSON.parse(value) } catch { /* keep string */ } }
-  ;(config as Record<string, unknown>)[key] = parsed
+  ;(config as unknown as Record<string, unknown>)[key] = parsed
   saveConfig(config)
 }
