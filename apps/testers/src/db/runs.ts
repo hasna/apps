@@ -64,7 +64,15 @@ export function listRuns(filter?: RunFilter): Run[] {
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
-  sql += " ORDER BY started_at DESC";
+
+  // Sort order
+  const sortField = filter?.sort ?? "date";
+  const sortDir = filter?.desc === false ? "ASC" : "DESC"; // default DESC
+  const orderByCol =
+    sortField === "duration" ? "(CASE WHEN finished_at IS NULL THEN NULL ELSE (julianday(finished_at) - julianday(started_at)) * 86400000 END)" :
+    sortField === "cost" ? "(SELECT COALESCE(SUM(cost_cents), 0) FROM results WHERE run_id = runs.id)" :
+    "started_at";
+  sql += ` ORDER BY ${orderByCol} ${sortDir}`;
 
   if (filter?.limit) {
     sql += " LIMIT ?";

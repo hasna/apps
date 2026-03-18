@@ -155,6 +155,84 @@ export function getCostSummary(options?: {
   };
 }
 
+// ─── By-Scenario Cost Breakdown ──────────────────────────────────────────────
+
+export interface ScenarioCostRow {
+  scenarioId: string;
+  name: string;
+  runCount: number;
+  totalCostCents: number;
+  avgCostPerRunCents: number;
+}
+
+export function getCostsByScenario(options?: {
+  projectId?: string;
+  period?: "day" | "week" | "month" | "all";
+}): ScenarioCostRow[] {
+  const db = getDatabase();
+  const period = options?.period ?? "month";
+  const projectId = options?.projectId;
+  const dateFilter = getDateFilter(period);
+  const projectFilter = projectId ? "AND ru.project_id = ?" : "";
+  const projectParams = projectId ? [projectId] : [];
+
+  const rows = db
+    .query(
+      `SELECT
+        r.scenario_id,
+        COALESCE(s.name, r.scenario_id) as name,
+        COUNT(DISTINCT r.run_id) as run_count,
+        COALESCE(SUM(r.cost_cents), 0) as total_cost_cents
+      FROM results r
+      JOIN runs ru ON r.run_id = ru.id
+      LEFT JOIN scenarios s ON r.scenario_id = s.id
+      WHERE 1=1 ${dateFilter} ${projectFilter}
+      GROUP BY r.scenario_id
+      ORDER BY total_cost_cents DESC`
+    )
+    .all(...projectParams) as Array<{
+      scenario_id: string;
+      name: string;
+      run_count: number;
+      total_cost_cents: number;
+    }>;
+
+  return rows.map((row) => ({
+    scenarioId: row.scenario_id,
+    name: row.name,
+    runCount: row.run_count,
+    totalCostCents: row.total_cost_cents,
+    avgCostPerRunCents: row.run_count > 0 ? row.total_cost_cents / row.run_count : 0,
+  }));
+}
+
+export function formatCostsByScenarioTerminal(rows: ScenarioCostRow[], period: string): string {
+  const lines: string[] = [];
+
+  lines.push("");
+  lines.push(chalk.bold(`  Cost by Scenario (${period})`));
+  lines.push("");
+
+  if (rows.length === 0) {
+    lines.push(chalk.dim("  No cost data found."));
+    lines.push("");
+    return lines.join("\n");
+  }
+
+  lines.push(`  ${"Scenario".padEnd(40)} ${"Runs".padEnd(8)} ${"Total Cost".padEnd(14)} Avg/Run`);
+  lines.push(`  ${"─".repeat(40)} ${"─".repeat(8)} ${"─".repeat(14)} ${"─".repeat(10)}`);
+
+  for (const row of rows) {
+    const label = row.name.length > 38 ? row.name.slice(0, 35) + "..." : row.name;
+    lines.push(
+      `  ${label.padEnd(40)} ${String(row.runCount).padEnd(8)} ${formatDollars(row.totalCostCents).padEnd(14)} ${formatDollars(row.avgCostPerRunCents)}`
+    );
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}
+
 export function checkBudget(estimatedCostCents: number): { allowed: boolean; warning?: string } {
   const budget = loadBudgetConfig();
 

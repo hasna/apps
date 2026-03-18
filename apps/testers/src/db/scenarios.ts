@@ -119,7 +119,15 @@ export function listScenarios(filter?: ScenarioFilter): Scenario[] {
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
-  sql += " ORDER BY created_at DESC";
+
+  // Sort order
+  const sortField = filter?.sort ?? "date";
+  const sortDir = filter?.desc === false ? "ASC" : "DESC"; // default DESC
+  const orderByCol =
+    sortField === "name" ? "name" :
+    sortField === "priority" ? "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END" :
+    "created_at";
+  sql += ` ORDER BY ${orderByCol} ${sortDir}`;
 
   if (filter?.limit) {
     sql += " LIMIT ?";
@@ -250,6 +258,31 @@ export function countScenarios(filter?: ScenarioFilter): number {
 
   const row = db.query(sql).get(...params) as { count: number };
   return row.count;
+}
+
+export interface StaleScenario extends Scenario {
+  lastRunAt: string | null;
+}
+
+export function findStaleScenarios(days: number): StaleScenario[] {
+  const db = getDatabase();
+
+  // Returns scenarios where the most recent run result is older than `days` days,
+  // or the scenario has never been run at all.
+  const rows = db.query(`
+    SELECT s.*, MAX(r.created_at) AS last_run_at
+    FROM scenarios s
+    LEFT JOIN results r ON r.scenario_id = s.id
+    GROUP BY s.id
+    HAVING last_run_at IS NULL
+       OR last_run_at < datetime('now', ? || ' days')
+    ORDER BY last_run_at ASC NULLS FIRST
+  `).all(`-${days}`) as (ScenarioRow & { last_run_at: string | null })[];
+
+  return rows.map((row) => ({
+    ...scenarioFromRow(row),
+    lastRunAt: row.last_run_at,
+  }));
 }
 
 export function deleteScenario(id: string): boolean {

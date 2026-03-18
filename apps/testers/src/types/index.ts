@@ -289,13 +289,19 @@ export interface ScenarioFilter {
   tags?: string[];
   priority?: ScenarioPriority;
   search?: string;
+  sort?: "date" | "priority" | "name";
+  desc?: boolean;
   limit?: number;
   offset?: number;
 }
 
+export type RunSortField = "date" | "duration" | "cost";
+
 export interface RunFilter {
   projectId?: string;
   status?: RunStatus;
+  sort?: "date" | "duration" | "cost";
+  desc?: boolean;
   limit?: number;
   offset?: number;
 }

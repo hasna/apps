@@ -36,6 +36,7 @@ export function App() {
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [onCloseModal, setOnCloseModal] = useState<(() => void) | null>(null);
   const [runToast, setRunToast] = useState<string | null>(null);
+  const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [isDark, setIsDark] = useState<boolean>(() => {
     const saved = localStorage.getItem("theme");
@@ -107,6 +108,15 @@ export function App() {
         return;
       }
 
+      // E → edit selected scenario
+      if (e.key === "e" || e.key === "E") {
+        if (selectedScenarioId && page.type === "scenarios") {
+          e.preventDefault();
+          setEditingScenarioId(selectedScenarioId);
+        }
+        return;
+      }
+
       // D → view diff (navigate to runs page)
       if (e.key === "d" || e.key === "D") {
         if (page.type === "scenarios") {
@@ -163,7 +173,12 @@ export function App() {
         <div style={{ flex: 1 }}>
           <ErrorBoundary>
             {page.type === "scenarios" && (
-              <ScenariosPage scenarios={scenarios} onRefresh={refresh} />
+              <ScenariosPage
+                scenarios={scenarios}
+                onRefresh={refresh}
+                editScenarioId={editingScenarioId}
+                onEditClose={() => setEditingScenarioId(null)}
+              />
             )}
             {page.type === "runs" && (
               <RunsPage runs={runs} onSelectRun={(id) => setPage({ type: "run-detail", runId: id })} onRefresh={refresh} />
@@ -194,6 +209,7 @@ export function App() {
         {/* Keyboard shortcuts hint bar */}
         <footer style={{ borderTop: "1px solid var(--border)", marginTop: 32, paddingTop: 10, display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
           <ShortcutHint keys={["R"]} label="Run selected" />
+          <ShortcutHint keys={["E"]} label="Edit selected" />
           <ShortcutHint keys={["D"]} label="View runs/diff" />
           <ShortcutHint keys={["S"]} label="Screenshots" />
           <ShortcutHint keys={["/"]} label="Search" />

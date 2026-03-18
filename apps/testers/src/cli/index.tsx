@@ -22,7 +22,7 @@ import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
 import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
-import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget } from "../lib/costs.js";
+import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
@@ -331,6 +331,9 @@ program
   .option("-t, --tag <tag>", "Filter by tag")
   .option("-p, --priority <level>", "Filter by priority")
   .option("--project <id>", "Filter by project ID")
+  .option("--search <text>", "Filter by name or description (case-insensitive substring match)")
+  .option("--sort <field>", "Sort field: date, priority, name (default: date)")
+  .option("--asc", "Sort ascending instead of descending", false)
   .option("-l, --limit <n>", "Limit results", "50")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON", false)
@@ -340,6 +343,9 @@ program
         tags: opts.tag ? [opts.tag] : undefined,
         priority: opts.priority as ScenarioPriority | undefined,
         projectId: opts.project,
+        search: opts.search,
+        sort: opts.sort as "date" | "priority" | "name" | undefined,
+        desc: !opts.asc,
         limit: parseInt(opts.limit, 10),
         offset: parseInt(opts.offset, 10) || undefined,
       });
@@ -411,7 +417,9 @@ program
   .option("-n, --name <name>", "New name")
   .option("-d, --description <text>", "New description")
   .option("-s, --steps <step>", "Replace steps (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
-  .option("-t, --tag <tag>", "Replace tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("-t, --tag <tag>", "Replace all tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--tag-add <tag>", "Add a tag to existing tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--tag-remove <tag>", "Remove a tag from existing tags (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
   .option("-p, --priority <level>", "New priority")
   .option("-m, --model <model>", "New model")
   .action((id: string, opts) => {
@@ -422,13 +430,25 @@ program
         process.exit(1);
       }
 
+      // Compute new tags: --tag replaces all; --tag-add/--tag-remove mutate existing
+      let newTags: string[] | undefined;
+      if (opts.tag.length > 0) {
+        // Full replacement
+        newTags = opts.tag;
+      } else if (opts.tagAdd.length > 0 || opts.tagRemove.length > 0) {
+        const existing = new Set(scenario.tags);
+        for (const t of opts.tagAdd) existing.add(t);
+        for (const t of opts.tagRemove) existing.delete(t);
+        newTags = [...existing];
+      }
+
       const updated = updateScenario(
         scenario.id,
         {
           name: opts.name,
           description: opts.description,
           steps: opts.steps.length > 0 ? opts.steps : undefined,
-          tags: opts.tag.length > 0 ? opts.tag : undefined,
+          tags: newTags,
           priority: opts.priority as ScenarioPriority | undefined,
           model: opts.model,
         },
@@ -436,6 +456,9 @@ program
       );
 
       log(chalk.green(`Updated scenario ${chalk.bold(updated.shortId)}: ${updated.name}`));
+      if (newTags !== undefined) {
+        log(chalk.dim(`  Tags: [${updated.tags.join(", ")}]`));
+      }
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
@@ -512,6 +535,9 @@ program
   .option("--env <name>", "Use a named environment for the URL")
   .option("--dry-run", "Print what would run without launching browser", false)
   .option("--retry <n>", "Retry failed scenarios up to n times", "0")
+  .option("--verbose", "Show per-step timing and full tool results", false)
+  .option("--watch-results", "When used with --background, poll and display live results table until run completes", false)
+  .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -626,12 +652,71 @@ program
         log(chalk.green(`Run started in background: ${chalk.bold(runId.slice(0, 8))}`));
         log(chalk.dim(`  Scenarios: ${scenarioCount}`));
         log(chalk.dim(`  URL: ${url}`));
+
+        if (opts.watchResults) {
+          // Poll every 3 seconds and render a live table until the run completes
+          log(chalk.dim(`  Watching results (polling every 3s)...`));
+          log("");
+          const POLL_INTERVAL = 3000;
+          const DONE_STATUSES = new Set(["passed", "failed", "cancelled"]);
+
+          const renderTable = () => {
+            const run = getRun(runId);
+            if (!run) return;
+            const results = getResultsByRun(runId);
+
+            // Clear previous table by moving cursor up (rough approach: reprint header)
+            const statusIcon = run.status === "passed"
+              ? chalk.green("PASS")
+              : run.status === "failed"
+                ? chalk.red("FAIL")
+                : chalk.blue("RUN ");
+
+            process.stdout.write(`\r  ${statusIcon}  ${run.passed} passed  ${run.failed} failed  ${run.total - run.passed - run.failed} running  (${results.length}/${run.total})\n`);
+
+            for (const r of results) {
+              const scenario = getScenario(r.scenarioId);
+              const name = scenario ? scenario.name : r.scenarioId.slice(0, 8);
+              const icon = r.status === "passed"
+                ? chalk.green("✓")
+                : r.status === "failed"
+                  ? chalk.red("✗")
+                  : r.status === "error"
+                    ? chalk.yellow("!")
+                    : chalk.blue("…");
+              const dur = r.durationMs > 0 ? chalk.dim(` ${(r.durationMs / 1000).toFixed(1)}s`) : "";
+              process.stdout.write(`    ${icon} ${name}${dur}\n`);
+            }
+          };
+
+          await new Promise<void>((resolve) => {
+            const poll = setInterval(() => {
+              const run = getRun(runId);
+              if (!run) return;
+              renderTable();
+              if (DONE_STATUSES.has(run.status)) {
+                clearInterval(poll);
+                resolve();
+              }
+            }, POLL_INTERVAL);
+          });
+
+          const finalRun = getRun(runId);
+          if (finalRun) {
+            log("");
+            const results = getResultsByRun(runId);
+            log(formatTerminal(finalRun, results));
+          }
+          process.exit(finalRun ? getExitCode(finalRun) : 0);
+        }
+
         log(chalk.dim(`  Check progress: testers results ${runId.slice(0, 8)}`));
         process.exit(0);
       }
 
       // Register live progress handler for foreground runs
       if (!opts.json && !opts.output) {
+        const verbose = !!opts.verbose;
         onRunEvent((event) => {
           switch (event.type) {
             case "scenario:start":
@@ -641,6 +726,12 @@ program
                 log(chalk.blue(`  [start] ${event.scenarioName ?? event.scenarioId}`));
               }
               break;
+            case "scenario:timeout_warning": {
+              const elapsedS = ((event.elapsedMs ?? 0) / 1000).toFixed(0);
+              const totalS = ((event.timeoutMs ?? 0) / 1000).toFixed(0);
+              log(chalk.yellow(`  ⚠️  Scenario '${event.scenarioName}' at 80% timeout (${elapsedS}s/${totalS}s) — still running`));
+              break;
+            }
             case "step:thinking":
               if (event.thinking) {
                 const preview = event.thinking.length > 120 ? event.thinking.slice(0, 120) + "..." : event.thinking;
@@ -654,8 +745,11 @@ program
               if (event.toolName === "report_result") {
                 log(chalk.bold(`    [result] ${event.toolResult}`));
               } else {
+                const durationStr = verbose && event.stepDurationMs !== undefined
+                  ? chalk.dim(`[${(event.stepDurationMs / 1000).toFixed(1)}s] `)
+                  : "";
                 const resultPreview = (event.toolResult ?? "").length > 100 ? (event.toolResult ?? "").slice(0, 100) + "..." : (event.toolResult ?? "");
-                log(chalk.dim(`    [done]  ${resultPreview}`));
+                log(chalk.dim(`    [done]  ${durationStr}${resultPreview}`));
               }
               break;
             case "screenshot:captured":
@@ -707,7 +801,7 @@ program
             log(jsonOutput);
           }
         } else {
-          log(formatTerminal(run, results));
+          log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
         }
 
         process.exit(getExitCode(run));
@@ -746,7 +840,7 @@ program
           log(jsonOutput);
         }
       } else {
-        log(formatTerminal(run, results));
+        log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
       }
 
       process.exit(getExitCode(run));
@@ -762,6 +856,8 @@ program
   .command("runs")
   .description("List past test runs")
   .option("--status <status>", "Filter by status")
+  .option("--sort <field>", "Sort field: date, duration, cost (default: date)")
+  .option("--asc", "Sort ascending instead of descending", false)
   .option("-l, --limit <n>", "Limit results", "20")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON", false)
@@ -769,6 +865,8 @@ program
     try {
       const runs = listRuns({
         status: opts.status as "pending" | "running" | "passed" | "failed" | "cancelled" | undefined,
+        sort: opts.sort as "date" | "duration" | "cost" | undefined,
+        desc: !opts.asc,
         limit: parseInt(opts.limit, 10),
         offset: parseInt(opts.offset, 10) || undefined,
       });
@@ -920,6 +1018,91 @@ program
 
       log("");
       log(chalk.green(`Imported ${imported} scenario(s) from ${absDir}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers export [format] ────────────────────────────────────────────────
+
+program
+  .command("export [format]")
+  .description("Export scenarios as JSON (default) or markdown files")
+  .option("-o, --output <path>", "Output file (JSON) or directory (markdown)")
+  .option("-t, --tag <tag>", "Filter by tag")
+  .option("-p, --priority <level>", "Filter by priority")
+  .option("--project <id>", "Filter by project ID")
+  .action((format: string | undefined, opts) => {
+    try {
+      const fmt = (format ?? "json").toLowerCase();
+      if (fmt !== "json" && fmt !== "markdown") {
+        logError(chalk.red(`Unknown format: ${fmt}. Supported: json, markdown`));
+        process.exit(1);
+      }
+
+      const projectId = resolveProject(opts.project);
+      const scenarios = listScenarios({
+        tags: opts.tag ? [opts.tag] : undefined,
+        priority: opts.priority as ScenarioPriority | undefined,
+        projectId,
+      });
+
+      if (scenarios.length === 0) {
+        log(chalk.dim("No scenarios found to export."));
+        return;
+      }
+
+      if (fmt === "json") {
+        const outputPath = opts.output ?? "testers-export.json";
+        const data = JSON.stringify(scenarios, null, 2);
+        writeFileSync(outputPath, data, "utf-8");
+        log(chalk.green(`Exported ${scenarios.length} scenario(s) to ${resolve(outputPath)}`));
+        return;
+      }
+
+      // Markdown: one .md file per scenario
+      const outputDir = opts.output ?? ".";
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
+
+      for (const s of scenarios) {
+        const lines: string[] = [];
+        lines.push(`# ${s.name}`);
+        lines.push("");
+        if (s.description && s.description !== s.name) {
+          lines.push(s.description);
+          lines.push("");
+        }
+        if (s.tags.length > 0) {
+          lines.push(`**Tags:** ${s.tags.join(", ")}`);
+        }
+        lines.push(`**Priority:** ${s.priority}`);
+        if (s.targetPath) {
+          lines.push(`**Path:** ${s.targetPath}`);
+        }
+        lines.push("");
+        if (s.steps.length > 0) {
+          lines.push("## Steps");
+          lines.push("");
+          for (const step of s.steps) {
+            lines.push(`- [ ] ${step}`);
+          }
+          lines.push("");
+        }
+
+        const safeFilename = s.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 80);
+        const filePath = join(outputDir, `${s.shortId}-${safeFilename}.md`);
+        writeFileSync(filePath, lines.join("\n"), "utf-8");
+        log(chalk.dim(`  ${s.shortId}: ${s.name} → ${filePath}`));
+      }
+
+      log(chalk.green(`\nExported ${scenarios.length} scenario(s) as markdown to ${resolve(outputDir)}`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
@@ -1770,12 +1953,26 @@ program
   .command("costs")
   .description("Show cost tracking and budget status")
   .option("--project <id>", "Project ID")
-  .option("--period <period>", "Time period", "month")
+  .option("--period <period>", "Time period: day, week, month, all (default: month)", "month")
+  .option("--by-scenario", "Group cost breakdown by scenario, sorted by total cost", false)
   .option("--json", "JSON output", false)
   .option("--csv", "CSV output", false)
   .action((opts) => {
     try {
-      const summary = getCostSummary({ projectId: resolveProject(opts.project), period: opts.period });
+      const projectId = resolveProject(opts.project);
+      const period = opts.period as "day" | "week" | "month" | "all";
+
+      if (opts.byScenario) {
+        const rows = getCostsByScenario({ projectId, period });
+        if (opts.json) {
+          log(JSON.stringify(rows, null, 2));
+        } else {
+          log(formatCostsByScenarioTerminal(rows, period));
+        }
+        return;
+      }
+
+      const summary = getCostSummary({ projectId, period });
       if (opts.csv) {
         log(formatCostsCsv(summary));
       } else if (opts.json) {

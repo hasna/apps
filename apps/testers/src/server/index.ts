@@ -162,6 +162,26 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // ── Scenarios ─────────────────────────────────────────────────────────
 
+  // GET /api/scenarios/search?q=
+  if (pathname === "/api/scenarios/search" && method === "GET") {
+    const q = searchParams.get("q") ?? "";
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const limit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
+    const sort = searchParams.get("sort") as "date" | "priority" | "name" | null;
+    const asc = searchParams.get("asc");
+
+    const scenarios = listScenarios({
+      search: q,
+      projectId,
+      sort: sort ?? undefined,
+      desc: asc === "true" ? false : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+    return jsonResponse(scenarios);
+  }
+
   // GET /api/scenarios
   if (pathname === "/api/scenarios" && method === "GET") {
     const tag = searchParams.get("tag");
@@ -230,6 +250,46 @@ async function handleRequest(req: Request): Promise<Response> {
     const deleted = deleteScenario(id);
     if (!deleted) return errorResponse("Scenario not found", 404);
     return jsonResponse({ deleted: true });
+  }
+
+  // PUT /api/scenarios/bulk
+  if (pathname === "/api/scenarios/bulk" && method === "PUT") {
+    const BulkUpdateSchema = z.object({
+      ids: z.array(z.string()).min(1, "ids must be a non-empty array"),
+      updates: z.object({
+        tags: z.array(z.string()).optional(),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      }),
+    });
+
+    try {
+      const body = await req.json();
+      const parsed = BulkUpdateSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+
+      const { ids, updates } = parsed.data;
+      const updated: ReturnType<typeof getScenario>[] = [];
+      const notFound: string[] = [];
+
+      for (const id of ids) {
+        const scenario = getScenario(id) ?? getScenarioByShortId(id);
+        if (!scenario) {
+          notFound.push(id);
+          continue;
+        }
+        const result = updateScenario(scenario.id, updates, scenario.version);
+        updated.push(result);
+      }
+
+      return jsonResponse({
+        updated: updated.length,
+        notFound,
+        scenarios: updated,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
   }
 
   // ── Runs ──────────────────────────────────────────────────────────────

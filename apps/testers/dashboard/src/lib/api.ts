@@ -29,6 +29,12 @@ export const createScenario = (data: Partial<Scenario>) =>
     body: JSON.stringify(data),
   });
 
+export const updateScenario = (id: string, data: Partial<import("../types").Scenario>) =>
+  fetchJSON<import("../types").Scenario>(`/scenarios/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
 export const deleteScenario = (id: string) =>
   fetchJSON<{ deleted: boolean }>(`/scenarios/${id}`, { method: "DELETE" });
 

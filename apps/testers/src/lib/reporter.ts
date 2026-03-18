@@ -13,17 +13,33 @@ function useEmoji(): boolean {
 export interface ReportOptions {
   json?: boolean;
   verbose?: boolean;
+  failedOnly?: boolean;
 }
 
-export function formatTerminal(run: Run, results: Result[]): string {
+export function formatTerminal(run: Run, results: Result[], options?: ReportOptions): string {
   const lines: string[] = [];
+  const failedOnly = options?.failedOnly ?? false;
 
   lines.push("");
   lines.push(chalk.bold(`  Run ${run.id.slice(0, 8)} — ${run.url}`));
   lines.push(chalk.dim(`  Model: ${run.model} | Parallel: ${run.parallel} | Headed: ${run.headed ? "yes" : "no"}`));
   lines.push("");
 
+  // When --failed-only, print a summary line for passed scenarios
+  if (failedOnly) {
+    const passedCount = results.filter((r) => r.status === "passed").length;
+    if (passedCount > 0) {
+      lines.push(chalk.dim(`  (${passedCount} passed scenario${passedCount !== 1 ? "s" : ""} hidden — use without --failed-only to see all)`));
+      lines.push("");
+    }
+  }
+
   for (const result of results) {
+    // Skip passed/skipped results when --failed-only is set
+    if (failedOnly && result.status !== "failed" && result.status !== "error") {
+      continue;
+    }
+
     const scenario = getScenario(result.scenarioId);
     const name = scenario ? `${scenario.shortId}: ${scenario.name}` : result.scenarioId.slice(0, 8);
     const screenshots = listScreenshots(result.id);

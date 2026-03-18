@@ -34,7 +34,8 @@ export interface RunEvent {
     | "run:complete"
     | "step:tool_call"
     | "step:tool_result"
-    | "step:thinking";
+    | "step:thinking"
+    | "scenario:timeout_warning";
   scenarioId?: string;
   scenarioName?: string;
   resultId?: string;
@@ -48,6 +49,9 @@ export interface RunEvent {
   stepNumber?: number;
   retryAttempt?: number;
   maxRetries?: number;
+  stepDurationMs?: number;
+  timeoutMs?: number;
+  elapsedMs?: number;
 }
 
 export type RunEventHandler = (event: RunEvent) => void;
@@ -64,12 +68,25 @@ function emit(event: RunEvent): void {
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    // Soft warning at 80% of timeout
+    const warningAt = Math.floor(ms * 0.8);
+    const warningTimer = setTimeout(() => {
+      emit({
+        type: "scenario:timeout_warning",
+        scenarioName: label,
+        timeoutMs: ms,
+        elapsedMs: warningAt,
+      });
+    }, warningAt);
+
     const timer = setTimeout(() => {
+      clearTimeout(warningTimer);
       reject(new Error(`Scenario '${label}' timed out after ${ms}ms. Try: testers run --timeout ${ms * 2} or simplify the scenario steps.`));
     }, ms);
+
     promise.then(
-      (val) => { clearTimeout(timer); resolve(val); },
-      (err) => { clearTimeout(timer); reject(err); },
+      (val) => { clearTimeout(timer); clearTimeout(warningTimer); resolve(val); },
+      (err) => { clearTimeout(timer); clearTimeout(warningTimer); reject(err); },
     );
   });
 }
@@ -112,6 +129,9 @@ export async function runSingleScenario(
 
     await page.goto(targetUrl, { timeout: Math.min(scenarioTimeout, 30000) });
 
+    // Per-step timing: track when each tool call started
+    const stepStartTimes = new Map<number, number>();
+
     const agentResult = await withTimeout(runAgentLoop({
       client,
       page,
@@ -121,6 +141,16 @@ export async function runSingleScenario(
       runId,
       maxTurns: 30,
       onStep: (stepEvent) => {
+        let stepDurationMs: number | undefined;
+        if (stepEvent.type === "tool_call") {
+          stepStartTimes.set(stepEvent.stepNumber, Date.now());
+        } else if (stepEvent.type === "tool_result") {
+          const startTime = stepStartTimes.get(stepEvent.stepNumber);
+          if (startTime !== undefined) {
+            stepDurationMs = Date.now() - startTime;
+            stepStartTimes.delete(stepEvent.stepNumber);
+          }
+        }
         emit({
           type: `step:${stepEvent.type}` as RunEvent["type"],
           scenarioId: scenario.id,
@@ -131,6 +161,7 @@ export async function runSingleScenario(
           toolResult: stepEvent.toolResult,
           thinking: stepEvent.thinking,
           stepNumber: stepEvent.stepNumber,
+          stepDurationMs,
         });
       },
     }), scenarioTimeout, scenario.name);
