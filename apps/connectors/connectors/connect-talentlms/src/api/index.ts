@@ -1,51 +1,49 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// TalentLMS Connector — Cloud-based Learning Management System
+import { TalentLMSClient } from './client';
+import type { TalentLMSConfig, TLMSUser, TLMSCourse, TLMSBranch, TLMSEnrollment } from '../types';
+export { TalentLMSClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class TalentLMS {
+  private readonly client: TalentLMSClient;
+  constructor(config: TalentLMSConfig) { this.client = new TalentLMSClient(config); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  static fromEnv(): TalentLMS {
+    const apiKey = process.env.TALENTLMS_API_KEY;
+    const domain = process.env.TALENTLMS_DOMAIN;
+    if (!apiKey || !domain) throw new Error('TALENTLMS_API_KEY and TALENTLMS_DOMAIN are required');
+    return new TalentLMS({ apiKey, domain });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  // Users
+  async listUsers(options?: { page?: number; perPage?: number }): Promise<TLMSUser[]> {
+    return this.client.request<TLMSUser[]>('/users', { params: { page: options?.page, per_page: options?.perPage } });
+  }
+  async getUser(userId: number): Promise<TLMSUser> { return this.client.request<TLMSUser>(`/users/id:${userId}`); }
+  async getUserByEmail(email: string): Promise<TLMSUser> { return this.client.request<TLMSUser>(`/users/email:${email}`); }
+  async createUser(data: { first_name: string; last_name: string; email: string; login: string; password: string; user_type?: string }): Promise<TLMSUser> {
+    return this.client.request<TLMSUser>('/users', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteUser(userId: number): Promise<void> { await this.client.request(`/users/id:${userId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Courses
+  async listCourses(): Promise<TLMSCourse[]> { return this.client.request<TLMSCourse[]>('/courses'); }
+  async getCourse(courseId: number): Promise<TLMSCourse> { return this.client.request<TLMSCourse>(`/courses/id:${courseId}`); }
+
+  // Enrollments
+  async enrollUser(userId: number, courseId: number): Promise<void> {
+    await this.client.request('/addusertocourse', { method: 'POST', body: { user_id: userId, course_id: courseId } });
+  }
+  async removeUserFromCourse(userId: number, courseId: number): Promise<void> {
+    await this.client.request('/removeuserfromcourse', { method: 'POST', body: { user_id: userId, course_id: courseId } });
+  }
+  async getUserEnrollments(userId: number): Promise<TLMSEnrollment[]> {
+    const user = await this.client.request<TLMSUser & { courses?: TLMSEnrollment[] }>(`/users/id:${userId}`);
+    return user.courses ?? [];
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  // Branches (teams/departments)
+  async listBranches(): Promise<TLMSBranch[]> { return this.client.request<TLMSBranch[]>('/branches'); }
+  async getBranch(branchId: number): Promise<TLMSBranch> { return this.client.request<TLMSBranch>(`/branches/id:${branchId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): TalentLMSClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
