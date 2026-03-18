@@ -1,51 +1,44 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Chatling Connector — AI chatbot builder for websites
+import { ChatlingClient } from './client';
+import type { ChatlingConfig, Chatbot, Conversation, SendMessageResult } from '../types';
+export { ChatlingClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class Chatling {
+  private readonly client: ChatlingClient;
+  constructor(config: ChatlingConfig) { this.client = new ChatlingClient(config); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  static fromEnv(): Chatling {
+    const apiKey = process.env.CHATLING_API_KEY;
+    if (!apiKey) throw new Error('CHATLING_API_KEY environment variable is required');
+    return new Chatling({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listChatbots(): Promise<Chatbot[]> {
+    const r = await this.client.request<{ data: Chatbot[] }>('/chatbots');
+    return r.data ?? [];
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getChatbot(chatbotId: string): Promise<Chatbot> {
+    return this.client.request<Chatbot>(`/chatbots/${chatbotId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async sendMessage(chatbotId: string, message: string, conversationId?: string): Promise<SendMessageResult> {
+    return this.client.request<SendMessageResult>(`/chatbots/${chatbotId}/chat`, {
+      method: 'POST',
+      body: { message, conversation_id: conversationId },
+    });
   }
+
+  async getConversation(chatbotId: string, conversationId: string): Promise<Conversation> {
+    return this.client.request<Conversation>(`/chatbots/${chatbotId}/conversations/${conversationId}`);
+  }
+
+  async listConversations(chatbotId: string, options?: { page?: number; limit?: number }): Promise<Conversation[]> {
+    const r = await this.client.request<{ data: Conversation[] }>(`/chatbots/${chatbotId}/conversations`, {
+      params: options as Record<string, number | undefined>,
+    });
+    return r.data ?? [];
+  }
+
+  getClient(): ChatlingClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

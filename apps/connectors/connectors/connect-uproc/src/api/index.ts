@@ -1,51 +1,49 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// uProc Connector — Data processing and enrichment tools
+import { UProcClient } from './client';
+import type { UProcConfig, UProcToolResult, UProcTool } from '../types';
+export { UProcClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class UProc {
+  private readonly client: UProcClient;
+  constructor(config: UProcConfig) { this.client = new UProcClient(config); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  static fromEnv(): UProc {
+    const email = process.env.UPROC_EMAIL;
+    const apiKey = process.env.UPROC_API_KEY;
+    if (!email || !apiKey) throw new Error('UPROC_EMAIL and UPROC_API_KEY are required');
+    return new UProc({ email, apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  /** Execute a uProc tool with input data */
+  async executeTool(toolId: string, inputs: Record<string, string | number | boolean>): Promise<UProcToolResult> {
+    return this.client.request<UProcToolResult>('/process', { tool: toolId, ...inputs });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  /** Validate an email address */
+  async validateEmail(email: string): Promise<UProcToolResult> {
+    return this.executeTool('get-email-validation', { email });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  /** Normalize a phone number */
+  async normalizePhone(phone: string, countryCode?: string): Promise<UProcToolResult> {
+    return this.executeTool('get-phone-number-info', { phone, country_code: countryCode ?? 'US' });
   }
+
+  /** Get company info from domain */
+  async getCompanyFromDomain(domain: string): Promise<UProcToolResult> {
+    return this.executeTool('get-company-from-domain', { domain });
+  }
+
+  /** Find professional email for a person */
+  async findEmail(firstName: string, lastName: string, domain: string): Promise<UProcToolResult> {
+    return this.executeTool('get-email-from-name-and-domain', { first_name: firstName, last_name: lastName, domain });
+  }
+
+  /** List all available tools */
+  async listTools(): Promise<UProcTool[]> {
+    const r = await this.client.request<{ tools: UProcTool[] }>('/tools');
+    return r.tools ?? [];
+  }
+
+  getClient(): UProcClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
