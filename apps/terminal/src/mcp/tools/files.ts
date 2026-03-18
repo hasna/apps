@@ -281,7 +281,7 @@ Match by function name, class name, method name (including ClassName.method), in
         }
         writeFileSync(file, content);
         h.logCall("edit", { command: `edit ${file}`, durationMs: Date.now() - start });
-        return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, file, replacements: all ? count : 1 }) }] };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, file, replacements: all ? count : 1, diff: { removed: find.slice(0, 100), added: replace.slice(0, 100) } }) }] };
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message }) }] };
       }

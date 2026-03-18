@@ -121,7 +121,7 @@ export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
     "run",
     "Run a project task by intent — test, build, lint, dev, typecheck, format. Auto-detects toolchain (bun/npm/pnpm/yarn/cargo/go/make). Saves ~100 tokens vs raw commands.",
     {
-      task: z.enum(["test", "build", "lint", "dev", "start", "typecheck", "format", "check"]).describe("What to run"),
+      task: z.string().describe("Task to run: test, build, lint, dev, start, typecheck, format, check — or any custom script name from package.json"),
       args: z.string().optional().describe("Extra arguments (e.g., '--watch', 'src/foo.test.ts')"),
       cwd: z.string().optional().describe("Working directory"),
     },
