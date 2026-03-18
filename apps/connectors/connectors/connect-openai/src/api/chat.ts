@@ -6,8 +6,8 @@ import type {
   ChatOptions,
   OpenAIModel,
   Tool,
-  DEFAULT_CHAT_MODEL,
 } from '../types';
+import { DEFAULT_CHAT_MODEL } from '../types';
 
 /**
  * Chat Completions API
@@ -23,7 +23,7 @@ export class ChatApi {
     options: ChatOptions = {}
   ): Promise<ChatCompletionResponse> {
     const request: ChatCompletionRequest = {
-      model: options.model || 'gpt-4o-mini',
+      model: options.model || DEFAULT_CHAT_MODEL,
       messages,
       stream: false,
     };

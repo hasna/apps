@@ -7,6 +7,7 @@ import type {
   XAIModel,
   Tool,
 } from '../types';
+import { DEFAULT_CHAT_MODEL } from '../types';
 
 /**
  * Chat Completions API
@@ -22,7 +23,7 @@ export class ChatApi {
     options: ChatOptions = {}
   ): Promise<ChatCompletionResponse> {
     const request: ChatCompletionRequest = {
-      model: options.model || 'grok-2',
+      model: options.model || DEFAULT_CHAT_MODEL,
       messages,
       stream: false,
     };
