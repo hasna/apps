@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Sellix Connector — Digital products and subscription e-commerce
+import { SellixClient } from './client';
+import type { SellixConfig, SXProduct, SXOrder, SXCoupon, SXCategory, SXCustomer, SXFeedback } from '../types';
+export { SellixClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Sellix {
+  private readonly client: SellixClient;
+  constructor(config: SellixConfig) { this.client = new SellixClient(config); }
+  static fromEnv(): Sellix {
+    const apiKey = process.env.SELLIX_API_KEY;
+    if (!apiKey) throw new Error('SELLIX_API_KEY is required');
+    return new Sellix({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProducts(options?: { page?: number }): Promise<SXProduct[]> { return this.client.request<SXProduct[]>('/products', { params: { page: options?.page } }); }
+  async getProduct(productId: string): Promise<SXProduct> { return this.client.request<SXProduct>(`/products/${productId}`); }
+  async createProduct(data: { title: string; description?: string; price: number; currency?: string; type?: string; stock?: number }): Promise<SXProduct> {
+    return this.client.request<SXProduct>('/products', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateProduct(productId: string, data: { title?: string; price?: number; stock?: number }): Promise<SXProduct> {
+    return this.client.request<SXProduct>(`/products/${productId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async deleteProduct(productId: string): Promise<void> { await this.client.request(`/products/${productId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listOrders(options?: { page?: number }): Promise<SXOrder[]> { return this.client.request<SXOrder[]>('/orders', { params: { page: options?.page } }); }
+  async getOrder(orderId: string): Promise<SXOrder> { return this.client.request<SXOrder>(`/orders/${orderId}`); }
+
+  async listCoupons(): Promise<SXCoupon[]> { return this.client.request<SXCoupon[]>('/coupons'); }
+  async createCoupon(data: { code: string; discount: number; discount_type: 'PERCENTAGE' | 'FIXED'; max_uses?: number }): Promise<SXCoupon> {
+    return this.client.request<SXCoupon>('/coupons', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listCategories(): Promise<SXCategory[]> { return this.client.request<SXCategory[]>('/categories'); }
+  async listCustomers(): Promise<SXCustomer[]> { return this.client.request<SXCustomer[]>('/customers'); }
+  async listFeedback(): Promise<SXFeedback[]> { return this.client.request<SXFeedback[]>('/feedback'); }
+  async replyToFeedback(feedbackId: string, reply: string): Promise<void> {
+    await this.client.request(`/feedback/reply/${feedbackId}`, { method: 'POST', body: { reply } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SellixClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
