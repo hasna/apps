@@ -1,51 +1,29 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Real Phone Validation Connector — Phone number validation and carrier lookup
+import { RealPhoneValidationClient } from './client';
+import type { RealPhoneValidationConfig, RPVResult } from '../types';
+export { RealPhoneValidationClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class RealPhoneValidation {
+  private readonly client: RealPhoneValidationClient;
+  constructor(config: RealPhoneValidationConfig) { this.client = new RealPhoneValidationClient(config); }
+  static fromEnv(): RealPhoneValidation {
+    const apiKey = process.env.REALPHONEVALIDATION_API_KEY;
+    if (!apiKey) throw new Error('REALPHONEVALIDATION_API_KEY is required');
+    return new RealPhoneValidation({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async validate(phone: string): Promise<RPVResult> {
+    return this.client.request<RPVResult>('/v2/validate', { phone });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async lookup(phone: string): Promise<RPVResult> {
+    return this.client.request<RPVResult>('/v2/lookup', { phone });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getCarrier(phone: string): Promise<{ carrier: string; phone_type: string }> {
+    const result = await this.validate(phone);
+    return { carrier: result.carrier, phone_type: result.phone_type };
   }
+
+  getClient(): RealPhoneValidationClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

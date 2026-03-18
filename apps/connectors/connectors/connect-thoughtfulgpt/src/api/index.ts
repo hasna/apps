@@ -1,51 +1,29 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Thoughtful GPT Connector — AI-powered healthcare automation
+import { ThoughtfulGPTClient } from './client';
+import type { ThoughtfulGPTConfig, TGAutomation, TGRun, TGRunList, TGAgent } from '../types';
+export { ThoughtfulGPTClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ThoughtfulGPT {
+  private readonly client: ThoughtfulGPTClient;
+  constructor(config: ThoughtfulGPTConfig) { this.client = new ThoughtfulGPTClient(config); }
+  static fromEnv(): ThoughtfulGPT {
+    const apiKey = process.env.THOUGHTFULGPT_API_KEY;
+    if (!apiKey) throw new Error('THOUGHTFULGPT_API_KEY is required');
+    return new ThoughtfulGPT({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listAutomations(): Promise<TGAutomation[]> { return this.client.request<TGAutomation[]>('/automations'); }
+  async getAutomation(automationId: string): Promise<TGAutomation> { return this.client.request<TGAutomation>(`/automations/${automationId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async runAutomation(automationId: string, input: Record<string, unknown>): Promise<TGRun> {
+    return this.client.request<TGRun>(`/automations/${automationId}/runs`, { method: 'POST', body: { input } });
+  }
+  async getRun(runId: string): Promise<TGRun> { return this.client.request<TGRun>(`/runs/${runId}`); }
+  async listRuns(automationId: string, options?: { page?: number; per_page?: number; status?: string }): Promise<TGRunList> {
+    return this.client.request<TGRunList>(`/automations/${automationId}/runs`, { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listAgents(): Promise<TGAgent[]> { return this.client.request<TGAgent[]>('/agents'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): ThoughtfulGPTClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
