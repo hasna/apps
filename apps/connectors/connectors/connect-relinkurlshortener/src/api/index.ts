@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Relink URL Shortener Connector — URL shortening and link management
+import { RelinkClient } from './client';
+import type { RelinkConfig, RLLink, RLLinkList, RLClickStats } from '../types';
+export { RelinkClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class RelinkUrlShortener {
+  private readonly client: RelinkClient;
+  constructor(config: RelinkConfig) { this.client = new RelinkClient(config); }
+  static fromEnv(): RelinkUrlShortener {
+    const apiKey = process.env.RELINK_API_KEY;
+    if (!apiKey) throw new Error('RELINK_API_KEY is required');
+    return new RelinkUrlShortener({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async shortenUrl(url: string, options?: { slug?: string; title?: string; expires_at?: string }): Promise<RLLink> {
+    return this.client.request<RLLink>('/links', { method: 'POST', body: { url, slug: options?.slug, title: options?.title, expires_at: options?.expires_at } as Record<string, unknown> });
+  }
+  async getLink(linkId: string): Promise<RLLink> { return this.client.request<RLLink>(`/links/${linkId}`); }
+  async listLinks(options?: { page?: number; per_page?: number }): Promise<RLLinkList> {
+    return this.client.request<RLLinkList>('/links', { params: { page: options?.page, per_page: options?.per_page } });
+  }
+  async updateLink(linkId: string, data: { url?: string; slug?: string; title?: string }): Promise<RLLink> {
+    return this.client.request<RLLink>(`/links/${linkId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+  async deleteLink(linkId: string): Promise<void> { await this.client.request(`/links/${linkId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getClickStats(linkId: string, options?: { from?: string; to?: string }): Promise<RLClickStats> {
+    return this.client.request<RLClickStats>(`/links/${linkId}/stats`, { params: { from: options?.from, to: options?.to } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): RelinkClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
