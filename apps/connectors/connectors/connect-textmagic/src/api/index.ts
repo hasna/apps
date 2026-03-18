@@ -1,51 +1,72 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Textmagic Connector — Business SMS platform
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+import { TextmagicClient } from './client';
+import type { TextmagicConfig, TextmagicMessage, SendMessageResult, Contact, TextmagicAccount } from '../types';
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
+export { TextmagicClient } from './client';
 
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Textmagic {
+  private readonly client: TextmagicClient;
+
+  constructor(config: TextmagicConfig) {
+    this.client = new TextmagicClient(config);
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  static fromEnv(): Textmagic {
+    const username = process.env.TEXTMAGIC_USERNAME;
+    const apiKey = process.env.TEXTMAGIC_API_KEY;
+    if (!username || !apiKey) throw new Error('TEXTMAGIC_USERNAME and TEXTMAGIC_API_KEY are required');
+    return new Textmagic({ username, apiKey });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getAccount(): Promise<TextmagicAccount> {
+    return this.client.request<TextmagicAccount>('/user');
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async sendMessage(options: { text: string; phones?: string[]; contacts?: number[]; lists?: number[]; sendingTime?: string }): Promise<SendMessageResult> {
+    return this.client.request<SendMessageResult>('/messages', {
+      method: 'POST',
+      body: {
+        text: options.text,
+        phones: options.phones?.join(','),
+        contacts: options.contacts?.join(','),
+        lists: options.lists?.join(','),
+        sendingTime: options.sendingTime,
+      },
+    });
   }
+
+  async listMessages(options?: { page?: number; limit?: number; query?: string }): Promise<{ resources: TextmagicMessage[]; page: number; pageCount: number; limit: number; totalCount: number }> {
+    return this.client.request('/messages', { params: options as Record<string, number | string | undefined> });
+  }
+
+  async getMessage(messageId: number): Promise<TextmagicMessage> {
+    return this.client.request<TextmagicMessage>(`/messages/${messageId}`);
+  }
+
+  async deleteMessage(messageId: number): Promise<void> {
+    await this.client.request(`/messages/${messageId}`, { method: 'DELETE' });
+  }
+
+  async listContacts(options?: { page?: number; limit?: number; search?: string }): Promise<{ resources: Contact[] }> {
+    return this.client.request('/contacts', { params: options as Record<string, string | number | undefined> });
+  }
+
+  async getContact(contactId: number): Promise<Contact> {
+    return this.client.request<Contact>(`/contacts/${contactId}`);
+  }
+
+  async createContact(data: { phone: string; firstName?: string; lastName?: string; email?: string; companyName?: string }): Promise<{ id: number; href: string }> {
+    return this.client.request('/contacts', { method: 'POST', body: data as Record<string, unknown> });
+  }
+
+  async updateContact(contactId: number, data: Partial<Parameters<Textmagic['createContact']>[0]>): Promise<void> {
+    await this.client.request(`/contacts/${contactId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+
+  async deleteContact(contactId: number): Promise<void> {
+    await this.client.request(`/contacts/${contactId}`, { method: 'DELETE' });
+  }
+
+  getClient(): TextmagicClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
