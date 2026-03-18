@@ -1,51 +1,28 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// AltText.ai Connector — AI-powered alt text generation for images
+import { AltTextAiClient } from './client';
+import type { AltTextAiConfig, AltTextResult, AltTextAccount, AltTextAsset, AltTextAssetList } from '../types';
+export { AltTextAiClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AltTextAi {
+  private readonly client: AltTextAiClient;
+  constructor(config: AltTextAiConfig) { this.client = new AltTextAiClient(config); }
+  static fromEnv(): AltTextAi {
+    const apiKey = process.env.ALTTEXTAI_API_KEY;
+    if (!apiKey) throw new Error('ALTTEXTAI_API_KEY is required');
+    return new AltTextAi({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async generate(imageUrl: string, options?: { lang?: string; keywords?: string[]; keyword_limit?: number; ecommerce_mode?: boolean }): Promise<AltTextResult> {
+    return this.client.request<AltTextResult>('/images', { method: 'POST', body: { image: { url: imageUrl }, ...options } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getAsset(assetId: string): Promise<AltTextAsset> { return this.client.request<AltTextAsset>(`/images/${assetId}`); }
+
+  async listAssets(options?: { page?: number; per_page?: number }): Promise<AltTextAssetList> {
+    return this.client.request<AltTextAssetList>('/images', { params: { page: options?.page, per_page: options?.per_page } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async getAccount(): Promise<AltTextAccount> { return this.client.request<AltTextAccount>('/account'); }
+
+  getClient(): AltTextAiClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
