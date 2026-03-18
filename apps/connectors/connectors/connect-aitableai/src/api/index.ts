@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// AITable.ai Connector — AI-powered spreadsheet/database platform
+import { AITableClient } from './client';
+import type { AITableConfig, AITSpace, AITNode, AITField, AITRecord, AITRecordList, AITView } from '../types';
+export { AITableClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AITable {
+  private readonly client: AITableClient;
+  constructor(config: AITableConfig) { this.client = new AITableClient(config); }
+  static fromEnv(): AITable {
+    const token = process.env.AITABLE_TOKEN;
+    if (!token) throw new Error('AITABLE_TOKEN is required');
+    return new AITable({ token, baseUrl: process.env.AITABLE_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listSpaces(): Promise<AITSpace[]> { return this.client.request<AITSpace[]>('/spaces'); }
+  async listNodes(spaceId: string): Promise<AITNode[]> { return this.client.request<AITNode[]>(`/spaces/${spaceId}/nodes`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listFields(datasheetId: string): Promise<AITField[]> { return this.client.request<AITField[]>(`/datasheets/${datasheetId}/fields`); }
+  async createField(datasheetId: string, data: { name: string; type: string; property?: Record<string, unknown> }): Promise<AITField> {
+    return this.client.request<AITField>(`/datasheets/${datasheetId}/fields`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteField(datasheetId: string, fieldId: string): Promise<void> {
+    await this.client.request(`/datasheets/${datasheetId}/fields/${fieldId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listRecords(datasheetId: string, options?: { pageNum?: number; pageSize?: number; viewId?: string; sort?: string; fieldKey?: string }): Promise<AITRecordList> {
+    return this.client.request<AITRecordList>(`/datasheets/${datasheetId}/records`, { params: { pageNum: options?.pageNum, pageSize: options?.pageSize, viewId: options?.viewId, sort: options?.sort, fieldKey: options?.fieldKey } });
+  }
+  async createRecords(datasheetId: string, records: { fields: Record<string, unknown> }[]): Promise<AITRecord[]> {
+    return this.client.request<AITRecord[]>(`/datasheets/${datasheetId}/records`, { method: 'POST', body: { records } as Record<string, unknown> });
+  }
+  async updateRecords(datasheetId: string, records: { recordId: string; fields: Record<string, unknown> }[]): Promise<AITRecord[]> {
+    return this.client.request<AITRecord[]>(`/datasheets/${datasheetId}/records`, { method: 'PATCH', body: { records } as Record<string, unknown> });
+  }
+  async deleteRecords(datasheetId: string, recordIds: string[]): Promise<void> {
+    const params = recordIds.map(id => `recordIds=${id}`).join('&');
+    await this.client.request(`/datasheets/${datasheetId}/records?${params}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listViews(datasheetId: string): Promise<AITView[]> { return this.client.request<AITView[]>(`/datasheets/${datasheetId}/views`); }
+
+  getClient(): AITableClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
