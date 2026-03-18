@@ -212,6 +212,55 @@ export function getSessionStats(): SessionStats {
   };
 }
 
+/** Get economy stats for a specific session */
+export function getSessionEconomy(sessionId: string): {
+  totalCalls: number;
+  tokensSaved: number;
+  tokensUsed: number;
+  aiCalls: number;
+  avgLatencyMs: number;
+  savingsUsd: { opus: number; sonnet: number; haiku: number };
+  tools: Record<string, { calls: number; tokensSaved: number }>;
+} {
+  const d = getDb();
+  const rows = d.prepare(
+    "SELECT nl, tokens_saved, tokens_used, duration_ms FROM interactions WHERE session_id = ?"
+  ).all(sessionId) as { nl: string; tokens_saved: number; tokens_used: number; duration_ms: number | null }[];
+
+  const tools: Record<string, { calls: number; tokensSaved: number }> = {};
+  let totalSaved = 0, totalUsed = 0, aiCalls = 0, totalLatency = 0, latencyCount = 0;
+
+  for (const r of rows) {
+    totalSaved += r.tokens_saved ?? 0;
+    totalUsed += r.tokens_used ?? 0;
+    if (r.tokens_used > 0) aiCalls++;
+    if (r.duration_ms) { totalLatency += r.duration_ms; latencyCount++; }
+
+    // Extract tool name from nl field: [mcp:toolname] command
+    const toolMatch = r.nl.match(/^\[mcp:(\w+)\]/);
+    const tool = toolMatch?.[1] ?? "cli";
+    if (!tools[tool]) tools[tool] = { calls: 0, tokensSaved: 0 };
+    tools[tool].calls++;
+    tools[tool].tokensSaved += r.tokens_saved ?? 0;
+  }
+
+  // Savings at consumer model rates (×5 turns before compaction)
+  const multiplied = totalSaved * 5;
+  return {
+    totalCalls: rows.length,
+    tokensSaved: totalSaved,
+    tokensUsed: totalUsed,
+    aiCalls,
+    avgLatencyMs: latencyCount > 0 ? Math.round(totalLatency / latencyCount) : 0,
+    savingsUsd: {
+      opus: (multiplied * 15) / 1_000_000,
+      sonnet: (multiplied * 3) / 1_000_000,
+      haiku: (multiplied * 0.8) / 1_000_000,
+    },
+    tools,
+  };
+}
+
 // ── Corrections ─────────────────────────────────────────────────────────────
 
 /** Record a correction: command failed, then AI retried with a better one */
@@ -265,6 +314,30 @@ export function recordOutput(
   getDb().prepare(
     "INSERT INTO outputs (session_id, command, raw_output_path, compressed_summary, tokens_raw, tokens_compressed, provider, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(sessionId ?? null, command, rawOutputPath ?? null, compressedSummary?.slice(0, 5000) ?? "", tokensRaw, tokensCompressed, provider ?? null, model ?? null, Date.now());
+}
+
+/** Prune sessions and interactions older than N days */
+export function pruneSessions(olderThanDays: number = 90): { sessionsDeleted: number; interactionsDeleted: number } {
+  const d = getDb();
+  const cutoff = Date.now() - (olderThanDays * 24 * 60 * 60 * 1000);
+  const oldSessions = d.prepare("SELECT id FROM sessions WHERE started_at < ?").all(cutoff) as { id: string }[];
+
+  if (oldSessions.length === 0) return { sessionsDeleted: 0, interactionsDeleted: 0 };
+
+  const ids = oldSessions.map(s => s.id);
+  const placeholders = ids.map(() => "?").join(",");
+
+  const intResult = d.prepare(`DELETE FROM interactions WHERE session_id IN (${placeholders})`).run(...ids);
+  const sesResult = d.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids);
+
+  // Also prune old corrections and outputs
+  d.prepare("DELETE FROM corrections WHERE created_at < ?").run(cutoff);
+  d.prepare("DELETE FROM outputs WHERE created_at < ?").run(cutoff);
+
+  return {
+    sessionsDeleted: oldSessions.length,
+    interactionsDeleted: (intResult as any).changes ?? 0,
+  };
 }
 
 /** Close the database connection */

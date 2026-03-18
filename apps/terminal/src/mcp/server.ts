@@ -13,7 +13,7 @@ import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipe
 import { substituteVariables } from "../recipes/model.js";
 import { bgStart, bgStatus, bgStop, bgLogs, bgWaitPort } from "../supervisor.js";
 import { diffOutput } from "../diff-cache.js";
-import { listSessions, getSessionInteractions, getSessionStats } from "../sessions-db.js";
+import { createSession, logInteraction, listSessions, getSessionInteractions, getSessionStats, getSessionEconomy } from "../sessions-db.js";
 import { cachedRead, cacheStats } from "../file-cache.js";
 import { getBootContext, invalidateBootCache } from "../session-boot.js";
 import { storeOutput, expandOutput } from "../expand-store.js";
@@ -62,8 +62,35 @@ function exec(command: string, cwd?: string, timeout?: number, allowRewrite: boo
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "terminal",
-    version: "0.2.0",
+    version: "3.4.0",
   });
+
+  // Create a session for this MCP server instance
+  const sessionId = createSession(process.cwd(), "mcp");
+
+  /** Log a tool call to sessions.db for economy tracking */
+  function logCall(tool: string, data: {
+    command?: string;
+    outputTokens?: number;
+    tokensSaved?: number;
+    durationMs?: number;
+    exitCode?: number;
+    aiProcessed?: boolean;
+    model?: string;
+  }) {
+    try {
+      logInteraction(sessionId, {
+        nl: `[mcp:${tool}]${data.command ? ` ${data.command.slice(0, 200)}` : ""}`,
+        command: data.command?.slice(0, 500),
+        exitCode: data.exitCode,
+        tokensUsed: data.aiProcessed ? (data.outputTokens ?? 0) : 0,
+        tokensSaved: data.tokensSaved ?? 0,
+        durationMs: data.durationMs,
+        model: data.model,
+        cached: false,
+      });
+    } catch {} // never let logging break tool execution
+  }
 
   // ── execute: run a command, return structured result ──────────────────────
 
@@ -78,16 +105,17 @@ export function createServer(): McpServer {
       maxTokens: z.number().optional().describe("Token budget for compressed/summary format"),
     },
     async ({ command, cwd, timeout, format, maxTokens }) => {
+      const start = Date.now();
       const result = await exec(command, cwd, timeout ?? 30000);
       const output = (result.stdout + result.stderr).trim();
 
       // Raw mode — with lazy execution for large results
       if (!format || format === "raw") {
         const clean = stripAnsi(output);
-        // Lazy mode: if >100 lines, return count + sample instead of full output
         if (shouldBeLazy(clean, command)) {
           const lazy = toLazy(clean, command);
           const detailKey = storeOutput(command, clean);
+          logCall("execute", { command, outputTokens: estimateTokens(clean), tokensSaved: 0, durationMs: Date.now() - start, exitCode: result.exitCode });
           return {
             content: [{ type: "text" as const, text: JSON.stringify({
               exitCode: result.exitCode, ...lazy, detailKey, duration: result.duration,
@@ -95,6 +123,7 @@ export function createServer(): McpServer {
             }) }],
           };
         }
+        logCall("execute", { command, outputTokens: estimateTokens(clean), tokensSaved: 0, durationMs: Date.now() - start, exitCode: result.exitCode });
         return {
           content: [{ type: "text" as const, text: JSON.stringify({
             exitCode: result.exitCode, output: clean, duration: result.duration, tokens: estimateTokens(clean),
@@ -108,6 +137,7 @@ export function createServer(): McpServer {
         try {
           const processed = await processOutput(command, output);
           const detailKey = output.split("\n").length > 15 ? storeOutput(command, output) : undefined;
+          logCall("execute", { command, outputTokens: estimateTokens(output), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, exitCode: result.exitCode, aiProcessed: processed.aiProcessed });
           return {
             content: [{ type: "text" as const, text: JSON.stringify({
               exitCode: result.exitCode,
@@ -121,6 +151,7 @@ export function createServer(): McpServer {
           };
         } catch {
           const compressed = compress(command, output, { maxTokens });
+          logCall("execute", { command, outputTokens: estimateTokens(output), tokensSaved: compressed.tokensSaved, durationMs: Date.now() - start, exitCode: result.exitCode });
           return {
             content: [{ type: "text" as const, text: JSON.stringify({
               exitCode: result.exitCode, output: compressed.content, duration: result.duration,
@@ -156,12 +187,13 @@ export function createServer(): McpServer {
       timeout: z.number().optional().describe("Timeout in ms (default: 30000)"),
     },
     async ({ command, cwd, timeout }) => {
-      const result = await exec(command, cwd, timeout ?? 30000, true); // allow rewrite for smart mode
+      const start = Date.now();
+      const result = await exec(command, cwd, timeout ?? 30000, true);
       const output = (result.stdout + result.stderr).trim();
       const processed = await processOutput(command, output);
 
-      // Progressive disclosure: store full output, return summary + expand key
       const detailKey = output.split("\n").length > 15 ? storeOutput(command, output) : undefined;
+      logCall("execute_smart", { command, outputTokens: estimateTokens(output), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, exitCode: result.exitCode, aiProcessed: processed.aiProcessed });
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
@@ -274,7 +306,9 @@ export function createServer(): McpServer {
       maxResults: z.number().optional().describe("Max results per category (default: 50)"),
     },
     async ({ pattern, path, includeNodeModules, maxResults }) => {
+      const start = Date.now();
       const result = await searchFiles(pattern, path ?? process.cwd(), { includeNodeModules, maxResults });
+      logCall("search_files", { command: `search_files ${pattern}`, tokensSaved: (result as any).tokensSaved ?? 0, durationMs: Date.now() - start });
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     }
   );
@@ -292,7 +326,9 @@ export function createServer(): McpServer {
       contextLines: z.number().optional().describe("Context lines around matches (default: 0)"),
     },
     async ({ pattern, path, fileType, maxResults, contextLines }) => {
+      const start = Date.now();
       const result = await searchContent(pattern, path ?? process.cwd(), { fileType, maxResults, contextLines });
+      logCall("search_content", { command: `grep ${pattern}`, tokensSaved: result.tokensSaved ?? 0, durationMs: Date.now() - start });
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     }
   );
@@ -482,6 +518,7 @@ export function createServer(): McpServer {
       timeout: z.number().optional().describe("Timeout in ms"),
     },
     async ({ command, cwd, timeout }) => {
+      const start = Date.now();
       const workDir = cwd ?? process.cwd();
       const result = await exec(command, workDir, timeout ?? 30000);
       const output = (result.stdout + result.stderr).trim();
@@ -490,6 +527,7 @@ export function createServer(): McpServer {
       if (diff.tokensSaved > 0) {
         recordSaving("diff", diff.tokensSaved);
       }
+      logCall("execute_diff", { command, outputTokens: estimateTokens(output), tokensSaved: diff.tokensSaved, durationMs: Date.now() - start, exitCode: result.exitCode });
 
       if (diff.unchanged) {
         return { content: [{ type: "text" as const, text: JSON.stringify({
@@ -553,7 +591,8 @@ export function createServer(): McpServer {
       }
       if (action === "detail" && sessionId) {
         const interactions = getSessionInteractions(sessionId);
-        return { content: [{ type: "text" as const, text: JSON.stringify(interactions) }] };
+        const economy = getSessionEconomy(sessionId);
+        return { content: [{ type: "text" as const, text: JSON.stringify({ interactions, economy }) }] };
       }
       const sessions = listSessions(limit ?? 20);
       return { content: [{ type: "text" as const, text: JSON.stringify(sessions) }] };
@@ -646,10 +685,12 @@ export function createServer(): McpServer {
       summarize: z.boolean().optional().describe("Return AI summary instead of full content (saves ~90% tokens)"),
     },
     async ({ path, offset, limit, summarize }) => {
+      const start = Date.now();
       const result = cachedRead(path, { offset, limit });
 
       if (summarize && result.content.length > 500) {
         const processed = await processOutput(`cat ${path}`, result.content);
+        logCall("read_file", { command: path, outputTokens: estimateTokens(result.content), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, aiProcessed: true });
         return {
           content: [{ type: "text" as const, text: JSON.stringify({
             summary: processed.summary,
@@ -660,6 +701,7 @@ export function createServer(): McpServer {
         };
       }
 
+      logCall("read_file", { command: path, outputTokens: estimateTokens(result.content), tokensSaved: 0, durationMs: Date.now() - start });
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
           content: result.content,

@@ -83,6 +83,16 @@ if (args[0] === "uninstall") {
   process.exit(0);
 }
 
+// ── Prune ────────────────────────────────────────────────────────────────────
+
+if (args[0] === "prune") {
+  const days = parseInt(args.find(a => a.startsWith("--older-than="))?.split("=")[1] ?? "90");
+  const { pruneSessions } = await import("./sessions-db.js");
+  const result = pruneSessions(days);
+  console.log(`  Pruned ${result.sessionsDeleted} sessions, ${result.interactionsDeleted} interactions older than ${days}d`);
+  process.exit(0);
+}
+
 // ── MCP commands ─────────────────────────────────────────────────────────────
 
 if (args[0] === "mcp") {
