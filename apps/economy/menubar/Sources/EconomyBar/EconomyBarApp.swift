@@ -8,6 +8,7 @@ struct EconomyBarApp: App {
     MenuBarExtra {
       ContentView()
         .environmentObject(appState)
+        .background(.clear)
     } label: {
       MenuBarLabel(cost: appState.today.total_usd, isOffline: appState.isOffline)
     }

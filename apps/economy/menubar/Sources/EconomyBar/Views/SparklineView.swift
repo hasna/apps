@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SparklineView: View {
   let entries: [DailyEntry]
+  @State private var hoveredIndex: Int? = nil
 
   private var dailyTotals: [(date: String, cost: Double)] {
     var map: [String: Double] = [:]
@@ -10,30 +11,62 @@ struct SparklineView: View {
   }
 
   var body: some View {
-    VStack(spacing: 2) {
-      Canvas { ctx, size in
-        let totals = dailyTotals
-        guard totals.count > 1 else { return }
-        let maxVal = totals.map(\.cost).max() ?? 1
-        let barWidth = size.width / CGFloat(totals.count)
-        let gap: CGFloat = 1
-        for (i, entry) in totals.enumerated() {
-          let height = maxVal > 0 ? CGFloat(entry.cost / maxVal) * size.height : 2
-          let x = CGFloat(i) * barWidth + gap / 2
-          let rect = CGRect(x: x, y: size.height - height, width: barWidth - gap, height: max(height, 2))
-          ctx.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(.accentColor.opacity(0.8)))
+    let totals = dailyTotals
+    let maxVal = totals.map(\.cost).max() ?? 1
+
+    VStack(spacing: 4) {
+      // Hover tooltip
+      if let idx = hoveredIndex, idx < totals.count {
+        HStack {
+          Text(totals[idx].date)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Text(fmtCost(totals[idx].cost))
+            .font(.caption2.monospacedDigit())
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.15), value: hoveredIndex)
+      } else {
+        // placeholder to keep height stable
+        Text(" ").font(.caption2)
+      }
+
+      // Bars
+      HStack(alignment: .bottom, spacing: 2) {
+        ForEach(Array(totals.enumerated()), id: \.offset) { i, entry in
+          let height = maxVal > 0 ? max(CGFloat(entry.cost / maxVal) * 40, 2) : 2
+          let isHovered = hoveredIndex == i
+          Rectangle()
+            .fill(isHovered ? Color.primary : Color.primary.opacity(0.35))
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+            .cornerRadius(2)
+            .onHover { hovering in
+              hoveredIndex = hovering ? i : nil
+            }
         }
       }
-      .frame(height: 36)
+      .frame(height: 40)
 
-      if let first = dailyTotals.first?.date, let last = dailyTotals.last?.date {
+      // Date labels
+      if let first = totals.first?.date, let last = totals.last?.date {
         HStack {
-          Text(formatDate(first)).font(.system(size: 9)).foregroundStyle(.tertiary)
+          Text(formatDate(first)).font(.caption2).foregroundStyle(.tertiary)
           Spacer()
-          Text(formatDate(last)).font(.system(size: 9)).foregroundStyle(.tertiary)
+          Text(formatDate(last)).font(.caption2).foregroundStyle(.tertiary)
         }
       }
     }
+  }
+
+  private func fmtCost(_ usd: Double) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencySymbol = "$"
+    formatter.maximumFractionDigits = 2
+    formatter.minimumFractionDigits = 2
+    return formatter.string(from: NSNumber(value: usd)) ?? String(format: "$%.2f", usd)
   }
 
   private func formatDate(_ d: String) -> String {

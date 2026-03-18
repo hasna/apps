@@ -7,9 +7,9 @@
   <key>CFBundleExecutable</key>
   <string>EconomyBar</string>
   <key>CFBundleName</key>
-  <string>Economy Bar</string>
+  <string>Economy</string>
   <key>CFBundleDisplayName</key>
-  <string>Economy Bar</string>
+  <string>Economy</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0</string>
   <key>CFBundleVersion</key>

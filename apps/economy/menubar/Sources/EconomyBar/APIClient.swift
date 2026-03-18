@@ -34,6 +34,10 @@ actor APIClient {
     try await get("/api/projects")
   }
 
+  func fetchGoals() async throws -> [GoalStatus] {
+    try await get("/api/goals")
+  }
+
   func sync() async throws {
     let url = URL(string: "\(base)/api/sync")!
     var req = URLRequest(url: url)

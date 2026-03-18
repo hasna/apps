@@ -6,14 +6,16 @@ struct OfflineView: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .font(.system(size: 28))
         .foregroundStyle(.orange)
+        .symbolEffect(.pulse)
       Text("Server offline")
-        .font(.system(size: 13, weight: .medium))
-      Text("Start with: economy serve")
-        .font(.system(size: 11))
+        .font(.subheadline)
+        .fontWeight(.semibold)
+      Text("economy serve")
+        .font(.caption)
+        .fontDesign(.monospaced)
         .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
     }
     .frame(maxWidth: .infinity)
-    .padding(.vertical, 16)
+    .padding(.vertical, 24)
   }
 }
