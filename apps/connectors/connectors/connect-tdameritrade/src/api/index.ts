@@ -1,51 +1,42 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// TD Ameritrade Connector — Brokerage, trading, and market data
+import { TDAClient } from './client';
+import type { TDAConfig, TDAQuote, TDAAccount, TDAOrder, TDAPriceHistory, TDASearchResult } from '../types';
+export { TDAClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TDAmeritrade {
+  private readonly client: TDAClient;
+  constructor(config: TDAConfig) { this.client = new TDAClient(config); }
+  static fromEnv(): TDAmeritrade {
+    const apiKey = process.env.TDA_API_KEY;
+    if (!apiKey) throw new Error('TDA_API_KEY is required');
+    return new TDAmeritrade({ apiKey, accessToken: process.env.TDA_ACCESS_TOKEN });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getQuote(symbol: string): Promise<Record<string, TDAQuote>> { return this.client.request(`/marketdata/${symbol}/quotes`); }
+  async getQuotes(symbols: string[]): Promise<Record<string, TDAQuote>> {
+    return this.client.request('/marketdata/quotes', { params: { symbol: symbols.join(',') } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getPriceHistory(symbol: string, options?: { periodType?: string; period?: number; frequencyType?: string; frequency?: number }): Promise<TDAPriceHistory> {
+    return this.client.request<TDAPriceHistory>(`/marketdata/${symbol}/pricehistory`, { params: { periodType: options?.periodType, period: options?.period, frequencyType: options?.frequencyType, frequency: options?.frequency } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async searchInstruments(query: string, projection?: string): Promise<TDASearchResult> {
+    return this.client.request<TDASearchResult>('/instruments', { params: { symbol: query, projection: projection || 'symbol-search' } });
   }
+
+  async getAccount(accountId: string): Promise<TDAAccount> { return this.client.request<TDAAccount>(`/accounts/${accountId}`, { params: { fields: 'positions' } }); }
+  async listAccounts(): Promise<TDAAccount[]> { return this.client.request<TDAAccount[]>('/accounts', { params: { fields: 'positions' } }); }
+
+  async listOrders(accountId: string, options?: { maxResults?: number; status?: string }): Promise<TDAOrder[]> {
+    return this.client.request<TDAOrder[]>(`/accounts/${accountId}/orders`, { params: { maxResults: options?.maxResults, status: options?.status } });
+  }
+  async placeOrder(accountId: string, order: Record<string, unknown>): Promise<void> {
+    await this.client.request(`/accounts/${accountId}/orders`, { method: 'POST', body: order });
+  }
+  async cancelOrder(accountId: string, orderId: number): Promise<void> {
+    await this.client.request(`/accounts/${accountId}/orders/${orderId}`, { method: 'DELETE' });
+  }
+
+  getClient(): TDAClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

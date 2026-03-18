@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Mist Connector — Juniper Mist AI-driven wireless network management
+import { MistClient } from './client';
+import type { MistConfig, MistSite, MistAP, MistClient as MistClientType, MistWlan, MistOrg } from '../types';
+export { MistClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Mist {
+  private readonly client: MistClient;
+  constructor(config: MistConfig) { this.client = new MistClient(config); }
+  static fromEnv(): Mist {
+    const token = process.env.MIST_TOKEN;
+    if (!token) throw new Error('MIST_TOKEN is required');
+    return new Mist({ token, baseUrl: process.env.MIST_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listOrgs(): Promise<MistOrg[]> { return this.client.request<MistOrg[]>('/self/orgs'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listSites(orgId: string): Promise<MistSite[]> { return this.client.request<MistSite[]>(`/orgs/${orgId}/sites`); }
+  async getSite(siteId: string): Promise<MistSite> { return this.client.request<MistSite>(`/sites/${siteId}`); }
+
+  async listAPs(siteId: string): Promise<MistAP[]> { return this.client.request<MistAP[]>(`/sites/${siteId}/devices`); }
+  async getAP(siteId: string, deviceId: string): Promise<MistAP> { return this.client.request<MistAP>(`/sites/${siteId}/devices/${deviceId}`); }
+
+  async listClients(siteId: string): Promise<MistClientType[]> { return this.client.request<MistClientType[]>(`/sites/${siteId}/stats/clients`); }
+
+  async listWlans(siteId: string): Promise<MistWlan[]> { return this.client.request<MistWlan[]>(`/sites/${siteId}/wlans`); }
+  async getWlan(siteId: string, wlanId: string): Promise<MistWlan> { return this.client.request<MistWlan>(`/sites/${siteId}/wlans/${wlanId}`); }
+  async createWlan(siteId: string, data: { ssid: string; auth?: { type: string; psk?: string }; enabled?: boolean }): Promise<MistWlan> {
+    return this.client.request<MistWlan>(`/sites/${siteId}/wlans`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): MistClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
