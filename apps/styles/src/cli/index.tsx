@@ -27,6 +27,7 @@ import {
 } from "../lib/profiles.js";
 import { getPref, setPref, listPrefs } from "../lib/preferences.js";
 import { runHealthCheck, checkFile, getDefaultRules } from "../lib/health.js";
+import { getHealthDiff } from "../lib/healthdiff.js";
 import {
   injectStyleHook,
   isHookInstalled,
@@ -39,6 +40,12 @@ import {
 } from "../lib/fs.js";
 import { listTemplates, applyTemplate } from "../lib/templates.js";
 import { createTasksFromViolations } from "../lib/taskgen.js";
+import { detectProjectPath } from "../lib/detect.js";
+import { injectIntoClaudeMd, removeFromClaudeMd } from "../lib/contextinjector.js";
+import { getFixSuggestions, applyFixes } from "../lib/fixer.js";
+import { getExample, listExamples, PATTERNS } from "../lib/examples.js";
+import type { Pattern } from "../lib/examples.js";
+import { getDb } from "../lib/db.js";
 import { App } from "./components/App.js";
 
 // ── TTY detection ─────────────────────────────────────────────────────────────
@@ -87,6 +94,21 @@ function error(msg: string, suggestions?: string[]): never {
     jsonOut({ error: msg, suggestions: suggestions ?? [] });
   }
   process.exit(1);
+}
+
+// ── Format relative time ─────────────────────────────────────────────────────
+
+function formatAgo(ts: number | null | undefined): string | null {
+  if (ts == null) return null;
+  const diffMs = Date.now() - ts;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}min ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
 }
 
 // ── Build style.md content from a style name ─────────────────────────────────
@@ -195,7 +217,8 @@ program
   .description("Set the active style for a project or globally")
   .option("-p, --project <path>", "Project path (default: cwd)")
   .option("-g, --global", "Set as global default instead of project-specific")
-  .action(async (name: string, opts: { project?: string; global?: boolean }) => {
+  .option("--inject-context", "Inject context into CLAUDE.md even if it does not exist yet")
+  .action(async (name: string, opts: { project?: string; global?: boolean; injectContext?: boolean }) => {
     const style = getStyle(name);
     if (!style) {
       const similar = findSimilarStyles(name);
@@ -203,7 +226,7 @@ program
     }
 
     const profile = getBuiltinStyleProfile(name);
-    const projectPath = resolve(opts.project ?? process.cwd());
+    const projectPath = resolve(opts.project ?? detectProjectPath());
 
     if (opts.global) {
       setPref("active_profile", profile.id, "global");
@@ -231,6 +254,18 @@ program
       }
     }
 
+    // Auto-inject into CLAUDE.md if it exists or --inject-context flag passed
+    const claudeMdPath = join(projectPath, "CLAUDE.md");
+    if (opts.injectContext || existsSync(claudeMdPath)) {
+      const prefsArr = listPrefs(projectPath);
+      const prefsMap: Record<string, string> = {};
+      for (const p of prefsArr) prefsMap[p.key] = p.value;
+      const injectResult = injectIntoClaudeMd(projectPath, profile, prefsMap);
+      if (isTTY && injectResult.action !== "unchanged") {
+        console.log(chalk.dim(`  CLAUDE.md context ${injectResult.action}: ${injectResult.path}`));
+      }
+    }
+
     if (isTTY) {
       console.log(chalk.green(`✔ Active style set to: ${style.displayName}`));
       console.log(chalk.dim(`  Project: ${projectPath}`));
@@ -253,8 +288,9 @@ program
   .description("Initialize open-styles for a project")
   .option("-p, --project <path>", "Project path (default: cwd)")
   .option("-s, --style <name>", "Style to activate")
-  .action(async (opts: { project?: string; style?: string }) => {
-    const projectPath = resolve(opts.project ?? process.cwd());
+  .option("--inject-context", "Inject context into CLAUDE.md even if it does not exist yet")
+  .action(async (opts: { project?: string; style?: string; injectContext?: boolean }) => {
+    const projectPath = resolve(opts.project ?? detectProjectPath());
 
     // Init project dirs in ~/.styles/
     initProjectDir(projectPath);
@@ -277,14 +313,15 @@ program
     }
 
     // Write style.md if style specified
+    let activeProfile = null;
     if (opts.style) {
       const style = getStyle(opts.style);
       if (!style) {
         const similar = findSimilarStyles(opts.style);
         error(`Style not found: "${opts.style}"`, similar.length ? [`Did you mean: ${similar.join(", ")}`] : undefined);
       }
-      const profile = getBuiltinStyleProfile(opts.style);
-      setActiveProfile(projectPath, profile.id);
+      activeProfile = getBuiltinStyleProfile(opts.style);
+      setActiveProfile(projectPath, activeProfile.id);
       writeStyleContextFile(projectPath, buildStyleMdContent(opts.style));
     }
 
@@ -292,6 +329,18 @@ program
     const claudeDir = join(projectPath, ".claude");
     if (existsSync(claudeDir)) {
       injectStyleHook(projectPath);
+    }
+
+    // Auto-inject into CLAUDE.md if it exists or --inject-context flag passed
+    const claudeMdPath = join(projectPath, "CLAUDE.md");
+    if (activeProfile && (opts.injectContext || existsSync(claudeMdPath))) {
+      const prefsArr = listPrefs(projectPath);
+      const prefsMap: Record<string, string> = {};
+      for (const p of prefsArr) prefsMap[p.key] = p.value;
+      const injectResult = injectIntoClaudeMd(projectPath, activeProfile, prefsMap);
+      if (isTTY && injectResult.action !== "unchanged") {
+        console.log(chalk.dim(`  CLAUDE.md context ${injectResult.action}: ${injectResult.path}`));
+      }
     }
 
     if (isTTY) {
@@ -470,11 +519,13 @@ program
   .option("--ai", "Use Cerebras AI for deeper analysis")
   .option("--watch", "Re-run on file changes")
   .option("--create-tasks", "Auto-create todos tasks for violations")
-  .action(async (opts: { project?: string; ai?: boolean; watch?: boolean; createTasks?: boolean }) => {
-    const projectPath = resolve(opts.project ?? process.cwd());
+  .option("--since-last", "Only scan files modified since the last health check run")
+  .option("--no-cache", "Skip file cache and force full rescan")
+  .action(async (opts: { project?: string; ai?: boolean; watch?: boolean; createTasks?: boolean; sinceLast?: boolean; noCache?: boolean }) => {
+    const projectPath = resolve(opts.project ?? detectProjectPath());
 
     async function doCheck() {
-      const result = await runHealthCheck(projectPath);
+      const result = await runHealthCheck(projectPath, { sinceLast: opts.sinceLast ?? false, noCache: opts.noCache ?? false });
 
       if (opts.ai) {
         // AI inspection via Cerebras
@@ -645,6 +696,385 @@ templateCmd
       }
       process.exit(1);
     }
+  });
+
+// ── styles context ────────────────────────────────────────────────────────────
+
+program
+  .command("context")
+  .description("Show the active style context for a project (for AI agents)")
+  .option("-p, --project <path>", "Project path (default: auto-detect)")
+  .action(async (opts: { project?: string }) => {
+    const projectPath = resolve(opts.project ?? detectProjectPath());
+
+    // Get active profile or fallback to minimalist
+    let profile = getActiveProfile(projectPath);
+    if (!profile) {
+      profile = getBuiltinStyleProfile("minimalist");
+    }
+
+    // Get preferences as a flat key→value map
+    const prefsArr = listPrefs(projectPath);
+    const prefsMap: Record<string, string> = {};
+    for (const p of prefsArr) prefsMap[p.key] = p.value;
+
+    // Get last health check from DB
+    const db = getDb();
+    const lastCheck = db
+      .query(
+        "SELECT score, status, run_at FROM health_checks WHERE project_path = ? ORDER BY run_at DESC LIMIT 1"
+      )
+      .get(projectPath) as { score: number; status: string; run_at: number } | null;
+
+    const result = {
+      projectPath,
+      activeStyle: {
+        name: profile.name,
+        displayName: profile.displayName,
+        category: profile.category,
+      },
+      principles: profile.principles,
+      antiPatterns: "antiPatterns" in profile ? profile.antiPatterns : [],
+      preferences: prefsMap,
+      score: lastCheck?.score ?? null,
+      status: lastCheck?.status ?? null,
+      lastCheckAgo: formatAgo(lastCheck?.run_at),
+    };
+
+    if (!isTTY) {
+      jsonOut(result);
+      return;
+    }
+
+    console.log();
+    console.log(chalk.bold(`Active Style: ${profile.displayName}`));
+    console.log(chalk.dim(`Category: ${profile.category}`));
+    console.log(chalk.dim(`Project: ${projectPath}`));
+    if (result.principles.length) {
+      console.log();
+      console.log(chalk.bold("Principles:"));
+      for (const p of result.principles) console.log(`  ${chalk.cyan("•")} ${p}`);
+    }
+    if (result.antiPatterns.length) {
+      console.log();
+      console.log(chalk.bold("Anti-Patterns:"));
+      for (const ap of result.antiPatterns) console.log(`  ${chalk.red("✗")} ${ap}`);
+    }
+    if (Object.keys(prefsMap).length) {
+      console.log();
+      console.log(chalk.bold("Preferences:"));
+      for (const [k, v] of Object.entries(prefsMap)) {
+        console.log(`  ${chalk.cyan(k)}: ${v}`);
+      }
+    }
+    if (lastCheck) {
+      console.log();
+      console.log(
+        `Health: ${statusColor(lastCheck.status)}  Score: ${chalk.bold(String(lastCheck.score))}/100  (${result.lastCheckAgo})`
+      );
+    }
+    console.log();
+  });
+
+// ── styles score ──────────────────────────────────────────────────────────────
+
+program
+  .command("score")
+  .description("Show the latest health check score for a project")
+  .option("-p, --project <path>", "Project path (default: auto-detect)")
+  .action((opts: { project?: string }) => {
+    const projectPath = resolve(opts.project ?? detectProjectPath());
+    const db = getDb();
+
+    const lastCheck = db
+      .query(
+        `SELECT score, status, run_at, json_array_length(violations) as violation_count
+         FROM health_checks
+         WHERE project_path = ?
+         ORDER BY run_at DESC
+         LIMIT 1`
+      )
+      .get(projectPath) as {
+      score: number;
+      status: string;
+      run_at: number;
+      violation_count: number;
+    } | null;
+
+    if (!lastCheck) {
+      const msg = {
+        score: null,
+        status: "unknown",
+        message: "No health check run yet. Run: styles health",
+      };
+      if (!isTTY) {
+        jsonOut(msg);
+        return;
+      }
+      console.log(chalk.dim("No health check run yet."));
+      console.log(chalk.dim("Run: styles health"));
+      return;
+    }
+
+    const result = {
+      score: lastCheck.score,
+      status: lastCheck.status,
+      violations: lastCheck.violation_count,
+      lastRun: formatAgo(lastCheck.run_at),
+      projectPath,
+    };
+
+    if (!isTTY) {
+      jsonOut(result);
+      return;
+    }
+
+    console.log();
+    console.log(
+      `Score: ${chalk.bold(String(lastCheck.score))}/100  ${statusColor(lastCheck.status)}`
+    );
+    console.log(chalk.dim(`Violations: ${lastCheck.violation_count}`));
+    console.log(chalk.dim(`Last run: ${result.lastRun}`));
+    console.log(chalk.dim(`Project: ${projectPath}`));
+    console.log();
+  });
+
+// ── styles inject-context ─────────────────────────────────────────────────────
+
+program
+  .command("inject-context")
+  .description("Inject or update the style context block in CLAUDE.md")
+  .option("-p, --project <path>", "Project path (default: auto-detect)")
+  .option("--remove", "Remove the style context block from CLAUDE.md")
+  .action(async (opts: { project?: string; remove?: boolean }) => {
+    const projectPath = resolve(opts.project ?? detectProjectPath());
+
+    if (opts.remove) {
+      const result = removeFromClaudeMd(projectPath);
+      if (!isTTY) {
+        jsonOut({ ok: true, ...result });
+        return;
+      }
+      if (result.action === "removed") {
+        console.log(chalk.green(`✔ Removed style context from: ${result.path}`));
+      } else {
+        console.log(chalk.dim(`No style context block found in: ${result.path}`));
+      }
+      return;
+    }
+
+    // Get active profile or fallback to minimalist
+    let profile = getActiveProfile(projectPath);
+    if (!profile) {
+      profile = getBuiltinStyleProfile("minimalist");
+    }
+
+    const prefsArr = listPrefs(projectPath);
+    const prefsMap: Record<string, string> = {};
+    for (const p of prefsArr) prefsMap[p.key] = p.value;
+
+    const result = injectIntoClaudeMd(projectPath, profile, prefsMap);
+
+    if (!isTTY) {
+      jsonOut({ ok: true, ...result });
+      return;
+    }
+
+    if (result.action === "unchanged") {
+      console.log(chalk.dim(`Style context already up to date: ${result.path}`));
+    } else {
+      console.log(chalk.green(`✔ Style context ${result.action}: ${result.path}`));
+    }
+  });
+
+// ── styles diff ───────────────────────────────────────────────────────────────
+
+program
+  .command("diff")
+  .description("Show health score diff between the last two health check runs")
+  .option("-p, --project <path>", "Project path (default: cwd)")
+  .action((opts: { project?: string }) => {
+    const projectPath = resolve(opts.project ?? detectProjectPath());
+    const diff = getHealthDiff(projectPath);
+
+    if (!isTTY) {
+      jsonOut(diff);
+      return;
+    }
+
+    if (diff.trend === "no-data") {
+      console.log(chalk.dim("No health check history found. Run `styles health` at least twice."));
+      return;
+    }
+
+    const prev = diff.previous!;
+    const curr = diff.current!;
+    const delta = diff.delta!;
+
+    const trendColor =
+      diff.trend === "improving"
+        ? chalk.green
+        : diff.trend === "worsening"
+          ? chalk.red
+          : chalk.dim;
+
+    console.log();
+    console.log(chalk.bold("Health Diff") + "  " + trendColor(diff.trend.toUpperCase()));
+    console.log();
+    console.log(
+      chalk.dim("Previous:") +
+        " score " +
+        chalk.bold(String(prev.score)) +
+        "/100, " +
+        prev.violations +
+        " violation(s)" +
+        chalk.dim(" (" + (formatAgo(prev.runAt) ?? "") + ")")
+    );
+    console.log(
+      chalk.dim("Current: ") +
+        " score " +
+        chalk.bold(String(curr.score)) +
+        "/100, " +
+        curr.violations +
+        " violation(s)" +
+        chalk.dim(" (" + (formatAgo(curr.runAt) ?? "") + ")")
+    );
+    console.log();
+
+    const scoreSign = delta.score > 0 ? "+" : "";
+    const violSign = delta.violations > 0 ? "+" : "";
+    console.log(
+      chalk.dim("Score delta:     ") + trendColor(scoreSign + String(delta.score))
+    );
+    console.log(
+      chalk.dim("Violations delta:") + " " + (delta.violations <= 0 ? chalk.green(violSign + String(delta.violations)) : chalk.red(violSign + String(delta.violations)))
+    );
+
+    if (diff.resolved.length > 0) {
+      console.log();
+      console.log(chalk.green("Resolved (" + diff.resolved.length + "):"));
+      for (const msg of diff.resolved.slice(0, 5)) {
+        console.log(chalk.green("  + ") + chalk.dim(msg));
+      }
+      if (diff.resolved.length > 5) {
+        console.log(chalk.dim("  ... and " + (diff.resolved.length - 5) + " more"));
+      }
+    }
+
+    if (diff.introduced.length > 0) {
+      console.log();
+      console.log(chalk.red("Introduced (" + diff.introduced.length + "):"));
+      for (const msg of diff.introduced.slice(0, 5)) {
+        console.log(chalk.red("  - ") + chalk.dim(msg));
+      }
+      if (diff.introduced.length > 5) {
+        console.log(chalk.dim("  ... and " + (diff.introduced.length - 5) + " more"));
+      }
+    }
+
+    console.log();
+  });
+
+// ── styles fix ────────────────────────────────────────────────────────────────
+
+program
+  .command("fix <file>")
+  .description("Show fix suggestions for style violations in a file")
+  .option("-p, --project <path>", "Project path (default: cwd)")
+  .option("--apply", "Auto-apply fixable suggestions to the file")
+  .action(async (file: string, opts: { project?: string; apply?: boolean }) => {
+    const projectPath = resolve(opts.project ?? process.cwd());
+    const filePath = resolve(file);
+
+    const { getActiveProfile } = await import("../lib/profiles.js");
+    const profile = getActiveProfile(projectPath);
+    const rules = getDefaultRules(profile);
+    const violations = checkFile(filePath, rules);
+
+    const fixes = getFixSuggestions(filePath, violations);
+    let applied = 0;
+
+    if (opts.apply) {
+      const autoFixable = fixes.filter((f) => f.autoFixable);
+      applied = applyFixes(filePath, autoFixable);
+    }
+
+    const result = { filePath, fixes, applied };
+
+    if (!isTTY) {
+      jsonOut(result);
+      return;
+    }
+
+    if (fixes.length === 0) {
+      console.log(chalk.green(`✔ ${file}: No violations to fix`));
+      return;
+    }
+
+    console.log(chalk.bold(`\n${file}: ${fixes.length} fix suggestion(s)\n`));
+    for (const fix of fixes) {
+      const fixable = fix.autoFixable ? chalk.green("[auto-fixable]") : chalk.dim("[manual]");
+      console.log(`  Line ${chalk.bold(String(fix.line))} ${fixable} ${chalk.dim(fix.rule)}`);
+      console.log(`    ${chalk.dim("Current:")}    ${fix.current.trim()}`);
+      console.log(`    ${chalk.dim("Suggestion:")} ${fix.suggestion}`);
+      if (fix.autoFixable && fix.fixedLine) {
+        console.log(`    ${chalk.dim("Fixed line:")} ${fix.fixedLine.trim()}`);
+      }
+      console.log();
+    }
+
+    if (opts.apply) {
+      if (applied > 0) {
+        console.log(chalk.green(`✔ Applied ${applied} auto-fix(es) to ${file}`));
+      } else {
+        console.log(chalk.dim("No auto-fixable issues found to apply."));
+      }
+    } else {
+      const autoCount = fixes.filter((f) => f.autoFixable).length;
+      if (autoCount > 0) {
+        console.log(chalk.dim(`Tip: Run with --apply to auto-fix ${autoCount} fixable issue(s).`));
+      }
+    }
+  });
+
+// ── styles example ────────────────────────────────────────────────────────────
+
+program
+  .command("example <pattern>")
+  .description("Show a code example for a UI pattern in the active style")
+  .option("-s, --style <name>", "Style name (default: active project style or minimalist)")
+  .option("-p, --project <path>", "Project path (default: cwd)")
+  .action(async (pattern: string, opts: { style?: string; project?: string }) => {
+    const projectPath = resolve(opts.project ?? process.cwd());
+
+    // Resolve style: flag > active profile > fallback minimalist
+    let styleName: string;
+    if (opts.style) {
+      styleName = opts.style;
+    } else {
+      const { getActiveProfile } = await import("../lib/profiles.js");
+      const profile = getActiveProfile(projectPath);
+      styleName = profile?.name ?? "minimalist";
+    }
+
+    if (!PATTERNS.includes(pattern as Pattern)) {
+      const validPatterns = PATTERNS.join(", ");
+      error(`Unknown pattern: "${pattern}"`, [`Valid patterns: ${validPatterns}`]);
+    }
+
+    const code = getExample(styleName, pattern as Pattern);
+
+    if (!code) {
+      const available = listExamples(styleName);
+      const availableStr = available.length > 0 ? available.join(", ") : "none";
+      error(
+        `No example found for pattern "${pattern}" in style "${styleName}"`,
+        [`Available patterns for ${styleName}: ${availableStr}`]
+      );
+    }
+
+    // Print raw TSX — agents can copy-paste
+    process.stdout.write(code);
   });
 
 // ── styles serve ──────────────────────────────────────────────────────────────
