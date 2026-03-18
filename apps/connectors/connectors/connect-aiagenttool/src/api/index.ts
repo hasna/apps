@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// AI Agent Tool Connector — AI agent tooling and orchestration
+import { AIAgentToolClient } from './client';
+import type { AIAgentToolConfig, AATAgent, AATTool, AATExecution, AATExecutionList } from '../types';
+export { AIAgentToolClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AIAgentTool {
+  private readonly client: AIAgentToolClient;
+  constructor(config: AIAgentToolConfig) { this.client = new AIAgentToolClient(config); }
+  static fromEnv(): AIAgentTool {
+    const apiKey = process.env.AIAGENTTOOL_API_KEY;
+    if (!apiKey) throw new Error('AIAGENTTOOL_API_KEY is required');
+    return new AIAgentTool({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listAgents(): Promise<AATAgent[]> { return this.client.request<AATAgent[]>('/agents'); }
+  async getAgent(agentId: string): Promise<AATAgent> { return this.client.request<AATAgent>(`/agents/${agentId}`); }
+  async createAgent(data: { name: string; description?: string; model?: string; tools?: string[]; instructions?: string }): Promise<AATAgent> {
+    return this.client.request<AATAgent>('/agents', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateAgent(agentId: string, data: { name?: string; description?: string; model?: string; tools?: string[]; instructions?: string }): Promise<AATAgent> {
+    return this.client.request<AATAgent>(`/agents/${agentId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+  async deleteAgent(agentId: string): Promise<void> { await this.client.request(`/agents/${agentId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async executeAgent(agentId: string, input: string): Promise<AATExecution> {
+    return this.client.request<AATExecution>(`/agents/${agentId}/execute`, { method: 'POST', body: { input } });
+  }
+  async getExecution(executionId: string): Promise<AATExecution> { return this.client.request<AATExecution>(`/executions/${executionId}`); }
+  async listExecutions(agentId: string, options?: { page?: number; limit?: number }): Promise<AATExecutionList> {
+    return this.client.request<AATExecutionList>(`/agents/${agentId}/executions`, { params: { page: options?.page, limit: options?.limit } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTools(): Promise<AATTool[]> { return this.client.request<AATTool[]>('/tools'); }
+  async getTool(toolId: string): Promise<AATTool> { return this.client.request<AATTool>(`/tools/${toolId}`); }
+  async createTool(data: { name: string; description: string; type: string; parameters: Record<string, unknown> }): Promise<AATTool> {
+    return this.client.request<AATTool>('/tools', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): AIAgentToolClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

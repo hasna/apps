@@ -1,51 +1,30 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Apiary Connector — API design, documentation, and testing
+import { ApiaryClient } from './client';
+import type { ApiaryConfig, ApiaryApi, ApiaryApiList, ApiaryBlueprint, ApiaryTest, ApiaryTestList, ApiaryTeam } from '../types';
+export { ApiaryClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Apiary {
+  private readonly client: ApiaryClient;
+  constructor(config: ApiaryConfig) { this.client = new ApiaryClient(config); }
+  static fromEnv(): Apiary {
+    const token = process.env.APIARY_TOKEN;
+    if (!token) throw new Error('APIARY_TOKEN is required');
+    return new Apiary({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listApis(): Promise<ApiaryApiList> { return this.client.request<ApiaryApiList>('/me/apis'); }
+  async getApi(apiName: string): Promise<ApiaryApi> { return this.client.request<ApiaryApi>(`/me/apis/${apiName}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getBlueprint(apiName: string): Promise<ApiaryBlueprint> { return this.client.request<ApiaryBlueprint>(`/blueprint/get/${apiName}`); }
+  async publishBlueprint(apiName: string, code: string): Promise<void> {
+    await this.client.request(`/blueprint/publish/${apiName}`, { method: 'POST', body: { code } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listTests(apiName: string): Promise<ApiaryTestList> { return this.client.request<ApiaryTestList>(`/apis/${apiName}/tests`); }
+  async getTest(apiName: string, testId: string): Promise<ApiaryTest> { return this.client.request<ApiaryTest>(`/apis/${apiName}/tests/${testId}`); }
+  async runTests(apiName: string): Promise<ApiaryTest> { return this.client.request<ApiaryTest>(`/apis/${apiName}/tests`, { method: 'POST' }); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async getTeam(): Promise<ApiaryTeam> { return this.client.request<ApiaryTeam>('/me/team'); }
+
+  getClient(): ApiaryClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
