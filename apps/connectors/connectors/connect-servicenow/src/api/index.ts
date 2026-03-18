@@ -1,51 +1,55 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ServiceNow Connector — Enterprise IT service management and workflow automation
+import { ServiceNowClient } from './client';
+import type { ServiceNowConfig, SNRecord, SNRecordList, SNSingleRecord } from '../types';
+export { ServiceNowClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ServiceNow {
+  private readonly client: ServiceNowClient;
+  constructor(config: ServiceNowConfig) { this.client = new ServiceNowClient(config); }
+  static fromEnv(): ServiceNow {
+    const instance = process.env.SERVICENOW_INSTANCE;
+    const username = process.env.SERVICENOW_USERNAME;
+    const password = process.env.SERVICENOW_PASSWORD;
+    if (!instance || !username || !password) throw new Error('SERVICENOW_INSTANCE, SERVICENOW_USERNAME, and SERVICENOW_PASSWORD are required');
+    return new ServiceNow({ instance, username, password });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Generic Table API (works with any ServiceNow table)
+  async listRecords(table: string, options?: { sysparm_limit?: number; sysparm_offset?: number; sysparm_query?: string; sysparm_fields?: string; sysparm_display_value?: string }): Promise<SNRecordList> {
+    return this.client.request<SNRecordList>(`/table/${table}`, { params: options as Record<string, string | number | undefined> });
+  }
+  async getRecord(table: string, sysId: string, options?: { sysparm_fields?: string; sysparm_display_value?: string }): Promise<SNSingleRecord> {
+    return this.client.request<SNSingleRecord>(`/table/${table}/${sysId}`, { params: options as Record<string, string | number | undefined> });
+  }
+  async createRecord(table: string, data: Record<string, unknown>): Promise<SNSingleRecord> {
+    return this.client.request<SNSingleRecord>(`/table/${table}`, { method: 'POST', body: data });
+  }
+  async updateRecord(table: string, sysId: string, data: Record<string, unknown>): Promise<SNSingleRecord> {
+    return this.client.request<SNSingleRecord>(`/table/${table}/${sysId}`, { method: 'PATCH', body: data });
+  }
+  async deleteRecord(table: string, sysId: string): Promise<void> {
+    await this.client.request(`/table/${table}/${sysId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  // Convenience methods for common tables
+  async listIncidents(options?: { sysparm_limit?: number; sysparm_query?: string }): Promise<SNRecordList> {
+    return this.listRecords('incident', { ...options, sysparm_display_value: 'true' });
+  }
+  async createIncident(data: { short_description: string; description?: string; urgency?: string; impact?: string; caller_id?: string; category?: string }): Promise<SNSingleRecord> {
+    return this.createRecord('incident', data);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listUsers(options?: { sysparm_limit?: number; sysparm_query?: string }): Promise<SNRecordList> {
+    return this.listRecords('sys_user', options);
   }
+
+  async listChangeRequests(options?: { sysparm_limit?: number; sysparm_query?: string }): Promise<SNRecordList> {
+    return this.listRecords('change_request', options);
+  }
+
+  async listCatalogItems(options?: { sysparm_limit?: number }): Promise<SNRecordList> {
+    return this.listRecords('sc_cat_item', options);
+  }
+
+  getClient(): ServiceNowClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
