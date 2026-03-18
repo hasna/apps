@@ -273,3 +273,71 @@ export interface UpdateIssueResponse {
 export interface ArchiveIssueResponse {
   issueArchive: IssuePayload;
 }
+
+// ============================================
+// Comments
+// ============================================
+
+export interface LinearComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  editedAt: string | null;
+  url: string;
+  user: { id: string; name: string; displayName: string; email: string };
+  issue: { id: string; identifier: string; title: string };
+  parent: { id: string } | null;
+  children: { nodes: Omit<LinearComment, 'children'>[] };
+}
+
+export interface CreateCommentInput {
+  issueId: string;
+  body: string;
+  parentId?: string;
+}
+
+export interface UpdateCommentInput {
+  body: string;
+}
+
+export interface CommentsResponse {
+  issue: { comments: { nodes: LinearComment[]; pageInfo: { hasNextPage: boolean; endCursor: string } } } | null;
+}
+
+export interface CommentResponse {
+  comment: LinearComment;
+}
+
+export interface CreateCommentResponse {
+  commentCreate: { success: boolean; comment: LinearComment };
+}
+
+export interface UpdateCommentResponse {
+  commentUpdate: { success: boolean; comment: LinearComment };
+}
+
+// ============================================
+// Workflow States
+// ============================================
+
+export interface WorkflowState {
+  id: string;
+  name: string;
+  color: string;
+  type: 'triage' | 'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled';
+  position: number;
+  description: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  team: { id: string; name: string; key: string };
+}
+
+export interface WorkflowStatesResponse {
+  team: { states: { nodes: WorkflowState[] } } | null;
+}
+
+export interface WorkflowStateResponse {
+  workflowState: WorkflowState;
+}
