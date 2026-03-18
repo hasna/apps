@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Cisco Umbrella Connector — Cloud security and DNS protection
+import { CiscoUmbrellaClient } from './client';
+import type { CiscoUmbrellaConfig, CUDestinationList, CUDestination, CUReport, CUCategory, CUSecurityEvent } from '../types';
+export { CiscoUmbrellaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CiscoUmbrella {
+  private readonly client: CiscoUmbrellaClient;
+  constructor(config: CiscoUmbrellaConfig) { this.client = new CiscoUmbrellaClient(config); }
+  static fromEnv(): CiscoUmbrella {
+    const apiKey = process.env.UMBRELLA_API_KEY;
+    const apiSecret = process.env.UMBRELLA_API_SECRET;
+    const orgId = process.env.UMBRELLA_ORG_ID;
+    if (!apiKey || !apiSecret || !orgId) throw new Error('UMBRELLA_API_KEY, UMBRELLA_API_SECRET, and UMBRELLA_ORG_ID are required');
+    return new CiscoUmbrella({ apiKey, apiSecret, orgId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listDestinationLists(): Promise<{ data: CUDestinationList[] }> {
+    return this.client.request(`/policies/v2/destinationlists`);
+  }
+  async getDestinationList(listId: number): Promise<{ data: CUDestinationList }> {
+    return this.client.request(`/policies/v2/destinationlists/${listId}`);
+  }
+  async addDestination(listId: number, destination: string, comment?: string): Promise<void> {
+    await this.client.request(`/policies/v2/destinationlists/${listId}/destinations`, { method: 'POST', body: [{ destination, comment }] as unknown as Record<string, unknown> });
+  }
+  async removeDestination(listId: number, destinationId: number): Promise<void> {
+    await this.client.request(`/policies/v2/destinationlists/${listId}/destinations/remove`, { method: 'DELETE', body: [destinationId] as unknown as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getTopDomains(options?: { from?: string; to?: string; limit?: number }): Promise<{ data: CUReport[] }> {
+    return this.client.request(`/reports/v2/organizations/${this.client.getOrgId()}/top-domains`, { params: { from: options?.from, to: options?.to, limit: options?.limit } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listCategories(): Promise<{ data: CUCategory[] }> { return this.client.request('/policies/v2/categories'); }
+
+  async listSecurityEvents(options?: { from?: string; to?: string; limit?: number }): Promise<{ data: CUSecurityEvent[] }> {
+    return this.client.request(`/reports/v2/organizations/${this.client.getOrgId()}/security-activity`, { params: { from: options?.from, to: options?.to, limit: options?.limit } });
   }
+
+  getClient(): CiscoUmbrellaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

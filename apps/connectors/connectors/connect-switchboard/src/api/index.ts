@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Switchboard Connector — Collaborative canvas for async team meetings
+import { SwitchboardClient } from './client';
+import type { SwitchboardConfig, SWRoom, SWRoomList, SWApp, SWParticipant } from '../types';
+export { SwitchboardClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Switchboard {
+  private readonly client: SwitchboardClient;
+  constructor(config: SwitchboardConfig) { this.client = new SwitchboardClient(config); }
+  static fromEnv(): Switchboard {
+    const apiKey = process.env.SWITCHBOARD_API_KEY;
+    if (!apiKey) throw new Error('SWITCHBOARD_API_KEY is required');
+    return new Switchboard({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listRooms(options?: { page?: number; status?: string }): Promise<SWRoomList> {
+    return this.client.request<SWRoomList>('/rooms', { params: { page: options?.page, status: options?.status } });
+  }
+  async getRoom(roomId: string): Promise<SWRoom> { return this.client.request<SWRoom>(`/rooms/${roomId}`); }
+  async createRoom(data: { name: string; description?: string }): Promise<SWRoom> {
+    return this.client.request<SWRoom>('/rooms', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteRoom(roomId: string): Promise<void> { await this.client.request(`/rooms/${roomId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listApps(roomId: string): Promise<SWApp[]> { return this.client.request<SWApp[]>(`/rooms/${roomId}/apps`); }
+  async addApp(roomId: string, data: { name: string; type: string; url: string }): Promise<SWApp> {
+    return this.client.request<SWApp>(`/rooms/${roomId}/apps`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listParticipants(roomId: string): Promise<SWParticipant[]> { return this.client.request<SWParticipant[]>(`/rooms/${roomId}/participants`); }
+  async inviteParticipant(roomId: string, email: string, role?: string): Promise<void> {
+    await this.client.request(`/rooms/${roomId}/participants`, { method: 'POST', body: { email, role: role || 'member' } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SwitchboardClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
