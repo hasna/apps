@@ -2,9 +2,10 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, getBudgetStatuses } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
+import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import type { Period, Agent } from '../types/index.js'
 
@@ -39,7 +40,9 @@ const TOOLS = [
   { name: 'get_model_breakdown',   description: 'Cost per model. No params.', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_project_breakdown', description: 'Cost per project. No params.', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_budget_status',     description: 'Budget limits vs spend, percent used, alert flags. No params.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'sync',                  description: 'Ingest new cost data. sources: all|claude|codex', inputSchema: { type: 'object', properties: { sources: { type: 'string', enum: ['all','claude','codex'] } } } },
+  { name: 'get_daily',             description: 'Daily cost table by agent. Params: days(30)', inputSchema: { type: 'object', properties: { days: { type: 'number' } } } },
+  { name: 'get_session_detail',    description: 'Per-request breakdown of a single session. Params: session_id (prefix ok)', inputSchema: { type: 'object', properties: { session_id: { type: 'string' } }, required: ['session_id'] } },
+  { name: 'sync',                  description: 'Ingest new cost data. sources: all|claude|codex|gemini', inputSchema: { type: 'object', properties: { sources: { type: 'string', enum: ['all','claude','codex','gemini'] } } } },
   { name: 'search_tools',          description: 'List tool names matching query. Use first to find relevant tools.', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } },
   { name: 'describe_tools',        description: 'Get param hints for specific tools by name.', inputSchema: { type: 'object', properties: { names: { type: 'array', items: { type: 'string' } } }, required: ['names'] } },
 ]
@@ -51,7 +54,9 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_model_breakdown:   'no params → model, requests, tokens, cost',
   get_project_breakdown: 'no params → project_name, sessions, cost',
   get_budget_status:     'no params → budget limits, current spend, percent_used, is_over_alert',
-  sync:                  'sources(all|claude|codex) → {files, requests, sessions} ingested',
+  get_daily:             'days(30) → daily cost table grouped by date and agent',
+  get_session_detail:    'session_id(prefix ok) → per-request breakdown with model, tokens, cost',
+  sync:                  'sources(all|claude|codex|gemini) → {files, requests, sessions} ingested',
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
@@ -95,7 +100,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           agent: a['agent'] as Agent | undefined,
           project: a['project'] as string | undefined,
           limit: Number(a['limit'] ?? 20),
-        }) as Array<Record<string, unknown>>
+        }) as unknown as Array<Record<string, unknown>>
         // Header + compact rows
         const lines = ['id       agent  cost       tokens   project']
         for (const s of sessions) lines.push(fmtSession(s))
@@ -103,14 +108,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       case 'get_top_sessions': {
-        const sessions = queryTopSessions(db, Number(a['n'] ?? 10), a['agent'] as string | undefined) as Array<Record<string, unknown>>
+        const sessions = queryTopSessions(db, Number(a['n'] ?? 10), a['agent'] as string | undefined) as unknown as Array<Record<string, unknown>>
         const lines = ['rank  id       agent  cost       tokens   project']
         sessions.forEach((s, i) => lines.push(`${String(i+1).padEnd(5)} ${fmtSession(s)}`))
         return { content: [{ type: 'text', text: lines.join('\n') }] }
       }
 
       case 'get_model_breakdown': {
-        const rows = queryModelBreakdown(db) as Array<Record<string, unknown>>
+        const rows = queryModelBreakdown(db) as unknown as Array<Record<string, unknown>>
         const lines = ['model                          reqs    tokens   cost']
         for (const r of rows) {
           lines.push(`${String(r['model']).slice(0,30).padEnd(31)}${String(r['requests']).padEnd(8)}${fmtTok(Number(r['total_tokens'])).padEnd(9)}${fmtUsd(Number(r['cost_usd']))}`)
@@ -119,7 +124,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       case 'get_project_breakdown': {
-        const rows = queryProjectBreakdown(db) as Array<Record<string, unknown>>
+        const rows = queryProjectBreakdown(db) as unknown as Array<Record<string, unknown>>
         const lines = ['project              sessions tokens   cost']
         for (const r of rows) {
           const name = String(r['project_name'] || r['project_path'] || '—').slice(0, 20)
@@ -129,7 +134,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       case 'get_budget_status': {
-        const budgets = getBudgetStatuses(db) as Array<Record<string, unknown>>
+        const budgets = getBudgetStatuses(db) as unknown as Array<Record<string, unknown>>
         if (budgets.length === 0) return { content: [{ type: 'text', text: 'No budgets set.' }] }
         const lines = ['scope                period   spent      limit      used%  status']
         for (const b of budgets) {
@@ -137,6 +142,45 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           const pct = Number(b['percent_used']).toFixed(1)
           const status = b['is_over_limit'] ? 'OVER' : b['is_over_alert'] ? 'ALERT' : 'OK'
           lines.push(`${scope.padEnd(21)}${String(b['period']).padEnd(9)}${fmtUsd(Number(b['current_spend_usd'])).padEnd(11)}${fmtUsd(Number(b['limit_usd'])).padEnd(11)}${pct}%`.padEnd(49) + `  ${status}`)
+        }
+        return { content: [{ type: 'text', text: lines.join('\n') }] }
+      }
+
+      case 'get_daily': {
+        const days = Number(a['days'] ?? 30)
+        const rows = queryDailyBreakdown(db, days) as Array<Record<string, unknown>>
+        const lines = ['date        claude     codex      gemini     total']
+        // Group by date, sum by agent
+        const byDate = new Map<string, {claude: number, codex: number, gemini: number}>()
+        for (const r of rows) {
+          const d = String(r['date'])
+          const entry = byDate.get(d) ?? { claude: 0, codex: 0, gemini: 0 }
+          if (r['agent'] === 'claude') entry.claude += Number(r['cost_usd'])
+          else if (r['agent'] === 'codex') entry.codex += Number(r['cost_usd'])
+          else if (r['agent'] === 'gemini') entry.gemini += Number(r['cost_usd'])
+          byDate.set(d, entry)
+        }
+        for (const [date, costs] of [...byDate.entries()].sort()) {
+          const total = costs.claude + costs.codex + costs.gemini
+          lines.push(`${date}  ${fmtUsd(costs.claude).padEnd(11)}${fmtUsd(costs.codex).padEnd(11)}${fmtUsd(costs.gemini).padEnd(11)}${fmtUsd(total)}`)
+        }
+        return { content: [{ type: 'text', text: lines.join('\n') }] }
+      }
+
+      case 'get_session_detail': {
+        const sid = String(a['session_id'] ?? '')
+        const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(sid, `${sid}%`) as Record<string, unknown> | null
+        if (!session) return { content: [{ type: 'text', text: `Session not found: ${sid}` }], isError: true }
+        const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC LIMIT 50`).all(session['id'] as string) as Array<Record<string, unknown>>
+        const lines = [
+          `session: ${String(session['id']).slice(0,16)}`,
+          `agent: ${session['agent']}  project: ${session['project_name'] || '—'}`,
+          `cost: ${fmtUsd(Number(session['total_cost_usd']))}  tokens: ${fmtTok(Number(session['total_tokens']))}  requests: ${session['request_count']}`,
+          '',
+          'time      model                  input    output   cost'
+        ]
+        for (const r of requests) {
+          lines.push(`${String(r['timestamp']).slice(11,19)}  ${String(r['model']).slice(0,22).padEnd(23)}${fmtTok(Number(r['input_tokens'])).padEnd(9)}${fmtTok(Number(r['output_tokens'])).padEnd(9)}${fmtUsd(Number(r['cost_usd']))}`)
         }
         return { content: [{ type: 'text', text: lines.join('\n') }] }
       }
@@ -151,6 +195,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (sources === 'all' || sources === 'codex') {
           const r = await ingestCodex(db) as Record<string, number>
           parts.push(`codex: ${r['sessions']} sessions`)
+        }
+        if (sources === 'all' || sources === 'gemini') {
+          const r = await ingestGemini(db) as Record<string, number>
+          parts.push(`gemini: ${r['sessions']} sessions`)
         }
         return { content: [{ type: 'text', text: parts.join('\n') || 'done' }] }
       }
