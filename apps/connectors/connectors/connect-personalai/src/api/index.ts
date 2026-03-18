@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Personal AI Connector — Personal AI assistant with memory and knowledge base
+import { PersonalAIClient } from './client';
+import type { PersonalAIConfig, PAIMessage, PAIMemory, PAIMemoryList, PAIProfile, PAIDomain } from '../types';
+export { PersonalAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class PersonalAI {
+  private readonly client: PersonalAIClient;
+  constructor(config: PersonalAIConfig) { this.client = new PersonalAIClient(config); }
+  static fromEnv(): PersonalAI {
+    const apiKey = process.env.PERSONALAI_API_KEY;
+    if (!apiKey) throw new Error('PERSONALAI_API_KEY is required');
+    return new PersonalAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async sendMessage(text: string, options?: { domain_name?: string; context?: string }): Promise<PAIMessage> {
+    return this.client.request<PAIMessage>('/message', { method: 'POST', body: { Text: text, DomainName: options?.domain_name, Context: options?.context } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async createMemory(text: string, options?: { source_name?: string; domain_name?: string; created_time?: string }): Promise<{ status: string }> {
+    return this.client.request('/memory', { method: 'POST', body: { Text: text, SourceName: options?.source_name, DomainName: options?.domain_name, CreatedTime: options?.created_time } as Record<string, unknown> });
+  }
+  async listMemories(options?: { page?: number; per_page?: number }): Promise<PAIMemoryList> {
+    return this.client.request<PAIMemoryList>('/memory', { params: { page: options?.page, per_page: options?.per_page } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getProfile(): Promise<PAIProfile> { return this.client.request<PAIProfile>('/profile'); }
+
+  async listDomains(): Promise<PAIDomain[]> { return this.client.request<PAIDomain[]>('/domains'); }
+  async createDomain(name: string, description?: string): Promise<PAIDomain> {
+    return this.client.request<PAIDomain>('/domains', { method: 'POST', body: { name, description } });
   }
+
+  getClient(): PersonalAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

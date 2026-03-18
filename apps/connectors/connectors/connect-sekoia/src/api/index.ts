@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Sekoia Connector — Cyber threat intelligence and security operations
+import { SekoiaClient } from './client';
+import type { SekoiaConfig, SKAlert, SKAlertList, SKIndicator, SKRule, SKAsset, SKEvent } from '../types';
+export { SekoiaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Sekoia {
+  private readonly client: SekoiaClient;
+  constructor(config: SekoiaConfig) { this.client = new SekoiaClient(config); }
+  static fromEnv(): Sekoia {
+    const apiKey = process.env.SEKOIA_API_KEY;
+    if (!apiKey) throw new Error('SEKOIA_API_KEY is required');
+    return new Sekoia({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listAlerts(options?: { limit?: number; offset?: number; status?: string; severity?: number }): Promise<SKAlertList> {
+    return this.client.request<SKAlertList>('/sic/alerts', { params: { limit: options?.limit, offset: options?.offset, status: options?.status, severity: options?.severity } });
+  }
+  async getAlert(alertUuid: string): Promise<SKAlert> { return this.client.request<SKAlert>(`/sic/alerts/${alertUuid}`); }
+  async updateAlertStatus(alertUuid: string, status: string, comment?: string): Promise<SKAlert> {
+    return this.client.request<SKAlert>(`/sic/alerts/${alertUuid}/status`, { method: 'PATCH', body: { status, comment } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async searchIndicators(query: string, options?: { limit?: number; type?: string }): Promise<{ items: SKIndicator[] }> {
+    return this.client.request('/inthreat/indicators', { params: { value: query, limit: options?.limit, type: options?.type } });
+  }
+  async getIndicator(indicatorId: string): Promise<SKIndicator> { return this.client.request<SKIndicator>(`/inthreat/indicators/${indicatorId}`); }
+
+  async listRules(options?: { limit?: number; enabled?: boolean }): Promise<{ items: SKRule[] }> {
+    return this.client.request('/sic/rules', { params: { limit: options?.limit, enabled: options?.enabled === true ? 'true' : options?.enabled === false ? 'false' : undefined } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listAssets(options?: { limit?: number; type?: string }): Promise<{ items: SKAsset[] }> {
+    return this.client.request('/assets', { params: { limit: options?.limit, type: options?.type } });
   }
+
+  async listEvents(options?: { limit?: number; from?: string; to?: string }): Promise<{ items: SKEvent[] }> {
+    return this.client.request('/sic/events', { params: { limit: options?.limit, date_from: options?.from, date_to: options?.to } });
+  }
+
+  getClient(): SekoiaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
