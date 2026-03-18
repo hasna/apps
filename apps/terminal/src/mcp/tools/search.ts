@@ -1,0 +1,111 @@
+// Search tools: search_content, search_files, search_semantic, lookup
+
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z, type ToolHelpers } from "./helpers.js";
+import { searchFiles, searchContent, semanticSearch } from "../../search/index.js";
+
+export function registerSearchTools(server: McpServer, h: ToolHelpers): void {
+
+  // ── search_files ──────────────────────────────────────────────────────────
+
+  server.tool(
+    "search_files",
+    "Search for files by name pattern. Auto-filters node_modules, .git, dist. Returns categorized results (source, config, other) with token savings.",
+    {
+      pattern: z.string().describe("Glob pattern (e.g., '*hooks*', '*.test.ts')"),
+      path: z.string().optional().describe("Search root (default: cwd)"),
+      includeNodeModules: z.boolean().optional().describe("Include node_modules (default: false)"),
+      maxResults: z.number().optional().describe("Max results per category (default: 50)"),
+    },
+    async ({ pattern, path, includeNodeModules, maxResults }) => {
+      const start = Date.now();
+      const result = await searchFiles(pattern, path ?? process.cwd(), { includeNodeModules, maxResults });
+      h.logCall("search_files", { command: `search_files ${pattern}`, tokensSaved: (result as any).tokensSaved ?? 0, durationMs: Date.now() - start });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── search_content ────────────────────────────────────────────────────────
+
+  server.tool(
+    "search_content",
+    "Search file contents by regex pattern. Groups matches by file, sorted by relevance. Auto-filters excluded directories.",
+    {
+      pattern: z.string().describe("Search pattern (regex)"),
+      path: z.string().optional().describe("Search root (default: cwd)"),
+      fileType: z.string().optional().describe("File type filter (e.g., 'ts', 'py')"),
+      maxResults: z.number().optional().describe("Max files to return (default: 30)"),
+      contextLines: z.number().optional().describe("Context lines around matches (default: 0)"),
+    },
+    async ({ pattern, path, fileType, maxResults, contextLines }) => {
+      const start = Date.now();
+      const result = await searchContent(pattern, path ?? process.cwd(), { fileType, maxResults, contextLines });
+      h.logCall("search_content", { command: `grep ${pattern}`, tokensSaved: result.tokensSaved ?? 0, durationMs: Date.now() - start });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── search_semantic ───────────────────────────────────────────────────────
+
+  server.tool(
+    "search_semantic",
+    "Find functions, classes, components, hooks, types by NAME or SIGNATURE. Searches symbol declarations, NOT code behavior or content. Use search_content (grep) instead for pattern matching inside code (e.g., security audits, string searches, imports).",
+    {
+      query: z.string().describe("Symbol name to search for (e.g., 'auth', 'login', 'UserService'). Matches function/class/type names, not code content."),
+      path: z.string().optional().describe("Search root (default: cwd)"),
+      kinds: z.array(z.enum(["function", "class", "interface", "type", "variable", "export", "import", "component", "hook"])).optional().describe("Filter by symbol kind"),
+      exportedOnly: z.boolean().optional().describe("Only show exported symbols (default: false)"),
+      maxResults: z.number().optional().describe("Max results (default: 30)"),
+    },
+    async ({ query, path, kinds, exportedOnly, maxResults }) => {
+      const result = await semanticSearch(query, path ?? process.cwd(), {
+        kinds: kinds as any,
+        exportedOnly,
+        maxResults,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+  );
+
+  // ── lookup ────────────────────────────────────────────────────────────────
+
+  server.tool(
+    "lookup",
+    "Search for specific items in a file by name or pattern. Agent says what to find, not how to grep. Saves ~300 tokens vs constructing grep pipelines.",
+    {
+      file: z.string().describe("File path to search in"),
+      items: z.array(z.string()).describe("Names or patterns to look up"),
+      context: z.number().optional().describe("Lines of context around each match (default: 3)"),
+    },
+    async ({ file: rawFile, items, context }) => {
+      const start = Date.now();
+      const file = h.resolvePath(rawFile);
+      const { readFileSync } = await import("fs");
+      try {
+        const content = readFileSync(file, "utf8");
+        const lines = content.split("\n");
+        const ctx = context ?? 3;
+        const results: Record<string, { line: number; text: string; context: string[] }[]> = {};
+
+        for (const item of items) {
+          results[item] = [];
+          const pattern = new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+          for (let i = 0; i < lines.length; i++) {
+            if (pattern.test(lines[i])) {
+              results[item].push({
+                line: i + 1,
+                text: lines[i].trim(),
+                context: lines.slice(Math.max(0, i - ctx), i + ctx + 1).map(l => l.trimEnd()),
+              });
+            }
+          }
+        }
+
+        h.logCall("lookup", { command: `lookup ${file} [${items.join(",")}]`, durationMs: Date.now() - start });
+        return { content: [{ type: "text" as const, text: JSON.stringify(results) }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message }) }] };
+      }
+    }
+  );
+}
