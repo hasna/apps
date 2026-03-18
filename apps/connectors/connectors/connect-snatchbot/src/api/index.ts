@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SnatchBot Connector — Multi-channel chatbot building and automation
+import { SnatchBotClient } from './client';
+import type { SnatchBotConfig, SBBot, SBConversation, SBUser, SBBroadcast } from '../types';
+export { SnatchBotClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SnatchBot {
+  private readonly client: SnatchBotClient;
+  constructor(config: SnatchBotConfig) { this.client = new SnatchBotClient(config); }
+  static fromEnv(): SnatchBot {
+    const token = process.env.SNATCHBOT_TOKEN;
+    if (!token) throw new Error('SNATCHBOT_TOKEN is required');
+    return new SnatchBot({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listBots(): Promise<SBBot[]> { return this.client.request<SBBot[]>('/bots'); }
+  async getBot(botId: string): Promise<SBBot> { return this.client.request<SBBot>(`/bots/${botId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async sendMessage(botId: string, userId: string, message: string, channel?: string): Promise<{ response: string }> {
+    return this.client.request(`/bots/${botId}/message`, { method: 'POST', body: { user_id: userId, message, channel } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(botId: string, options?: { page?: number }): Promise<SBConversation[]> {
+    return this.client.request<SBConversation[]>(`/bots/${botId}/conversations`, { params: { page: options?.page } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listUsers(botId: string, options?: { page?: number }): Promise<SBUser[]> {
+    return this.client.request<SBUser[]>(`/bots/${botId}/users`, { params: { page: options?.page } });
   }
+  async getUser(botId: string, userId: string): Promise<SBUser> { return this.client.request<SBUser>(`/bots/${botId}/users/${userId}`); }
+
+  async listBroadcasts(botId: string): Promise<SBBroadcast[]> { return this.client.request<SBBroadcast[]>(`/bots/${botId}/broadcasts`); }
+
+  getClient(): SnatchBotClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

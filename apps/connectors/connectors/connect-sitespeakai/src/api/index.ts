@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SiteSpeak AI Connector — AI chatbot and customer support for websites
+import { SiteSpeakAIClient } from './client';
+import type { SiteSpeakAIConfig, SSChatbot, SSConversation, SSDataSource, SSAnalytics } from '../types';
+export { SiteSpeakAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SiteSpeakAI {
+  private readonly client: SiteSpeakAIClient;
+  constructor(config: SiteSpeakAIConfig) { this.client = new SiteSpeakAIClient(config); }
+  static fromEnv(): SiteSpeakAI {
+    const apiKey = process.env.SITESPEAKAI_API_KEY;
+    if (!apiKey) throw new Error('SITESPEAKAI_API_KEY is required');
+    return new SiteSpeakAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listChatbots(): Promise<SSChatbot[]> { return this.client.request<SSChatbot[]>('/chatbots'); }
+  async getChatbot(chatbotId: string): Promise<SSChatbot> { return this.client.request<SSChatbot>(`/chatbots/${chatbotId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async ask(chatbotId: string, question: string, visitorId?: string): Promise<{ answer: string; sources: { title: string; url: string }[]; conversation_id: string }> {
+    return this.client.request(`/chatbots/${chatbotId}/ask`, { method: 'POST', body: { question, visitor_id: visitorId } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(chatbotId: string, options?: { page?: number }): Promise<SSConversation[]> {
+    return this.client.request<SSConversation[]>(`/chatbots/${chatbotId}/conversations`, { params: { page: options?.page } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listDataSources(chatbotId: string): Promise<SSDataSource[]> { return this.client.request<SSDataSource[]>(`/chatbots/${chatbotId}/data-sources`); }
+  async addUrlSource(chatbotId: string, url: string): Promise<SSDataSource> {
+    return this.client.request<SSDataSource>(`/chatbots/${chatbotId}/data-sources`, { method: 'POST', body: { type: 'url', url } });
   }
+  async deleteDataSource(chatbotId: string, dataSourceId: string): Promise<void> {
+    await this.client.request(`/chatbots/${chatbotId}/data-sources/${dataSourceId}`, { method: 'DELETE' });
+  }
+
+  async getAnalytics(chatbotId: string, options?: { from?: string; to?: string }): Promise<SSAnalytics> {
+    return this.client.request<SSAnalytics>(`/chatbots/${chatbotId}/analytics`, { params: { from: options?.from, to: options?.to } });
+  }
+
+  getClient(): SiteSpeakAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
