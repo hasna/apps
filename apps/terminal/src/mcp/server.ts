@@ -767,16 +767,11 @@ export function createServer(): McpServer {
       path: z.string().describe("File path to extract symbols from"),
     },
     async ({ path: filePath }) => {
-      const { semanticSearch } = await import("../search/semantic.js");
-      const dir = filePath.replace(/\/[^/]+$/, "") || ".";
-      const file = filePath.split("/").pop() ?? filePath;
-      const result = await semanticSearch(file.replace(/\.\w+$/, ""), dir, { maxResults: 50 });
-      // Filter to only symbols from the requested file
-      const fileSymbols = result.symbols.filter(s =>
-        s.file.endsWith(filePath) || s.file.endsWith("/" + filePath)
-      );
+      const { extractSymbolsFromFile } = await import("../search/semantic.js");
+      const symbols = extractSymbolsFromFile(filePath).filter(s => s.kind !== "import");
+      logCall("symbols", { command: filePath, outputTokens: symbols.length * 5, durationMs: 0 });
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(fileSymbols) }],
+        content: [{ type: "text" as const, text: JSON.stringify(symbols) }],
       };
     }
   );
