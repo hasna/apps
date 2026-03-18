@@ -924,6 +924,42 @@ Match by function name, class name, method name (including ClassName.method), in
   );
 
   server.tool(
+    "bulk_commit",
+    "Multiple logical commits in one call. Agent decides which files go in which commit, we handle all git commands. No AI cost. Use smart_commit instead if you want AI to decide the grouping.",
+    {
+      commits: z.array(z.object({
+        message: z.string().describe("Commit message"),
+        files: z.array(z.string()).describe("Files to stage for this commit"),
+      })).describe("Array of logical commits"),
+      push: z.boolean().optional().describe("Push after all commits (default: true)"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ commits, push, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+      const results: { message: string; files: number; ok: boolean }[] = [];
+
+      for (const c of commits) {
+        const fileArgs = c.files.map(f => `"${f}"`).join(" ");
+        const cmd = `git add ${fileArgs} && git commit -m ${JSON.stringify(c.message)}`;
+        const r = await exec(cmd, workDir, 15000);
+        results.push({ message: c.message, files: c.files.length, ok: r.exitCode === 0 });
+      }
+
+      let pushed = false;
+      if (push !== false) {
+        const pushResult = await exec("git push", workDir, 30000);
+        pushed = pushResult.exitCode === 0;
+      }
+
+      invalidateBootCache();
+      logCall("bulk_commit", { command: `${commits.length} commits`, durationMs: Date.now() - start });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({ commits: results, pushed, total: results.length }) }] };
+    }
+  );
+
+  server.tool(
     "run",
     "Run a project task by intent — test, build, lint, dev, typecheck, format. Auto-detects toolchain (bun/npm/pnpm/yarn/cargo/go/make). Saves ~100 tokens vs raw commands.",
     {
