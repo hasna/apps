@@ -1,51 +1,25 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
-
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+// Seamless.AI Connector — B2B sales prospecting and contact data
+import { SeamlessAIClient } from './client';
+import type { SeamlessAIConfig, SAIContact, SAICompany, SearchContactsOptions, SearchCompaniesOptions } from '../types';
+export { SeamlessAIClient } from './client';
+export class SeamlessAI {
+  private readonly client: SeamlessAIClient;
+  constructor(config: SeamlessAIConfig) { this.client = new SeamlessAIClient(config); }
+  static fromEnv(): SeamlessAI {
+    const apiKey = process.env.SEAMLESSAI_API_KEY;
+    if (!apiKey) throw new Error('SEAMLESSAI_API_KEY environment variable is required');
+    return new SeamlessAI({ apiKey });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async searchContacts(options: SearchContactsOptions): Promise<{ contacts: SAIContact[]; total: number; page: number }> {
+    return this.client.request('/contacts/search', options as Record<string, unknown>);
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getContact(contactId: string): Promise<SAIContact> { return this.client.request<SAIContact>(`/contacts/${contactId}`); }
+  async searchCompanies(options: SearchCompaniesOptions): Promise<{ companies: SAICompany[]; total: number; page: number }> {
+    return this.client.request('/companies/search', options as Record<string, unknown>);
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getCompany(companyId: string): Promise<SAICompany> { return this.client.request<SAICompany>(`/companies/${companyId}`); }
+  async getCredits(): Promise<{ used: number; total: number; remaining: number }> {
+    return this.client.request('/account/credits');
   }
+  getClient(): SeamlessAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

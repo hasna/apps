@@ -1,51 +1,33 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
-
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+// UserVoice Connector — Product feedback and customer insights
+import { UserVoiceClient } from './client';
+import type { UserVoiceConfig, UVSuggestion, UVUser, UVForum, UVTicket } from '../types';
+export { UserVoiceClient } from './client';
+export class UserVoice {
+  private readonly client: UserVoiceClient;
+  constructor(config: UserVoiceConfig) { this.client = new UserVoiceClient(config); }
+  static fromEnv(): UserVoice {
+    const apiKey = process.env.USERVOICE_API_KEY;
+    const subdomain = process.env.USERVOICE_SUBDOMAIN;
+    if (!apiKey || !subdomain) throw new Error('USERVOICE_API_KEY and USERVOICE_SUBDOMAIN are required');
+    return new UserVoice({ apiKey, subdomain });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listForums(): Promise<UVForum[]> { const r = await this.client.request<{ forums: UVForum[] }>('/forums'); return r.forums ?? []; }
+  async listSuggestions(forumId?: number, options?: { sort?: string; page?: number; perPage?: number; status?: string }): Promise<UVSuggestion[]> {
+    const path = forumId ? `/forums/${forumId}/suggestions` : '/suggestions';
+    const r = await this.client.request<{ suggestions: UVSuggestion[] }>(path, { params: { sort: options?.sort, page: options?.page, per_page: options?.perPage, status: options?.status } });
+    return r.suggestions ?? [];
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getSuggestion(suggestionId: number): Promise<UVSuggestion> { return (await this.client.request<{ suggestion: UVSuggestion }>(`/suggestions/${suggestionId}`)).suggestion; }
+  async createSuggestion(forumId: number, title: string, body?: string): Promise<UVSuggestion> {
+    const r = await this.client.request<{ suggestion: UVSuggestion }>(`/forums/${forumId}/suggestions`, { method: 'POST', body: { suggestion: { title, body } } });
+    return r.suggestion;
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async updateSuggestionStatus(suggestionId: number, status: string): Promise<UVSuggestion> {
+    const r = await this.client.request<{ suggestion: UVSuggestion }>(`/suggestions/${suggestionId}`, { method: 'PUT', body: { suggestion: { status } } });
+    return r.suggestion;
   }
+  async listUsers(options?: { page?: number; perPage?: number }): Promise<UVUser[]> { const r = await this.client.request<{ users: UVUser[] }>('/users', { params: options as Record<string, number | undefined> }); return r.users ?? []; }
+  async getUser(userId: number): Promise<UVUser> { return (await this.client.request<{ user: UVUser }>(`/users/${userId}`)).user; }
+  async listTickets(options?: { page?: number; perPage?: number; state?: string }): Promise<UVTicket[]> { const r = await this.client.request<{ tickets: UVTicket[] }>('/tickets', { params: options as Record<string, string | number | undefined> }); return r.tickets ?? []; }
+  getClient(): UserVoiceClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
