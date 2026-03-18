@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Fortinet FortiGate Connector — Network security and firewall management
+import { FortiGateClient } from './client';
+import type { FortiGateConfig, FGFirewallPolicy, FGAddress, FGInterface, FGSystemStatus, FGVdom } from '../types';
+export { FortiGateClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class FortiGate {
+  private readonly client: FortiGateClient;
+  constructor(config: FortiGateConfig) { this.client = new FortiGateClient(config); }
+  static fromEnv(): FortiGate {
+    const url = process.env.FORTIGATE_URL;
+    const token = process.env.FORTIGATE_TOKEN;
+    if (!url || !token) throw new Error('FORTIGATE_URL and FORTIGATE_TOKEN are required');
+    return new FortiGate({ url, token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getSystemStatus(): Promise<FGSystemStatus> { return this.client.request<FGSystemStatus>('/monitor/system/status'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listFirewallPolicies(options?: { vdom?: string }): Promise<FGFirewallPolicy[]> {
+    return this.client.request<FGFirewallPolicy[]>('/cmdb/firewall/policy', { params: { vdom: options?.vdom || 'root' } });
+  }
+  async getFirewallPolicy(policyId: number, vdom?: string): Promise<FGFirewallPolicy> {
+    return this.client.request<FGFirewallPolicy>(`/cmdb/firewall/policy/${policyId}`, { params: { vdom: vdom || 'root' } });
+  }
+  async createFirewallPolicy(data: { name: string; srcintf: { name: string }[]; dstintf: { name: string }[]; srcaddr: { name: string }[]; dstaddr: { name: string }[]; action: string; schedule: string; service: { name: string }[] }, vdom?: string): Promise<void> {
+    await this.client.request('/cmdb/firewall/policy', { method: 'POST', body: data as Record<string, unknown>, params: { vdom: vdom || 'root' } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listAddresses(options?: { vdom?: string }): Promise<FGAddress[]> {
+    return this.client.request<FGAddress[]>('/cmdb/firewall/address', { params: { vdom: options?.vdom || 'root' } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listInterfaces(): Promise<FGInterface[]> { return this.client.request<FGInterface[]>('/cmdb/system/interface'); }
+
+  async listVdoms(): Promise<FGVdom[]> { return this.client.request<FGVdom[]>('/cmdb/system/vdom'); }
+
+  async getRouteTable(vdom?: string): Promise<Record<string, unknown>[]> {
+    return this.client.request('/monitor/router/ipv4', { params: { vdom: vdom || 'root' } });
   }
+
+  getClient(): FortiGateClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

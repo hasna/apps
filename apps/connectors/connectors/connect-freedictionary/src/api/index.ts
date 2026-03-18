@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Free Dictionary Connector — Dictionary definitions, phonetics, and translations
+import { FreeDictionaryClient } from './client';
+import type { FreeDictionaryConfig, FDEntry } from '../types';
+export { FreeDictionaryClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class FreeDictionary {
+  private readonly client: FreeDictionaryClient;
+  constructor(config: FreeDictionaryConfig = {}) { this.client = new FreeDictionaryClient(config); }
+  static fromEnv(): FreeDictionary {
+    return new FreeDictionary();
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async define(word: string, language?: string): Promise<FDEntry[]> {
+    const lang = language || 'en';
+    return this.client.request<FDEntry[]>(`/entries/${lang}/${encodeURIComponent(word)}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getPhonetics(word: string, language?: string): Promise<{ word: string; phonetics: { text: string; audio: string }[] }> {
+    const entries = await this.define(word, language);
+    return { word, phonetics: entries.flatMap(e => e.phonetics.filter(p => p.text || p.audio)) };
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getSynonyms(word: string, language?: string): Promise<string[]> {
+    const entries = await this.define(word, language);
+    const synonyms = new Set<string>();
+    entries.forEach(e => e.meanings.forEach(m => { m.synonyms.forEach(s => synonyms.add(s)); m.definitions.forEach(d => d.synonyms.forEach(s => synonyms.add(s))); }));
+    return Array.from(synonyms);
   }
+
+  async getAntonyms(word: string, language?: string): Promise<string[]> {
+    const entries = await this.define(word, language);
+    const antonyms = new Set<string>();
+    entries.forEach(e => e.meanings.forEach(m => { m.antonyms.forEach(a => antonyms.add(a)); m.definitions.forEach(d => d.antonyms.forEach(a => antonyms.add(a))); }));
+    return Array.from(antonyms);
+  }
+
+  getClient(): FreeDictionaryClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
