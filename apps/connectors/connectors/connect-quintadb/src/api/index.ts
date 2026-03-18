@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// QuintaDB Connector — Online database and web form builder
+import { QuintaDBClient } from './client';
+import type { QuintaDBConfig, QDBEntity, QDBRecord, QDBProperty } from '../types';
+export { QuintaDBClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class QuintaDB {
+  private readonly client: QuintaDBClient;
+  constructor(config: QuintaDBConfig) { this.client = new QuintaDBClient(config); }
+  static fromEnv(): QuintaDB {
+    const apiKey = process.env.QUINTADB_API_KEY;
+    const appId = process.env.QUINTADB_APP_ID;
+    if (!apiKey || !appId) throw new Error('QUINTADB_API_KEY and QUINTADB_APP_ID are required');
+    return new QuintaDB({ apiKey, appId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listEntities(): Promise<QDBEntity[]> { return this.client.request<QDBEntity[]>('/dtypes.json'); }
+  async getEntity(entityId: string): Promise<QDBEntity> { return this.client.request<QDBEntity>(`/dtypes/${entityId}.json`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listRecords(entityId: string, options?: { page?: number; per_page?: number }): Promise<QDBRecord[]> {
+    return this.client.request<QDBRecord[]>(`/dtypes/${entityId}/records.json`, { params: options as Record<string, number | undefined> });
+  }
+  async getRecord(entityId: string, recordId: string): Promise<QDBRecord> {
+    return this.client.request<QDBRecord>(`/dtypes/${entityId}/records/${recordId}.json`);
+  }
+  async createRecord(entityId: string, values: Record<string, unknown>): Promise<QDBRecord> {
+    return this.client.request<QDBRecord>(`/dtypes/${entityId}/records.json`, { method: 'POST', body: { values } });
+  }
+  async updateRecord(entityId: string, recordId: string, values: Record<string, unknown>): Promise<QDBRecord> {
+    return this.client.request<QDBRecord>(`/dtypes/${entityId}/records/${recordId}.json`, { method: 'PUT', body: { values } });
+  }
+  async deleteRecord(entityId: string, recordId: string): Promise<void> {
+    await this.client.request(`/dtypes/${entityId}/records/${recordId}.json`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listProperties(entityId: string): Promise<QDBProperty[]> {
+    return this.client.request<QDBProperty[]>(`/dtypes/${entityId}/properties.json`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): QuintaDBClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
