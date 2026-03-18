@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// TrackVia Connector — Low-code workflow and database platform
+import { TrackViaClient } from './client';
+import type { TrackViaConfig, TVApp, TVTable, TVRecord, TVRecordList, TVView, TVUser } from '../types';
+export { TrackViaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TrackVia {
+  private readonly client: TrackViaClient;
+  constructor(config: TrackViaConfig) { this.client = new TrackViaClient(config); }
+  static fromEnv(): TrackVia {
+    const token = process.env.TRACKVIA_TOKEN;
+    const accountId = process.env.TRACKVIA_ACCOUNT_ID;
+    if (!token || !accountId) throw new Error('TRACKVIA_TOKEN and TRACKVIA_ACCOUNT_ID are required');
+    return new TrackVia({ token, accountId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listApps(): Promise<TVApp[]> { return this.client.request<TVApp[]>('/apps'); }
+  async getApp(appId: number): Promise<TVApp> { return this.client.request<TVApp>(`/apps/${appId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listViews(options?: { name?: string }): Promise<TVView[]> {
+    return this.client.request<TVView[]>('/views', { params: { name: options?.name } });
+  }
+  async getView(viewId: number): Promise<TVView> { return this.client.request<TVView>(`/views/${viewId}`); }
+
+  async listRecords(viewId: number, options?: { start?: number; max?: number; q?: string }): Promise<TVRecordList> {
+    return this.client.request<TVRecordList>(`/views/${viewId}/find`, { params: { start: options?.start, max: options?.max, q: options?.q } });
+  }
+  async getRecord(viewId: number, recordId: number): Promise<TVRecord> {
+    return this.client.request<TVRecord>(`/views/${viewId}/records/${recordId}`);
+  }
+  async createRecord(viewId: number, data: Record<string, unknown>): Promise<TVRecord> {
+    return this.client.request<TVRecord>(`/views/${viewId}/records`, { method: 'POST', body: { data } });
+  }
+  async updateRecord(viewId: number, recordId: number, data: Record<string, unknown>): Promise<TVRecord> {
+    return this.client.request<TVRecord>(`/views/${viewId}/records/${recordId}`, { method: 'PUT', body: { data } });
+  }
+  async deleteRecord(viewId: number, recordId: number): Promise<void> {
+    await this.client.request(`/views/${viewId}/records/${recordId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listUsers(): Promise<TVUser[]> { return this.client.request<TVUser[]>('/users'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): TrackViaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
