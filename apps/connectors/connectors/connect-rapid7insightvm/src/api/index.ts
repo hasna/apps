@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Rapid7 InsightVM Connector — Vulnerability management and risk assessment
+import { Rapid7Client } from './client';
+import type { Rapid7Config, R7Asset, R7AssetList, R7Vulnerability, R7Scan, R7Site, R7Report } from '../types';
+export { Rapid7Client } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Rapid7InsightVM {
+  private readonly client: Rapid7Client;
+  constructor(config: Rapid7Config) { this.client = new Rapid7Client(config); }
+  static fromEnv(): Rapid7InsightVM {
+    const url = process.env.RAPID7_URL;
+    const username = process.env.RAPID7_USERNAME;
+    const password = process.env.RAPID7_PASSWORD;
+    if (!url || !username || !password) throw new Error('RAPID7_URL, RAPID7_USERNAME, and RAPID7_PASSWORD are required');
+    return new Rapid7InsightVM({ url, username, password });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listAssets(options?: { page?: number; size?: number; sort?: string }): Promise<R7AssetList> {
+    return this.client.request<R7AssetList>('/assets', { params: { page: options?.page, size: options?.size, sort: options?.sort } });
+  }
+  async getAsset(assetId: number): Promise<R7Asset> { return this.client.request<R7Asset>(`/assets/${assetId}`); }
+  async getAssetVulnerabilities(assetId: number): Promise<{ resources: R7Vulnerability[] }> {
+    return this.client.request(`/assets/${assetId}/vulnerabilities`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getVulnerability(vulnId: string): Promise<R7Vulnerability> { return this.client.request<R7Vulnerability>(`/vulnerabilities/${vulnId}`); }
+  async searchVulnerabilities(query: string): Promise<{ resources: R7Vulnerability[] }> {
+    return this.client.request('/vulnerabilities', { params: { query } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listScans(options?: { page?: number; size?: number }): Promise<{ resources: R7Scan[] }> {
+    return this.client.request('/scans', { params: { page: options?.page, size: options?.size } });
   }
+  async getScan(scanId: number): Promise<R7Scan> { return this.client.request<R7Scan>(`/scans/${scanId}`); }
+
+  async listSites(options?: { page?: number; size?: number }): Promise<{ resources: R7Site[] }> {
+    return this.client.request('/sites', { params: { page: options?.page, size: options?.size } });
+  }
+  async getSite(siteId: number): Promise<R7Site> { return this.client.request<R7Site>(`/sites/${siteId}`); }
+
+  async listReports(): Promise<{ resources: R7Report[] }> { return this.client.request('/reports'); }
+
+  getClient(): Rapid7Client { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

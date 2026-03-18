@@ -1,51 +1,33 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Lingvanex Connector — Machine translation and language detection
+import { LingvanexClient } from './client';
+import type { LingvanexConfig, LVTranslation, LVDetection, LVLanguage, LVTranslateOptions } from '../types';
+export { LingvanexClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Lingvanex {
+  private readonly client: LingvanexClient;
+  constructor(config: LingvanexConfig) { this.client = new LingvanexClient(config); }
+  static fromEnv(): Lingvanex {
+    const apiKey = process.env.LINGVANEX_API_KEY;
+    if (!apiKey) throw new Error('LINGVANEX_API_KEY is required');
+    return new Lingvanex({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async translate(options: LVTranslateOptions): Promise<LVTranslation> {
+    return this.client.request<LVTranslation>('/translate', { body: { from: options.from || 'en_GB', to: options.to, data: options.data, platform: options.platform || 'api' } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async translateBatch(texts: string[], to: string, from?: string): Promise<{ result: string[] }> {
+    return this.client.request('/translate', { body: { from: from || 'en_GB', to, data: texts, platform: 'api' } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async detect(text: string): Promise<LVDetection[]> {
+    const result = await this.client.request<{ result: LVDetection[] }>('/detect', { body: { data: text } });
+    return result.result;
   }
+
+  async listLanguages(options?: { platform?: string; code?: string }): Promise<{ result: LVLanguage[] }> {
+    return this.client.request('/getLanguages', { body: { platform: options?.platform || 'api', code: options?.code || 'en_GB' } });
+  }
+
+  getClient(): LingvanexClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
