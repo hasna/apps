@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Fastbots Connector — AI chatbot builder for websites and support
+import { FastbotsClient } from './client';
+import type { FastbotsConfig, FBBot, FBConversation, FBDataSource, FBLead } from '../types';
+export { FastbotsClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Fastbots {
+  private readonly client: FastbotsClient;
+  constructor(config: FastbotsConfig) { this.client = new FastbotsClient(config); }
+  static fromEnv(): Fastbots {
+    const apiKey = process.env.FASTBOTS_API_KEY;
+    if (!apiKey) throw new Error('FASTBOTS_API_KEY is required');
+    return new Fastbots({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listBots(): Promise<FBBot[]> { return this.client.request<FBBot[]>('/bots'); }
+  async getBot(botId: string): Promise<FBBot> { return this.client.request<FBBot>(`/bots/${botId}`); }
+  async updateBot(botId: string, data: { name?: string; description?: string; system_prompt?: string; model?: string; temperature?: number }): Promise<FBBot> {
+    return this.client.request<FBBot>(`/bots/${botId}`, { method: 'PATCH', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async chat(botId: string, message: string, options?: { conversation_id?: string; visitor_id?: string }): Promise<{ response: string; conversation_id: string }> {
+    return this.client.request(`/bots/${botId}/chat`, { method: 'POST', body: { message, conversation_id: options?.conversation_id, visitor_id: options?.visitor_id } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listConversations(botId: string): Promise<FBConversation[]> { return this.client.request<FBConversation[]>(`/bots/${botId}/conversations`); }
+  async getConversation(conversationId: string): Promise<FBConversation> { return this.client.request<FBConversation>(`/conversations/${conversationId}`); }
+
+  async listDataSources(botId: string): Promise<FBDataSource[]> { return this.client.request<FBDataSource[]>(`/bots/${botId}/data-sources`); }
+  async addUrlSource(botId: string, url: string): Promise<FBDataSource> {
+    return this.client.request<FBDataSource>(`/bots/${botId}/data-sources`, { method: 'POST', body: { type: 'url', url } });
   }
+  async addTextSource(botId: string, name: string, content: string): Promise<FBDataSource> {
+    return this.client.request<FBDataSource>(`/bots/${botId}/data-sources`, { method: 'POST', body: { type: 'text', name, content } });
+  }
+  async deleteDataSource(dataSourceId: string): Promise<void> { await this.client.request(`/data-sources/${dataSourceId}`, { method: 'DELETE' }); }
+
+  async listLeads(botId: string): Promise<FBLead[]> { return this.client.request<FBLead[]>(`/bots/${botId}/leads`); }
+
+  getClient(): FastbotsClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
