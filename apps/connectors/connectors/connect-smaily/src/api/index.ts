@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Smaily Connector — Email marketing automation and newsletter platform
+import { SmailyClient } from './client';
+import type { SmailyConfig, SMCampaign, SMSubscriber, SMSubscriberList, SMAutoresponder, SMSegment } from '../types';
+export { SmailyClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Smaily {
+  private readonly client: SmailyClient;
+  constructor(config: SmailyConfig) { this.client = new SmailyClient(config); }
+  static fromEnv(): Smaily {
+    const subdomain = process.env.SMAILY_SUBDOMAIN;
+    const username = process.env.SMAILY_USERNAME;
+    const password = process.env.SMAILY_PASSWORD;
+    if (!subdomain || !username || !password) throw new Error('SMAILY_SUBDOMAIN, SMAILY_USERNAME, and SMAILY_PASSWORD are required');
+    return new Smaily({ subdomain, username, password });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listCampaigns(): Promise<SMCampaign[]> { return this.client.request<SMCampaign[]>('/campaigns.php'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listSubscribers(options?: { page?: number; limit?: number; segment_id?: number }): Promise<SMSubscriberList> {
+    return this.client.request<SMSubscriberList>('/contact.php', { params: { page: options?.page, limit: options?.limit, list: options?.segment_id } });
+  }
+  async addSubscriber(email: string, fields?: Record<string, string>): Promise<{ code: number }> {
+    return this.client.request('/contact.php', { method: 'POST', body: { email, ...fields } });
+  }
+  async updateSubscriber(email: string, fields: Record<string, string>): Promise<{ code: number }> {
+    return this.client.request('/contact.php', { method: 'POST', body: { email, is_update: true, ...fields } as Record<string, unknown> });
+  }
+  async unsubscribe(email: string): Promise<{ code: number }> {
+    return this.client.request('/contact.php', { method: 'POST', body: { email, is_unsubscribed: 1 } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listAutoresponders(): Promise<SMAutoresponder[]> { return this.client.request<SMAutoresponder[]>('/autoresponder.php'); }
+  async listSegments(): Promise<SMSegment[]> { return this.client.request<SMSegment[]>('/list.php'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SmailyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

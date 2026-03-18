@@ -1,51 +1,25 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// WebinarJam Connector — Live webinar hosting and streaming
+import { WebinarJamClient } from './client';
+import type { WebinarJamConfig, WJWebinar, WJRegistrantResult } from '../types';
+export { WebinarJamClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class WebinarJam {
+  private readonly client: WebinarJamClient;
+  constructor(config: WebinarJamConfig) { this.client = new WebinarJamClient(config); }
+  static fromEnv(): WebinarJam {
+    const apiKey = process.env.WEBINARJAM_API_KEY;
+    if (!apiKey) throw new Error('WEBINARJAM_API_KEY is required');
+    return new WebinarJam({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listWebinars(): Promise<{ webinars: WJWebinar[] }> { return this.client.request('/webinars'); }
+  async getWebinar(webinarId: string): Promise<{ webinar: WJWebinar }> {
+    return this.client.request('/webinar', { webinar_id: webinarId });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async registerAttendee(webinarId: string, data: { first_name: string; last_name?: string; email: string; schedule: number }): Promise<WJRegistrantResult> {
+    return this.client.request('/register', { webinar_id: webinarId, ...data });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): WebinarJamClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
