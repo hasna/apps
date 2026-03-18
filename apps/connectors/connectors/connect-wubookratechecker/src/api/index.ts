@@ -1,51 +1,23 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Wu Bookrate Checker Connector — Book rating and review data lookup
+import { WuBookrateClient } from './client';
+import type { WuBookrateConfig, WBBook, WBReview, WBPriceResult } from '../types';
+export { WuBookrateClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class WuBookrateChecker {
+  private readonly client: WuBookrateClient;
+  constructor(config: WuBookrateConfig) { this.client = new WuBookrateClient(config); }
+  static fromEnv(): WuBookrateChecker {
+    const apiKey = process.env.WUBOOKRATE_API_KEY;
+    if (!apiKey) throw new Error('WUBOOKRATE_API_KEY is required');
+    return new WuBookrateChecker({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async lookupByISBN(isbn: string): Promise<WBBook> { return this.client.request<WBBook>(`/books/${isbn}`); }
+  async searchBooks(query: string, options?: { limit?: number }): Promise<{ books: WBBook[] }> {
+    return this.client.request('/books/search', { q: query, limit: options?.limit });
   }
+  async getReviews(isbn: string): Promise<{ reviews: WBReview[] }> { return this.client.request(`/books/${isbn}/reviews`); }
+  async getPrices(isbn: string): Promise<WBPriceResult> { return this.client.request<WBPriceResult>(`/books/${isbn}/prices`); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): WuBookrateClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

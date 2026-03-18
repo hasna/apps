@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Grist Connector — Relational spreadsheet and database
+import { GristClient } from './client';
+import type { GristConfig, GROrg, GRWorkspace, GRDocument, GRTable, GRColumn, GRRecord, GRRecordList } from '../types';
+export { GristClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Grist {
+  private readonly client: GristClient;
+  constructor(config: GristConfig) { this.client = new GristClient(config); }
+  static fromEnv(): Grist {
+    const apiKey = process.env.GRIST_API_KEY;
+    if (!apiKey) throw new Error('GRIST_API_KEY is required');
+    return new Grist({ apiKey, serverUrl: process.env.GRIST_SERVER_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listOrgs(): Promise<GROrg[]> { return this.client.request<GROrg[]>('/orgs'); }
+  async listWorkspaces(orgId: number): Promise<GRWorkspace[]> { return this.client.request<GRWorkspace[]>(`/orgs/${orgId}/workspaces`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listTables(docId: string): Promise<{ tables: GRTable[] }> { return this.client.request(`/docs/${docId}/tables`); }
+  async listColumns(docId: string, tableId: string): Promise<{ columns: GRColumn[] }> { return this.client.request(`/docs/${docId}/tables/${tableId}/columns`); }
+
+  async listRecords(docId: string, tableId: string, options?: { limit?: number; sort?: string; filter?: string }): Promise<GRRecordList> {
+    return this.client.request<GRRecordList>(`/docs/${docId}/tables/${tableId}/records`, { params: { limit: options?.limit, sort: options?.sort, filter: options?.filter } });
+  }
+  async addRecords(docId: string, tableId: string, records: { fields: Record<string, unknown> }[]): Promise<{ records: { id: number }[] }> {
+    return this.client.request(`/docs/${docId}/tables/${tableId}/records`, { method: 'POST', body: { records } as unknown as Record<string, unknown> });
+  }
+  async updateRecords(docId: string, tableId: string, records: { id: number; fields: Record<string, unknown> }[]): Promise<void> {
+    await this.client.request(`/docs/${docId}/tables/${tableId}/records`, { method: 'PATCH', body: { records } as unknown as Record<string, unknown> });
+  }
+  async deleteRecords(docId: string, tableId: string, recordIds: number[]): Promise<void> {
+    await this.client.request(`/docs/${docId}/tables/${tableId}/data/delete`, { method: 'POST', body: recordIds as unknown as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): GristClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
