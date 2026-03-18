@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Miestro Connector — Online course and membership platform
+import { MiestroClient } from './client';
+import type { MiestroConfig, MiCourse, MiLesson, MiMember, MiMemberList, MiMembership } from '../types';
+export { MiestroClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Miestro {
+  private readonly client: MiestroClient;
+  constructor(config: MiestroConfig) { this.client = new MiestroClient(config); }
+  static fromEnv(): Miestro {
+    const apiKey = process.env.MIESTRO_API_KEY;
+    if (!apiKey) throw new Error('MIESTRO_API_KEY is required');
+    return new Miestro({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listCourses(): Promise<MiCourse[]> { return this.client.request<MiCourse[]>('/courses'); }
+  async getCourse(courseId: number): Promise<MiCourse> { return this.client.request<MiCourse>(`/courses/${courseId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listLessons(courseId: number): Promise<MiLesson[]> { return this.client.request<MiLesson[]>(`/courses/${courseId}/lessons`); }
+  async getLesson(courseId: number, lessonId: number): Promise<MiLesson> { return this.client.request<MiLesson>(`/courses/${courseId}/lessons/${lessonId}`); }
+
+  async listMembers(options?: { page?: number; per_page?: number; status?: string }): Promise<MiMemberList> {
+    return this.client.request<MiMemberList>('/members', { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
+  }
+  async getMember(memberId: number): Promise<MiMember> { return this.client.request<MiMember>(`/members/${memberId}`); }
+  async createMember(data: { email: string; first_name?: string; last_name?: string; password?: string }): Promise<MiMember> {
+    return this.client.request<MiMember>('/members', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async enrollMember(memberId: number, courseId: number): Promise<void> {
+    await this.client.request(`/members/${memberId}/enroll`, { method: 'POST', body: { course_id: courseId } });
+  }
+  async unenrollMember(memberId: number, courseId: number): Promise<void> {
+    await this.client.request(`/members/${memberId}/unenroll`, { method: 'POST', body: { course_id: courseId } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listMemberships(): Promise<MiMembership[]> { return this.client.request<MiMembership[]>('/memberships'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): MiestroClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

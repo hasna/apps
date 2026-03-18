@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Specter Connector — Game intelligence platform for studios and developers
+import { SpecterClient } from './client';
+import type { SpecterConfig, SPApp, SPEvent, SPEventData, SPUser, SPUserList, SPSegment, SPEconomy } from '../types';
+export { SpecterClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Specter {
+  private readonly client: SpecterClient;
+  constructor(config: SpecterConfig) { this.client = new SpecterClient(config); }
+  static fromEnv(): Specter {
+    const apiKey = process.env.SPECTER_API_KEY;
+    const projectId = process.env.SPECTER_PROJECT_ID;
+    if (!apiKey || !projectId) throw new Error('SPECTER_API_KEY and SPECTER_PROJECT_ID are required');
+    return new Specter({ apiKey, projectId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listApps(): Promise<SPApp[]> { return this.client.request<SPApp[]>('/apps'); }
+  async getApp(appId: string): Promise<SPApp> { return this.client.request<SPApp>(`/apps/${appId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listEvents(): Promise<SPEvent[]> { return this.client.request<SPEvent[]>('/events'); }
+  async getEventData(eventName: string, options?: { start_date?: string; end_date?: string }): Promise<SPEventData[]> {
+    return this.client.request<SPEventData[]>(`/events/${eventName}/data`, { params: { start_date: options?.start_date, end_date: options?.end_date } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listUsers(options?: { page?: number; per_page?: number; segment_id?: string }): Promise<SPUserList> {
+    return this.client.request<SPUserList>('/users', { params: { page: options?.page, per_page: options?.per_page, segment_id: options?.segment_id } });
   }
+  async getUser(userId: string): Promise<SPUser> { return this.client.request<SPUser>(`/users/${userId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listSegments(): Promise<SPSegment[]> { return this.client.request<SPSegment[]>('/segments'); }
+  async getSegment(segmentId: string): Promise<SPSegment> { return this.client.request<SPSegment>(`/segments/${segmentId}`); }
+
+  async listEconomyItems(): Promise<SPEconomy[]> { return this.client.request<SPEconomy[]>('/economy/items'); }
+
+  getClient(): SpecterClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
