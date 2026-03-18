@@ -1,51 +1,45 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Alchemy Connector — Blockchain/Web3 development platform (Ethereum, Polygon, etc.)
+import { AlchemyClient } from './client';
+import type { AlchemyConfig, AlchemyJsonRpcResponse, AlchemyNftList } from '../types';
+export { AlchemyClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Alchemy {
+  private readonly client: AlchemyClient;
+  constructor(config: AlchemyConfig) { this.client = new AlchemyClient(config); }
+  static fromEnv(): Alchemy {
+    const apiKey = process.env.ALCHEMY_API_KEY;
+    if (!apiKey) throw new Error('ALCHEMY_API_KEY is required');
+    return new Alchemy({ apiKey, network: process.env.ALCHEMY_NETWORK });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  // Core Ethereum JSON-RPC
+  async getBalance(address: string, block?: string): Promise<AlchemyJsonRpcResponse<string>> { return this.client.rpc<string>('eth_getBalance', [address, block || 'latest']); }
+  async getBlockNumber(): Promise<AlchemyJsonRpcResponse<string>> { return this.client.rpc<string>('eth_blockNumber'); }
+  async getBlockByNumber(block: string, fullTx?: boolean): Promise<AlchemyJsonRpcResponse<Record<string, unknown>>> { return this.client.rpc('eth_getBlockByNumber', [block, fullTx ?? false]); }
+  async getBlockByHash(hash: string, fullTx?: boolean): Promise<AlchemyJsonRpcResponse<Record<string, unknown>>> { return this.client.rpc('eth_getBlockByHash', [hash, fullTx ?? false]); }
+  async getTransactionByHash(hash: string): Promise<AlchemyJsonRpcResponse<Record<string, unknown>>> { return this.client.rpc('eth_getTransactionByHash', [hash]); }
+  async getTransactionReceipt(hash: string): Promise<AlchemyJsonRpcResponse<Record<string, unknown>>> { return this.client.rpc('eth_getTransactionReceipt', [hash]); }
+  async getTransactionCount(address: string, block?: string): Promise<AlchemyJsonRpcResponse<string>> { return this.client.rpc<string>('eth_getTransactionCount', [address, block || 'latest']); }
+  async call(tx: { to: string; data?: string; from?: string }, block?: string): Promise<AlchemyJsonRpcResponse<string>> { return this.client.rpc<string>('eth_call', [tx, block || 'latest']); }
+  async estimateGas(tx: { to: string; data?: string; from?: string; value?: string }): Promise<AlchemyJsonRpcResponse<string>> { return this.client.rpc<string>('eth_estimateGas', [tx]); }
+  async gasPrice(): Promise<AlchemyJsonRpcResponse<string>> { return this.client.rpc<string>('eth_gasPrice'); }
+  async getLogs(filter: { fromBlock?: string; toBlock?: string; address?: string; topics?: string[] }): Promise<AlchemyJsonRpcResponse<unknown[]>> { return this.client.rpc<unknown[]>('eth_getLogs', [filter]); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Alchemy Enhanced APIs
+  async getTokenBalances(address: string): Promise<AlchemyJsonRpcResponse<{ address: string; tokenBalances: { contractAddress: string; tokenBalance: string }[] }>> {
+    return this.client.rpc('alchemy_getTokenBalances', [address, 'erc20']);
+  }
+  async getTokenMetadata(contractAddress: string): Promise<AlchemyJsonRpcResponse<{ name: string; symbol: string; decimals: number; logo: string | null }>> {
+    return this.client.rpc('alchemy_getTokenMetadata', [contractAddress]);
+  }
+  async getAssetTransfers(params: { fromBlock?: string; toBlock?: string; fromAddress?: string; toAddress?: string; category: string[]; maxCount?: string }): Promise<AlchemyJsonRpcResponse<{ transfers: unknown[] }>> {
+    return this.client.rpc('alchemy_getAssetTransfers', [params]);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  // NFT API v3
+  async getNftsForOwner(owner: string, options?: { pageKey?: string; pageSize?: number }): Promise<AlchemyNftList> {
+    return this.client.nftRequest<AlchemyNftList>('/getNFTsForOwner', { owner, pageKey: options?.pageKey, pageSize: options?.pageSize });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): AlchemyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
