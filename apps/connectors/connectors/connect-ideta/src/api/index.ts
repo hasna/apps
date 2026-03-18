@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Ideta Connector — No-code chatbot builder
+import { IdetaClient } from './client';
+import type { IdetaConfig, IDBot, IDConversation, IDUser, IDIntent } from '../types';
+export { IdetaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Ideta {
+  private readonly client: IdetaClient;
+  constructor(config: IdetaConfig) { this.client = new IdetaClient(config); }
+  static fromEnv(): Ideta {
+    const apiKey = process.env.IDETA_API_KEY;
+    if (!apiKey) throw new Error('IDETA_API_KEY is required');
+    return new Ideta({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listBots(): Promise<IDBot[]> { return this.client.request<IDBot[]>('/bots'); }
+  async getBot(botId: string): Promise<IDBot> { return this.client.request<IDBot>(`/bots/${botId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async sendMessage(botId: string, userId: string, message: string): Promise<{ response: string }> {
+    return this.client.request(`/bots/${botId}/message`, { method: 'POST', body: { user_id: userId, message } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(botId: string, options?: { page?: number }): Promise<IDConversation[]> {
+    return this.client.request<IDConversation[]>(`/bots/${botId}/conversations`, { params: { page: options?.page } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listUsers(botId: string, options?: { page?: number; tag?: string }): Promise<IDUser[]> {
+    return this.client.request<IDUser[]>(`/bots/${botId}/users`, { params: { page: options?.page, tag: options?.tag } });
   }
+  async getUser(botId: string, userId: string): Promise<IDUser> { return this.client.request<IDUser>(`/bots/${botId}/users/${userId}`); }
+
+  async listIntents(botId: string): Promise<IDIntent[]> { return this.client.request<IDIntent[]>(`/bots/${botId}/intents`); }
+
+  getClient(): IdetaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
