@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Chekhub Connector — Field service management and work order tracking
+import { ChekhubClient } from './client';
+import type { ChekhubConfig, CHWorkOrder, CHWorkOrderList, CHAsset, CHLocation, CHTechnician, CHChecklist } from '../types';
+export { ChekhubClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Chekhub {
+  private readonly client: ChekhubClient;
+  constructor(config: ChekhubConfig) { this.client = new ChekhubClient(config); }
+  static fromEnv(): Chekhub {
+    const token = process.env.CHEKHUB_TOKEN;
+    if (!token) throw new Error('CHEKHUB_TOKEN is required');
+    return new Chekhub({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listWorkOrders(options?: { page?: number; per_page?: number; status?: string; assignee_id?: string }): Promise<CHWorkOrderList> {
+    return this.client.request<CHWorkOrderList>('/work-orders', { params: { page: options?.page, per_page: options?.per_page, status: options?.status, assignee_id: options?.assignee_id } });
+  }
+  async getWorkOrder(workOrderId: string): Promise<CHWorkOrder> { return this.client.request<CHWorkOrder>(`/work-orders/${workOrderId}`); }
+  async createWorkOrder(data: { title: string; description?: string; priority?: string; assignee_id?: string; location_id?: string; due_date?: string }): Promise<CHWorkOrder> {
+    return this.client.request<CHWorkOrder>('/work-orders', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateWorkOrder(workOrderId: string, data: { title?: string; status?: string; priority?: string; assignee_id?: string }): Promise<CHWorkOrder> {
+    return this.client.request<CHWorkOrder>(`/work-orders/${workOrderId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+  async completeWorkOrder(workOrderId: string): Promise<CHWorkOrder> {
+    return this.client.request<CHWorkOrder>(`/work-orders/${workOrderId}/complete`, { method: 'POST' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listAssets(options?: { location_id?: string }): Promise<CHAsset[]> {
+    return this.client.request<CHAsset[]>('/assets', { params: { location_id: options?.location_id } });
   }
+  async getAsset(assetId: string): Promise<CHAsset> { return this.client.request<CHAsset>(`/assets/${assetId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listLocations(): Promise<CHLocation[]> { return this.client.request<CHLocation[]>('/locations'); }
+  async listTechnicians(): Promise<CHTechnician[]> { return this.client.request<CHTechnician[]>('/technicians'); }
+
+  async getChecklist(workOrderId: string): Promise<CHChecklist> { return this.client.request<CHChecklist>(`/work-orders/${workOrderId}/checklist`); }
+
+  getClient(): ChekhubClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

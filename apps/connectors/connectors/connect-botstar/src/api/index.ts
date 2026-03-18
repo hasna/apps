@@ -1,51 +1,44 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// BotStar Connector — Visual chatbot builder and automation
+import { BotStarClient } from './client';
+import type { BotStarConfig, BSBot, BSFlow, BSSubscriber, BSSubscriberList, BSBroadcast, BSConversation } from '../types';
+export { BotStarClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class BotStar {
+  private readonly client: BotStarClient;
+  constructor(config: BotStarConfig) { this.client = new BotStarClient(config); }
+  static fromEnv(): BotStar {
+    const token = process.env.BOTSTAR_TOKEN;
+    if (!token) throw new Error('BOTSTAR_TOKEN is required');
+    return new BotStar({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listBots(): Promise<BSBot[]> { return this.client.request<BSBot[]>('/bots'); }
+  async getBot(botId: string): Promise<BSBot> { return this.client.request<BSBot>(`/bots/${botId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listFlows(botId: string): Promise<BSFlow[]> { return this.client.request<BSFlow[]>(`/bots/${botId}/flows`); }
+
+  async listSubscribers(botId: string, options?: { page?: number; per_page?: number; tag?: string }): Promise<BSSubscriberList> {
+    return this.client.request<BSSubscriberList>(`/bots/${botId}/subscribers`, { params: { page: options?.page, per_page: options?.per_page, tag: options?.tag } });
+  }
+  async getSubscriber(botId: string, subscriberId: string): Promise<BSSubscriber> {
+    return this.client.request<BSSubscriber>(`/bots/${botId}/subscribers/${subscriberId}`);
+  }
+  async tagSubscriber(botId: string, subscriberId: string, tag: string): Promise<void> {
+    await this.client.request(`/bots/${botId}/subscribers/${subscriberId}/tags`, { method: 'POST', body: { tag } });
+  }
+  async untagSubscriber(botId: string, subscriberId: string, tag: string): Promise<void> {
+    await this.client.request(`/bots/${botId}/subscribers/${subscriberId}/tags/${tag}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async sendMessage(botId: string, subscriberId: string, message: string): Promise<void> {
+    await this.client.request(`/bots/${botId}/subscribers/${subscriberId}/messages`, { method: 'POST', body: { message } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listBroadcasts(botId: string): Promise<BSBroadcast[]> { return this.client.request<BSBroadcast[]>(`/bots/${botId}/broadcasts`); }
+
+  async getConversation(botId: string, subscriberId: string): Promise<BSConversation> {
+    return this.client.request<BSConversation>(`/bots/${botId}/subscribers/${subscriberId}/conversation`);
   }
+
+  getClient(): BotStarClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
