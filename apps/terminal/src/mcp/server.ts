@@ -1426,6 +1426,150 @@ Be specific, not generic. Only flag real problems.`,
     }
   );
 
+  // ── diff: show what changed ────────────────────────────────────────────────
+
+  server.tool(
+    "diff",
+    "Show what changed — git diff with AI summary. One call replaces constructing git diff commands.",
+    {
+      ref: z.string().optional().describe("Diff against this ref (default: unstaged changes). Examples: HEAD~1, main, abc123"),
+      file: z.string().optional().describe("Diff a specific file only"),
+      stat: z.boolean().optional().describe("Show file-level stats only, not full diff (default: false)"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ ref, file, stat, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+      let cmd = "git diff";
+      if (ref) cmd += ` ${ref}`;
+      if (stat) cmd += " --stat";
+      if (file) cmd += ` -- ${file}`;
+
+      const result = await exec(cmd, workDir, 15000);
+      const output = (result.stdout + result.stderr).trim();
+
+      if (!output) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ clean: true, message: "No changes" }) }] };
+      }
+
+      const processed = await processOutput(cmd, output);
+      logCall("diff", { command: cmd, outputTokens: estimateTokens(output), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, aiProcessed: processed.aiProcessed });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        summary: processed.summary,
+        lines: output.split("\n").length,
+        tokensSaved: processed.tokensSaved,
+      }) }] };
+    }
+  );
+
+  // ── install: add packages, auto-detect package manager ────────────────────
+
+  server.tool(
+    "install",
+    "Install packages — auto-detects bun/npm/pnpm/yarn/pip/cargo. Agent says what to install, we figure out how.",
+    {
+      packages: z.array(z.string()).describe("Package names to install"),
+      dev: z.boolean().optional().describe("Install as dev dependency (default: false)"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ packages, dev, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+      const { existsSync } = await import("fs");
+      const { join } = await import("path");
+
+      let cmd: string;
+      const pkgs = packages.join(" ");
+      const devFlag = dev ? " -D" : "";
+
+      if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bun.lock"))) {
+        cmd = `bun add${devFlag} ${pkgs}`;
+      } else if (existsSync(join(workDir, "pnpm-lock.yaml"))) {
+        cmd = `pnpm add${devFlag} ${pkgs}`;
+      } else if (existsSync(join(workDir, "yarn.lock"))) {
+        cmd = `yarn add${dev ? " --dev" : ""} ${pkgs}`;
+      } else if (existsSync(join(workDir, "package.json"))) {
+        cmd = `npm install${dev ? " --save-dev" : ""} ${pkgs}`;
+      } else if (existsSync(join(workDir, "requirements.txt")) || existsSync(join(workDir, "pyproject.toml"))) {
+        cmd = `pip install ${pkgs}`;
+      } else if (existsSync(join(workDir, "Cargo.toml"))) {
+        cmd = `cargo add ${pkgs}`;
+      } else {
+        cmd = `npm install${dev ? " --save-dev" : ""} ${pkgs}`;
+      }
+
+      const result = await exec(cmd, workDir, 60000);
+      const output = (result.stdout + result.stderr).trim();
+      const processed = await processOutput(cmd, output);
+      logCall("install", { command: cmd, exitCode: result.exitCode, durationMs: Date.now() - start, aiProcessed: processed.aiProcessed });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        exitCode: result.exitCode,
+        command: cmd,
+        summary: processed.summary,
+      }) }] };
+    }
+  );
+
+  // ── help: tool discoverability ────────────────────────────────────────────
+
+  server.tool(
+    "help",
+    "Get recommendations for which terminal tool to use. Describe what you want to do and get the best tool + usage example.",
+    {
+      goal: z.string().optional().describe("What you're trying to do (e.g., 'run tests', 'find where login is defined', 'commit my changes')"),
+    },
+    async ({ goal }) => {
+      if (!goal) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          tools: {
+            "execute / execute_smart": "Run any command. Smart = AI summary (80% fewer tokens)",
+            "run({task})": "Run test/build/lint — auto-detects toolchain",
+            "commit / bulk_commit / smart_commit": "Git commit — single, multi, or AI-grouped",
+            "diff({ref})": "Show what changed with AI summary",
+            "install({packages})": "Add packages — auto-detects bun/npm/pip/cargo",
+            "search_content({pattern})": "Grep with structured results",
+            "search_files({pattern})": "Find files by glob",
+            "symbols({path})": "AI file outline — any language",
+            "read_symbol({path, name})": "Read one function/class by name",
+            "read_file({path, summarize})": "Read or AI-summarize a file",
+            "read_files({files, summarize})": "Multi-file read in one call",
+            "symbols_dir({path})": "Symbols for entire directory",
+            "review({since})": "AI code review",
+            "lookup({file, items})": "Find items in a file by name",
+            "edit({file, find, replace})": "Find-replace in file",
+            "repo_state": "Git branch + status + log in one call",
+            "boot": "Full project context on session start",
+            "watch({task})": "Run task on file change",
+            "store_secret / list_secrets": "Secrets vault",
+            "project_note({save/recall})": "Persistent project notes",
+          },
+          tips: [
+            "Use relative paths — 'src/foo.ts' not '/Users/.../src/foo.ts'",
+            "Use your native Read/Write/Edit for file operations when you don't need AI summary",
+            "Use search_content for text patterns, symbols for code structure",
+            "Use commit for single, bulk_commit for multiple, smart_commit for AI-grouped",
+          ],
+        }) }] };
+      }
+
+      // AI recommends the best tool for the goal
+      const provider = getOutputProvider();
+      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+      const recommendation = await provider.complete(
+        `Agent wants to: ${goal}\n\nAvailable tools: execute, execute_smart, run, commit, bulk_commit, smart_commit, diff, install, search_content, search_files, symbols, read_symbol, read_file, read_files, symbols_dir, review, lookup, edit, repo_state, boot, watch, store_secret, list_secrets, project_note, help`,
+        {
+          model: outputModel,
+          system: `Recommend the best terminal MCP tool for this goal. Return JSON: {"tool": "name", "example": {params}, "why": "one line"}. If multiple tools work, list top 2.`,
+          maxTokens: 200, temperature: 0,
+        }
+      );
+
+      return { content: [{ type: "text" as const, text: recommendation }] };
+    }
+  );
+
   return server;
 }
 
