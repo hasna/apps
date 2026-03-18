@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Nyota Connector — AI meeting notes and action item tracking
+import { NyotaClient } from './client';
+import type { NyotaConfig, NYMeeting, NYMeetingList, NYTranscript, NYSummary, NYActionItem } from '../types';
+export { NyotaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Nyota {
+  private readonly client: NyotaClient;
+  constructor(config: NyotaConfig) { this.client = new NyotaClient(config); }
+  static fromEnv(): Nyota {
+    const apiKey = process.env.NYOTA_API_KEY;
+    if (!apiKey) throw new Error('NYOTA_API_KEY is required');
+    return new Nyota({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listMeetings(options?: { page?: number; per_page?: number; status?: string }): Promise<NYMeetingList> {
+    return this.client.request<NYMeetingList>('/meetings', { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
+  }
+  async getMeeting(meetingId: string): Promise<NYMeeting> { return this.client.request<NYMeeting>(`/meetings/${meetingId}`); }
+  async deleteMeeting(meetingId: string): Promise<void> { await this.client.request(`/meetings/${meetingId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getTranscript(meetingId: string): Promise<NYTranscript> { return this.client.request<NYTranscript>(`/meetings/${meetingId}/transcript`); }
+  async getSummary(meetingId: string): Promise<NYSummary> { return this.client.request<NYSummary>(`/meetings/${meetingId}/summary`); }
+
+  async listActionItems(options?: { meeting_id?: string; status?: string }): Promise<NYActionItem[]> {
+    return this.client.request<NYActionItem[]>('/action-items', { params: { meeting_id: options?.meeting_id, status: options?.status } });
+  }
+  async updateActionItem(actionItemId: string, data: { status?: string; assignee?: string; due_date?: string }): Promise<NYActionItem> {
+    return this.client.request<NYActionItem>(`/action-items/${actionItemId}`, { method: 'PATCH', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): NyotaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
