@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Kaggle Connector — Data science competitions, datasets, and notebooks
+import { KaggleClient } from './client';
+import type { KaggleConfig, KGDataset, KGCompetition, KGKernel, KGLeaderboardEntry } from '../types';
+export { KaggleClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Kaggle {
+  private readonly client: KaggleClient;
+  constructor(config: KaggleConfig) { this.client = new KaggleClient(config); }
+  static fromEnv(): Kaggle {
+    const username = process.env.KAGGLE_USERNAME;
+    const key = process.env.KAGGLE_KEY;
+    if (!username || !key) throw new Error('KAGGLE_USERNAME and KAGGLE_KEY are required');
+    return new Kaggle({ username, key });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listDatasets(options?: { search?: string; page?: number; sortBy?: string }): Promise<KGDataset[]> {
+    return this.client.request<KGDataset[]>('/datasets/list', { search: options?.search, page: options?.page, sortBy: options?.sortBy });
+  }
+  async getDataset(owner: string, dataset: string): Promise<KGDataset> {
+    return this.client.request<KGDataset>(`/datasets/view/${owner}/${dataset}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listCompetitions(options?: { search?: string; page?: number; category?: string }): Promise<KGCompetition[]> {
+    return this.client.request<KGCompetition[]>('/competitions/list', { search: options?.search, page: options?.page, category: options?.category });
+  }
+  async getLeaderboard(competitionId: string): Promise<KGLeaderboardEntry[]> {
+    return this.client.request<KGLeaderboardEntry[]>(`/competitions/${competitionId}/leaderboard/download`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listKernels(options?: { search?: string; page?: number; language?: string }): Promise<KGKernel[]> {
+    return this.client.request<KGKernel[]>('/kernels/list', { search: options?.search, page: options?.page, language: options?.language });
   }
+
+  getClient(): KaggleClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

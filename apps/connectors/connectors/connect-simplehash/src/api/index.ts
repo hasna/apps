@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SimpleHash Connector — NFT and blockchain data for multi-chain digital assets
+import { SimpleHashClient } from './client';
+import type { SimpleHashConfig, SHNFT, SHNFTList, SHCollection, SHTransfer } from '../types';
+export { SimpleHashClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SimpleHash {
+  private readonly client: SimpleHashClient;
+  constructor(config: SimpleHashConfig) { this.client = new SimpleHashClient(config); }
+  static fromEnv(): SimpleHash {
+    const apiKey = process.env.SIMPLEHASH_API_KEY;
+    if (!apiKey) throw new Error('SIMPLEHASH_API_KEY is required');
+    return new SimpleHash({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getNFT(chain: string, contractAddress: string, tokenId: string): Promise<SHNFT> {
+    return this.client.request<SHNFT>(`/nfts/${chain}/${contractAddress}/${tokenId}`);
+  }
+  async getNFTsByOwner(chains: string, walletAddress: string, options?: { cursor?: string; limit?: number }): Promise<SHNFTList> {
+    return this.client.request<SHNFTList>(`/nfts/owners`, { chains, wallet_addresses: walletAddress, cursor: options?.cursor, limit: options?.limit });
+  }
+  async getNFTsByContract(chain: string, contractAddress: string, options?: { cursor?: string; limit?: number }): Promise<SHNFTList> {
+    return this.client.request<SHNFTList>(`/nfts/${chain}/${contractAddress}`, { cursor: options?.cursor, limit: options?.limit });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getCollection(collectionId: string): Promise<SHCollection> {
+    return this.client.request<SHCollection>(`/nfts/collections/ids`, { collection_ids: collectionId });
+  }
+  async getTopCollections(chains: string, options?: { time_period?: string; limit?: number }): Promise<{ collections: SHCollection[] }> {
+    return this.client.request('/nfts/collections/top_v2', { chains, time_period: options?.time_period || '24h', limit: options?.limit });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getTransfersByWallet(chains: string, walletAddress: string, options?: { cursor?: string; limit?: number }): Promise<{ transfers: SHTransfer[]; next_cursor: string | null }> {
+    return this.client.request('/nfts/transfers/wallets', { chains, wallet_addresses: walletAddress, cursor: options?.cursor, limit: options?.limit });
   }
+
+  getClient(): SimpleHashClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
