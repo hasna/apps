@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   LineChart,
   Line,
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -16,6 +17,8 @@ import {
   BarChart3Icon,
   RefreshCwIcon,
   TrendingUpIcon,
+  AlertTriangleIcon,
+  XIcon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -53,6 +56,7 @@ function formatDate(d: string) {
 
 interface ChartEntry {
   date: string;
+  rawDate: string; // YYYY-MM-DD for spike comparison
   claude: number;
   codex: number;
 }
@@ -61,13 +65,28 @@ function buildChartData(entries: DailyEntry[]): ChartEntry[] {
   const map = new Map<string, ChartEntry>();
   for (const e of entries) {
     const key = e.date;
-    if (!map.has(key)) map.set(key, { date: formatDate(key), claude: 0, codex: 0 });
+    if (!map.has(key)) map.set(key, { date: formatDate(key), rawDate: key, claude: 0, codex: 0 });
     const row = map.get(key)!;
     if (e.agent === "claude") row.claude += e.cost_usd;
     else if (e.agent === "codex") row.codex += e.cost_usd;
     else row.claude += e.cost_usd;
   }
-  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return Array.from(map.values()).sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+}
+
+function computeSpikes(daily: DailyEntry[]): { spikeDates: Set<string>; spikeCount: number } {
+  const byDate = new Map<string, number>();
+  for (const d of daily) {
+    byDate.set(d.date, (byDate.get(d.date) ?? 0) + d.cost_usd);
+  }
+  const dates = [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const spikeDates = new Set<string>();
+  for (let i = 7; i < dates.length; i++) {
+    const window = dates.slice(i - 7, i).map((d) => d[1]);
+    const avg = window.reduce((s, v) => s + v, 0) / window.length;
+    if (dates[i]![1] > avg * 2 && avg > 0) spikeDates.add(dates[i]![0]);
+  }
+  return { spikeDates, spikeCount: spikeDates.size };
 }
 
 const chartConfig: ChartConfig = {
@@ -79,13 +98,16 @@ export function OverviewTab() {
   const [todaySummary, setTodaySummary] = useState<Summary | null>(null);
   const [weekSummary, setWeekSummary] = useState<Summary | null>(null);
   const [monthSummary, setMonthSummary] = useState<Summary | null>(null);
-  const [chartData, setChartData] = useState<ChartEntry[]>([]);
+  const [allChartData, setAllChartData] = useState<ChartEntry[]>([]);
+  const [allDailyEntries, setAllDailyEntries] = useState<DailyEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [chartType, setChartType] = useState<"line" | "bar">("line");
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -101,7 +123,8 @@ export function OverviewTab() {
       setTodaySummary(t.data);
       setWeekSummary(w.data);
       setMonthSummary(m.data);
-      setChartData(buildChartData(daily.data));
+      setAllDailyEntries(daily.data);
+      setAllChartData(buildChartData(daily.data));
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
@@ -109,6 +132,22 @@ export function OverviewTab() {
       setLoading(false);
     }
   }, []);
+
+  // Filtered chart data based on date range
+  const chartData = useMemo(() => {
+    if (!dateFrom && !dateTo) return allChartData;
+    return allChartData.filter((entry) => {
+      if (dateFrom && entry.rawDate < dateFrom) return false;
+      if (dateTo && entry.rawDate > dateTo) return false;
+      return true;
+    });
+  }, [allChartData, dateFrom, dateTo]);
+
+  // Spike computation over the full dataset (not filtered)
+  const { spikeDates, spikeCount } = useMemo(
+    () => computeSpikes(allDailyEntries),
+    [allDailyEntries]
+  );
 
   useEffect(() => {
     load();
@@ -182,7 +221,15 @@ export function OverviewTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {spikeCount > 0 && (
+            <div className="flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+              <AlertTriangleIcon className="size-3.5" />
+              {spikeCount} spike {spikeCount === 1 ? "day" : "days"} detected
+            </div>
+          )}
+        </div>
         <span className="text-xs text-muted-foreground">Last updated: {lastUpdatedText}</span>
       </div>
 
@@ -203,12 +250,40 @@ export function OverviewTab() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-sm flex items-center gap-2">
               <BarChart3Icon className="size-4 text-blue-500" />
               Daily Cost — Last 30 Days
             </CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Date range filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-muted-foreground">From:</span>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <span className="text-xs text-muted-foreground">To:</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                {(dateFrom || dateTo) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => { setDateFrom(""); setDateTo(""); }}
+                  >
+                    <XIcon className="size-3 mr-1" />
+                    Clear
+                  </Button>
+                )}
+              </div>
               <div className="flex rounded-md border">
                 <button
                   className={`px-2.5 py-1 text-xs font-medium rounded-l-md transition-colors ${chartType === "line" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
@@ -283,7 +358,14 @@ export function OverviewTab() {
                     content={<ChartTooltipContent formatter={(val: number) => formatUsd(val)} />}
                   />
                   <ChartLegend content={<ChartLegendContent />} />
-                  <Bar dataKey="claude" fill="var(--color-claude)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="claude" radius={[4, 4, 0, 0]}>
+                    {chartData.map((entry, index) => (
+                      <Cell
+                        key={index}
+                        fill={spikeDates.has(entry.rawDate) ? "#f59e0b" : "var(--color-claude)"}
+                      />
+                    ))}
+                  </Bar>
                   <Bar dataKey="codex" fill="var(--color-codex)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               )}

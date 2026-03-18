@@ -86,20 +86,38 @@ export const getSummary = (period: 'today' | 'week' | 'month' | 'all') =>
 export const getDaily = (days = 30) =>
   request<{ data: DailyEntry[] }>(`/api/daily?days=${days}`)
 
+export interface SessionRequest {
+  id: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_create_tokens: number
+  cost_usd: number
+  duration_ms: number
+  timestamp: string
+}
+
 // Sessions
 export const getSessions = (params: {
   agent?: string
   project?: string
   limit?: number
   offset?: number
+  since?: string
 }) => {
   const q = new URLSearchParams()
   if (params.agent) q.set('agent', params.agent)
   if (params.project) q.set('project', params.project)
   if (params.limit != null) q.set('limit', String(params.limit))
   if (params.offset != null) q.set('offset', String(params.offset))
+  if (params.since) q.set('since', params.since)
   return request<{ data: Session[] }>(`/api/sessions?${q}`)
 }
+
+// Session requests (per-request breakdown)
+export const getSessionRequests = (sessionId: string) =>
+  request<{ data: SessionRequest[] }>(`/api/sessions/${encodeURIComponent(sessionId)}/requests`)
 
 // Top sessions
 export const getTop = (n = 10) =>
