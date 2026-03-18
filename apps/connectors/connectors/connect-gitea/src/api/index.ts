@@ -1,51 +1,47 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Gitea Connector — Self-hosted Git service and DevOps platform
+import { GiteaClient } from './client';
+import type { GiteaConfig, GiteaRepo, GiteaIssue, GiteaUser, GiteaOrg, GiteaBranch, GiteaPullRequest } from '../types';
+export { GiteaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Gitea {
+  private readonly client: GiteaClient;
+  constructor(config: GiteaConfig) { this.client = new GiteaClient(config); }
+  static fromEnv(): Gitea {
+    const token = process.env.GITEA_TOKEN;
+    const url = process.env.GITEA_URL;
+    if (!token || !url) throw new Error('GITEA_TOKEN and GITEA_URL are required');
+    return new Gitea({ token, url });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getMe(): Promise<GiteaUser> { return this.client.request<GiteaUser>('/user'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listMyRepos(options?: { page?: number; limit?: number }): Promise<GiteaRepo[]> {
+    return this.client.request<GiteaRepo[]>('/user/repos', { params: { page: options?.page, limit: options?.limit } });
+  }
+  async getRepo(owner: string, repo: string): Promise<GiteaRepo> { return this.client.request<GiteaRepo>(`/repos/${owner}/${repo}`); }
+  async createRepo(data: { name: string; description?: string; private?: boolean; auto_init?: boolean }): Promise<GiteaRepo> {
+    return this.client.request<GiteaRepo>('/user/repos', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteRepo(owner: string, repo: string): Promise<void> { await this.client.request(`/repos/${owner}/${repo}`, { method: 'DELETE' }); }
+
+  async listIssues(owner: string, repo: string, options?: { state?: string; page?: number; limit?: number }): Promise<GiteaIssue[]> {
+    return this.client.request<GiteaIssue[]>(`/repos/${owner}/${repo}/issues`, { params: { state: options?.state, page: options?.page, limit: options?.limit } });
+  }
+  async getIssue(owner: string, repo: string, index: number): Promise<GiteaIssue> { return this.client.request<GiteaIssue>(`/repos/${owner}/${repo}/issues/${index}`); }
+  async createIssue(owner: string, repo: string, data: { title: string; body?: string; assignees?: string[]; labels?: number[] }): Promise<GiteaIssue> {
+    return this.client.request<GiteaIssue>(`/repos/${owner}/${repo}/issues`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listBranches(owner: string, repo: string): Promise<GiteaBranch[]> { return this.client.request<GiteaBranch[]>(`/repos/${owner}/${repo}/branches`); }
+
+  async listPullRequests(owner: string, repo: string, options?: { state?: string; page?: number }): Promise<GiteaPullRequest[]> {
+    return this.client.request<GiteaPullRequest[]>(`/repos/${owner}/${repo}/pulls`, { params: { state: options?.state, page: options?.page } });
+  }
+  async createPullRequest(owner: string, repo: string, data: { title: string; body?: string; head: string; base: string }): Promise<GiteaPullRequest> {
+    return this.client.request<GiteaPullRequest>(`/repos/${owner}/${repo}/pulls`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listOrgs(): Promise<GiteaOrg[]> { return this.client.request<GiteaOrg[]>('/user/orgs'); }
+
+  getClient(): GiteaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
