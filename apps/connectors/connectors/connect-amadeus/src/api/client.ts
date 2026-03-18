@@ -54,7 +54,7 @@ export class AmadeusClient {
     return this.accessToken;
   }
 
-  async get<T>(path: string, params?: Record<string, any>): Promise<T> {
+  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     const token = await this.getAccessToken();
     
     let url = this.baseUrl + path;
@@ -80,7 +80,7 @@ export class AmadeusClient {
     return this.handleResponse<T>(response);
   }
 
-  async post<T>(path: string, body: any, params?: Record<string, any>): Promise<T> {
+  async post<T>(path: string, body: Record<string, unknown> | unknown[], params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     const token = await this.getAccessToken();
     
     let url = this.baseUrl + path;

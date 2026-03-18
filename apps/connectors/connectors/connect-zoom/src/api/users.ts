@@ -49,4 +49,98 @@ export class UsersApi {
       },
     });
   }
+
+  /**
+   * Create a user
+   */
+  async createUser(options: {
+    action: 'create' | 'autoCreate' | 'custCreate' | 'ssoCreate';
+    userInfo: {
+      email: string;
+      type: 1 | 2 | 3;
+      firstName?: string;
+      lastName?: string;
+      displayName?: string;
+      password?: string;
+    };
+  }): Promise<ZoomUser> {
+    return this.client.request<ZoomUser>('/users', {
+      method: 'POST',
+      body: options,
+    });
+  }
+
+  /**
+   * Update a user's profile
+   */
+  async updateUser(
+    userId: string,
+    data: {
+      firstName?: string;
+      lastName?: string;
+      type?: 1 | 2 | 3;
+      timezone?: string;
+      language?: string;
+      dept?: string;
+      jobTitle?: string;
+      company?: string;
+    }
+  ): Promise<void> {
+    await this.client.request(`/users/${userId}`, {
+      method: 'PATCH',
+      body: data,
+    });
+  }
+
+  /**
+   * Delete a user
+   */
+  async deleteUser(
+    userId: string,
+    options?: {
+      action?: 'disassociate' | 'delete';
+      transferEmail?: string;
+      transferMeetings?: boolean;
+      transferWebinars?: boolean;
+      transferRecordings?: boolean;
+    }
+  ): Promise<void> {
+    await this.client.request(`/users/${userId}`, {
+      method: 'DELETE',
+      params: {
+        action: options?.action,
+        transfer_email: options?.transferEmail,
+        transfer_meetings: options?.transferMeetings,
+        transfer_webinars: options?.transferWebinars,
+        transfer_recordings: options?.transferRecordings,
+      },
+    });
+  }
+
+  /**
+   * Get a user's settings
+   */
+  async getUserSettings(userId: string): Promise<Record<string, unknown>> {
+    return this.client.request<Record<string, unknown>>(`/users/${userId}/settings`);
+  }
+
+  /**
+   * Update a user's settings
+   */
+  async updateUserSettings(
+    userId: string,
+    settings: Record<string, unknown>
+  ): Promise<void> {
+    await this.client.request(`/users/${userId}/settings`, {
+      method: 'PATCH',
+      body: settings,
+    });
+  }
+
+  /**
+   * Get a user's presence status
+   */
+  async getPresenceStatus(userId: string): Promise<{ presence_status: string }> {
+    return this.client.request<{ presence_status: string }>(`/users/${userId}/presence_status`);
+  }
 }
