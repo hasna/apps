@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Cody Connector — AI coding assistant by Sourcegraph
+import { CodyClient } from './client';
+import type { CodyConfig, CodyCompletion, CodySearchResult, CodyRepository } from '../types';
+export { CodyClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Cody {
+  private readonly client: CodyClient;
+  constructor(config: CodyConfig) { this.client = new CodyClient(config); }
+  static fromEnv(): Cody {
+    const token = process.env.SOURCEGRAPH_TOKEN;
+    if (!token) throw new Error('SOURCEGRAPH_TOKEN is required');
+    return new Cody({ token, endpoint: process.env.SOURCEGRAPH_ENDPOINT });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async complete(prompt: string, options?: { model?: string; maxTokensToSample?: number; temperature?: number; stopSequences?: string[] }): Promise<CodyCompletion> {
+    return this.client.request<CodyCompletion>('/.api/completions/stream', { method: 'POST', body: { messages: [{ speaker: 'human', text: prompt }], model: options?.model, maxTokensToSample: options?.maxTokensToSample || 1000, temperature: options?.temperature || 0, stopSequences: options?.stopSequences } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async chat(messages: { speaker: 'human' | 'assistant'; text: string }[], options?: { model?: string; maxTokensToSample?: number; temperature?: number }): Promise<CodyCompletion> {
+    return this.client.request<CodyCompletion>('/.api/completions/stream', { method: 'POST', body: { messages, model: options?.model, maxTokensToSample: options?.maxTokensToSample || 4000, temperature: options?.temperature || 0 } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async searchCode(query: string): Promise<CodySearchResult> {
+    return this.client.request<CodySearchResult>('/.api/search/stream', { params: { q: query } });
   }
+
+  async listRepositories(options?: { query?: string; first?: number }): Promise<{ nodes: CodyRepository[] }> {
+    return this.client.request('/.api/repos', { params: { q: options?.query, first: options?.first } });
+  }
+
+  getClient(): CodyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
