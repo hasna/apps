@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// DHL Connector — Shipment tracking, rate calculation, and logistics
+import { DHLClient } from './client';
+import type { DHLConfig, DHLTrackingResult, DHLRateResult, DHLLocation } from '../types';
+export { DHLClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class DHL {
+  private readonly client: DHLClient;
+  constructor(config: DHLConfig) { this.client = new DHLClient(config); }
+  static fromEnv(): DHL {
+    const apiKey = process.env.DHL_API_KEY;
+    if (!apiKey) throw new Error('DHL_API_KEY is required');
+    return new DHL({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async trackShipment(trackingNumber: string, options?: { service?: string; language?: string }): Promise<DHLTrackingResult> {
+    return this.client.request<DHLTrackingResult>('/track/shipments', { trackingNumber, service: options?.service, language: options?.language });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getRates(data: { productCode?: string; accountNumber: string; originCountryCode: string; originPostalCode: string; destinationCountryCode: string; destinationPostalCode: string; weight: number; length?: number; width?: number; height?: number }): Promise<DHLRateResult> {
+    return this.client.post<DHLRateResult>('/express/rates', { ...data, packages: [{ weight: { value: data.weight }, dimensions: data.length ? { length: data.length, width: data.width, height: data.height } : undefined }] } as Record<string, unknown>);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async findLocations(countryCode: string, options?: { postalCode?: string; city?: string; radius?: number; limit?: number }): Promise<{ locations: DHLLocation[] }> {
+    return this.client.request('/location-finder/v1/find-by-address', { countryCode, postalCode: options?.postalCode, addressLocality: options?.city, radius: options?.radius, limit: options?.limit });
   }
+
+  async findLocationsByGeo(latitude: number, longitude: number, options?: { radius?: number; limit?: number }): Promise<{ locations: DHLLocation[] }> {
+    return this.client.request('/location-finder/v1/find-by-geo', { latitude, longitude, radius: options?.radius, limit: options?.limit });
+  }
+
+  getClient(): DHLClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
