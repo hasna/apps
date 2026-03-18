@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// AirNow Connector — US EPA air quality data (AQI observations and forecasts)
+import { AirNowClient } from './client';
+import type { AirNowConfig, AirNowObservation, AirNowForecast } from '../types';
+export { AirNowClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AirNow {
+  private readonly client: AirNowClient;
+  constructor(config: AirNowConfig) { this.client = new AirNowClient(config); }
+  static fromEnv(): AirNow {
+    const apiKey = process.env.AIRNOW_API_KEY;
+    if (!apiKey) throw new Error('AIRNOW_API_KEY is required');
+    return new AirNow({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getCurrentByZip(zipCode: string, options?: { distance?: number }): Promise<AirNowObservation[]> {
+    return this.client.request<AirNowObservation[]>('/observation/zipCode/current/', { zipCode, distance: options?.distance });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getCurrentByLatLon(latitude: number, longitude: number, options?: { distance?: number }): Promise<AirNowObservation[]> {
+    return this.client.request<AirNowObservation[]>('/observation/latLong/current/', { latitude, longitude, distance: options?.distance });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getHistoricalByZip(zipCode: string, date: string, options?: { distance?: number }): Promise<AirNowObservation[]> {
+    return this.client.request<AirNowObservation[]>('/observation/zipCode/historical/', { zipCode, date, distance: options?.distance });
   }
+
+  async getHistoricalByLatLon(latitude: number, longitude: number, date: string, options?: { distance?: number }): Promise<AirNowObservation[]> {
+    return this.client.request<AirNowObservation[]>('/observation/latLong/historical/', { latitude, longitude, date, distance: options?.distance });
+  }
+
+  async getForecastByZip(zipCode: string, options?: { date?: string; distance?: number }): Promise<AirNowForecast[]> {
+    return this.client.request<AirNowForecast[]>('/forecast/zipCode/', { zipCode, date: options?.date, distance: options?.distance });
+  }
+
+  async getForecastByLatLon(latitude: number, longitude: number, options?: { date?: string; distance?: number }): Promise<AirNowForecast[]> {
+    return this.client.request<AirNowForecast[]>('/forecast/latLong/', { latitude, longitude, date: options?.date, distance: options?.distance });
+  }
+
+  getClient(): AirNowClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

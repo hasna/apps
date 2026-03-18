@@ -1,51 +1,45 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Airtop Connector — Cloud browser automation and AI web scraping
+import { AirtopClient } from './client';
+import type { AirtopConfig, AirtopSession, AirtopSessionList, AirtopWindow, AirtopScrapeResult, AirtopPromptResult, AirtopScreenshot } from '../types';
+export { AirtopClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Airtop {
+  private readonly client: AirtopClient;
+  constructor(config: AirtopConfig) { this.client = new AirtopClient(config); }
+  static fromEnv(): Airtop {
+    const apiKey = process.env.AIRTOP_API_KEY;
+    if (!apiKey) throw new Error('AIRTOP_API_KEY is required');
+    return new Airtop({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async createSession(options?: { configuration?: Record<string, unknown> }): Promise<AirtopSession> {
+    return this.client.request<AirtopSession>('/sessions', { method: 'POST', body: options?.configuration ? { configuration: options.configuration } : {} });
+  }
+  async getSession(sessionId: string): Promise<AirtopSession> { return this.client.request<AirtopSession>(`/sessions/${sessionId}`); }
+  async listSessions(): Promise<AirtopSessionList> { return this.client.request<AirtopSessionList>('/sessions'); }
+  async terminateSession(sessionId: string): Promise<void> { await this.client.request(`/sessions/${sessionId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async createWindow(sessionId: string, url: string): Promise<AirtopWindow> {
+    return this.client.request<AirtopWindow>(`/sessions/${sessionId}/windows`, { method: 'POST', body: { url } });
+  }
+  async getWindow(sessionId: string, windowId: string): Promise<AirtopWindow> {
+    return this.client.request<AirtopWindow>(`/sessions/${sessionId}/windows/${windowId}`);
+  }
+  async closeWindow(sessionId: string, windowId: string): Promise<void> {
+    await this.client.request(`/sessions/${sessionId}/windows/${windowId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async scrape(sessionId: string, windowId: string): Promise<AirtopScrapeResult> {
+    return this.client.request<AirtopScrapeResult>(`/sessions/${sessionId}/windows/${windowId}/scrape`, { method: 'POST' });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async prompt(sessionId: string, windowId: string, prompt: string): Promise<AirtopPromptResult> {
+    return this.client.request<AirtopPromptResult>(`/sessions/${sessionId}/windows/${windowId}/prompt`, { method: 'POST', body: { prompt } });
   }
+
+  async screenshot(sessionId: string, windowId: string): Promise<AirtopScreenshot> {
+    return this.client.request<AirtopScreenshot>(`/sessions/${sessionId}/windows/${windowId}/screenshot`);
+  }
+
+  getClient(): AirtopClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
