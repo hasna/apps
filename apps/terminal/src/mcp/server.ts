@@ -858,6 +858,161 @@ Match by function name, class name, method name (including ClassName.method), in
     }
   );
 
+  // ── Intent-level tools — agents express WHAT, we handle HOW ───────────────
+
+  server.tool(
+    "commit",
+    "Commit and optionally push. Agent says what to commit, we handle git add/commit/push. Saves ~400 tokens vs raw git commands.",
+    {
+      message: z.string().describe("Commit message"),
+      files: z.array(z.string()).optional().describe("Files to stage (default: all changed)"),
+      push: z.boolean().optional().describe("Push after commit (default: false)"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ message, files, push, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+      const addCmd = files && files.length > 0 ? `git add ${files.map(f => `"${f}"`).join(" ")}` : "git add -A";
+      const commitCmd = `${addCmd} && git commit -m ${JSON.stringify(message)}`;
+      const fullCmd = push ? `${commitCmd} && git push` : commitCmd;
+
+      const result = await exec(fullCmd, workDir, 30000);
+      const output = (result.stdout + result.stderr).trim();
+      logCall("commit", { command: `commit: ${message.slice(0, 80)}`, durationMs: Date.now() - start, exitCode: result.exitCode });
+      invalidateBootCache();
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        exitCode: result.exitCode,
+        output: stripAnsi(output).split("\n").filter(l => l.trim()).slice(0, 5).join("\n"),
+        pushed: push ?? false,
+      }) }] };
+    }
+  );
+
+  server.tool(
+    "run",
+    "Run a project task by intent — test, build, lint, dev, typecheck, format. Auto-detects toolchain (bun/npm/pnpm/yarn/cargo/go/make). Saves ~100 tokens vs raw commands.",
+    {
+      task: z.enum(["test", "build", "lint", "dev", "start", "typecheck", "format", "check"]).describe("What to run"),
+      args: z.string().optional().describe("Extra arguments (e.g., '--watch', 'src/foo.test.ts')"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ task, args, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+
+      // Detect toolchain from project files
+      const { existsSync } = await import("fs");
+      const { join } = await import("path");
+      let runner = "npm run";
+      if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bun.lock"))) runner = "bun run";
+      else if (existsSync(join(workDir, "pnpm-lock.yaml"))) runner = "pnpm run";
+      else if (existsSync(join(workDir, "yarn.lock"))) runner = "yarn";
+      else if (existsSync(join(workDir, "Cargo.toml"))) runner = "cargo";
+      else if (existsSync(join(workDir, "go.mod"))) runner = "go";
+      else if (existsSync(join(workDir, "Makefile"))) runner = "make";
+
+      // Map intent to command
+      let cmd: string;
+      if (runner === "cargo") {
+        cmd = `cargo ${task}${args ? ` ${args}` : ""}`;
+      } else if (runner === "go") {
+        const goMap: Record<string, string> = { test: "go test ./...", build: "go build ./...", lint: "golangci-lint run", format: "gofmt -w .", check: "go vet ./..." };
+        cmd = goMap[task] ?? `go ${task}`;
+      } else if (runner === "make") {
+        cmd = `make ${task}${args ? ` ${args}` : ""}`;
+      } else {
+        // JS/TS ecosystem
+        const jsMap: Record<string, string> = { test: "test", build: "build", lint: "lint", dev: "dev", start: "start", typecheck: "typecheck", format: "format", check: "check" };
+        cmd = `${runner} ${jsMap[task] ?? task}${args ? ` ${args}` : ""}`;
+      }
+
+      const result = await exec(cmd, workDir, 120000);
+      const output = (result.stdout + result.stderr).trim();
+      const processed = await processOutput(cmd, output);
+      logCall("run", { command: `${task}${args ? ` ${args}` : ""}`, outputTokens: estimateTokens(output), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, exitCode: result.exitCode, aiProcessed: processed.aiProcessed });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        exitCode: result.exitCode,
+        task,
+        runner,
+        summary: processed.summary,
+        tokensSaved: processed.tokensSaved,
+      }) }] };
+    }
+  );
+
+  server.tool(
+    "edit",
+    "Find and replace text in a file. Agent says what to change, no sed/awk/python needed. Saves ~200 tokens vs constructing shell commands.",
+    {
+      file: z.string().describe("File path"),
+      find: z.string().describe("Text to find (exact match)"),
+      replace: z.string().describe("Replacement text"),
+      all: z.boolean().optional().describe("Replace all occurrences (default: first only)"),
+    },
+    async ({ file, find, replace, all }) => {
+      const start = Date.now();
+      const { readFileSync, writeFileSync } = await import("fs");
+      try {
+        let content = readFileSync(file, "utf8");
+        const count = (content.match(new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+        if (count === 0) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Text not found", file }) }] };
+        }
+        if (all) {
+          content = content.split(find).join(replace);
+        } else {
+          content = content.replace(find, replace);
+        }
+        writeFileSync(file, content);
+        logCall("edit", { command: `edit ${file}`, durationMs: Date.now() - start });
+        return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, file, replacements: all ? count : 1 }) }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message }) }] };
+      }
+    }
+  );
+
+  server.tool(
+    "lookup",
+    "Search for specific items in a file by name or pattern. Agent says what to find, not how to grep. Saves ~300 tokens vs constructing grep pipelines.",
+    {
+      file: z.string().describe("File path to search in"),
+      items: z.array(z.string()).describe("Names or patterns to look up"),
+      context: z.number().optional().describe("Lines of context around each match (default: 3)"),
+    },
+    async ({ file, items, context }) => {
+      const start = Date.now();
+      const { readFileSync } = await import("fs");
+      try {
+        const content = readFileSync(file, "utf8");
+        const lines = content.split("\n");
+        const ctx = context ?? 3;
+        const results: Record<string, { line: number; text: string; context: string[] }[]> = {};
+
+        for (const item of items) {
+          results[item] = [];
+          const pattern = new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+          for (let i = 0; i < lines.length; i++) {
+            if (pattern.test(lines[i])) {
+              results[item].push({
+                line: i + 1,
+                text: lines[i].trim(),
+                context: lines.slice(Math.max(0, i - ctx), i + ctx + 1).map(l => l.trimEnd()),
+              });
+            }
+          }
+        }
+
+        logCall("lookup", { command: `lookup ${file} [${items.join(",")}]`, durationMs: Date.now() - start });
+        return { content: [{ type: "text" as const, text: JSON.stringify(results) }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message }) }] };
+      }
+    }
+  );
+
   return server;
 }
 
