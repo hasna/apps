@@ -1,51 +1,27 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Tilda Connector — Website builder and publishing platform
+import { TildaClient } from './client';
+import type { TildaConfig, TildaProject, TildaProjectData, TildaPage, TildaPageFull } from '../types';
+export { TildaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Tilda {
+  private readonly client: TildaClient;
+  constructor(config: TildaConfig) { this.client = new TildaClient(config); }
+  static fromEnv(): Tilda {
+    const publicKey = process.env.TILDA_PUBLIC_KEY;
+    const secretKey = process.env.TILDA_SECRET_KEY;
+    if (!publicKey || !secretKey) throw new Error('TILDA_PUBLIC_KEY and TILDA_SECRET_KEY are required');
+    return new Tilda({ publicKey, secretKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<TildaProject[]> { return this.client.request<TildaProject[]>('/getprojectslist'); }
+  async getProject(projectId: string): Promise<TildaProjectData> { return this.client.request<TildaProjectData>('/getproject', { projectid: projectId }); }
+  async getProjectExport(projectId: string): Promise<TildaProjectData> { return this.client.request<TildaProjectData>('/getprojectexport', { projectid: projectId }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
-  }
+  async listPages(projectId: string): Promise<TildaPage[]> { return this.client.request<TildaPage[]>('/getpageslist', { projectid: projectId }); }
+  async getPage(pageId: string): Promise<TildaPageFull> { return this.client.request<TildaPageFull>('/getpage', { pageid: pageId }); }
+  async getPageFull(pageId: string): Promise<TildaPageFull> { return this.client.request<TildaPageFull>('/getpagefull', { pageid: pageId }); }
+  async getPageExport(pageId: string): Promise<TildaPageFull> { return this.client.request<TildaPageFull>('/getpageexport', { pageid: pageId }); }
+  async getPageFullExport(pageId: string): Promise<TildaPageFull> { return this.client.request<TildaPageFull>('/getpagefullexport', { pageid: pageId }); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): TildaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
