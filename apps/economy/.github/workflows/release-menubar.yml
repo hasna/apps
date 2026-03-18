@@ -1,0 +1,62 @@
+name: Release Economy Bar
+
+on:
+  push:
+    tags:
+      - 'menubar-v*'
+
+jobs:
+  build-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build arm64
+        working-directory: menubar
+        run: swift build -c release --arch arm64
+      - name: Bundle .app
+        run: |
+          mkdir -p "dist/Economy Bar.app/Contents/MacOS"
+          cp menubar/.build/arm64-apple-macosx/release/EconomyBar "dist/Economy Bar.app/Contents/MacOS/EconomyBar"
+          cp menubar/Resources/Info.plist "dist/Economy Bar.app/Contents/Info.plist"
+          cd dist && zip -r ../economy-bar-arm64.zip "Economy Bar.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: economy-bar-arm64
+          path: economy-bar-arm64.zip
+
+  build-x86_64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build x86_64
+        working-directory: menubar
+        run: swift build -c release --arch x86_64
+      - name: Bundle .app
+        run: |
+          mkdir -p "dist/Economy Bar.app/Contents/MacOS"
+          cp menubar/.build/x86_64-apple-macosx/release/EconomyBar "dist/Economy Bar.app/Contents/MacOS/EconomyBar"
+          cp menubar/Resources/Info.plist "dist/Economy Bar.app/Contents/Info.plist"
+          cd dist && zip -r ../economy-bar-x86_64.zip "Economy Bar.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: economy-bar-x86_64
+          path: economy-bar-x86_64.zip
+
+  release:
+    needs: [build-arm64, build-x86_64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: economy-bar-arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: economy-bar-x86_64 }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            economy-bar-arm64.zip
+            economy-bar-x86_64.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

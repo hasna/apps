@@ -996,4 +996,41 @@ program
     console.log()
   })
 
+// ── menubar ───────────────────────────────────────────────────────────────────
+
+const menubarCmd = program.command('menubar').description('Manage the Economy Bar macOS menubar app')
+
+menubarCmd
+  .command('install')
+  .description('Download and install Economy Bar from GitHub Releases')
+  .option('--force', 'Overwrite existing installation')
+  .action(async (opts: { force?: boolean }) => {
+    const { menubarInstall } = await import('./commands/menubar.js')
+    await menubarInstall(opts)
+  })
+
+menubarCmd
+  .command('uninstall')
+  .description('Quit and remove Economy Bar from /Applications')
+  .action(async () => {
+    const { menubarUninstall } = await import('./commands/menubar.js')
+    menubarUninstall()
+  })
+
+menubarCmd
+  .command('start')
+  .description('Launch Economy Bar')
+  .action(async () => {
+    const { menubarStart } = await import('./commands/menubar.js')
+    menubarStart()
+  })
+
+menubarCmd
+  .command('stop')
+  .description('Quit Economy Bar')
+  .action(async () => {
+    const { menubarStop } = await import('./commands/menubar.js')
+    menubarStop()
+  })
+
 program.parse()
