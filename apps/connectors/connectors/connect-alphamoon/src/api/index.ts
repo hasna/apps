@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Alphamoon Connector — AI document processing and OCR
+import { AlphamoonClient } from './client';
+import type { AlphamoonConfig, AMDocument, AMDocumentList, AMExtractionResult, AMTemplate, AMProject } from '../types';
+export { AlphamoonClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Alphamoon {
+  private readonly client: AlphamoonClient;
+  constructor(config: AlphamoonConfig) { this.client = new AlphamoonClient(config); }
+  static fromEnv(): Alphamoon {
+    const token = process.env.ALPHAMOON_TOKEN;
+    if (!token) throw new Error('ALPHAMOON_TOKEN is required');
+    return new Alphamoon({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listDocuments(options?: { page?: number; limit?: number; projectId?: string }): Promise<AMDocumentList> {
+    return this.client.request<AMDocumentList>('/documents', { params: { page: options?.page, limit: options?.limit, project_id: options?.projectId } });
+  }
+  async getDocument(documentId: string): Promise<AMDocument> { return this.client.request<AMDocument>(`/documents/${documentId}`); }
+  async deleteDocument(documentId: string): Promise<void> { await this.client.request(`/documents/${documentId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getExtractionResults(documentId: string): Promise<AMExtractionResult> {
+    return this.client.request<AMExtractionResult>(`/documents/${documentId}/extraction`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTemplates(): Promise<AMTemplate[]> { return this.client.request<AMTemplate[]>('/templates'); }
+  async getTemplate(templateId: string): Promise<AMTemplate> { return this.client.request<AMTemplate>(`/templates/${templateId}`); }
+  async createTemplate(data: { name: string; fields: { name: string; type: string }[] }): Promise<AMTemplate> {
+    return this.client.request<AMTemplate>('/templates', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteTemplate(templateId: string): Promise<void> { await this.client.request(`/templates/${templateId}`, { method: 'DELETE' }); }
+
+  async listProjects(): Promise<AMProject[]> { return this.client.request<AMProject[]>('/projects'); }
+  async getProject(projectId: string): Promise<AMProject> { return this.client.request<AMProject>(`/projects/${projectId}`); }
+  async createProject(data: { name: string; template_id: string }): Promise<AMProject> {
+    return this.client.request<AMProject>('/projects', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): AlphamoonClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
