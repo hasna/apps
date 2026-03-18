@@ -215,9 +215,9 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[], c
 list files in current directory → ls
 list all files including hidden → ls -a
 show open files → lsof
-create copy of a.txt as b.txt → cp a.txt b.txt
-create file test.txt → touch test.txt
-make directory testdir → mkdir testdir
+show file size → du -sh file
+show file type → file filename
+show file permissions → ls -la file
 display routing table → route
 show last logged in users → last
 show file stats → stat file
@@ -235,7 +235,7 @@ system utilization stats → vmstat
 DNS servers → cat /etc/resolv.conf | grep nameserver
 long integer size → getconf LONG_BIT
 base64 decode string → echo 'str' | base64 -d
-change owner to nobody → chown nobody file
+show file owner → ls -la file
 unique lines in file → uniq file
 max cpu time → ulimit -t
 memory info → lsmem
