@@ -210,24 +210,43 @@ function buildSystemPrompt(perms: Permissions, sessionEntries: SessionEntry[], c
   const wantsAnalysis = /\b(quality|lint|coverage|complexity|unused|dead code|security|audit|scan|dependency)\b/i.test(nl);
   const blockedAltBlock = wantsAnalysis ? `\nBLOCKED ALTERNATIVES: If your preferred command needs installing packages, try READ-ONLY alternatives (grep, cat, wc, awk). NEVER give up on analysis questions.` : "";
 
-  return `You are a terminal assistant. Output ONLY the exact shell command — no explanation, no markdown, no backticks.
+  return `Translate to bash. One command. Simplest form. No explanation.
 
-RULES:
-- SIMPLICITY FIRST: Use the simplest command. Prefer grep | sort | head over 10-pipe chains.
-- ALWAYS use grep -rn when searching directories. NEVER grep without -r on a directory.
-- When user refers to items from previous output, use EXACT names shown.
-- For text search use grep -rn, NOT nm or objdump.
-- macOS/BSD tools: du -d 1 (not --max-depth), NEVER grep -P, use grep -E for extended regex.
-- NEVER invent commands. Stick to standard Unix/macOS.
-- NEVER install packages. READ-ONLY terminal.
-- NEVER modify source code. Only observe.
-- Search src/ not dist/ or node_modules/.
-- Use exact file paths from project context. Do NOT guess paths.
-- For DESTRUCTIVE requests: output BLOCKED: <reason>.
-- ACTION vs CONCEPTUAL: "run/test/build/check" → executable command. "explain/what does X mean" → read docs.
-- EXISTENCE CHECKS: "is there/does X exist" → use ls/find/test, NEVER run/launch.${astBlock}${compoundBlock}${blockedAltBlock}
+list files in current directory → ls
+list all files including hidden → ls -a
+show open files → lsof
+create copy of a.txt as b.txt → cp a.txt b.txt
+create file test.txt → touch test.txt
+make directory testdir → mkdir testdir
+display routing table → route
+show last logged in users → last
+show file stats → stat file
+print directory tree 2 levels → tree -L 2
+count word occurrences in file → grep -c "word" file
+print number of files in dir → ls -1 | wc -l
+print first line of file → head -1 file
+print last line of file → tail -1 file
+print lines 3 to 5 of file → sed -n '3,5p' file
+print every other line → awk 'NR%2==1' file
+count words in file → wc -w file
+find empty files not in subdirs → find . -maxdepth 1 -type f -empty
+show system load → w
+system utilization stats → vmstat
+DNS servers → cat /etc/resolv.conf | grep nameserver
+long integer size → getconf LONG_BIT
+base64 decode string → echo 'str' | base64 -d
+change owner to nobody → chown nobody file
+unique lines in file → uniq file
+max cpu time → ulimit -t
+memory info → lsmem
+process priority → nice
+bash profile → cat ~/.bashrc
+search recursively → grep -rn "pattern" src/
+${astBlock}${compoundBlock}${blockedAltBlock}
 cwd: ${process.cwd()}
-shell: zsh / macOS${projectContext}${safetyBlock}${restrictionBlock}${contextBlock}${currentPrompt ? loadCorrectionHints(currentPrompt) : ""}`;
+shell: zsh / macOS${projectContext}${safetyBlock}${restrictionBlock}${contextBlock}${currentPrompt ? loadCorrectionHints(currentPrompt) : ""}
+
+Q:`;
 }
 
 // ── streaming translate ───────────────────────────────────────────────────────
