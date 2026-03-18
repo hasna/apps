@@ -1,51 +1,27 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ConvertAPI Connector — File conversion and document processing
+import { ConvertAPIClient } from './client';
+import type { ConvertAPIConfig, CAConversion, CAFormat, CAUser } from '../types';
+export { ConvertAPIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ConvertAPI {
+  private readonly client: ConvertAPIClient;
+  constructor(config: ConvertAPIConfig) { this.client = new ConvertAPIClient(config); }
+  static fromEnv(): ConvertAPI {
+    const apiKey = process.env.CONVERTAPI_API_KEY;
+    if (!apiKey) throw new Error('CONVERTAPI_API_KEY is required');
+    return new ConvertAPI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async convert(fromFormat: string, toFormat: string, options: { File?: string; Url?: string; FileName?: string; StoreFile?: boolean; [key: string]: unknown }): Promise<CAConversion> {
+    return this.client.request<CAConversion>(`/convert/${fromFormat}/to/${toFormat}`, { method: 'POST', body: { Parameters: Object.entries(options).map(([Name, Value]) => ({ Name, Value })) } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async convertUrl(url: string, toFormat: string, options?: Record<string, unknown>): Promise<CAConversion> {
+    return this.convert('web', toFormat, { Url: url, ...options });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listFormats(): Promise<CAFormat[]> { return this.client.request<CAFormat[]>('/info/formats'); }
+  async getUser(): Promise<CAUser> { return this.client.request<CAUser>('/user'); }
+
+  getClient(): ConvertAPIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

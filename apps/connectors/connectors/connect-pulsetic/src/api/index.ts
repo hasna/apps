@@ -1,51 +1,33 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Pulsetic Connector — Website uptime monitoring and status pages
+import { PulseticClient } from './client';
+import type { PulseticConfig, PLMonitor, PLMonitorList, PLIncident, PLStatusPage, PLHeartbeat } from '../types';
+export { PulseticClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Pulsetic {
+  private readonly client: PulseticClient;
+  constructor(config: PulseticConfig) { this.client = new PulseticClient(config); }
+  static fromEnv(): Pulsetic {
+    const apiKey = process.env.PULSETIC_API_KEY;
+    if (!apiKey) throw new Error('PULSETIC_API_KEY is required');
+    return new Pulsetic({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listMonitors(): Promise<PLMonitorList> { return this.client.request<PLMonitorList>('/monitors'); }
+  async getMonitor(monitorId: number): Promise<PLMonitor> { return this.client.request<PLMonitor>(`/monitors/${monitorId}`); }
+  async createMonitor(data: { name: string; url: string; type?: string; interval?: number }): Promise<PLMonitor> {
+    return this.client.request<PLMonitor>('/monitors', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteMonitor(monitorId: number): Promise<void> { await this.client.request(`/monitors/${monitorId}`, { method: 'DELETE' }); }
+  async pauseMonitor(monitorId: number): Promise<void> { await this.client.request(`/monitors/${monitorId}/pause`, { method: 'POST' }); }
+  async resumeMonitor(monitorId: number): Promise<void> { await this.client.request(`/monitors/${monitorId}/resume`, { method: 'POST' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listIncidents(monitorId: number): Promise<{ data: PLIncident[] }> { return this.client.request(`/monitors/${monitorId}/incidents`); }
+
+  async getHeartbeats(monitorId: number, options?: { from?: string; to?: string }): Promise<{ data: PLHeartbeat[] }> {
+    return this.client.request(`/monitors/${monitorId}/heartbeats`, { params: { from: options?.from, to: options?.to } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listStatusPages(): Promise<{ data: PLStatusPage[] }> { return this.client.request('/status-pages'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): PulseticClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
