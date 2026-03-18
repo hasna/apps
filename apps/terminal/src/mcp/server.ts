@@ -301,9 +301,9 @@ export function createServer(): McpServer {
 
   server.tool(
     "search_semantic",
-    "Semantic code search — find functions, classes, components, hooks, types by meaning. Uses AST parsing, not string matching. Much more precise than grep for code navigation.",
+    "Find functions, classes, components, hooks, types by NAME or SIGNATURE. Searches symbol declarations, NOT code behavior or content. Use search_content (grep) instead for pattern matching inside code (e.g., security audits, string searches, imports).",
     {
-      query: z.string().describe("What to search for (e.g., 'auth functions', 'React components', 'database hooks')"),
+      query: z.string().describe("Symbol name to search for (e.g., 'auth', 'login', 'UserService'). Matches function/class/type names, not code content."),
       path: z.string().optional().describe("Search root (default: cwd)"),
       kinds: z.array(z.enum(["function", "class", "interface", "type", "variable", "export", "import", "component", "hook"])).optional().describe("Filter by symbol kind"),
       exportedOnly: z.boolean().optional().describe("Only show exported symbols (default: false)"),
