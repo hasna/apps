@@ -1,51 +1,48 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SurveySparrow Connector — Conversational survey and feedback platform
+import { SurveySparrowClient } from './client';
+import type { SurveySparrowConfig, SSSurvey, SSContact, SSSubmission, SSChannel } from '../types';
+export { SurveySparrowClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SurveySparrow {
+  private readonly client: SurveySparrowClient;
+  constructor(config: SurveySparrowConfig) { this.client = new SurveySparrowClient(config); }
+  static fromEnv(): SurveySparrow {
+    const apiKey = process.env.SURVEYSPARROW_API_KEY;
+    if (!apiKey) throw new Error('SURVEYSPARROW_API_KEY environment variable is required');
+    return new SurveySparrow({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listSurveys(options?: { page?: number; limit?: number; status?: string }): Promise<SSSurvey[]> {
+    const r = await this.client.request<{ data: SSSurvey[] }>('/surveys', { params: options as Record<string, string | number | undefined> });
+    return r.data ?? [];
+  }
+  async getSurvey(id: number): Promise<SSSurvey> {
+    const r = await this.client.request<{ data: SSSurvey }>(`/surveys/${id}`); return r.data;
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listContacts(options?: { page?: number; limit?: number; email?: string }): Promise<SSContact[]> {
+    const r = await this.client.request<{ data: SSContact[] }>('/contacts', { params: options as Record<string, string | number | undefined> });
+    return r.data ?? [];
+  }
+  async createContact(data: { full_name: string; email: string; phone?: string; variables?: Record<string, string> }): Promise<SSContact> {
+    const r = await this.client.request<{ data: SSContact }>('/contacts', { method: 'POST', body: data as Record<string, unknown> });
+    return r.data;
+  }
+  async deleteContact(id: number): Promise<void> { await this.client.request(`/contacts/${id}`, { method: 'DELETE' }); }
+
+  async listSubmissions(surveyId: number, options?: { page?: number; limit?: number; from?: string; to?: string }): Promise<SSSubmission[]> {
+    const r = await this.client.request<{ data: SSSubmission[] }>(`/surveys/${surveyId}/submissions`, { params: options as Record<string, string | number | undefined> });
+    return r.data ?? [];
+  }
+  async getSubmission(surveyId: number, submissionId: number): Promise<SSSubmission> {
+    const r = await this.client.request<{ data: SSSubmission }>(`/surveys/${surveyId}/submissions/${submissionId}`);
+    return r.data;
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listChannels(surveyId: number): Promise<SSChannel[]> {
+    const r = await this.client.request<{ data: SSChannel[] }>(`/surveys/${surveyId}/channels`);
+    return r.data ?? [];
   }
+
+  getClient(): SurveySparrowClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
