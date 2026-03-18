@@ -1,49 +1,12 @@
-export interface FusiooConfig {
-  apiKey: string;
-  workspaceId: string;
-  baseUrl?: string;
-}
+export interface FusiooConfig { token: string; }
 
-export interface App {
-  id: string;
-  name: string;
-  description: string | null;
-  fields: Field[];
-  recordCount: number;
-  created: string;
-  updated: string;
-}
-
-export interface Field {
-  id: string;
-  name: string;
-  type: 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multiSelect' | 'user' | 'file' | 'url' | 'email' | 'phone';
-  required: boolean;
-  options?: string[];
-}
-
-export interface AppRecord {
-  id: string;
-  appId: string;
-  fields: Record<string, unknown>;
-  created: string;
-  updated: string;
-  createdBy: string;
-}
-
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'admin' | 'member' | 'guest';
-  status: 'active' | 'inactive';
-}
+export interface FusiooApp { id: string; name: string; description: string; fields: FusiooField[]; created_at: string; }
+export interface FusiooField { id: string; name: string; type: string; required: boolean; options?: string[]; }
+export interface FusiooRecord { id: string; fields: Record<string, unknown>; created_at: string; updated_at: string; }
+export interface FusiooRecordList { records: FusiooRecord[]; total: number; page: number; per_page: number; }
+export interface FusiooWorkspace { id: string; name: string; apps: { id: string; name: string }[]; }
 
 export class FusiooApiError extends Error {
   public readonly statusCode: number;
-  constructor(message: string, statusCode: number) {
-    super(message);
-    this.name = 'FusiooApiError';
-    this.statusCode = statusCode;
-  }
+  constructor(message: string, statusCode: number) { super(message); this.name = 'FusiooApiError'; this.statusCode = statusCode; }
 }
