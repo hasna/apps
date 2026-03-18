@@ -1,51 +1,44 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Confluent Connector — Cloud-native Apache Kafka streaming platform
+import { ConfluentClient } from './client';
+import type { ConfluentConfig, CFEnvironment, CFCluster, CFConnector, CFServiceAccount, CFApiKey } from '../types';
+export { ConfluentClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Confluent {
+  private readonly client: ConfluentClient;
+  constructor(config: ConfluentConfig) { this.client = new ConfluentClient(config); }
+  static fromEnv(): Confluent {
+    const apiKey = process.env.CONFLUENT_API_KEY;
+    const apiSecret = process.env.CONFLUENT_API_SECRET;
+    if (!apiKey || !apiSecret) throw new Error('CONFLUENT_API_KEY and CONFLUENT_API_SECRET are required');
+    return new Confluent({ apiKey, apiSecret });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listEnvironments(): Promise<{ data: CFEnvironment[] }> { return this.client.request('/org/v2/environments'); }
+  async getEnvironment(envId: string): Promise<CFEnvironment> { return this.client.request<CFEnvironment>(`/org/v2/environments/${envId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listClusters(environmentId: string): Promise<{ data: CFCluster[] }> {
+    return this.client.request('/cmk/v2/clusters', { params: { environment: environmentId } });
+  }
+  async getCluster(clusterId: string, environmentId: string): Promise<CFCluster> {
+    return this.client.request<CFCluster>(`/cmk/v2/clusters/${clusterId}`, { params: { environment: environmentId } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConnectors(environmentId: string, clusterId: string): Promise<{ data: CFConnector[] }> {
+    return this.client.request(`/connect/v1/environments/${environmentId}/clusters/${clusterId}/connectors`);
+  }
+  async getConnector(environmentId: string, clusterId: string, connectorName: string): Promise<CFConnector> {
+    return this.client.request<CFConnector>(`/connect/v1/environments/${environmentId}/clusters/${clusterId}/connectors/${connectorName}`);
+  }
+  async createConnector(environmentId: string, clusterId: string, config: Record<string, string>): Promise<CFConnector> {
+    return this.client.request<CFConnector>(`/connect/v1/environments/${environmentId}/clusters/${clusterId}/connectors`, { method: 'POST', body: { name: config.name, config } as Record<string, unknown> });
+  }
+  async deleteConnector(environmentId: string, clusterId: string, connectorName: string): Promise<void> {
+    await this.client.request(`/connect/v1/environments/${environmentId}/clusters/${clusterId}/connectors/${connectorName}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listServiceAccounts(): Promise<{ data: CFServiceAccount[] }> { return this.client.request('/iam/v2/service-accounts'); }
+
+  async listApiKeys(): Promise<{ data: CFApiKey[] }> { return this.client.request('/iam/v2/api-keys'); }
+
+  getClient(): ConfluentClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

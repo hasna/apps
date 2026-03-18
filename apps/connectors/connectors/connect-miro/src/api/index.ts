@@ -1,51 +1,42 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Miro Connector — Visual collaboration and whiteboarding
+import { MiroClient } from './client';
+import type { MiroConfig, MRBoard, MRBoardList, MRItem, MRItemList, MRStickyNote, MRConnector } from '../types';
+export { MiroClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Miro {
+  private readonly client: MiroClient;
+  constructor(config: MiroConfig) { this.client = new MiroClient(config); }
+  static fromEnv(): Miro {
+    const token = process.env.MIRO_TOKEN;
+    if (!token) throw new Error('MIRO_TOKEN is required');
+    return new Miro({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listBoards(options?: { limit?: number; offset?: number; query?: string }): Promise<MRBoardList> {
+    return this.client.request<MRBoardList>('/boards', { params: { limit: options?.limit, offset: options?.offset, query: options?.query } });
+  }
+  async getBoard(boardId: string): Promise<MRBoard> { return this.client.request<MRBoard>(`/boards/${boardId}`); }
+  async createBoard(data: { name: string; description?: string; teamId?: string }): Promise<MRBoard> {
+    return this.client.request<MRBoard>('/boards', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listItems(boardId: string, options?: { limit?: number; cursor?: string; type?: string }): Promise<MRItemList> {
+    return this.client.request<MRItemList>(`/boards/${boardId}/items`, { params: { limit: options?.limit, cursor: options?.cursor, type: options?.type } });
+  }
+  async getItem(boardId: string, itemId: string): Promise<MRItem> { return this.client.request<MRItem>(`/boards/${boardId}/items/${itemId}`); }
+  async deleteItem(boardId: string, itemId: string): Promise<void> { await this.client.request(`/boards/${boardId}/items/${itemId}`, { method: 'DELETE' }); }
+
+  async createStickyNote(boardId: string, data: { content: string; shape?: string; fillColor?: string; x?: number; y?: number }): Promise<MRStickyNote> {
+    return this.client.request<MRStickyNote>(`/boards/${boardId}/sticky_notes`, { method: 'POST', body: { data: { content: data.content, shape: data.shape }, style: { fillColor: data.fillColor }, position: { x: data.x || 0, y: data.y || 0 } } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async createConnector(boardId: string, startItemId: string, endItemId: string): Promise<MRConnector> {
+    return this.client.request<MRConnector>(`/boards/${boardId}/connectors`, { method: 'POST', body: { startItem: { id: startItemId }, endItem: { id: endItemId } } });
   }
+
+  async listMembers(boardId: string): Promise<{ data: { id: string; name: string; role: string }[] }> {
+    return this.client.request(`/boards/${boardId}/members`);
+  }
+
+  getClient(): MiroClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
