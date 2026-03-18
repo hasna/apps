@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Browserless Connector — Headless browser automation as a service
+import { BrowserlessClient } from './client';
+import type { BrowserlessConfig, BLScreenshotOptions, BLPdfOptions, BLContentResult, BLScrapeResult, BLPerformanceResult } from '../types';
+export { BrowserlessClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Browserless {
+  private readonly client: BrowserlessClient;
+  constructor(config: BrowserlessConfig) { this.client = new BrowserlessClient(config); }
+  static fromEnv(): Browserless {
+    const apiKey = process.env.BROWSERLESS_API_KEY;
+    if (!apiKey) throw new Error('BROWSERLESS_API_KEY is required');
+    return new Browserless({ apiKey, baseUrl: process.env.BROWSERLESS_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async screenshot(options: BLScreenshotOptions): Promise<BLContentResult> {
+    return this.client.request<BLContentResult>('/screenshot', { body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async pdf(options: BLPdfOptions): Promise<BLContentResult> {
+    return this.client.request<BLContentResult>('/pdf', { body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async content(url: string, options?: { gotoOptions?: { waitUntil?: string; timeout?: number } }): Promise<BLContentResult> {
+    return this.client.request<BLContentResult>('/content', { body: { url, ...options } as Record<string, unknown> });
   }
+
+  async scrape(url: string, elements: { selector: string; timeout?: number }[]): Promise<BLScrapeResult> {
+    return this.client.request<BLScrapeResult>('/scrape', { body: { url, elements } as Record<string, unknown> });
+  }
+
+  async performance(url: string): Promise<BLPerformanceResult> {
+    return this.client.request<BLPerformanceResult>('/performance', { body: { url } });
+  }
+
+  async execute(code: string, context?: Record<string, unknown>): Promise<unknown> {
+    return this.client.request('/function', { body: { code, context } });
+  }
+
+  getClient(): BrowserlessClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

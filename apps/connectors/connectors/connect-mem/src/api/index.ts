@@ -1,51 +1,28 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Mem Connector — AI-powered note-taking and knowledge management
+import { MemClient } from './client';
+import type { MemConfig, MemNote, MemNoteList, MemSearchResult } from '../types';
+export { MemClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Mem {
+  private readonly client: MemClient;
+  constructor(config: MemConfig) { this.client = new MemClient(config); }
+  static fromEnv(): Mem {
+    const apiKey = process.env.MEM_API_KEY;
+    if (!apiKey) throw new Error('MEM_API_KEY is required');
+    return new Mem({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async createNote(content: string, options?: { is_read?: boolean; scheduled_at?: string }): Promise<MemNote> {
+    return this.client.request<MemNote>('/mems', { method: 'POST', body: { content, isRead: options?.is_read, scheduledAt: options?.scheduled_at } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async appendToNote(noteId: string, content: string): Promise<MemNote> {
+    return this.client.request<MemNote>(`/mems/${noteId}/append`, { method: 'POST', body: { content } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async search(query: string): Promise<MemSearchResult> {
+    return this.client.request<MemSearchResult>('/search', { method: 'POST', body: { query } });
   }
+
+  getClient(): MemClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
