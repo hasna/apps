@@ -1,51 +1,46 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// UniSender Connector — Email and SMS marketing platform
+import { UniSenderClient } from './client';
+import type { UniSenderConfig, USList, USCampaign, USCampaignStats, USMessage, USField } from '../types';
+export { UniSenderClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class UniSender {
+  private readonly client: UniSenderClient;
+  constructor(config: UniSenderConfig) { this.client = new UniSenderClient(config); }
+  static fromEnv(): UniSender {
+    const apiKey = process.env.UNISENDER_API_KEY;
+    if (!apiKey) throw new Error('UNISENDER_API_KEY is required');
+    return new UniSender({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getLists(): Promise<USList[]> { return this.client.request<USList[]>('getLists'); }
+  async createList(title: string, options?: { before_subscribe_url?: string; after_subscribe_url?: string }): Promise<{ id: number }> {
+    return this.client.request('createList', { title, ...options });
+  }
+  async deleteList(listId: number): Promise<void> { await this.client.request('deleteList', { list_id: listId }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async subscribe(listIds: number[], email: string, fields?: Record<string, string>): Promise<{ person_id: number }> {
+    const params: Record<string, string | number> = { list_ids: listIds.join(','), 'fields[email]': email };
+    if (fields) Object.entries(fields).forEach(([k, v]) => { params[`fields[${k}]`] = v; });
+    return this.client.request('subscribe', params);
+  }
+  async unsubscribe(email: string): Promise<void> { await this.client.request('unsubscribe', { contact: email, contact_type: 'email' }); }
+
+  async createEmailMessage(data: { sender_name: string; sender_email: string; subject: string; body: string; list_id: number }): Promise<{ message_id: number }> {
+    return this.client.request('createEmailMessage', data as Record<string, string | number>);
+  }
+  async createCampaign(messageId: number): Promise<{ campaign_id: number; status: string }> {
+    return this.client.request('createCampaign', { message_id: messageId });
+  }
+  async getCampaignStatus(campaignId: number): Promise<USCampaignStats> {
+    return this.client.request<USCampaignStats>('getCampaignStatus', { campaign_id: campaignId });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getFields(): Promise<USField[]> { return this.client.request<USField[]>('getFields'); }
+  async createField(name: string, type: string): Promise<{ id: number }> { return this.client.request('createField', { name, type }); }
+
+  async sendSms(phone: string, text: string, sender?: string): Promise<{ sms_id: number }> {
+    return this.client.request('sendSms', { phone, text, sender });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): UniSenderClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
