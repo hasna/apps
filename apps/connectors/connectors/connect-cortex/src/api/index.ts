@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Cortex Connector — Internal developer portal and service catalog
+import { CortexClient } from './client';
+import type { CortexConfig, CortexService, CortexServiceList, CortexScorecard, CortexScore, CortexTeam, CortexCatalogEntity } from '../types';
+export { CortexClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Cortex {
+  private readonly client: CortexClient;
+  constructor(config: CortexConfig) { this.client = new CortexClient(config); }
+  static fromEnv(): Cortex {
+    const token = process.env.CORTEX_TOKEN;
+    if (!token) throw new Error('CORTEX_TOKEN is required');
+    return new Cortex({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listServices(options?: { page?: number; pageSize?: number; type?: string }): Promise<CortexServiceList> {
+    return this.client.request<CortexServiceList>('/catalog', { params: { page: options?.page, pageSize: options?.pageSize, type: options?.type } });
+  }
+  async getService(tag: string): Promise<CortexService> { return this.client.request<CortexService>(`/catalog/${tag}`); }
+  async createService(data: { tag: string; name: string; description?: string; type?: string; owners?: { name: string; email: string }[] }): Promise<CortexService> {
+    return this.client.request<CortexService>('/catalog', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateService(tag: string, data: { name?: string; description?: string; type?: string }): Promise<CortexService> {
+    return this.client.request<CortexService>(`/catalog/${tag}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async deleteService(tag: string): Promise<void> { await this.client.request(`/catalog/${tag}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listScorecards(): Promise<CortexScorecard[]> { return this.client.request<CortexScorecard[]>('/scorecards'); }
+  async getScorecard(tag: string): Promise<CortexScorecard> { return this.client.request<CortexScorecard>(`/scorecards/${tag}`); }
+  async getServiceScore(serviceTag: string, scorecardTag: string): Promise<CortexScore> {
+    return this.client.request<CortexScore>(`/catalog/${serviceTag}/scorecards/${scorecardTag}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTeams(): Promise<CortexTeam[]> { return this.client.request<CortexTeam[]>('/teams'); }
+  async getTeam(tag: string): Promise<CortexTeam> { return this.client.request<CortexTeam>(`/teams/${tag}`); }
+
+  async searchCatalog(query: string): Promise<CortexCatalogEntity[]> {
+    return this.client.request<CortexCatalogEntity[]>('/catalog/search', { params: { query } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CortexClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

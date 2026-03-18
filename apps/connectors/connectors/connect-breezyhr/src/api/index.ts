@@ -1,51 +1,50 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Breezy HR Connector — Recruiting and applicant tracking system
+import { BreezyHRClient } from './client';
+import type { BreezyHRConfig, BreezyCompany, BreezyPosition, BreezyCandidate, BreezyStage, BreezyUser } from '../types';
+export { BreezyHRClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class BreezyHR {
+  private readonly client: BreezyHRClient;
+  constructor(config: BreezyHRConfig) { this.client = new BreezyHRClient(config); }
+  static fromEnv(): BreezyHR {
+    const token = process.env.BREEZYHR_TOKEN;
+    if (!token) throw new Error('BREEZYHR_TOKEN is required');
+    return new BreezyHR({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listCompanies(): Promise<BreezyCompany[]> { return this.client.request<BreezyCompany[]>('/companies'); }
+  async getCompany(companyId: string): Promise<BreezyCompany> { return this.client.request<BreezyCompany>(`/company/${companyId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listPositions(companyId: string, options?: { state?: string }): Promise<BreezyPosition[]> {
+    return this.client.request<BreezyPosition[]>(`/company/${companyId}/positions`, { params: { state: options?.state } });
+  }
+  async getPosition(companyId: string, positionId: string): Promise<BreezyPosition> {
+    return this.client.request<BreezyPosition>(`/company/${companyId}/position/${positionId}`);
+  }
+  async createPosition(companyId: string, data: { name: string; department?: string; type?: { id: string }; location?: { city?: string; state?: string; country?: string } }): Promise<BreezyPosition> {
+    return this.client.request<BreezyPosition>(`/company/${companyId}/positions`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listCandidates(companyId: string, positionId: string): Promise<BreezyCandidate[]> {
+    return this.client.request<BreezyCandidate[]>(`/company/${companyId}/position/${positionId}/candidates`);
+  }
+  async getCandidate(companyId: string, positionId: string, candidateId: string): Promise<BreezyCandidate> {
+    return this.client.request<BreezyCandidate>(`/company/${companyId}/position/${positionId}/candidate/${candidateId}`);
+  }
+  async createCandidate(companyId: string, positionId: string, data: { name: string; email_address?: string; phone_number?: string; origin?: string }): Promise<BreezyCandidate> {
+    return this.client.request<BreezyCandidate>(`/company/${companyId}/position/${positionId}/candidates`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async moveCandidate(companyId: string, positionId: string, candidateId: string, stageId: string): Promise<void> {
+    await this.client.request(`/company/${companyId}/position/${positionId}/candidate/${candidateId}/move`, { method: 'PUT', body: { stage_id: stageId } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listStages(companyId: string, positionId: string): Promise<BreezyStage[]> {
+    return this.client.request<BreezyStage[]>(`/company/${companyId}/position/${positionId}/stages`);
   }
+
+  async listTeamMembers(companyId: string): Promise<BreezyUser[]> {
+    return this.client.request<BreezyUser[]>(`/company/${companyId}/members`);
+  }
+
+  getClient(): BreezyHRClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
