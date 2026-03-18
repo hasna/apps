@@ -1,51 +1,44 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Microsoft Entra ID (Azure AD) Connector — Identity and directory services
+import { EntraIDClient } from './client';
+import type { EntraIDConfig, ADUser, ADUserList, ADGroup, ADGroupList, ADApplication, ADServicePrincipal, ADDomain } from '../types';
+export { EntraIDClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class EntraID {
+  private readonly client: EntraIDClient;
+  constructor(config: EntraIDConfig) { this.client = new EntraIDClient(config); }
+  static fromEnv(): EntraID {
+    const token = process.env.ENTRAID_TOKEN;
+    if (!token) throw new Error('ENTRAID_TOKEN is required');
+    return new EntraID({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listUsers(options?: { $top?: number; $filter?: string; $select?: string; $orderby?: string }): Promise<ADUserList> {
+    return this.client.request<ADUserList>('/users', { params: { $top: options?.$top, $filter: options?.$filter, $select: options?.$select, $orderby: options?.$orderby } });
+  }
+  async getUser(userId: string): Promise<ADUser> { return this.client.request<ADUser>(`/users/${userId}`); }
+  async createUser(data: { displayName: string; mailNickname: string; userPrincipalName: string; passwordProfile: { password: string; forceChangePasswordNextSignIn?: boolean }; accountEnabled: boolean }): Promise<ADUser> {
+    return this.client.request<ADUser>('/users', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateUser(userId: string, data: { displayName?: string; jobTitle?: string; department?: string; accountEnabled?: boolean }): Promise<void> {
+    await this.client.request(`/users/${userId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+  async deleteUser(userId: string): Promise<void> { await this.client.request(`/users/${userId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listGroups(options?: { $top?: number; $filter?: string }): Promise<ADGroupList> {
+    return this.client.request<ADGroupList>('/groups', { params: { $top: options?.$top, $filter: options?.$filter } });
+  }
+  async getGroup(groupId: string): Promise<ADGroup> { return this.client.request<ADGroup>(`/groups/${groupId}`); }
+  async getGroupMembers(groupId: string): Promise<ADUserList> { return this.client.request<ADUserList>(`/groups/${groupId}/members`); }
+  async addGroupMember(groupId: string, userId: string): Promise<void> {
+    await this.client.request(`/groups/${groupId}/members/$ref`, { method: 'POST', body: { '@odata.id': `https://graph.microsoft.com/v1.0/directoryObjects/${userId}` } });
+  }
+  async removeGroupMember(groupId: string, userId: string): Promise<void> {
+    await this.client.request(`/groups/${groupId}/members/${userId}/$ref`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listApplications(): Promise<{ value: ADApplication[] }> { return this.client.request('/applications'); }
+  async listServicePrincipals(): Promise<{ value: ADServicePrincipal[] }> { return this.client.request('/servicePrincipals'); }
+  async listDomains(): Promise<{ value: ADDomain[] }> { return this.client.request('/domains'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): EntraIDClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
