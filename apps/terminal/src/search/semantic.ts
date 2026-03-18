@@ -172,14 +172,37 @@ function extractSymbols(filePath: string): CodeSymbol[] {
       continue;
     }
 
-    // Classes
+    // Classes — also extract methods inside the class body
     const classMatch = line.match(/(?:export\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?/);
     if (classMatch) {
+      const className = classMatch[1];
       symbols.push({
-        name: classMatch[1], kind: "class", file, line: lineNum,
+        name: className, kind: "class", file, line: lineNum,
         signature: line.trim().replace(/\{.*$/, "").trim(),
         exported: isExported,
       });
+      // Walk class body to find methods
+      let braceDepth = 0;
+      for (let j = i; j < lines.length; j++) {
+        for (const ch of lines[j]) {
+          if (ch === "{") braceDepth++;
+          if (ch === "}") braceDepth--;
+        }
+        if (j > i) {
+          const memberLine = lines[j];
+          // Class methods: async methodName(...), methodName(...), get/set name(...)
+          const methodMatch = memberLine.match(/^\s+(?:async\s+)?(?:(?:public|private|protected|static|readonly|override|abstract)\s+)*(?:get\s+|set\s+)?(\w+)\s*[\(<]/);
+          const RESERVED = new Set(["if", "for", "while", "switch", "catch", "return", "throw", "new", "delete", "typeof", "void", "yield", "await", "try", "else"]);
+          if (methodMatch && !RESERVED.has(methodMatch[1])) {
+            symbols.push({
+              name: `${className}.${methodMatch[1]}`, kind: "function", file, line: j + 1,
+              signature: memberLine.trim().replace(/\{.*$/, "").trim(),
+              exported: isExported,
+            });
+          }
+        }
+        if (braceDepth === 0 && j > i) break; // end of class
+      }
       continue;
     }
 
