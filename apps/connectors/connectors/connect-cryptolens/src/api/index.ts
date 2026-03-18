@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Cryptolens Connector — Software licensing and key management
+import { CryptolensClient } from './client';
+import type { CryptolensConfig, CLKey, CLProduct, CLCustomer, CLActivateResult } from '../types';
+export { CryptolensClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Cryptolens {
+  private readonly client: CryptolensClient;
+  constructor(config: CryptolensConfig) { this.client = new CryptolensClient(config); }
+  static fromEnv(): Cryptolens {
+    const token = process.env.CRYPTOLENS_TOKEN;
+    if (!token) throw new Error('CRYPTOLENS_TOKEN is required');
+    return new Cryptolens({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async activate(productId: number, key: string, machineCode: string): Promise<CLActivateResult> {
+    return this.client.request<CLActivateResult>('/key/Activate', { ProductId: productId, Key: key, MachineCode: machineCode, Sign: true });
+  }
+  async deactivate(productId: number, key: string, machineCode: string): Promise<{ result: number; message: string }> {
+    return this.client.request('/key/Deactivate', { ProductId: productId, Key: key, MachineCode: machineCode });
+  }
+  async createKey(productId: number, options?: { period?: number; f1?: boolean; f2?: boolean; maxNoOfMachines?: number; notes?: string }): Promise<{ key: string; result: number }> {
+    return this.client.request('/key/CreateKey', { ProductId: productId, Period: options?.period, F1: options?.f1, F2: options?.f2, MaxNoOfMachines: options?.maxNoOfMachines, Notes: options?.notes });
+  }
+  async getKey(productId: number, key: string): Promise<CLActivateResult> {
+    return this.client.request<CLActivateResult>('/key/GetKey', { ProductId: productId, Key: key, Sign: true });
+  }
+  async blockKey(productId: number, key: string): Promise<{ result: number }> {
+    return this.client.request('/key/BlockKey', { ProductId: productId, Key: key });
+  }
+  async unblockKey(productId: number, key: string): Promise<{ result: number }> {
+    return this.client.request('/key/UnblockKey', { ProductId: productId, Key: key });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listProducts(): Promise<{ products: CLProduct[] }> { return this.client.request('/product/GetProducts'); }
+  async listCustomers(): Promise<{ customers: CLCustomer[] }> { return this.client.request('/customer/GetCustomers'); }
+  async addCustomer(name: string, email: string, companyName?: string): Promise<{ customerId: number }> {
+    return this.client.request('/customer/AddCustomer', { Name: name, Email: email, CompanyName: companyName });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CryptolensClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
