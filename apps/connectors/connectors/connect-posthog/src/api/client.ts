@@ -3,7 +3,10 @@ import { PostHogApiError } from '../types';
 
 export class PostHogClient {
   private readonly apiKey: string;
-  readonly baseUrl: string; // exposed for capture endpoint (different from API)
+  readonly baseUrl: string;
+
+  /** Get the API key for direct API calls (e.g. batch capture endpoint) */
+  getApiKey(): string { return this.apiKey; }
 
   constructor(config: PostHogConfig) {
     if (!config.apiKey) throw new Error('PostHog API key is required');

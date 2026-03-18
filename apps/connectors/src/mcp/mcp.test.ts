@@ -74,6 +74,42 @@ afterEach(() => {
 });
 
 describe("MCP Server", () => {
+  test("direct shebang launch responds to initialize", async () => {
+    const proc = Bun.spawn([MCP], {
+      cwd: TEST_DIR,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    proc.stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0" },
+        },
+      }) + "\n"
+    );
+    proc.stdin.end();
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+
+    const lines = stdout.trim().split("\n").filter(Boolean);
+    expect(lines.length).toBeGreaterThan(0);
+    const response = JSON.parse(lines[0]);
+    expect(response.id).toBe(1);
+    expect(response.result?.protocolVersion).toBe("2025-06-18");
+  });
+
   describe("search_connectors", () => {
     test("finds connectors by keyword", async () => {
       const res = await callMcp("search_connectors", { query: "payment" });

@@ -1,4 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+
+// Fellow agents: keep this entrypoint on Bun; the bundled MCP binary emits `bun:` imports and Node breaks the initialize handshake.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -919,8 +921,6 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  // Use stderr -- stdout is reserved for JSON-RPC
-  console.error("Connectors MCP server running on stdio");
 }
 
 main().catch((error) => {

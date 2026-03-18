@@ -69,7 +69,7 @@ export class PostHog {
     await fetch(`${host}/batch/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: (this.client as unknown as { apiKey: string }).apiKey, batch: events }),
+      body: JSON.stringify({ api_key: this.client.getApiKey(), batch: events }),
     });
   }
 
