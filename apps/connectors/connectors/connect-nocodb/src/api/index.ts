@@ -1,51 +1,49 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// NocoDB Connector — Open-source Airtable alternative and spreadsheet-database
+import { NocoDBClient } from './client';
+import type { NocoDBConfig, NocBase, NocTable, NocColumn, NocRecord, NocRecordList, NocView } from '../types';
+export { NocoDBClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class NocoDB {
+  private readonly client: NocoDBClient;
+  constructor(config: NocoDBConfig) { this.client = new NocoDBClient(config); }
+  static fromEnv(): NocoDB {
+    const token = process.env.NOCODB_TOKEN;
+    if (!token) throw new Error('NOCODB_TOKEN is required');
+    return new NocoDB({ token, baseUrl: process.env.NOCODB_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listBases(): Promise<{ list: NocBase[] }> { return this.client.request('/db/meta/bases'); }
+  async getBase(baseId: string): Promise<NocBase> { return this.client.request(`/db/meta/bases/${baseId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listTables(baseId: string): Promise<{ list: NocTable[] }> { return this.client.request(`/db/meta/projects/${baseId}/tables`); }
+  async getTable(tableId: string): Promise<NocTable> { return this.client.request(`/db/meta/tables/${tableId}`); }
+  async createTable(baseId: string, data: { title: string; columns?: { title: string; uidt: string }[] }): Promise<NocTable> {
+    return this.client.request(`/db/meta/projects/${baseId}/tables`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteTable(tableId: string): Promise<void> { await this.client.request(`/db/meta/tables/${tableId}`, { method: 'DELETE' }); }
+
+  async listRecords(tableId: string, options?: { offset?: number; limit?: number; where?: string; sort?: string; fields?: string }): Promise<NocRecordList> {
+    return this.client.request(`/db/data/noco/p/default/${tableId}`, { params: { offset: options?.offset, limit: options?.limit, where: options?.where, sort: options?.sort, fields: options?.fields } });
+  }
+  async getRecord(tableId: string, recordId: number): Promise<NocRecord> {
+    return this.client.request(`/db/data/noco/p/default/${tableId}/${recordId}`);
+  }
+  async createRecord(tableId: string, data: Record<string, unknown>): Promise<NocRecord> {
+    return this.client.request(`/db/data/noco/p/default/${tableId}`, { method: 'POST', body: data });
+  }
+  async updateRecord(tableId: string, recordId: number, data: Record<string, unknown>): Promise<NocRecord> {
+    return this.client.request(`/db/data/noco/p/default/${tableId}/${recordId}`, { method: 'PATCH', body: data });
+  }
+  async deleteRecord(tableId: string, recordId: number): Promise<void> {
+    await this.client.request(`/db/data/noco/p/default/${tableId}/${recordId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listViews(tableId: string): Promise<{ list: NocView[] }> { return this.client.request(`/db/meta/tables/${tableId}/views`); }
+
+  async listColumns(tableId: string): Promise<{ list: NocColumn[] }> { return this.client.request(`/db/meta/tables/${tableId}/columns`); }
+  async createColumn(tableId: string, data: { title: string; uidt: string }): Promise<NocColumn> {
+    return this.client.request(`/db/meta/tables/${tableId}/columns`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): NocoDBClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
