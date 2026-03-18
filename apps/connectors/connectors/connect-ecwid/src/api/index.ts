@@ -1,51 +1,45 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Ecwid Connector — E-commerce platform for online store management
+import { EcwidClient } from './client';
+import type { EcwidConfig, EcwidProduct, EcwidProductList, EcwidOrder, EcwidOrderList, EcwidCategory, EcwidCustomer } from '../types';
+export { EcwidClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Ecwid {
+  private readonly client: EcwidClient;
+  constructor(config: EcwidConfig) { this.client = new EcwidClient(config); }
+  static fromEnv(): Ecwid {
+    const storeId = process.env.ECWID_STORE_ID;
+    const token = process.env.ECWID_TOKEN;
+    if (!storeId || !token) throw new Error('ECWID_STORE_ID and ECWID_TOKEN are required');
+    return new Ecwid({ storeId, token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProducts(options?: { offset?: number; limit?: number; keyword?: string; category?: number; enabled?: boolean }): Promise<EcwidProductList> {
+    return this.client.request<EcwidProductList>('/products', { params: { offset: options?.offset, limit: options?.limit, keyword: options?.keyword, category: options?.category, enabled: options?.enabled === true ? 'true' : options?.enabled === false ? 'false' : undefined } });
+  }
+  async getProduct(productId: number): Promise<EcwidProduct> { return this.client.request<EcwidProduct>(`/products/${productId}`); }
+  async createProduct(data: { name: string; price: number; sku?: string; description?: string; categoryIds?: number[]; weight?: number; quantity?: number }): Promise<{ id: number }> {
+    return this.client.request('/products', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateProduct(productId: number, data: { name?: string; price?: number; sku?: string; enabled?: boolean; quantity?: number }): Promise<{ updateCount: number }> {
+    return this.client.request(`/products/${productId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async deleteProduct(productId: number): Promise<void> { await this.client.request(`/products/${productId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listOrders(options?: { offset?: number; limit?: number; paymentStatus?: string; fulfillmentStatus?: string }): Promise<EcwidOrderList> {
+    return this.client.request<EcwidOrderList>('/orders', { params: { offset: options?.offset, limit: options?.limit, paymentStatus: options?.paymentStatus, fulfillmentStatus: options?.fulfillmentStatus } });
+  }
+  async getOrder(orderId: number): Promise<EcwidOrder> { return this.client.request<EcwidOrder>(`/orders/${orderId}`); }
+  async updateOrder(orderId: number, data: { paymentStatus?: string; fulfillmentStatus?: string }): Promise<{ updateCount: number }> {
+    return this.client.request(`/orders/${orderId}`, { method: 'PUT', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listCategories(options?: { parent?: number }): Promise<{ items: EcwidCategory[] }> {
+    return this.client.request('/categories', { params: { parent: options?.parent } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listCustomers(options?: { offset?: number; limit?: number; keyword?: string }): Promise<{ items: EcwidCustomer[] }> {
+    return this.client.request('/customers', { params: { offset: options?.offset, limit: options?.limit, keyword: options?.keyword } });
   }
+
+  getClient(): EcwidClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

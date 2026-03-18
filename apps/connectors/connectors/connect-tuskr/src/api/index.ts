@@ -1,51 +1,46 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Tuskr Connector — Test case management and QA platform
+import { TuskrClient } from './client';
+import type { TuskrConfig, TKProject, TKTestCase, TKTestRun, TKTestResult, TKFolder } from '../types';
+export { TuskrClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Tuskr {
+  private readonly client: TuskrClient;
+  constructor(config: TuskrConfig) { this.client = new TuskrClient(config); }
+  static fromEnv(): Tuskr {
+    const token = process.env.TUSKR_TOKEN;
+    if (!token) throw new Error('TUSKR_TOKEN is required');
+    return new Tuskr({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<TKProject[]> { return this.client.request<TKProject[]>('/projects'); }
+  async getProject(projectId: string): Promise<TKProject> { return this.client.request<TKProject>(`/projects/${projectId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listTestCases(projectId: string, options?: { folder_id?: string }): Promise<TKTestCase[]> {
+    return this.client.request<TKTestCase[]>(`/projects/${projectId}/test-cases`, { params: { folder_id: options?.folder_id } });
+  }
+  async getTestCase(projectId: string, testCaseId: string): Promise<TKTestCase> {
+    return this.client.request<TKTestCase>(`/projects/${projectId}/test-cases/${testCaseId}`);
+  }
+  async createTestCase(projectId: string, data: { title: string; description?: string; steps?: { step: string; expected_result: string }[]; priority?: string; type?: string; folder_id?: string }): Promise<TKTestCase> {
+    return this.client.request<TKTestCase>(`/projects/${projectId}/test-cases`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTestRuns(projectId: string): Promise<TKTestRun[]> { return this.client.request<TKTestRun[]>(`/projects/${projectId}/test-runs`); }
+  async getTestRun(projectId: string, testRunId: string): Promise<TKTestRun> {
+    return this.client.request<TKTestRun>(`/projects/${projectId}/test-runs/${testRunId}`);
+  }
+  async createTestRun(projectId: string, data: { name: string; description?: string; test_case_ids: string[] }): Promise<TKTestRun> {
+    return this.client.request<TKTestRun>(`/projects/${projectId}/test-runs`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listTestResults(projectId: string, testRunId: string): Promise<TKTestResult[]> {
+    return this.client.request<TKTestResult[]>(`/projects/${projectId}/test-runs/${testRunId}/results`);
   }
+  async updateTestResult(projectId: string, testRunId: string, resultId: string, data: { status: string; comment?: string }): Promise<TKTestResult> {
+    return this.client.request<TKTestResult>(`/projects/${projectId}/test-runs/${testRunId}/results/${resultId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+
+  async listFolders(projectId: string): Promise<TKFolder[]> { return this.client.request<TKFolder[]>(`/projects/${projectId}/folders`); }
+
+  getClient(): TuskrClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
