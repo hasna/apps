@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Zoho WorkDrive Connector — Team file storage and collaboration
+import { ZohoWorkDriveClient } from './client';
+import type { ZohoWorkDriveConfig, ZWDFile, ZWDFolder, ZWDTeam, ZWDUser } from '../types';
+export { ZohoWorkDriveClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ZohoWorkDrive {
+  private readonly client: ZohoWorkDriveClient;
+  constructor(config: ZohoWorkDriveConfig) { this.client = new ZohoWorkDriveClient(config); }
+  static fromEnv(): ZohoWorkDrive {
+    const token = process.env.ZOHOWORKDRIVE_TOKEN;
+    const teamId = process.env.ZOHOWORKDRIVE_TEAM_ID;
+    if (!token || !teamId) throw new Error('ZOHOWORKDRIVE_TOKEN and ZOHOWORKDRIVE_TEAM_ID are required');
+    return new ZohoWorkDrive({ token, teamId, baseUrl: process.env.ZOHOWORKDRIVE_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getTeam(): Promise<{ data: ZWDTeam }> { return this.client.request(`/teams/${this.client.getTeamId()}`); }
+  async listTeamMembers(): Promise<{ data: ZWDUser[] }> { return this.client.request(`/teams/${this.client.getTeamId()}/members`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listFiles(folderId: string, options?: { page?: number; per_page?: number }): Promise<{ data: ZWDFile[] }> {
+    return this.client.request(`/files/${folderId}/files`, { params: { 'page[offset]': options?.page, 'page[limit]': options?.per_page } });
+  }
+  async getFile(fileId: string): Promise<{ data: ZWDFile }> { return this.client.request(`/files/${fileId}`); }
+  async deleteFile(fileId: string): Promise<void> { await this.client.request(`/files/${fileId}`, { method: 'DELETE' }); }
+  async renameFile(fileId: string, name: string): Promise<{ data: ZWDFile }> {
+    return this.client.request(`/files/${fileId}`, { method: 'PATCH', body: { data: { attributes: { name }, type: 'files' } } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listFolders(parentId: string): Promise<{ data: ZWDFolder[] }> {
+    return this.client.request(`/files/${parentId}/files`, { params: { filter: 'folder' } });
+  }
+  async createFolder(parentId: string, name: string): Promise<{ data: ZWDFolder }> {
+    return this.client.request('/files', { method: 'POST', body: { data: { attributes: { name, parent_id: parentId }, type: 'files' } } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async searchFiles(query: string): Promise<{ data: ZWDFile[] }> {
+    return this.client.request(`/teams/${this.client.getTeamId()}/files/search`, { params: { search_string: query } });
   }
+
+  getClient(): ZohoWorkDriveClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
