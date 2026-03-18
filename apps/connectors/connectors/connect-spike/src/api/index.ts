@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Spike Connector — Incident management and on-call alerting
+import { SpikeClient } from './client';
+import type { SpikeConfig, SPIncident, SPIncidentList, SPService, SPEscalationPolicy, SPOnCallSchedule } from '../types';
+export { SpikeClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Spike {
+  private readonly client: SpikeClient;
+  constructor(config: SpikeConfig) { this.client = new SpikeClient(config); }
+  static fromEnv(): Spike {
+    const apiKey = process.env.SPIKE_API_KEY;
+    if (!apiKey) throw new Error('SPIKE_API_KEY is required');
+    return new Spike({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listIncidents(options?: { page?: number; per_page?: number; status?: string; severity?: string }): Promise<SPIncidentList> {
+    return this.client.request<SPIncidentList>('/incidents', { params: { page: options?.page, per_page: options?.per_page, status: options?.status, severity: options?.severity } });
+  }
+  async getIncident(incidentId: string): Promise<SPIncident> { return this.client.request<SPIncident>(`/incidents/${incidentId}`); }
+  async createIncident(data: { title: string; description?: string; severity: string; service_id: string }): Promise<SPIncident> {
+    return this.client.request<SPIncident>('/incidents', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async acknowledgeIncident(incidentId: string): Promise<SPIncident> {
+    return this.client.request<SPIncident>(`/incidents/${incidentId}/acknowledge`, { method: 'POST' });
+  }
+  async resolveIncident(incidentId: string): Promise<SPIncident> {
+    return this.client.request<SPIncident>(`/incidents/${incidentId}/resolve`, { method: 'POST' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listServices(): Promise<SPService[]> { return this.client.request<SPService[]>('/services'); }
+  async listEscalationPolicies(): Promise<SPEscalationPolicy[]> { return this.client.request<SPEscalationPolicy[]>('/escalation-policies'); }
+  async listOnCallSchedules(): Promise<SPOnCallSchedule[]> { return this.client.request<SPOnCallSchedule[]>('/on-call-schedules'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SpikeClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

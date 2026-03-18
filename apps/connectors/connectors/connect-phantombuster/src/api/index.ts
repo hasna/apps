@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// PhantomBuster Connector — Cloud-based web automation and data extraction
+import { PhantomBusterClient } from './client';
+import type { PhantomBusterConfig, PBAgent, PBContainer, PBOutput } from '../types';
+export { PhantomBusterClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class PhantomBuster {
+  private readonly client: PhantomBusterClient;
+  constructor(config: PhantomBusterConfig) { this.client = new PhantomBusterClient(config); }
+  static fromEnv(): PhantomBuster {
+    const apiKey = process.env.PHANTOMBUSTER_API_KEY;
+    if (!apiKey) throw new Error('PHANTOMBUSTER_API_KEY is required');
+    return new PhantomBuster({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getAgent(agentId: string): Promise<PBAgent> { return this.client.request<PBAgent>('/agents/fetch', { params: { id: agentId } }); }
+  async listAgents(): Promise<PBAgent[]> { return this.client.request<PBAgent[]>('/agents/fetch-all'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async launchAgent(agentId: string, options?: { argument?: Record<string, unknown> }): Promise<{ containerId: string }> {
+    return this.client.request('/agents/launch', { method: 'POST', body: { id: agentId, argument: options?.argument ? JSON.stringify(options.argument) : undefined } as Record<string, unknown> });
+  }
+  async abortAgent(agentId: string): Promise<void> {
+    await this.client.request('/agents/abort', { method: 'POST', body: { id: agentId } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getContainer(containerId: string): Promise<PBContainer> {
+    return this.client.request<PBContainer>('/containers/fetch', { params: { id: containerId } });
+  }
+  async getContainerOutput(containerId: string): Promise<PBOutput> {
+    return this.client.request<PBOutput>('/containers/fetch-output', { params: { id: containerId } });
+  }
+  async getContainerResultObject(containerId: string): Promise<PBOutput> {
+    return this.client.request<PBOutput>('/containers/fetch-result-object', { params: { id: containerId } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): PhantomBusterClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
