@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// YOURLS Connector — Self-hosted URL shortener and link management
+import { YOURLSClient } from './client';
+import type { YOURLSConfig, YOURLSLink, YOURLSStats, YOURLSShortenResult } from '../types';
+export { YOURLSClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class YOURLS {
+  private readonly client: YOURLSClient;
+  constructor(config: YOURLSConfig) { this.client = new YOURLSClient(config); }
+  static fromEnv(): YOURLS {
+    const apiUrl = process.env.YOURLS_API_URL;
+    const signatureToken = process.env.YOURLS_SIGNATURE;
+    if (!apiUrl || !signatureToken) throw new Error('YOURLS_API_URL and YOURLS_SIGNATURE are required');
+    return new YOURLS({ apiUrl, signatureToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  /** Shorten a URL */
+  async shorten(url: string, options?: { keyword?: string; title?: string }): Promise<YOURLSShortenResult> {
+    return this.client.request<YOURLSShortenResult>('shorturl', { url, keyword: options?.keyword, title: options?.title });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  /** Expand a short URL to its original */
+  async expand(shorturl: string): Promise<{ keyword: string; shorturl: string; url: string; title: string; clicks: number }> {
+    return this.client.request('expand', { shorturl });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  /** Get stats for a specific short URL */
+  async getUrlStats(shorturl: string): Promise<{ link: YOURLSLink; statusCode: number; message: string }> {
+    return this.client.request('url-stats', { shorturl });
   }
+
+  /** Get global stats */
+  async getStats(filter?: 'top' | 'bottom' | 'rand' | 'last', limit?: number): Promise<{ stats: YOURLSStats; links: Record<string, YOURLSLink> }> {
+    return this.client.request('stats', { filter: filter || 'top', limit: limit || 10 });
+  }
+
+  /** Get database stats (total links + clicks) */
+  async getDbStats(): Promise<YOURLSStats> {
+    const r = await this.client.request<{ db_stats: YOURLSStats }>('db-stats');
+    return r.db_stats;
+  }
+
+  getClient(): YOURLSClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
