@@ -1,51 +1,28 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Forms On Fire Connector — Mobile forms and data collection
+import { FormsOnFireClient } from './client';
+import type { FormsOnFireConfig, FOFForm, FOFSubmission, FOFSubmissionList, FOFUser } from '../types';
+export { FormsOnFireClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class FormsOnFire {
+  private readonly client: FormsOnFireClient;
+  constructor(config: FormsOnFireConfig) { this.client = new FormsOnFireClient(config); }
+  static fromEnv(): FormsOnFire {
+    const apiKey = process.env.FORMSONFIRE_API_KEY;
+    if (!apiKey) throw new Error('FORMSONFIRE_API_KEY is required');
+    return new FormsOnFire({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listForms(): Promise<FOFForm[]> { return this.client.request<FOFForm[]>('/forms'); }
+  async getForm(formId: string): Promise<FOFForm> { return this.client.request<FOFForm>(`/forms/${formId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listSubmissions(formId: string, options?: { page?: number; per_page?: number; status?: string }): Promise<FOFSubmissionList> {
+    return this.client.request<FOFSubmissionList>(`/forms/${formId}/submissions`, { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
+  }
+  async getSubmission(formId: string, submissionId: string): Promise<FOFSubmission> {
+    return this.client.request<FOFSubmission>(`/forms/${formId}/submissions/${submissionId}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listUsers(): Promise<FOFUser[]> { return this.client.request<FOFUser[]>('/users'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): FormsOnFireClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

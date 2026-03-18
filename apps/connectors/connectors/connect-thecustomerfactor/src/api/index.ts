@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// The Customer Factor Connector — CRM and scheduling for service businesses
+import { TheCustomerFactorClient } from './client';
+import type { TheCustomerFactorConfig, TCFCustomer, TCFJob, TCFInvoice, TCFEstimate } from '../types';
+export { TheCustomerFactorClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TheCustomerFactor {
+  private readonly client: TheCustomerFactorClient;
+  constructor(config: TheCustomerFactorConfig) { this.client = new TheCustomerFactorClient(config); }
+  static fromEnv(): TheCustomerFactor {
+    const apiKey = process.env.THECUSTOMERFACTOR_API_KEY;
+    if (!apiKey) throw new Error('THECUSTOMERFACTOR_API_KEY is required');
+    return new TheCustomerFactor({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listCustomers(options?: { page?: number; search?: string }): Promise<{ customers: TCFCustomer[] }> {
+    return this.client.request('/customers', { params: { page: options?.page, search: options?.search } });
+  }
+  async getCustomer(customerId: number): Promise<TCFCustomer> { return this.client.request<TCFCustomer>(`/customers/${customerId}`); }
+  async createCustomer(data: { first_name: string; last_name: string; email?: string; phone?: string; address?: string; city?: string; state?: string; zip?: string }): Promise<TCFCustomer> {
+    return this.client.request<TCFCustomer>('/customers', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listJobs(options?: { customer_id?: number; status?: string; page?: number }): Promise<{ jobs: TCFJob[] }> {
+    return this.client.request('/jobs', { params: { customer_id: options?.customer_id, status: options?.status, page: options?.page } });
+  }
+  async getJob(jobId: number): Promise<TCFJob> { return this.client.request<TCFJob>(`/jobs/${jobId}`); }
+  async createJob(data: { customer_id: number; description: string; scheduled_date: string; amount?: number; crew?: string }): Promise<TCFJob> {
+    return this.client.request<TCFJob>('/jobs', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateJob(jobId: number, data: { status?: string; completed_date?: string; notes?: string }): Promise<TCFJob> {
+    return this.client.request<TCFJob>(`/jobs/${jobId}`, { method: 'PUT', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listInvoices(options?: { customer_id?: number; status?: string }): Promise<{ invoices: TCFInvoice[] }> {
+    return this.client.request('/invoices', { params: { customer_id: options?.customer_id, status: options?.status } });
   }
+
+  async listEstimates(options?: { customer_id?: number }): Promise<{ estimates: TCFEstimate[] }> {
+    return this.client.request('/estimates', { params: { customer_id: options?.customer_id } });
+  }
+
+  getClient(): TheCustomerFactorClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
