@@ -30,6 +30,7 @@ import { runHealthCheck, checkFile, getDefaultRules } from "../lib/health.js";
 import { getHealthDiff } from "../lib/healthdiff.js";
 import {
   injectStyleHook,
+  injectAllStyleHooks,
   isHookInstalled,
 } from "../lib/hookmanager.js";
 import {
@@ -41,7 +42,15 @@ import {
 import { listTemplates, applyTemplate } from "../lib/templates.js";
 import { createTasksFromViolations } from "../lib/taskgen.js";
 import { detectProjectPath } from "../lib/detect.js";
-import { injectIntoClaudeMd, removeFromClaudeMd } from "../lib/contextinjector.js";
+import {
+  injectIntoClaudeMd,
+  injectIntoAllAgentMds,
+  injectIntoAgentMd,
+  removeFromClaudeMd,
+  removeFromAllAgentMds,
+  removeFromAgentMd,
+} from "../lib/contextinjector.js";
+import type { AgentName } from "../lib/detect.js";
 import { getFixSuggestions, applyFixes } from "../lib/fixer.js";
 import { getExample, listExamples, PATTERNS } from "../lib/examples.js";
 import type { Pattern } from "../lib/examples.js";
@@ -254,15 +263,17 @@ program
       }
     }
 
-    // Auto-inject into CLAUDE.md if it exists or --inject-context flag passed
+    // Auto-inject context into all agent MD files
+    const prefsArr = listPrefs(projectPath);
     const claudeMdPath = join(projectPath, "CLAUDE.md");
     if (opts.injectContext || existsSync(claudeMdPath)) {
-      const prefsArr = listPrefs(projectPath);
-      const prefsMap: Record<string, string> = {};
-      for (const p of prefsArr) prefsMap[p.key] = p.value;
-      const injectResult = injectIntoClaudeMd(projectPath, profile, prefsMap);
-      if (isTTY && injectResult.action !== "unchanged") {
-        console.log(chalk.dim(`  CLAUDE.md context ${injectResult.action}: ${injectResult.path}`));
+      const injectResults = injectIntoAllAgentMds(projectPath, profile, prefsArr);
+      if (isTTY) {
+        for (const [, res] of Object.entries(injectResults)) {
+          if (res && res.action !== "unchanged") {
+            console.log(chalk.dim(`  ${res.agent} context ${res.action}: ${res.path}`));
+          }
+        }
       }
     }
 
@@ -325,38 +336,41 @@ program
       writeStyleContextFile(projectPath, buildStyleMdContent(opts.style));
     }
 
-    // Inject hook if .claude/ exists
-    const claudeDir = join(projectPath, ".claude");
-    if (existsSync(claudeDir)) {
-      injectStyleHook(projectPath);
-    }
+    // Inject hooks into all detected agent dirs
+    const hookResults = injectAllStyleHooks(projectPath);
 
-    // Auto-inject into CLAUDE.md if it exists or --inject-context flag passed
+    // Auto-inject context into all agent MD files
+    const initPrefsArr = listPrefs(projectPath);
     const claudeMdPath = join(projectPath, "CLAUDE.md");
     if (activeProfile && (opts.injectContext || existsSync(claudeMdPath))) {
-      const prefsArr = listPrefs(projectPath);
-      const prefsMap: Record<string, string> = {};
-      for (const p of prefsArr) prefsMap[p.key] = p.value;
-      const injectResult = injectIntoClaudeMd(projectPath, activeProfile, prefsMap);
-      if (isTTY && injectResult.action !== "unchanged") {
-        console.log(chalk.dim(`  CLAUDE.md context ${injectResult.action}: ${injectResult.path}`));
+      const ctxResults = injectIntoAllAgentMds(projectPath, activeProfile, initPrefsArr);
+      if (isTTY) {
+        for (const [, res] of Object.entries(ctxResults)) {
+          if (res && res.action !== "unchanged") {
+            console.log(chalk.dim(`  ${res.agent} context ${res.action}: ${res.path}`));
+          }
+        }
       }
     }
+
+    const injectedAgents = Object.entries(hookResults)
+      .filter(([, r]) => r !== null)
+      .map(([a]) => a);
 
     if (isTTY) {
       console.log(chalk.green(`✔ Initialized open-styles for: ${projectPath}`));
       if (opts.style) {
         console.log(chalk.dim(`  Active style: ${opts.style}`));
       }
-      if (existsSync(claudeDir)) {
-        console.log(chalk.dim("  Hook injected into .claude/settings.json"));
+      if (injectedAgents.length > 0) {
+        console.log(chalk.dim(`  Hooks injected for agents: ${injectedAgents.join(", ")}`));
       }
     } else {
       jsonOut({
         ok: true,
         projectPath,
         style: opts.style ?? null,
-        hookInjected: existsSync(claudeDir),
+        hooks: hookResults,
       });
     }
   });
@@ -843,22 +857,33 @@ program
 
 program
   .command("inject-context")
-  .description("Inject or update the style context block in CLAUDE.md")
+  .description("Inject or update the style context block in agent MD files")
   .option("-p, --project <path>", "Project path (default: auto-detect)")
-  .option("--remove", "Remove the style context block from CLAUDE.md")
-  .action(async (opts: { project?: string; remove?: boolean }) => {
+  .option("--agent <name>", "Only inject into a specific agent (claude|gemini|codex|opencode|pi)")
+  .option("--remove", "Remove the style context block from agent MD files")
+  .action(async (opts: { project?: string; agent?: string; remove?: boolean }) => {
     const projectPath = resolve(opts.project ?? detectProjectPath());
+    const agentFilter = opts.agent as AgentName | undefined;
 
     if (opts.remove) {
-      const result = removeFromClaudeMd(projectPath);
-      if (!isTTY) {
-        jsonOut({ ok: true, ...result });
-        return;
-      }
-      if (result.action === "removed") {
-        console.log(chalk.green(`✔ Removed style context from: ${result.path}`));
+      if (agentFilter) {
+        const result = removeFromAgentMd(projectPath, agentFilter);
+        if (!isTTY) {
+          jsonOut({ ok: true, ...result });
+          return;
+        }
+        if (result.action === "removed") {
+          console.log(chalk.green(`✔ Removed style context from: ${result.path}`));
+        } else {
+          console.log(chalk.dim(`No style context block found in: ${result.path}`));
+        }
       } else {
-        console.log(chalk.dim(`No style context block found in: ${result.path}`));
+        removeFromAllAgentMds(projectPath);
+        if (!isTTY) {
+          jsonOut({ ok: true, action: "removed-all" });
+          return;
+        }
+        console.log(chalk.green(`✔ Removed style context from all agent MD files`));
       }
       return;
     }
@@ -870,20 +895,37 @@ program
     }
 
     const prefsArr = listPrefs(projectPath);
-    const prefsMap: Record<string, string> = {};
-    for (const p of prefsArr) prefsMap[p.key] = p.value;
 
-    const result = injectIntoClaudeMd(projectPath, profile, prefsMap);
-
-    if (!isTTY) {
-      jsonOut({ ok: true, ...result });
-      return;
-    }
-
-    if (result.action === "unchanged") {
-      console.log(chalk.dim(`Style context already up to date: ${result.path}`));
+    if (agentFilter) {
+      const result = injectIntoAgentMd(projectPath, agentFilter, profile, prefsArr);
+      if (!isTTY) {
+        jsonOut({ ok: true, ...result });
+        return;
+      }
+      if (result.action === "unchanged") {
+        console.log(chalk.dim(`Style context already up to date: ${result.path}`));
+      } else {
+        console.log(chalk.green(`✔ Style context ${result.action}: ${result.path}`));
+      }
     } else {
-      console.log(chalk.green(`✔ Style context ${result.action}: ${result.path}`));
+      const results = injectIntoAllAgentMds(projectPath, profile, prefsArr);
+      if (!isTTY) {
+        jsonOut({ ok: true, results });
+        return;
+      }
+      let anyChange = false;
+      for (const [, res] of Object.entries(results)) {
+        if (!res) continue;
+        if (res.action === "unchanged") {
+          console.log(chalk.dim(`Style context already up to date: ${res.path}`));
+        } else {
+          console.log(chalk.green(`✔ Style context ${res.action}: ${res.path}`));
+          anyChange = true;
+        }
+      }
+      if (!anyChange) {
+        console.log(chalk.dim("No agent MD files found to inject into. Run `styles init` first."));
+      }
     }
   });
 

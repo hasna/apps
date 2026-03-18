@@ -102,19 +102,33 @@ export type { CreatedTask } from "./lib/taskgen.js";
 export {
   getClaudeSettingsPath,
   injectStyleHook,
+  injectAllStyleHooks,
   removeStyleHook,
+  removeAllStyleHooks,
   isHookInstalled,
+  getInstalledAgentHooks,
 } from "./lib/hookmanager.js";
 export type { InjectResult } from "./lib/hookmanager.js";
 
 // ── Project detection ─────────────────────────────────────────────────────────
-export { detectProjectPath } from "./lib/detect.js";
+export {
+  detectProjectPath,
+  detectAgents,
+  hasAnyAgent,
+  getDetectedAgentNames,
+  AGENT_DIRS,
+} from "./lib/detect.js";
+export type { AgentName, DetectedAgents } from "./lib/detect.js";
 
 // ── Context injector ──────────────────────────────────────────────────────────
 export {
   buildContextSection,
   injectIntoClaudeMd,
+  injectIntoAgentMd,
+  injectIntoAllAgentMds,
   removeFromClaudeMd,
+  removeFromAgentMd,
+  removeFromAllAgentMds,
 } from "./lib/contextinjector.js";
 
 // ── Fixer ─────────────────────────────────────────────────────────────────────
