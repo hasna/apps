@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Relevance AI Connector — AI platform for agents and workflows
+import { RelevanceAIClient } from './client';
+import type { RelevanceAIConfig, RAAgent, RAConversation, RATool, RAKnowledgeSet } from '../types';
+export { RelevanceAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class RelevanceAI {
+  private readonly client: RelevanceAIClient;
+  constructor(config: RelevanceAIConfig) { this.client = new RelevanceAIClient(config); }
+  static fromEnv(): RelevanceAI {
+    const apiKey = process.env.RELEVANCEAI_API_KEY;
+    const projectId = process.env.RELEVANCEAI_PROJECT_ID;
+    if (!apiKey || !projectId) throw new Error('RELEVANCEAI_API_KEY and RELEVANCEAI_PROJECT_ID are required');
+    return new RelevanceAI({ apiKey, projectId, region: process.env.RELEVANCEAI_REGION });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listAgents(): Promise<RAAgent[]> { return this.client.request<RAAgent[]>('/agents/list', { method: 'POST', body: {} }); }
+  async getAgent(agentId: string): Promise<RAAgent> { return this.client.request<RAAgent>(`/agents/${agentId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async triggerAgent(agentId: string, message: string, conversationId?: string): Promise<{ conversation_id: string; answer: string }> {
+    return this.client.request(`/agents/trigger`, { method: 'POST', body: { agent_id: agentId, message: { role: 'user', content: message }, conversation_id: conversationId } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(agentId: string): Promise<RAConversation[]> {
+    return this.client.request<RAConversation[]>('/agents/conversations/list', { method: 'POST', body: { agent_id: agentId } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listTools(): Promise<RATool[]> { return this.client.request<RATool[]>('/tools/list', { method: 'POST', body: {} }); }
+  async runTool(toolId: string, params: Record<string, unknown>): Promise<{ output: unknown }> {
+    return this.client.request('/tools/trigger', { method: 'POST', body: { tool_id: toolId, params } });
   }
+
+  async listKnowledgeSets(): Promise<RAKnowledgeSet[]> { return this.client.request<RAKnowledgeSet[]>('/knowledge/list', { method: 'POST', body: {} }); }
+  async searchKnowledge(knowledgeSetId: string, query: string): Promise<{ results: { text: string; score: number }[] }> {
+    return this.client.request('/knowledge/search', { method: 'POST', body: { knowledge_set_id: knowledgeSetId, query } });
+  }
+
+  getClient(): RelevanceAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

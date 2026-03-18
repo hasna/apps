@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// My AskAI Connector — Custom AI assistant builder for knowledge bases
+import { MyAskAIClient } from './client';
+import type { MyAskAIConfig, MAAssistant, MAConversation, MADataSource } from '../types';
+export { MyAskAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class MyAskAI {
+  private readonly client: MyAskAIClient;
+  constructor(config: MyAskAIConfig) { this.client = new MyAskAIClient(config); }
+  static fromEnv(): MyAskAI {
+    const apiKey = process.env.MYASKAI_API_KEY;
+    if (!apiKey) throw new Error('MYASKAI_API_KEY is required');
+    return new MyAskAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listAssistants(): Promise<MAAssistant[]> { return this.client.request<MAAssistant[]>('/assistants'); }
+  async getAssistant(assistantId: string): Promise<MAAssistant> { return this.client.request<MAAssistant>(`/assistants/${assistantId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async ask(assistantId: string, question: string, options?: { conversation_id?: string }): Promise<{ answer: string; sources: { title: string; url: string }[]; conversation_id: string }> {
+    return this.client.request(`/assistants/${assistantId}/ask`, { method: 'POST', body: { question, conversation_id: options?.conversation_id } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(assistantId: string): Promise<MAConversation[]> {
+    return this.client.request<MAConversation[]>(`/assistants/${assistantId}/conversations`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listDataSources(assistantId: string): Promise<MADataSource[]> {
+    return this.client.request<MADataSource[]>(`/assistants/${assistantId}/data-sources`);
   }
+  async addUrlSource(assistantId: string, url: string): Promise<MADataSource> {
+    return this.client.request<MADataSource>(`/assistants/${assistantId}/data-sources`, { method: 'POST', body: { type: 'url', url } });
+  }
+  async deleteDataSource(assistantId: string, dataSourceId: string): Promise<void> {
+    await this.client.request(`/assistants/${assistantId}/data-sources/${dataSourceId}`, { method: 'DELETE' });
+  }
+
+  getClient(): MyAskAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
