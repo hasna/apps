@@ -1,51 +1,47 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// PractiTest Connector — End-to-end QA and test management
+import { PractiTestClient } from './client';
+import type { PractiTestConfig, PTProject, PTTestCase, PTTestSet, PTInstance, PTRun, PTIssue } from '../types';
+export { PractiTestClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class PractiTest {
+  private readonly client: PractiTestClient;
+  constructor(config: PractiTestConfig) { this.client = new PractiTestClient(config); }
+  static fromEnv(): PractiTest {
+    const email = process.env.PRACTITEST_EMAIL;
+    const apiToken = process.env.PRACTITEST_API_TOKEN;
+    if (!email || !apiToken) throw new Error('PRACTITEST_EMAIL and PRACTITEST_API_TOKEN are required');
+    return new PractiTest({ email, apiToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<{ data: PTProject[] }> { return this.client.request('/projects.json'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listTestCases(projectId: string, options?: { page?: number }): Promise<{ data: PTTestCase[] }> {
+    return this.client.request(`/projects/${projectId}/tests.json`, { params: { page: options?.page } });
+  }
+  async getTestCase(projectId: string, testId: string): Promise<{ data: PTTestCase }> {
+    return this.client.request(`/projects/${projectId}/tests/${testId}.json`);
+  }
+  async createTestCase(projectId: string, data: { name: string; description?: string; priority?: string }): Promise<{ data: PTTestCase }> {
+    return this.client.request(`/projects/${projectId}/tests.json`, { method: 'POST', body: { data: { type: 'tests', attributes: data } } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTestSets(projectId: string): Promise<{ data: PTTestSet[] }> { return this.client.request(`/projects/${projectId}/sets.json`); }
+
+  async listInstances(projectId: string, setId: string): Promise<{ data: PTInstance[] }> {
+    return this.client.request(`/projects/${projectId}/instances.json`, { params: { set_ids: setId } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listRuns(projectId: string, options?: { instance_id?: string }): Promise<{ data: PTRun[] }> {
+    return this.client.request(`/projects/${projectId}/runs.json`, { params: { instance_id: options?.instance_id } });
   }
+  async createRun(projectId: string, instanceId: string, status: string): Promise<{ data: PTRun }> {
+    return this.client.request(`/projects/${projectId}/runs.json`, { method: 'POST', body: { data: { type: 'instances', attributes: { instance_id: instanceId, 'exit-code': status === 'PASSED' ? 0 : 1 } } } });
+  }
+
+  async listIssues(projectId: string): Promise<{ data: PTIssue[] }> { return this.client.request(`/projects/${projectId}/issues.json`); }
+  async createIssue(projectId: string, data: { title: string; description?: string; severity?: string }): Promise<{ data: PTIssue }> {
+    return this.client.request(`/projects/${projectId}/issues.json`, { method: 'POST', body: { data: { type: 'issues', attributes: data } } });
+  }
+
+  getClient(): PractiTestClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

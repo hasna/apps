@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Ortto Connector — Customer data platform and marketing automation
+import { OrttoClient } from './client';
+import type { OrttoConfig, OTPerson, OTPersonList, OTActivity, OTJourney, OTAudience, OTTag } from '../types';
+export { OrttoClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Ortto {
+  private readonly client: OrttoClient;
+  constructor(config: OrttoConfig) { this.client = new OrttoClient(config); }
+  static fromEnv(): Ortto {
+    const apiKey = process.env.ORTTO_API_KEY;
+    if (!apiKey) throw new Error('ORTTO_API_KEY is required');
+    return new Ortto({ apiKey, region: process.env.ORTTO_REGION });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getPersons(options?: { fields?: string[]; limit?: number; cursor?: string; filter?: Record<string, unknown> }): Promise<OTPersonList> {
+    return this.client.request<OTPersonList>('/person/get', { body: { fields: options?.fields, limit: options?.limit, cursor: options?.cursor, filter: options?.filter } as Record<string, unknown> });
+  }
+  async mergePerson(fields: Record<string, unknown>, tags?: string[]): Promise<OTPerson> {
+    return this.client.request<OTPerson>('/person/merge', { body: { people: [{ fields, tags }] } as Record<string, unknown> });
+  }
+  async deletePerson(personId: string): Promise<void> {
+    await this.client.request('/person/delete', { body: { people: [{ person_id: personId }] } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async trackActivity(personId: string, activityName: string, attributes?: Record<string, unknown>): Promise<void> {
+    await this.client.request('/activities/create', { body: { activities: [{ person_id: personId, activity_id: activityName, attributes }] } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listJourneys(): Promise<{ journeys: OTJourney[] }> { return this.client.request('/journeys/get', { body: {} }); }
+  async listAudiences(): Promise<{ audiences: OTAudience[] }> { return this.client.request('/audiences/get', { body: {} }); }
+  async listTags(): Promise<{ tags: OTTag[] }> { return this.client.request('/tags/get', { body: {} }); }
+  async createTag(tag: string): Promise<void> { await this.client.request('/tags/create', { body: { tag } }); }
+
+  getClient(): OrttoClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
