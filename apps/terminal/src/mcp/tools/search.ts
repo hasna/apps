@@ -29,17 +29,24 @@ export function registerSearchTools(server: McpServer, h: ToolHelpers): void {
 
   server.tool(
     "search_content",
-    "Search file contents by regex pattern. Groups matches by file, sorted by relevance. Auto-filters excluded directories.",
+    "Search file contents by regex pattern. Groups matches by file, sorted by relevance. Use offset for pagination when results are truncated.",
     {
       pattern: z.string().describe("Search pattern (regex)"),
       path: z.string().optional().describe("Search root (default: cwd)"),
       fileType: z.string().optional().describe("File type filter (e.g., 'ts', 'py')"),
       maxResults: z.number().optional().describe("Max files to return (default: 30)"),
+      offset: z.number().optional().describe("Skip first N files (for pagination, default: 0)"),
       contextLines: z.number().optional().describe("Context lines around matches (default: 0)"),
     },
-    async ({ pattern, path, fileType, maxResults, contextLines }) => {
+    async ({ pattern, path, fileType, maxResults, offset, contextLines }) => {
       const start = Date.now();
-      const result = await searchContent(pattern, path ?? process.cwd(), { fileType, maxResults, contextLines });
+      // Fetch more than needed to support offset
+      const fetchLimit = (maxResults ?? 30) + (offset ?? 0);
+      const result = await searchContent(pattern, path ?? process.cwd(), { fileType, maxResults: fetchLimit, contextLines });
+      // Apply offset
+      if (offset && offset > 0 && result.files) {
+        result.files = result.files.slice(offset);
+      }
       h.logCall("search_content", { command: `grep ${pattern}`, tokensSaved: result.tokensSaved ?? 0, durationMs: Date.now() - start });
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     }

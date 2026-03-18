@@ -35,12 +35,12 @@ export function captureSnapshot(): SessionSnapshot {
     uptime: Date.now() - p.startedAt,
   }));
 
-  // Recent commands (last 10, compressed)
+  // Recent commands (last 10)
   const history = loadHistory().slice(-10);
   const recentCommands = history.map(h => ({
     cmd: h.cmd,
     exitCode: h.error,
-    summary: h.nl !== h.cmd ? h.nl : undefined,
+    intent: h.nl !== h.cmd ? h.nl : undefined, // user's original NL intent, not AI-generated
   }));
 
   // Project recipes
