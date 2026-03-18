@@ -103,7 +103,7 @@ export class AdsApi {
       status?: AdStatus;
     }
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
 
     const ad: Record<string, unknown> = {
       adGroup: `customers/${customerId}/adGroups/${adGroupId}`,
@@ -131,7 +131,7 @@ export class AdsApi {
    * Update ad status
    */
   async updateStatus(adGroupId: string, adId: string, status: AdStatus): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroupAds/${adGroupId}~${adId}`;
 
     return this.client.mutate('adGroupAds', [{
@@ -161,7 +161,7 @@ export class AdsApi {
    * Remove an ad
    */
   async remove(adGroupId: string, adId: string): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroupAds/${adGroupId}~${adId}`;
 
     return this.client.mutate('adGroupAds', [{

@@ -103,7 +103,7 @@ export class KeywordsApi {
     }>,
     options?: { status?: AdGroupCriterionStatus }
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
 
     const operations = keywords.map(kw => ({
       create: {
@@ -141,7 +141,7 @@ export class KeywordsApi {
    * Update keyword status
    */
   async updateStatus(adGroupId: string, criterionId: string, status: AdGroupCriterionStatus): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroupCriteria/${adGroupId}~${criterionId}`;
 
     return this.client.mutate('adGroupCriteria', [{
@@ -157,7 +157,7 @@ export class KeywordsApi {
    * Update keyword bid
    */
   async updateBid(adGroupId: string, criterionId: string, cpcBidMicros: string): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroupCriteria/${adGroupId}~${criterionId}`;
 
     return this.client.mutate('adGroupCriteria', [{
@@ -187,7 +187,7 @@ export class KeywordsApi {
    * Remove a keyword
    */
   async remove(adGroupId: string, criterionId: string): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroupCriteria/${adGroupId}~${criterionId}`;
 
     return this.client.mutate('adGroupCriteria', [{
@@ -202,7 +202,7 @@ export class KeywordsApi {
     adGroupId: string,
     keywords: Array<{ text: string; matchType: KeywordMatchType }>
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
 
     const operations = keywords.map(kw => ({
       create: {
@@ -243,7 +243,7 @@ export class KeywordsApi {
     campaignId: string,
     keywords: Array<{ text: string; matchType: KeywordMatchType }>
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
 
     const operations = keywords.map(kw => ({
       create: {

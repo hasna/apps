@@ -89,7 +89,7 @@ export class AdGroupsApi {
       cpcBidMicros?: string;
     }
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
 
     const adGroup: Record<string, unknown> = {
       name,
@@ -117,7 +117,7 @@ export class AdGroupsApi {
       targetCpaMicros?: string;
     }
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroups/${adGroupId}`;
 
     const adGroup: Record<string, unknown> = {
@@ -153,7 +153,7 @@ export class AdGroupsApi {
    * Remove an ad group
    */
   async remove(adGroupId: string): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/adGroups/${adGroupId}`;
 
     return this.client.mutate('adGroups', [{

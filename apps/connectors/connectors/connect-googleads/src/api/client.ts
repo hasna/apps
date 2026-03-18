@@ -39,7 +39,7 @@ export class GoogleAdsClient {
     return headers;
   }
 
-  private getCustomerId(): string {
+  getCustomerId(): string {
     if (!this.customerId) {
       throw new Error('Customer ID not set. Use --customer or set default with "connect-googleads config set-customer"');
     }

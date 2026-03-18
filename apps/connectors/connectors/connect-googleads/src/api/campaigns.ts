@@ -92,7 +92,7 @@ export class CampaignsApi {
       endDate?: string;
     }
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
 
     // First create the budget
     const budgetResponse = await this.client.mutate('campaignBudgets', [{
@@ -143,7 +143,7 @@ export class CampaignsApi {
       endDate?: string;
     }
   ): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/campaigns/${campaignId}`;
 
     const campaign: Record<string, unknown> = {
@@ -179,7 +179,7 @@ export class CampaignsApi {
    * Remove a campaign
    */
   async remove(campaignId: string): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/campaigns/${campaignId}`;
 
     return this.client.mutate('campaigns', [{
@@ -238,7 +238,7 @@ export class CampaignsApi {
    * Update campaign budget
    */
   async updateBudget(budgetId: string, amountMicros: string): Promise<MutateResponse> {
-    const customerId = (this.client as any).getCustomerId();
+    const customerId = this.client.getCustomerId();
     const resourceName = `customers/${customerId}/campaignBudgets/${budgetId}`;
 
     return this.client.mutate('campaignBudgets', [{
