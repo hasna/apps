@@ -126,6 +126,17 @@ export class GitHubClient {
   }
 
   /**
+   * Get authentication headers for direct fetch calls (e.g. binary uploads, redirect capture).
+   */
+  getAuthHeaders(): Record<string, string> {
+    return {
+      'Authorization': `Bearer ${this.token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': API_VERSION,
+    };
+  }
+
+  /**
    * Get a preview of the token (for display/debugging)
    */
   getTokenPreview(): string {

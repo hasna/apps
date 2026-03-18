@@ -135,11 +135,7 @@ export class WorkflowsApi {
       {
         method: 'GET',
         redirect: 'manual',
-        headers: {
-          Authorization: `Bearer ${(this.client as unknown as { token: string }).token}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
+        headers: this.client.getAuthHeaders(),
       }
     );
     return response.headers.get('location') || '';

@@ -118,14 +118,11 @@ export class ReleasesApi {
     url.searchParams.set('name', name);
     if (label) url.searchParams.set('label', label);
 
-    const token = (this.client as unknown as { token: string }).token;
     const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...this.client.getAuthHeaders(),
         'Content-Type': contentType,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
       },
       body: data,
     });
