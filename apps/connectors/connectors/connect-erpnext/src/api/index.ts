@@ -1,51 +1,42 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ERPNext Connector — Open-source ERP for accounting, inventory, and business
+import { ERPNextClient } from './client';
+import type { ERPNextConfig, ENDocument, ENDocumentList } from '../types';
+export { ERPNextClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ERPNext {
+  private readonly client: ERPNextClient;
+  constructor(config: ERPNextConfig) { this.client = new ERPNextClient(config); }
+  static fromEnv(): ERPNext {
+    const url = process.env.ERPNEXT_URL;
+    const apiKey = process.env.ERPNEXT_API_KEY;
+    const apiSecret = process.env.ERPNEXT_API_SECRET;
+    if (!url || !apiKey || !apiSecret) throw new Error('ERPNEXT_URL, ERPNEXT_API_KEY, and ERPNEXT_API_SECRET are required');
+    return new ERPNext({ url, apiKey, apiSecret });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listDocuments(doctype: string, options?: { filters?: string; fields?: string; limit_page_length?: number; order_by?: string }): Promise<ENDocumentList> {
+    return this.client.request<ENDocumentList>(`/resource/${doctype}`, { params: { filters: options?.filters, fields: options?.fields, limit_page_length: options?.limit_page_length, order_by: options?.order_by } });
+  }
+  async getDocument(doctype: string, name: string): Promise<{ data: ENDocument }> {
+    return this.client.request(`/resource/${doctype}/${name}`);
+  }
+  async createDocument(doctype: string, data: Record<string, unknown>): Promise<{ data: ENDocument }> {
+    return this.client.request(`/resource/${doctype}`, { method: 'POST', body: data });
+  }
+  async updateDocument(doctype: string, name: string, data: Record<string, unknown>): Promise<{ data: ENDocument }> {
+    return this.client.request(`/resource/${doctype}/${name}`, { method: 'PUT', body: data });
+  }
+  async deleteDocument(doctype: string, name: string): Promise<void> {
+    await this.client.request(`/resource/${doctype}/${name}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async callMethod(method: string, args?: Record<string, unknown>): Promise<{ message: unknown }> {
+    return this.client.request(`/method/${method}`, args ? { method: 'POST', body: args } : {});
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async search(doctype: string, query: string, options?: { filters?: string; page_length?: number }): Promise<{ results: string[][] }> {
+    return this.client.request('/method/frappe.client.get_list', { params: { doctype, txt: query, filters: options?.filters, page_length: options?.page_length } });
   }
+
+  getClient(): ERPNextClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

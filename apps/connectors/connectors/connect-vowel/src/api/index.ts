@@ -1,51 +1,29 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Vowel Connector — Video meetings with transcription and summaries
+import { VowelClient } from './client';
+import type { VowelConfig, VWMeeting, VWMeetingList, VWTranscript, VWSummary, VWBookmark } from '../types';
+export { VowelClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Vowel {
+  private readonly client: VowelClient;
+  constructor(config: VowelConfig) { this.client = new VowelClient(config); }
+  static fromEnv(): Vowel {
+    const apiKey = process.env.VOWEL_API_KEY;
+    if (!apiKey) throw new Error('VOWEL_API_KEY is required');
+    return new Vowel({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listMeetings(options?: { page?: number; per_page?: number }): Promise<VWMeetingList> {
+    return this.client.request<VWMeetingList>('/meetings', { params: { page: options?.page, per_page: options?.per_page } });
+  }
+  async getMeeting(meetingId: string): Promise<VWMeeting> { return this.client.request<VWMeeting>(`/meetings/${meetingId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getTranscript(meetingId: string): Promise<VWTranscript> { return this.client.request<VWTranscript>(`/meetings/${meetingId}/transcript`); }
+  async getSummary(meetingId: string): Promise<VWSummary> { return this.client.request<VWSummary>(`/meetings/${meetingId}/summary`); }
+
+  async listBookmarks(meetingId: string): Promise<VWBookmark[]> { return this.client.request<VWBookmark[]>(`/meetings/${meetingId}/bookmarks`); }
+  async createBookmark(meetingId: string, data: { timestamp: number; note: string }): Promise<VWBookmark> {
+    return this.client.request<VWBookmark>(`/meetings/${meetingId}/bookmarks`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): VowelClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
