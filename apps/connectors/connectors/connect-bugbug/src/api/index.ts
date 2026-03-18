@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// BugBug Connector — Browser-based automated testing
+import { BugBugClient } from './client';
+import type { BugBugConfig, BBTest, BBSuite, BBRun, BBProject } from '../types';
+export { BugBugClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class BugBug {
+  private readonly client: BugBugClient;
+  constructor(config: BugBugConfig) { this.client = new BugBugClient(config); }
+  static fromEnv(): BugBug {
+    const apiKey = process.env.BUGBUG_API_KEY;
+    if (!apiKey) throw new Error('BUGBUG_API_KEY is required');
+    return new BugBug({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<BBProject[]> { return this.client.request<BBProject[]>('/projects'); }
+  async getProject(projectId: string): Promise<BBProject> { return this.client.request<BBProject>(`/projects/${projectId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listTests(projectId: string): Promise<BBTest[]> { return this.client.request<BBTest[]>(`/projects/${projectId}/tests`); }
+  async getTest(projectId: string, testId: string): Promise<BBTest> { return this.client.request<BBTest>(`/projects/${projectId}/tests/${testId}`); }
+  async runTest(projectId: string, testId: string, options?: { browser?: string }): Promise<BBRun> {
+    return this.client.request<BBRun>(`/projects/${projectId}/tests/${testId}/run`, { method: 'POST', body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listSuites(projectId: string): Promise<BBSuite[]> { return this.client.request<BBSuite[]>(`/projects/${projectId}/suites`); }
+  async getSuite(projectId: string, suiteId: string): Promise<BBSuite> { return this.client.request<BBSuite>(`/projects/${projectId}/suites/${suiteId}`); }
+  async runSuite(projectId: string, suiteId: string, options?: { browser?: string }): Promise<BBRun> {
+    return this.client.request<BBRun>(`/projects/${projectId}/suites/${suiteId}/run`, { method: 'POST', body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getRun(runId: string): Promise<BBRun> { return this.client.request<BBRun>(`/runs/${runId}`); }
+  async listRuns(projectId: string, options?: { test_id?: string; suite_id?: string; status?: string }): Promise<BBRun[]> {
+    return this.client.request<BBRun[]>(`/projects/${projectId}/runs`, { params: { test_id: options?.test_id, suite_id: options?.suite_id, status: options?.status } });
   }
+
+  getClient(): BugBugClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

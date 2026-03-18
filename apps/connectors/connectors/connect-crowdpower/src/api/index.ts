@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// CrowdPower Connector — Customer engagement and lifecycle automation
+import { CrowdPowerClient } from './client';
+import type { CrowdPowerConfig, CPUser, CPUserList, CPSegment, CPCampaign, CPEvent, CPTag } from '../types';
+export { CrowdPowerClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CrowdPower {
+  private readonly client: CrowdPowerClient;
+  constructor(config: CrowdPowerConfig) { this.client = new CrowdPowerClient(config); }
+  static fromEnv(): CrowdPower {
+    const apiKey = process.env.CROWDPOWER_API_KEY;
+    if (!apiKey) throw new Error('CROWDPOWER_API_KEY is required');
+    return new CrowdPower({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listUsers(options?: { page?: number; per_page?: number; segment_id?: string }): Promise<CPUserList> {
+    return this.client.request<CPUserList>('/users', { params: { page: options?.page, per_page: options?.per_page, segment_id: options?.segment_id } });
+  }
+  async getUser(userId: string): Promise<CPUser> { return this.client.request<CPUser>(`/users/${userId}`); }
+  async createOrUpdateUser(data: { email: string; name?: string; custom_attributes?: Record<string, unknown>; tags?: string[] }): Promise<CPUser> {
+    return this.client.request<CPUser>('/users', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteUser(userId: string): Promise<void> { await this.client.request(`/users/${userId}`, { method: 'DELETE' }); }
+  async tagUser(userId: string, tag: string): Promise<void> { await this.client.request(`/users/${userId}/tags`, { method: 'POST', body: { tag } }); }
+  async untagUser(userId: string, tag: string): Promise<void> { await this.client.request(`/users/${userId}/tags/${tag}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async trackEvent(data: { user_id: string; name: string; properties?: Record<string, unknown> }): Promise<CPEvent> {
+    return this.client.request<CPEvent>('/events', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listSegments(): Promise<CPSegment[]> { return this.client.request<CPSegment[]>('/segments'); }
+  async listCampaigns(): Promise<CPCampaign[]> { return this.client.request<CPCampaign[]>('/campaigns'); }
+  async listTags(): Promise<CPTag[]> { return this.client.request<CPTag[]>('/tags'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CrowdPowerClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
