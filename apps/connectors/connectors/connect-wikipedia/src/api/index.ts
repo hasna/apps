@@ -27,9 +27,8 @@ export class Wikipedia {
   }
 
   /** Get a random article */
-  async getRandom(): Promise<WikiRandomArticle> {
-    const r = await this.client.request<{ items: WikiRandomArticle[] }>('/api/rest_v1/page/random/summary');
-    return (r as unknown as WikiArticleSummary & { pageid: number; key: string; excerpt: string; description: string });
+  async getRandom(): Promise<WikiArticleSummary> {
+    return this.client.request<WikiArticleSummary>('/api/rest_v1/page/random/summary');
   }
 
   /** Get full article content as plain text */
