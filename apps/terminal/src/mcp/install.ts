@@ -23,14 +23,14 @@ function hasGemini(): boolean { return !!which("gemini"); }
 function installClaude(bin: string): boolean {
   if (!hasClaude()) { log("–", "Claude Code not found, skipping"); return false; }
   try {
-    execSync(`claude mcp add --transport stdio --scope user open-terminal -- ${bin} mcp serve`, { stdio: ["pipe", "pipe", "pipe"] });
+    execSync(`claude mcp add --transport stdio --scope user terminal -- ${bin} mcp serve`, { stdio: ["pipe", "pipe", "pipe"] });
     log("✓", "Claude Code");
     return true;
   } catch {
     // May already exist
     try {
-      execSync(`claude mcp remove open-terminal -s user`, { stdio: ["pipe", "pipe", "pipe"] });
-      execSync(`claude mcp add --transport stdio --scope user open-terminal -- ${bin} mcp serve`, { stdio: ["pipe", "pipe", "pipe"] });
+      execSync(`claude mcp remove terminal -s user`, { stdio: ["pipe", "pipe", "pipe"] });
+      execSync(`claude mcp add --transport stdio --scope user terminal -- ${bin} mcp serve`, { stdio: ["pipe", "pipe", "pipe"] });
       log("✓", "Claude Code (updated)");
       return true;
     } catch (e) {
@@ -50,8 +50,8 @@ function installCodex(bin: string): boolean {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     let content = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
     // Remove old entry if exists
-    content = content.replace(/\n?\[mcp_servers\.open-terminal\][^\[]*/g, "");
-    content += `\n[mcp_servers.open-terminal]\ncommand = "${bin}"\nargs = ["mcp", "serve"]\n`;
+    content = content.replace(/\n?\[mcp_servers\.terminal\][^\[]*/g, "");
+    content += `\n[mcp_servers.terminal]\ncommand = "${bin}"\nargs = ["mcp", "serve"]\n`;
     writeFileSync(configPath, content);
     log("✓", "Codex");
     return true;
@@ -74,7 +74,7 @@ function installGemini(bin: string): boolean {
       try { config = JSON.parse(readFileSync(configPath, "utf8")); } catch {}
     }
     if (!config.mcpServers) config.mcpServers = {};
-    config.mcpServers["open-terminal"] = { command: bin, args: ["mcp", "serve"] };
+    config.mcpServers["terminal"] = { command: bin, args: ["mcp", "serve"] };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
     log("✓", "Gemini CLI");
     return true;
@@ -88,7 +88,7 @@ function installGemini(bin: string): boolean {
 
 function uninstallClaude(): boolean {
   if (!hasClaude()) return false;
-  try { execSync(`claude mcp remove open-terminal -s user`, { stdio: ["pipe", "pipe", "pipe"] }); log("✓", "Removed from Claude Code"); return true; } catch { return false; }
+  try { execSync(`claude mcp remove terminal -s user`, { stdio: ["pipe", "pipe", "pipe"] }); log("✓", "Removed from Claude Code"); return true; } catch { return false; }
 }
 
 function uninstallCodex(): boolean {
@@ -96,8 +96,8 @@ function uninstallCodex(): boolean {
   if (!existsSync(configPath)) return false;
   try {
     let content = readFileSync(configPath, "utf8");
-    if (!content.includes("open-terminal")) return false;
-    content = content.replace(/\n?\[mcp_servers\.open-terminal\][^\[]*/g, "");
+    if (!content.includes("terminal")) return false;
+    content = content.replace(/\n?\[mcp_servers\.terminal\][^\[]*/g, "");
     writeFileSync(configPath, content);
     log("✓", "Removed from Codex");
     return true;
@@ -109,8 +109,8 @@ function uninstallGemini(): boolean {
   if (!existsSync(configPath)) return false;
   try {
     const config = JSON.parse(readFileSync(configPath, "utf8"));
-    if (!config.mcpServers?.["open-terminal"]) return false;
-    delete config.mcpServers["open-terminal"];
+    if (!config.mcpServers?.["terminal"]) return false;
+    delete config.mcpServers["terminal"];
     writeFileSync(configPath, JSON.stringify(config, null, 2));
     log("✓", "Removed from Gemini CLI");
     return true;
@@ -124,7 +124,7 @@ export function handleInstall(args: string[]): void {
 
   // Uninstall
   if (flags.has("uninstall") || flags.has("--uninstall")) {
-    console.log("\n  Removing open-terminal MCP server...\n");
+    console.log("\n  Removing terminal MCP server...\n");
     uninstallClaude();
     uninstallCodex();
     uninstallGemini();
@@ -147,14 +147,7 @@ export function handleInstall(args: string[]): void {
 
   const bin = which("terminal") ?? which("t") ?? "npx @hasna/terminal";
 
-  console.log(`
-  ┌─────────────────────────────────────┐
-  │         open-terminal               │
-  │   Smart terminal for AI agents      │
-  └─────────────────────────────────────┘
-
-  Setting up MCP server for all agents...
-`);
+  console.log(`\n  terminal — setting up MCP...\n`);
 
   let count = 0;
   if (installClaude(bin)) count++;
@@ -162,29 +155,9 @@ export function handleInstall(args: string[]): void {
   if (installGemini(bin)) count++;
 
   if (count === 0) {
-    console.log(`
-  No AI agents found. Install one first:
-
-    npm i -g @anthropic-ai/claude-code    # Claude Code
-    npm i -g @openai/codex                # Codex
-    npm i -g @anthropic-ai/gemini-cli     # Gemini CLI
-
-  Then run: terminal install
-`);
+    console.log(`\n  No agents found. Install Claude Code, Codex, or Gemini CLI first.\n`);
   } else {
-    console.log(`
-  Done. ${count} agent${count > 1 ? "s" : ""} configured.
-  Restart your agent to start using open-terminal.
-
-  Your AI agent now has these tools:
-    execute_smart   Run any command, get AI-summarized output
-    execute_diff    Run command, see only what changed
-    search_content  Smart grep with file grouping
-    search_files    Find files by pattern
-    read_symbol     Read a function by name (not whole file)
-    boot            Full project context in one call
-    repo_state      Git status + log + diff in one call
-`);
+    console.log(`\n  ${count} agent${count > 1 ? "s" : ""} ready. Restart to apply.\n`);
   }
 }
 

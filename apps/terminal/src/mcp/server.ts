@@ -1,4 +1,4 @@
-// MCP Server for open-terminal — exposes terminal capabilities to AI agents
+// MCP Server for terminal — exposes terminal capabilities to AI agents
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -61,7 +61,7 @@ function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCo
 
 export function createServer(): McpServer {
   const server = new McpServer({
-    name: "open-terminal",
+    name: "terminal",
     version: "0.2.0",
   });
 
@@ -251,11 +251,11 @@ export function createServer(): McpServer {
 
   server.tool(
     "status",
-    "Get open-terminal server status, capabilities, and available parsers.",
+    "Get terminal server status, capabilities, and available parsers.",
     async () => {
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          name: "open-terminal", version: "0.3.0", cwd: process.cwd(),
+          name: "terminal", version: "3.3.0", cwd: process.cwd(),
           features: ["ai-output-processing", "token-compression", "noise-filtering", "diff-caching", "lazy-execution", "progressive-disclosure"],
         }) }],
       };
@@ -762,5 +762,5 @@ export async function startMcpServer(): Promise<void> {
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("open-terminal MCP server running on stdio");
+  console.error("terminal MCP server running on stdio");
 }
