@@ -28,14 +28,36 @@ function saveStore(filePath: string, store: RecipeStore): void {
   writeFileSync(filePath, JSON.stringify(store, null, 2));
 }
 
+// ── Built-in system recipes (always available, zero config) ─────────────────
+
+const SYSTEM_RECIPES: Recipe[] = [
+  // Git workflows
+  { id: "sys-commit-push", name: "commit-push", description: "Stage all, commit, push to origin", command: "git add -A && git commit -m \"{message}\" && git push", tags: ["git"], collection: "git", variables: [{ name: "message", required: true }], createdAt: 0, updatedAt: 0 },
+  { id: "sys-pr", name: "create-pr", description: "Create GitHub PR from current branch", command: "gh pr create --title \"{title}\" --body \"{body}\"", tags: ["git", "github"], collection: "git", variables: [{ name: "title", required: true }, { name: "body", default: "" }], createdAt: 0, updatedAt: 0 },
+  { id: "sys-stash", name: "stash-switch", description: "Stash changes, switch branch, pop", command: "git stash && git checkout {branch} && git stash pop", tags: ["git"], collection: "git", variables: [{ name: "branch", required: true }], createdAt: 0, updatedAt: 0 },
+
+  // Quality checks
+  { id: "sys-todos", name: "find-todos", description: "Find all TODO/FIXME/HACK in source code", command: "grep -rn 'TODO\\|FIXME\\|HACK\\|XXX' {path} --include='*.ts' --include='*.tsx' --include='*.js' --include='*.py' --include='*.go' --include='*.rs' --include='*.java' --include='*.rb'", tags: ["quality"], collection: "quality", variables: [{ name: "path", default: "src/" }], createdAt: 0, updatedAt: 0 },
+  { id: "sys-deadcode", name: "find-unused-exports", description: "Find exported symbols that may be unused", command: "grep -rn 'export ' {path} --include='*.ts' | sed 's/.*export //' | sed 's/[(<:].*//' | sort -u", tags: ["quality"], collection: "quality", variables: [{ name: "path", default: "src/" }], createdAt: 0, updatedAt: 0 },
+  { id: "sys-security", name: "security-scan", description: "Scan for common security anti-patterns", command: "grep -rn 'eval\\|exec\\|spawn\\|innerHTML\\|dangerouslySetInnerHTML\\|password.*=.*[\"'\\']' {path} --include='*.ts' --include='*.js' --include='*.py'", tags: ["security"], collection: "quality", variables: [{ name: "path", default: "src/" }], createdAt: 0, updatedAt: 0 },
+
+  // Project info
+  { id: "sys-deps", name: "list-deps", description: "Show project dependencies", command: "cat package.json 2>/dev/null | grep -A 100 '\"dependencies\"' | head -30 || cat requirements.txt 2>/dev/null || cat Cargo.toml 2>/dev/null | grep -A 50 'dependencies'", tags: ["deps"], collection: "project", variables: [], createdAt: 0, updatedAt: 0 },
+  { id: "sys-size", name: "project-size", description: "Count lines of code by file type", command: "find {path} -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.git/*' -type f | xargs wc -l 2>/dev/null | sort -rn | head -20", tags: ["stats"], collection: "project", variables: [{ name: "path", default: "src/" }], createdAt: 0, updatedAt: 0 },
+
+  // Process management
+  { id: "sys-port", name: "kill-port", description: "Kill whatever is running on a port", command: "lsof -ti :{port} | xargs kill -9 2>/dev/null || echo 'Port {port} is free'", tags: ["process"], collection: "system", variables: [{ name: "port", required: true }], createdAt: 0, updatedAt: 0 },
+  { id: "sys-disk", name: "disk-usage", description: "Show disk usage of current directory", command: "du -sh {path}/* 2>/dev/null | sort -rh | head -15", tags: ["system"], collection: "system", variables: [{ name: "path", default: "." }], createdAt: 0, updatedAt: 0 },
+];
+
 // ── CRUD operations ──────────────────────────────────────────────────────────
 
-/** Get all recipes (merged: global + project-scoped) */
+/** Get all recipes (merged: system + global + project-scoped) */
 export function listRecipes(projectPath?: string): Recipe[] {
   const global = loadStore(GLOBAL_FILE).recipes;
-  if (!projectPath) return global;
+  if (!projectPath) return [...global, ...SYSTEM_RECIPES];
   const project = loadStore(projectFile(projectPath)).recipes;
-  return [...project, ...global]; // project recipes first (higher priority)
+  return [...project, ...global, ...SYSTEM_RECIPES]; // project > global > system priority
 }
 
 /** Get recipes filtered by collection */

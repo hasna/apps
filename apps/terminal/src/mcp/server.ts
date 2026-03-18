@@ -181,7 +181,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "execute_smart",
-    "Run a command and get AI-summarized output. The AI decides what's important — errors, failures, key results are kept; verbose logs, progress bars, passing tests are dropped. Saves 80-95% tokens vs raw output. Best tool for agents.",
+    "Run a command and get AI-summarized output (80-95% token savings). Use this for: test runs, builds, git operations, process management, system info. Do NOT use for file read/write — use your native Read/Write/Edit tools instead (they're faster, no shell overhead).",
     {
       command: z.string().describe("Shell command to execute"),
       cwd: z.string().optional().describe("Working directory"),
@@ -678,7 +678,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "read_file",
-    "Read a file with session caching. Use summarize=true to get an AI-generated outline (~90% fewer tokens) instead of full content — ideal when you just want to understand what a file does without reading every line.",
+    "Read a file with summarize=true for AI outline (~90% fewer tokens). For full file reads without summarization, prefer your native Read tool (faster, no MCP overhead). Use this when you want cached reads or AI summaries.",
     {
       path: z.string().describe("File path"),
       offset: z.number().optional().describe("Start line (0-indexed)"),
@@ -944,7 +944,7 @@ Match by function name, class name, method name (including ClassName.method), in
 
   server.tool(
     "edit",
-    "Find and replace text in a file. Agent says what to change, no sed/awk/python needed. Saves ~200 tokens vs constructing shell commands.",
+    "Find and replace in a file. For simple edits, prefer your native Edit tool (faster). Use this for batch replacements (all=true) or when you don't have a native Edit tool available.",
     {
       file: z.string().describe("File path"),
       find: z.string().describe("Text to find (exact match)"),
