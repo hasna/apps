@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ProfitWell Connector — Subscription financial metrics and revenue reporting
+import { ProfitWellClient } from './client';
+import type { ProfitWellConfig, PWMetrics, PWSubscription, PWPlan } from '../types';
+export { ProfitWellClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ProfitWell {
+  private readonly client: ProfitWellClient;
+  constructor(config: ProfitWellConfig) { this.client = new ProfitWellClient(config); }
+  static fromEnv(): ProfitWell {
+    const apiKey = process.env.PROFITWELL_API_KEY;
+    if (!apiKey) throw new Error('PROFITWELL_API_KEY is required');
+    return new ProfitWell({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getMetrics(options?: { month?: string; plan_id?: string }): Promise<PWMetrics> {
+    return this.client.request<PWMetrics>('/metrics/monthly/', { params: { month: options?.month, plan_id: options?.plan_id } });
+  }
+  async getDailyMetrics(options?: { date?: string }): Promise<PWMetrics> {
+    return this.client.request<PWMetrics>('/metrics/daily/', { params: { date: options?.date } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listSubscriptions(options?: { email?: string; page?: number }): Promise<PWSubscription[]> {
+    return this.client.request<PWSubscription[]>('/subscriptions/', { params: { email: options?.email, page: options?.page } });
+  }
+  async createSubscription(data: { email: string; plan_id: string; value: number; effective_date: string }): Promise<PWSubscription> {
+    return this.client.request<PWSubscription>('/subscriptions/', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async churnSubscription(subscriptionId: string, effectiveDate: string): Promise<void> {
+    await this.client.request(`/subscriptions/${subscriptionId}/`, { method: 'DELETE', params: { effective_date: effectiveDate } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listPlans(): Promise<PWPlan[]> { return this.client.request<PWPlan[]>('/plans/'); }
+
+  getClient(): ProfitWellClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
