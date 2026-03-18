@@ -1,51 +1,31 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// The Leap Connector — Digital product creation and selling for creators
+import { TheLeapClient } from './client';
+import type { TheLeapConfig, TLProduct, TLOrder, TLCustomer } from '../types';
+export { TheLeapClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TheLeap {
+  private readonly client: TheLeapClient;
+  constructor(config: TheLeapConfig) { this.client = new TheLeapClient(config); }
+  static fromEnv(): TheLeap {
+    const apiKey = process.env.THELEAP_API_KEY;
+    if (!apiKey) throw new Error('THELEAP_API_KEY is required');
+    return new TheLeap({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listProducts(options?: { page?: number; status?: string }): Promise<TLProduct[]> {
+    return this.client.request<TLProduct[]>('/products', { params: { page: options?.page, status: options?.status } });
   }
+  async getProduct(productId: string): Promise<TLProduct> { return this.client.request<TLProduct>(`/products/${productId}`); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listOrders(options?: { page?: number; product_id?: string }): Promise<TLOrder[]> {
+    return this.client.request<TLOrder[]>('/orders', { params: { page: options?.page, product_id: options?.product_id } });
   }
+  async getOrder(orderId: string): Promise<TLOrder> { return this.client.request<TLOrder>(`/orders/${orderId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listCustomers(options?: { page?: number }): Promise<TLCustomer[]> {
+    return this.client.request<TLCustomer[]>('/customers', { params: { page: options?.page } });
   }
+  async getCustomer(customerId: string): Promise<TLCustomer> { return this.client.request<TLCustomer>(`/customers/${customerId}`); }
+
+  getClient(): TheLeapClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

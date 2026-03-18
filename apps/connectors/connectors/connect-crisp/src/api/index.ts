@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Crisp Connector — Customer messaging and live chat
+import { CrispClient } from './client';
+import type { CrispConfig, CRConversation, CRMessage, CRPeople } from '../types';
+export { CrispClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Crisp {
+  private readonly client: CrispClient;
+  constructor(config: CrispConfig) { this.client = new CrispClient(config); }
+  static fromEnv(): Crisp {
+    const websiteId = process.env.CRISP_WEBSITE_ID;
+    const tokenId = process.env.CRISP_TOKEN_ID;
+    const tokenKey = process.env.CRISP_TOKEN_KEY;
+    if (!websiteId || !tokenId || !tokenKey) throw new Error('CRISP_WEBSITE_ID, CRISP_TOKEN_ID, and CRISP_TOKEN_KEY are required');
+    return new Crisp({ websiteId, tokenId, tokenKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listConversations(options?: { page_number?: number }): Promise<CRConversation[]> {
+    return this.client.request<CRConversation[]>(`/website/${this.client.getWebsiteId()}/conversations/${options?.page_number || 1}`);
+  }
+  async getConversation(sessionId: string): Promise<CRConversation> {
+    return this.client.request<CRConversation>(`/website/${this.client.getWebsiteId()}/conversation/${sessionId}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getMessages(sessionId: string): Promise<CRMessage[]> {
+    return this.client.request<CRMessage[]>(`/website/${this.client.getWebsiteId()}/conversation/${sessionId}/messages`);
+  }
+  async sendMessage(sessionId: string, content: string, type?: string): Promise<void> {
+    await this.client.request(`/website/${this.client.getWebsiteId()}/conversation/${sessionId}/message`, { method: 'POST', body: { type: type || 'text', content, from: 'operator', origin: 'chat' } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async resolveConversation(sessionId: string): Promise<void> {
+    await this.client.request(`/website/${this.client.getWebsiteId()}/conversation/${sessionId}/state`, { method: 'PATCH', body: { state: 'resolved' } });
   }
+
+  async getPeople(peopleId: string): Promise<CRPeople> {
+    return this.client.request<CRPeople>(`/website/${this.client.getWebsiteId()}/people/profile/${peopleId}`);
+  }
+  async searchPeople(searchText: string): Promise<CRPeople[]> {
+    return this.client.request<CRPeople[]>(`/website/${this.client.getWebsiteId()}/people/profiles/1`, { params: { search_text: searchText } });
+  }
+
+  getClient(): CrispClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
