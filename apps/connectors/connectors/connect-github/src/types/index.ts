@@ -635,3 +635,53 @@ export interface ListWorkflowRunsOptions {
   exclude_pull_requests?: boolean;
   head_sha?: string;
 }
+
+// ============================================
+// Commits & Branches
+// ============================================
+
+export interface Branch {
+  name: string;
+  commit: {
+    sha: string;
+    url: string;
+  };
+  protected: boolean;
+}
+
+export interface CommitStatus {
+  id: number;
+  url: string;
+  state: 'error' | 'failure' | 'pending' | 'success';
+  description: string | null;
+  target_url: string | null;
+  context: string;
+  created_at: string;
+  updated_at: string;
+  creator: User;
+}
+
+export interface CreateCommitStatusOptions {
+  state: 'error' | 'failure' | 'pending' | 'success';
+  target_url?: string;
+  description?: string;
+  context?: string;
+}
+
+export interface CompareResult {
+  url: string;
+  html_url: string;
+  status: 'diverged' | 'ahead' | 'behind' | 'identical';
+  ahead_by: number;
+  behind_by: number;
+  total_commits: number;
+  commits: Commit[];
+  files: Array<{
+    filename: string;
+    status: string;
+    additions: number;
+    deletions: number;
+    changes: number;
+    patch?: string;
+  }>;
+}

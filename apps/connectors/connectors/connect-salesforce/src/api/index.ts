@@ -341,14 +341,8 @@ export class Salesforce {
    * Get current user
    */
   async getCurrentUser(): Promise<{ identity: string; user_id: string; organization_id: string; username: string; display_name: string }> {
-    // Use the identity endpoint
-    const url = new URL(this.client.getInstanceUrl());
-    const response = await fetch(`${url.origin}/services/oauth2/userinfo`, {
-      headers: {
-        'Authorization': `Bearer ${this.client['accessToken']}`,
-      },
-    });
-    return response.json();
+    const url = `${this.client.getInstanceUrl()}/services/oauth2/userinfo`;
+    return this.client.requestAbsolute(url);
   }
 
   /**

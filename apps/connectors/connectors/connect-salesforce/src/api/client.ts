@@ -131,6 +131,55 @@ export class SalesforceClient {
     return this.request<T>(path, { method: 'DELETE', params });
   }
 
+
+  /**
+   * Make an authenticated request to an absolute URL (e.g. OAuth endpoints
+   * that live at the instance root rather than /services/data/vXX.X/).
+   */
+  async requestAbsolute<T>(absoluteUrl: string, options: RequestOptions = {}): Promise<T> {
+    const { method = 'GET', params, body, headers = {} } = options;
+    const url = new URL(absoluteUrl);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          url.searchParams.append(key, String(value));
+        }
+      });
+    }
+    const requestHeaders: Record<string, string> = {
+      'Authorization': `Bearer ${this.accessToken}`,
+      'Accept': 'application/json',
+      ...headers,
+    };
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+    const fetchOptions: RequestInit = { method, headers: requestHeaders };
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+    const response = await fetch(url.toString(), fetchOptions);
+    if (response.status === 204) return {} as T;
+    let data: unknown;
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const text = await response.text();
+      if (text) {
+        try { data = JSON.parse(text); } catch { data = text; }
+      }
+    } else {
+      data = await response.text();
+    }
+    if (!response.ok) {
+      const errors = Array.isArray(data) ? data : undefined;
+      const message = Array.isArray(data) && (data as any)[0]?.message
+        ? (data as any)[0].message
+        : `Salesforce API error: ${response.status}`;
+      throw new SalesforceApiError(message, response.status, errors);
+    }
+    return data as T;
+  }
+
   /**
    * Get a preview of the access token (for display/debugging)
    */

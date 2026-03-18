@@ -6,6 +6,7 @@ import { PullsApi } from './pulls';
 import { UsersApi } from './users';
 import { ReleasesApi } from './releases';
 import { WorkflowsApi } from './workflows';
+import { CommitsApi } from './commits';
 
 /**
  * Main GitHub connector class
@@ -20,6 +21,7 @@ export class GitHub {
   public readonly users: UsersApi;
   public readonly releases: ReleasesApi;
   public readonly workflows: WorkflowsApi;
+  public readonly commits: CommitsApi;
 
   constructor(config: GitHubConfig) {
     this.client = new GitHubClient(config);
@@ -29,6 +31,7 @@ export class GitHub {
     this.users = new UsersApi(this.client);
     this.releases = new ReleasesApi(this.client);
     this.workflows = new WorkflowsApi(this.client);
+    this.commits = new CommitsApi(this.client);
   }
 
   /**
@@ -68,3 +71,4 @@ export { PullsApi } from './pulls';
 export { UsersApi } from './users';
 export { ReleasesApi } from './releases';
 export { WorkflowsApi } from './workflows';
+export { CommitsApi } from './commits';
