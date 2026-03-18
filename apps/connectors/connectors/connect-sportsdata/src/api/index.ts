@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SportsData Connector — Real-time sports data, scores, and statistics
+import { SportsDataClient } from './client';
+import type { SportsDataConfig, SDTeam, SDGame, SDPlayer, SDStanding, SDScore } from '../types';
+export { SportsDataClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SportsData {
+  private readonly client: SportsDataClient;
+  constructor(config: SportsDataConfig) { this.client = new SportsDataClient(config); }
+  static fromEnv(): SportsData {
+    const apiKey = process.env.SPORTSDATA_API_KEY;
+    if (!apiKey) throw new Error('SPORTSDATA_API_KEY is required');
+    return new SportsData({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  // NFL
+  async getNFLTeams(): Promise<SDTeam[]> { return this.client.request<SDTeam[]>('nfl', '/Teams'); }
+  async getNFLSchedule(season: string): Promise<SDGame[]> { return this.client.request<SDGame[]>('nfl', `/Schedules/${season}`); }
+  async getNFLScores(season: string, week: number): Promise<SDScore[]> { return this.client.request<SDScore[]>('nfl', `/ScoresByWeek/${season}/${week}`); }
+  async getNFLStandings(season: string): Promise<SDStanding[]> { return this.client.request<SDStanding[]>('nfl', `/Standings/${season}`); }
+  async getNFLPlayers(): Promise<SDPlayer[]> { return this.client.request<SDPlayer[]>('nfl', '/Players'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // NBA
+  async getNBATeams(): Promise<SDTeam[]> { return this.client.request<SDTeam[]>('nba', '/Teams'); }
+  async getNBAScores(date: string): Promise<SDScore[]> { return this.client.request<SDScore[]>('nba', `/ScoresByDate/${date}`); }
+  async getNBAStandings(season: string): Promise<SDStanding[]> { return this.client.request<SDStanding[]>('nba', `/Standings/${season}`); }
+
+  // MLB
+  async getMLBTeams(): Promise<SDTeam[]> { return this.client.request<SDTeam[]>('mlb', '/Teams'); }
+  async getMLBScores(date: string): Promise<SDScore[]> { return this.client.request<SDScore[]>('mlb', `/ScoresByDate/${date}`); }
+
+  // Soccer
+  async getSoccerCompetitions(): Promise<{ CompetitionId: number; Name: string; AreaName: string }[]> {
+    return this.client.request('soccer', '/Competitions');
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SportsDataClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

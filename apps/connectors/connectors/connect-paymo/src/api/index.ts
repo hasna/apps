@@ -1,51 +1,42 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Paymo Connector — Project management, time tracking, and invoicing
+import { PaymoClient } from './client';
+import type { PaymoConfig, PMProject, PMTask, PMTimeEntry, PMClient, PMInvoice, PMUser } from '../types';
+export { PaymoClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Paymo {
+  private readonly client: PaymoClient;
+  constructor(config: PaymoConfig) { this.client = new PaymoClient(config); }
+  static fromEnv(): Paymo {
+    const apiKey = process.env.PAYMO_API_KEY;
+    if (!apiKey) throw new Error('PAYMO_API_KEY is required');
+    return new Paymo({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listProjects(options?: { active?: boolean }): Promise<{ projects: PMProject[] }> {
+    return this.client.request('/projects', { params: { where: options?.active !== undefined ? `active=${options.active}` : undefined } });
+  }
+  async getProject(projectId: number): Promise<{ projects: PMProject[] }> { return this.client.request(`/projects/${projectId}`); }
+  async createProject(data: { name: string; description?: string; client_id?: number; budget_hours?: number }): Promise<{ projects: PMProject[] }> {
+    return this.client.request('/projects', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTasks(options?: { project_id?: number; complete?: boolean }): Promise<{ tasks: PMTask[] }> {
+    return this.client.request('/tasks', { params: { where: options?.project_id ? `project_id=${options.project_id}` : undefined } });
+  }
+  async createTask(data: { name: string; project_id: number; tasklist_id: number; user_id?: number; due_date?: string }): Promise<{ tasks: PMTask[] }> {
+    return this.client.request('/tasks', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listTimeEntries(options?: { task_id?: number; user_id?: number }): Promise<{ entries: PMTimeEntry[] }> {
+    return this.client.request('/entries', { params: { where: options?.task_id ? `task_id=${options.task_id}` : undefined } });
   }
+  async createTimeEntry(data: { task_id: number; user_id: number; start_time: string; end_time: string; description?: string }): Promise<{ entries: PMTimeEntry[] }> {
+    return this.client.request('/entries', { method: 'POST', body: data as Record<string, unknown> });
+  }
+
+  async listClients(): Promise<{ clients: PMClient[] }> { return this.client.request('/clients'); }
+  async listInvoices(): Promise<{ invoices: PMInvoice[] }> { return this.client.request('/invoices'); }
+  async listUsers(): Promise<{ users: PMUser[] }> { return this.client.request('/users'); }
+
+  getClient(): PaymoClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
