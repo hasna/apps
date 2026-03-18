@@ -615,7 +615,13 @@ export function createServer(): McpServer {
     "Get everything an agent needs on session start in ONE call — git state, project info, source structure. Replaces: git status + git log + cat package.json + ls src/. Cached for the session.",
     async () => {
       const ctx = await getBootContext(process.cwd());
-      return { content: [{ type: "text" as const, text: JSON.stringify(ctx) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        ...ctx,
+        hints: {
+          cwd: process.cwd(),
+          tip: "All terminal tools support relative paths. Use 'src/foo.ts' not the full absolute path. Use commit({message, push:true}) instead of raw git commands. Use run({task:'test'}) instead of bun/npm test. Use lookup({file, items}) instead of grep pipelines.",
+        },
+      }) }] };
     }
   );
 
