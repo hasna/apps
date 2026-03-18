@@ -1,51 +1,47 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Strapi Connector — Open-source headless CMS and content API
+import { StrapiClient } from './client';
+import type { StrapiConfig, StrapiEntry, StrapiEntryList, StrapiSingleEntry, StrapiContentType, StrapiUser, StrapiMedia } from '../types';
+export { StrapiClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Strapi {
+  private readonly client: StrapiClient;
+  constructor(config: StrapiConfig) { this.client = new StrapiClient(config); }
+  static fromEnv(): Strapi {
+    const url = process.env.STRAPI_URL;
+    const token = process.env.STRAPI_TOKEN;
+    if (!url || !token) throw new Error('STRAPI_URL and STRAPI_TOKEN are required');
+    return new Strapi({ url, token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async find(contentType: string, options?: { page?: number; pageSize?: number; sort?: string; filters?: string; populate?: string; fields?: string }): Promise<StrapiEntryList> {
+    return this.client.request<StrapiEntryList>(`/${contentType}`, { params: { 'pagination[page]': options?.page, 'pagination[pageSize]': options?.pageSize, sort: options?.sort, filters: options?.filters, populate: options?.populate, fields: options?.fields } });
+  }
+  async findOne(contentType: string, id: number, options?: { populate?: string; fields?: string }): Promise<StrapiSingleEntry> {
+    return this.client.request<StrapiSingleEntry>(`/${contentType}/${id}`, { params: { populate: options?.populate, fields: options?.fields } });
+  }
+  async create(contentType: string, data: Record<string, unknown>): Promise<StrapiSingleEntry> {
+    return this.client.request<StrapiSingleEntry>(`/${contentType}`, { method: 'POST', body: { data } });
+  }
+  async update(contentType: string, id: number, data: Record<string, unknown>): Promise<StrapiSingleEntry> {
+    return this.client.request<StrapiSingleEntry>(`/${contentType}/${id}`, { method: 'PUT', body: { data } });
+  }
+  async remove(contentType: string, id: number): Promise<StrapiSingleEntry> {
+    return this.client.request<StrapiSingleEntry>(`/${contentType}/${id}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listContentTypes(): Promise<{ data: StrapiContentType[] }> { return this.client.request('/content-type-builder/content-types'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listUsers(options?: { page?: number; pageSize?: number }): Promise<StrapiUser[]> {
+    return this.client.request<StrapiUser[]>('/users', { params: { 'pagination[page]': options?.page, 'pagination[pageSize]': options?.pageSize } });
   }
+  async getUser(userId: number): Promise<StrapiUser> { return this.client.request<StrapiUser>(`/users/${userId}`); }
+  async getMe(): Promise<StrapiUser> { return this.client.request<StrapiUser>('/users/me'); }
+
+  async listMedia(options?: { page?: number; pageSize?: number }): Promise<StrapiMedia[]> {
+    return this.client.request<StrapiMedia[]>('/upload/files', { params: { 'pagination[page]': options?.page, 'pagination[pageSize]': options?.pageSize } });
+  }
+  async getMedia(mediaId: number): Promise<StrapiMedia> { return this.client.request<StrapiMedia>(`/upload/files/${mediaId}`); }
+  async deleteMedia(mediaId: number): Promise<void> { await this.client.request(`/upload/files/${mediaId}`, { method: 'DELETE' }); }
+
+  getClient(): StrapiClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
