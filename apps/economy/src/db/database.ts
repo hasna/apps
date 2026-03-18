@@ -180,6 +180,11 @@ export function querySessions(db: Database, filter: SessionFilter = {}): Economy
   if (filter.agent) { conditions.push('agent = ?'); params.push(filter.agent) }
   if (filter.project) { conditions.push('project_path LIKE ?'); params.push(`%${filter.project}%`) }
   if (filter.since) { conditions.push('started_at >= ?'); params.push(filter.since) }
+  if (filter.search) {
+    const q = `%${filter.search}%`
+    conditions.push('(project_name LIKE ? OR agent LIKE ? OR id LIKE ?)')
+    params.push(q, q, `${filter.search}%`)
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
   const limit = filter.limit ?? 50
   const offset = filter.offset ?? 0

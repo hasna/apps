@@ -17,6 +17,11 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'claude-3-opus':      { inputPer1M: 15.00, outputPer1M: 75.00, cacheReadPer1M: 1.50,  cacheWritePer1M: 18.75 },
   'claude-3-sonnet':    { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
   'claude-3-haiku':     { inputPer1M: 0.25,  outputPer1M: 1.25,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0.30  },
+  // Gemini
+  'gemini-2.0-flash':  { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-2.5-pro':    { inputPer1M: 1.25,   outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-1.5-pro':    { inputPer1M: 1.25,   outputPer1M: 5.00,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-1.5-flash':  { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   // OpenAI / Codex — subscription-based but API pricing for reference
   'gpt-5.3-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-5.2-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },

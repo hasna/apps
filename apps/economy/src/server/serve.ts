@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite'
 import {
   querySummary, querySessions, queryTopSessions,
   queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown,
-  listBudgets, getBudgetStatuses, upsertBudget, deleteBudget,
+  getBudgetStatuses, upsertBudget, deleteBudget,
   listProjects, upsertProject, deleteProject,
   listModelPricing, upsertModelPricing, deleteModelPricing,
   openDatabase,
@@ -73,7 +73,7 @@ export function createHandler(db: Database) {
       const fieldsParam = url.searchParams.get('fields')
       const fields = fieldsParam ? fieldsParam.split(',').map(f => f.trim()).filter(Boolean) : undefined
       const sessions = querySessions(db, { agent: agent ?? undefined, project, limit, offset, since })
-      return ok(fields ? sessions.map(s => applyFields(s as Record<string, unknown>, fields)) : sessions, { limit, offset })
+      return ok(fields ? sessions.map(s => applyFields(s as unknown as Record<string, unknown>, fields)) : sessions, { limit, offset })
     }
 
     // Top sessions
@@ -178,6 +178,16 @@ export function createHandler(db: Database) {
       if (sources === 'all' || sources === 'claude') results['claude'] = await ingestClaude(db)
       if (sources === 'all' || sources === 'codex') results['codex'] = await ingestCodex(db)
       return ok(results)
+    }
+
+    // Session requests detail
+    const sessionRequestsMatch = path.match(/^\/api\/sessions\/([^/]+)\/requests$/)
+    if (sessionRequestsMatch && method === 'GET') {
+      const sessionId = sessionRequestsMatch[1]!
+      const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(sessionId, `${sessionId}%`) as Record<string, unknown> | null
+      if (!session) return err('Session not found', 404)
+      const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
+      return ok(requests, { session_id: session['id'], count: requests.length })
     }
 
     return err('Not found', 404)

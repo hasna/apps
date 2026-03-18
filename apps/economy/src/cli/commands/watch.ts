@@ -7,6 +7,7 @@ import type { Agent } from '../../types/index.js'
 interface WatchOptions {
   interval: number
   agent?: Agent
+  notify?: number
 }
 
 function fmt(usd: number): string {
@@ -35,6 +36,10 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
   let lastCheck = new Date(Date.now() - opts.interval * 1000).toISOString()
   const lines: string[] = []
   const MAX_LINES = 20
+
+  // Notify threshold tracking
+  let sessionCumulativeCost = 0
+  let notifyThresholdFired = 0  // tracks how many full thresholds have been crossed
 
   // Initial render
   const initialSummaryToday = querySummary(db, 'today')
@@ -68,6 +73,19 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
       // Notify on large cost
       if (req.cost_usd > 1.0) {
         notify('economy: high cost', `$${req.cost_usd.toFixed(2)} on ${req.model}`)
+      }
+
+      // --notify threshold tracking
+      if (opts.notify && opts.notify > 0) {
+        sessionCumulativeCost += req.cost_usd
+        const crossedThresholds = Math.floor(sessionCumulativeCost / opts.notify)
+        if (crossedThresholds > notifyThresholdFired) {
+          notifyThresholdFired = crossedThresholds
+          const { execSync } = require('child_process') as typeof import('child_process')
+          try {
+            execSync(`osascript -e 'display notification "Economy: $${sessionCumulativeCost.toFixed(2)} spent this session" with title "Cost Alert"'`)
+          } catch { /* non-macOS */ }
+        }
       }
     }
 
