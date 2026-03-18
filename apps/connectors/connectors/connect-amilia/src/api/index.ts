@@ -1,51 +1,34 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Amilia Connector — Activity registration and recreation management
+import { AmiliaClient } from './client';
+import type { AmiliaConfig, AmiliaActivity, AmiliaActivityList, AmiliaPerson, AmiliaRegistration, AmiliaLocation, AmiliaCategory } from '../types';
+export { AmiliaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Amilia {
+  private readonly client: AmiliaClient;
+  constructor(config: AmiliaConfig) { this.client = new AmiliaClient(config); }
+  static fromEnv(): Amilia {
+    const token = process.env.AMILIA_TOKEN;
+    const organizationId = process.env.AMILIA_ORG_ID;
+    if (!token || !organizationId) throw new Error('AMILIA_TOKEN and AMILIA_ORG_ID are required');
+    return new Amilia({ token, organizationId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listActivities(options?: { page?: number; perPage?: number; categoryId?: number }): Promise<AmiliaActivityList> {
+    return this.client.request<AmiliaActivityList>('/activities', { params: { page: options?.page, perPage: options?.perPage, categoryId: options?.categoryId } });
   }
+  async getActivity(activityId: number): Promise<AmiliaActivity> { return this.client.request<AmiliaActivity>(`/activities/${activityId}`); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listPersons(options?: { page?: number; perPage?: number }): Promise<AmiliaPerson[]> {
+    return this.client.request<AmiliaPerson[]>('/persons', { params: { page: options?.page, perPage: options?.perPage } });
   }
+  async getPerson(personId: number): Promise<AmiliaPerson> { return this.client.request<AmiliaPerson>(`/persons/${personId}`); }
+  async searchPersons(query: string): Promise<AmiliaPerson[]> { return this.client.request<AmiliaPerson[]>('/persons/search', { params: { q: query } }); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listRegistrations(activityId: number): Promise<AmiliaRegistration[]> { return this.client.request<AmiliaRegistration[]>(`/activities/${activityId}/registrations`); }
+  async getRegistration(registrationId: number): Promise<AmiliaRegistration> { return this.client.request<AmiliaRegistration>(`/registrations/${registrationId}`); }
+
+  async listLocations(): Promise<AmiliaLocation[]> { return this.client.request<AmiliaLocation[]>('/locations'); }
+  async listCategories(): Promise<AmiliaCategory[]> { return this.client.request<AmiliaCategory[]>('/categories'); }
+
+  getClient(): AmiliaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
