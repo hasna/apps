@@ -1,51 +1,98 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Reply.io Connector
+// Sales engagement — contacts, campaigns, email sequences
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+import { ReplyClient } from './client';
+import type { ReplyConfig, Person, Campaign, EmailAccount, Task } from '../types';
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
+export { ReplyClient } from './client';
 
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Reply {
+  private readonly client: ReplyClient;
+
+  constructor(config: ReplyConfig) {
+    this.client = new ReplyClient(config);
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  static fromEnv(): Reply {
+    const apiKey = process.env.REPLY_API_KEY;
+    if (!apiKey) throw new Error('REPLY_API_KEY environment variable is required');
+    return new Reply({ apiKey });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  // People (contacts)
+  async listPeople(options?: { page?: number; limit?: number; campaignId?: number }): Promise<{ people: Person[]; total: number }> {
+    return this.client.request('/people', { params: options as Record<string, number | undefined> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getPerson(personId: number): Promise<Person> {
+    return this.client.request<Person>(`/people/${personId}`);
   }
+
+  async getPersonByEmail(email: string): Promise<Person> {
+    return this.client.request<Person>('/people/get', { params: { email } });
+  }
+
+  async createPerson(data: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    company?: string;
+    title?: string;
+    phone?: string;
+    customFields?: Record<string, string>;
+  }): Promise<{ id: number }> {
+    return this.client.request('/people', { method: 'POST', body: data as Record<string, unknown> });
+  }
+
+  async updatePerson(personId: number, data: Partial<Parameters<Reply['createPerson']>[0]>): Promise<void> {
+    await this.client.request(`/people/${personId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+
+  async deletePerson(personId: number): Promise<void> {
+    await this.client.request(`/people/${personId}`, { method: 'DELETE' });
+  }
+
+  async pushPersonToCampaign(personId: number, campaignId: number): Promise<void> {
+    await this.client.request('/people/pushtosequence', {
+      method: 'POST',
+      body: { personId, campaignId },
+    });
+  }
+
+  async removePersonFromCampaign(personId: number, campaignId: number): Promise<void> {
+    await this.client.request('/people/removefromsequence', {
+      method: 'POST',
+      body: { personId, campaignId },
+    });
+  }
+
+  // Campaigns (sequences)
+  async listCampaigns(options?: { page?: number; limit?: number }): Promise<{ campaigns: Campaign[]; total: number }> {
+    return this.client.request('/campaigns', { params: options as Record<string, number | undefined> });
+  }
+
+  async getCampaign(campaignId: number): Promise<Campaign> {
+    return this.client.request<Campaign>(`/campaigns/${campaignId}`);
+  }
+
+  async startCampaign(campaignId: number): Promise<void> {
+    await this.client.request(`/campaigns/${campaignId}/start`, { method: 'PUT' });
+  }
+
+  async pauseCampaign(campaignId: number): Promise<void> {
+    await this.client.request(`/campaigns/${campaignId}/pause`, { method: 'PUT' });
+  }
+
+  // Email Accounts
+  async listEmailAccounts(): Promise<EmailAccount[]> {
+    const result = await this.client.request<{ emailAccounts: EmailAccount[] }>('/emailaccounts');
+    return result.emailAccounts;
+  }
+
+  // Tasks
+  async listTasks(options?: { page?: number; limit?: number; type?: string }): Promise<{ tasks: Task[]; total: number }> {
+    return this.client.request('/tasks', { params: options as Record<string, string | number | undefined> });
+  }
+
+  getClient(): ReplyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
