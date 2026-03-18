@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// CraftDraft Connector — Document drafting and template management
+import { CraftDraftClient } from './client';
+import type { CraftDraftConfig, CDTemplate, CDDocument, CDDocumentList, CDExport } from '../types';
+export { CraftDraftClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CraftDraft {
+  private readonly client: CraftDraftClient;
+  constructor(config: CraftDraftConfig) { this.client = new CraftDraftClient(config); }
+  static fromEnv(): CraftDraft {
+    const apiKey = process.env.CRAFTDRAFT_API_KEY;
+    if (!apiKey) throw new Error('CRAFTDRAFT_API_KEY is required');
+    return new CraftDraft({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listTemplates(): Promise<CDTemplate[]> { return this.client.request<CDTemplate[]>('/templates'); }
+  async getTemplate(templateId: string): Promise<CDTemplate> { return this.client.request<CDTemplate>(`/templates/${templateId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listDocuments(options?: { page?: number; per_page?: number; status?: string; template_id?: string }): Promise<CDDocumentList> {
+    return this.client.request<CDDocumentList>('/documents', { params: { page: options?.page, per_page: options?.per_page, status: options?.status, template_id: options?.template_id } });
+  }
+  async getDocument(documentId: string): Promise<CDDocument> { return this.client.request<CDDocument>(`/documents/${documentId}`); }
+  async createDocument(data: { template_id: string; name: string; variables: Record<string, string> }): Promise<CDDocument> {
+    return this.client.request<CDDocument>('/documents', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateDocument(documentId: string, data: { name?: string; variables?: Record<string, string>; status?: string }): Promise<CDDocument> {
+    return this.client.request<CDDocument>(`/documents/${documentId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+  async deleteDocument(documentId: string): Promise<void> { await this.client.request(`/documents/${documentId}`, { method: 'DELETE' }); }
+
+  async exportDocument(documentId: string, format: 'pdf' | 'docx' | 'html'): Promise<CDExport> {
+    return this.client.request<CDExport>(`/documents/${documentId}/export`, { method: 'POST', body: { format } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CraftDraftClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
