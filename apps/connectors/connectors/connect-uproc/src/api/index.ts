@@ -1,49 +1,33 @@
 // uProc Connector — Data processing and enrichment tools
 import { UProcClient } from './client';
-import type { UProcConfig, UProcToolResult, UProcTool } from '../types';
+import type { UProcConfig, UProcTool, UProcResult, UProcBatchJob, UProcCredits } from '../types';
 export { UProcClient } from './client';
 
 export class UProc {
   private readonly client: UProcClient;
   constructor(config: UProcConfig) { this.client = new UProcClient(config); }
-
   static fromEnv(): UProc {
-    const email = process.env.UPROC_EMAIL;
     const apiKey = process.env.UPROC_API_KEY;
-    if (!email || !apiKey) throw new Error('UPROC_EMAIL and UPROC_API_KEY are required');
-    return new UProc({ email, apiKey });
+    if (!apiKey) throw new Error('UPROC_API_KEY is required');
+    return new UProc({ apiKey });
   }
 
-  /** Execute a uProc tool with input data */
-  async executeTool(toolId: string, inputs: Record<string, string | number | boolean>): Promise<UProcToolResult> {
-    return this.client.request<UProcToolResult>('/process', { tool: toolId, ...inputs });
+  async listTools(options?: { category?: string }): Promise<UProcTool[]> {
+    return this.client.request<UProcTool[]>('/tools', { params: { category: options?.category } });
+  }
+  async getTool(toolId: string): Promise<UProcTool> { return this.client.request<UProcTool>(`/tools/${toolId}`); }
+
+  async runTool(toolId: string, params: Record<string, unknown>): Promise<UProcResult> {
+    return this.client.request<UProcResult>(`/tools/${toolId}/run`, { method: 'POST', body: params });
   }
 
-  /** Validate an email address */
-  async validateEmail(email: string): Promise<UProcToolResult> {
-    return this.executeTool('get-email-validation', { email });
+  async createBatchJob(toolId: string, data: Record<string, unknown>[]): Promise<UProcBatchJob> {
+    return this.client.request<UProcBatchJob>(`/tools/${toolId}/batch`, { method: 'POST', body: { data } as Record<string, unknown> });
   }
+  async getBatchJob(jobId: string): Promise<UProcBatchJob> { return this.client.request<UProcBatchJob>(`/batch/${jobId}`); }
+  async listBatchJobs(): Promise<UProcBatchJob[]> { return this.client.request<UProcBatchJob[]>('/batch'); }
 
-  /** Normalize a phone number */
-  async normalizePhone(phone: string, countryCode?: string): Promise<UProcToolResult> {
-    return this.executeTool('get-phone-number-info', { phone, country_code: countryCode ?? 'US' });
-  }
-
-  /** Get company info from domain */
-  async getCompanyFromDomain(domain: string): Promise<UProcToolResult> {
-    return this.executeTool('get-company-from-domain', { domain });
-  }
-
-  /** Find professional email for a person */
-  async findEmail(firstName: string, lastName: string, domain: string): Promise<UProcToolResult> {
-    return this.executeTool('get-email-from-name-and-domain', { first_name: firstName, last_name: lastName, domain });
-  }
-
-  /** List all available tools */
-  async listTools(): Promise<UProcTool[]> {
-    const r = await this.client.request<{ tools: UProcTool[] }>('/tools');
-    return r.tools ?? [];
-  }
+  async getCredits(): Promise<UProcCredits> { return this.client.request<UProcCredits>('/credits'); }
 
   getClient(): UProcClient { return this.client; }
 }
