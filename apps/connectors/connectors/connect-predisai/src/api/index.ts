@@ -1,51 +1,33 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Predis AI Connector — AI-powered social media content creation and scheduling
+import { PredisAIClient } from './client';
+import type { PredisAIConfig, PAPost, PAPostList, PAGeneration, PABrand } from '../types';
+export { PredisAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class PredisAI {
+  private readonly client: PredisAIClient;
+  constructor(config: PredisAIConfig) { this.client = new PredisAIClient(config); }
+  static fromEnv(): PredisAI {
+    const apiKey = process.env.PREDISAI_API_KEY;
+    if (!apiKey) throw new Error('PREDISAI_API_KEY is required');
+    return new PredisAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async generatePost(data: { text: string; platform: string; brand_id?: string; media_type?: string }): Promise<PAGeneration> {
+    return this.client.request<PAGeneration>('/create_content', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async getGeneration(generationId: string): Promise<PAGeneration> { return this.client.request<PAGeneration>(`/creatives/${generationId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listPosts(options?: { page?: number; platform?: string }): Promise<PAPostList> {
+    return this.client.request<PAPostList>('/posts', { params: { page: options?.page, platform: options?.platform } });
+  }
+  async schedulePost(data: { creative_id: string; platform: string; scheduled_at: string; caption?: string }): Promise<PAPost> {
+    return this.client.request<PAPost>('/schedule', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listBrands(): Promise<PABrand[]> { return this.client.request<PABrand[]>('/brands'); }
+  async createBrand(data: { name: string; description?: string; colors?: string[]; website?: string }): Promise<PABrand> {
+    return this.client.request<PABrand>('/brands', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): PredisAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

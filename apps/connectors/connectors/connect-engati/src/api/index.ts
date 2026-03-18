@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Engati Connector — Conversational AI chatbot and automation
+import { EngatiClient } from './client';
+import type { EngatiConfig, ENBot, ENConversation, ENCustomer, ENCustomerList, ENBroadcast } from '../types';
+export { EngatiClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Engati {
+  private readonly client: EngatiClient;
+  constructor(config: EngatiConfig) { this.client = new EngatiClient(config); }
+  static fromEnv(): Engati {
+    const apiKey = process.env.ENGATI_API_KEY;
+    const botKey = process.env.ENGATI_BOT_KEY;
+    if (!apiKey || !botKey) throw new Error('ENGATI_API_KEY and ENGATI_BOT_KEY are required');
+    return new Engati({ apiKey, botKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getBot(): Promise<ENBot> { return this.client.request<ENBot>('/bot'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async sendMessage(customerId: string, message: string, channel?: string): Promise<void> {
+    await this.client.request('/messages/send', { method: 'POST', body: { customer_id: customerId, message, channel } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(options?: { status?: string; page?: number }): Promise<{ conversations: ENConversation[] }> {
+    return this.client.request('/conversations', { params: { status: options?.status, page: options?.page } });
+  }
+  async getConversation(conversationId: string): Promise<ENConversation> {
+    return this.client.request<ENConversation>(`/conversations/${conversationId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listCustomers(options?: { page?: number; per_page?: number; tag?: string }): Promise<ENCustomerList> {
+    return this.client.request<ENCustomerList>('/customers', { params: { page: options?.page, per_page: options?.per_page, tag: options?.tag } });
   }
+  async getCustomer(customerId: string): Promise<ENCustomer> { return this.client.request<ENCustomer>(`/customers/${customerId}`); }
+  async updateCustomer(customerId: string, data: { name?: string; email?: string; tags?: string[]; custom_attributes?: Record<string, unknown> }): Promise<ENCustomer> {
+    return this.client.request<ENCustomer>(`/customers/${customerId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+
+  async listBroadcasts(): Promise<ENBroadcast[]> { return this.client.request<ENBroadcast[]>('/broadcasts'); }
+
+  getClient(): EngatiClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
