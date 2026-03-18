@@ -1,51 +1,30 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Formdesk Connector — Online form builder and data collection
+import { FormdeskClient } from './client';
+import type { FormdeskConfig, FDForm, FDSubmission, FDSubmissionList } from '../types';
+export { FormdeskClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Formdesk {
+  private readonly client: FormdeskClient;
+  constructor(config: FormdeskConfig) { this.client = new FormdeskClient(config); }
+  static fromEnv(): Formdesk {
+    const apiKey = process.env.FORMDESK_API_KEY;
+    const subdomain = process.env.FORMDESK_SUBDOMAIN;
+    if (!apiKey || !subdomain) throw new Error('FORMDESK_API_KEY and FORMDESK_SUBDOMAIN are required');
+    return new Formdesk({ apiKey, subdomain });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listForms(): Promise<FDForm[]> { return this.client.request<FDForm[]>('/forms'); }
+  async getForm(formId: string): Promise<FDForm> { return this.client.request<FDForm>(`/forms/${formId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listSubmissions(formId: string, options?: { page?: number; per_page?: number; from_date?: string; to_date?: string }): Promise<FDSubmissionList> {
+    return this.client.request<FDSubmissionList>(`/forms/${formId}/submissions`, { params: { page: options?.page, per_page: options?.per_page, from_date: options?.from_date, to_date: options?.to_date } });
+  }
+  async getSubmission(formId: string, submissionId: string): Promise<FDSubmission> {
+    return this.client.request<FDSubmission>(`/forms/${formId}/submissions/${submissionId}`);
+  }
+  async deleteSubmission(formId: string, submissionId: string): Promise<void> {
+    await this.client.request(`/forms/${formId}/submissions/${submissionId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): FormdeskClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
