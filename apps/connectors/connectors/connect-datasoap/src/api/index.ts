@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// DataSoap Connector — Data cleansing, email verification, and validation
+import { DataSoapClient } from './client';
+import type { DataSoapConfig, DSEmailResult, DSPhoneResult, DSAddressResult, DSBatchResult, DSCredits } from '../types';
+export { DataSoapClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class DataSoap {
+  private readonly client: DataSoapClient;
+  constructor(config: DataSoapConfig) { this.client = new DataSoapClient(config); }
+  static fromEnv(): DataSoap {
+    const apiKey = process.env.DATASOAP_API_KEY;
+    if (!apiKey) throw new Error('DATASOAP_API_KEY is required');
+    return new DataSoap({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async verifyEmail(email: string): Promise<DSEmailResult> {
+    return this.client.request<DSEmailResult>('/email/verify', { method: 'POST', body: { email } });
+  }
+  async verifyEmailBatch(emails: string[]): Promise<DSBatchResult> {
+    return this.client.request<DSBatchResult>('/email/verify/batch', { method: 'POST', body: { emails } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async validatePhone(phone: string, countryCode?: string): Promise<DSPhoneResult> {
+    return this.client.request<DSPhoneResult>('/phone/validate', { method: 'POST', body: { phone, country_code: countryCode } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async validateAddress(address: string): Promise<DSAddressResult> {
+    return this.client.request<DSAddressResult>('/address/validate', { method: 'POST', body: { address } });
   }
+
+  async getBatchStatus(batchId: string): Promise<DSBatchResult> {
+    return this.client.request<DSBatchResult>(`/batch/${batchId}`);
+  }
+
+  async getCredits(): Promise<DSCredits> { return this.client.request<DSCredits>('/credits'); }
+
+  getClient(): DataSoapClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

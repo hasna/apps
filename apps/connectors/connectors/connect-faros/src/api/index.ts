@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Faros Connector — Engineering intelligence and developer productivity analytics
+import { FarosClient } from './client';
+import type { FarosConfig, FarosDeployment, FarosBuild, FarosIncident, FarosTeam, FarosQueryResult } from '../types';
+export { FarosClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Faros {
+  private readonly client: FarosClient;
+  constructor(config: FarosConfig) { this.client = new FarosClient(config); }
+  static fromEnv(): Faros {
+    const apiKey = process.env.FAROS_API_KEY;
+    if (!apiKey) throw new Error('FAROS_API_KEY is required');
+    return new Faros({ apiKey, baseUrl: process.env.FAROS_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async query(query: string): Promise<FarosQueryResult> {
+    return this.client.request<FarosQueryResult>('/graphs/default/query', { method: 'POST', body: { query } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listDeployments(options?: { application?: string; limit?: number }): Promise<FarosDeployment[]> {
+    return this.client.request<FarosDeployment[]>('/graphs/default/deployments', { params: { application: options?.application, limit: options?.limit } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listBuilds(options?: { pipeline?: string; limit?: number }): Promise<FarosBuild[]> {
+    return this.client.request<FarosBuild[]>('/graphs/default/builds', { params: { pipeline: options?.pipeline, limit: options?.limit } });
   }
+
+  async listIncidents(options?: { status?: string; severity?: string; limit?: number }): Promise<FarosIncident[]> {
+    return this.client.request<FarosIncident[]>('/graphs/default/incidents', { params: { status: options?.status, severity: options?.severity, limit: options?.limit } });
+  }
+
+  async listTeams(): Promise<FarosTeam[]> { return this.client.request<FarosTeam[]>('/graphs/default/teams'); }
+  async getTeam(teamUid: string): Promise<FarosTeam> { return this.client.request<FarosTeam>(`/graphs/default/teams/${teamUid}`); }
+
+  async ingestData(origin: string, entries: Record<string, unknown>[]): Promise<{ entriesProcessed: number }> {
+    return this.client.request('/graphs/default/revisions', { method: 'POST', body: { origin, entries } as Record<string, unknown> });
+  }
+
+  getClient(): FarosClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
