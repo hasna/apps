@@ -1,73 +1,33 @@
 import type { KibanaConfig } from '../types';
 import { KibanaApiError } from '../types';
 
-export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  params?: Record<string, string | number | boolean | undefined>;
-  body?: Record<string, unknown> | unknown[];
-}
-
 export class KibanaClient {
-  private readonly baseUrl: string;
   private readonly authHeader: string;
+  private readonly baseUrl: string;
 
   constructor(config: KibanaConfig) {
-    if (!config.baseUrl) throw new Error('Kibana base URL is required');
-    this.baseUrl = config.baseUrl.replace(/\/$/, '');
-
+    if (!config.url) throw new Error('Kibana url is required');
+    this.baseUrl = `${config.url.replace(/\/$/, '')}/api`;
     if (config.apiKey) {
       this.authHeader = `ApiKey ${config.apiKey}`;
     } else if (config.username && config.password) {
-      this.authHeader = `Basic ${Buffer.from(`${config.username}:${config.password}`).toString('base64')}`;
+      this.authHeader = `Basic ${btoa(`${config.username}:${config.password}`)}`;
     } else {
-      throw new Error('Kibana auth required: provide apiKey or username+password');
+      throw new Error('Kibana apiKey or username/password is required');
     }
   }
 
-  async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', params, body } = options;
-
+  async request<T>(path: string, options: { method?: string; body?: Record<string, unknown>; params?: Record<string, string | number | undefined> } = {}): Promise<T> {
+    const { method = 'GET', body, params } = options;
     const url = new URL(`${this.baseUrl}${path}`);
-    if (params) {
-      Object.entries(params).forEach(([k, v]) => {
-        if (v !== undefined) url.searchParams.append(k, String(v));
-      });
-    }
-
-    const headers: Record<string, string> = {
-      Authorization: this.authHeader,
-      'Content-Type': 'application/json',
-      'kbn-xsrf': 'true',
-    };
-
+    if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined) url.searchParams.append(k, String(v)); });
+    const headers: Record<string, string> = { Authorization: this.authHeader, 'Content-Type': 'application/json', 'kbn-xsrf': 'true' };
     const fetchOptions: RequestInit = { method, headers };
-    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
-      fetchOptions.body = JSON.stringify(body);
-    }
-
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) fetchOptions.body = JSON.stringify(body);
     const response = await fetch(url.toString(), fetchOptions);
     if (response.status === 204) return {} as T;
-
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const msg = (data as { message?: string; error?: string })?.message
-        || (data as { error?: string })?.error
-        || response.statusText;
-      throw new KibanaApiError(msg, response.status);
-    }
+    if (!response.ok) throw new KibanaApiError((data as { message?: string })?.message || response.statusText, response.status);
     return data as T;
-  }
-
-  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'GET', params });
-  }
-  async post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-    return this.request<T>(path, { method: 'POST', body });
-  }
-  async put<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-    return this.request<T>(path, { method: 'PUT', body });
-  }
-  async delete<T>(path: string): Promise<T> {
-    return this.request<T>(path, { method: 'DELETE' });
   }
 }

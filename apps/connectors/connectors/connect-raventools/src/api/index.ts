@@ -1,97 +1,31 @@
-// Raven Tools Connector
-// SEO rank tracking, keyword monitoring, and marketing reporting
-
+// Raven Tools Connector — SEO and marketing reporting with rank tracking
 import { RavenToolsClient } from './client';
-import type {
-  RavenToolsConfig, Site, Keyword, RankingEntry, Competitor, Profile,
-} from '../types';
-
+import type { RavenToolsConfig, RTDomain, RTRanking, RTCompetitor, RTKeyword } from '../types';
 export { RavenToolsClient } from './client';
 
 export class RavenTools {
   private readonly client: RavenToolsClient;
-
-  constructor(config: RavenToolsConfig) {
-    this.client = new RavenToolsClient(config);
-  }
-
+  constructor(config: RavenToolsConfig) { this.client = new RavenToolsClient(config); }
   static fromEnv(): RavenTools {
-    const token = process.env.RAVENTOOLS_TOKEN || process.env.RAVEN_TOOLS_API_KEY;
-    if (!token) throw new Error('RAVENTOOLS_TOKEN environment variable is required');
-    return new RavenTools({ token });
+    const apiKey = process.env.RAVENTOOLS_API_KEY;
+    if (!apiKey) throw new Error('RAVENTOOLS_API_KEY is required');
+    return new RavenTools({ apiKey });
   }
 
-  // Profile
-  async getProfile(): Promise<Profile> {
-    return this.client.request<Profile>('/profile');
-  }
+  async listDomains(): Promise<RTDomain[]> { return this.client.request<RTDomain[]>('domains'); }
+  async addDomain(domain: string): Promise<{ status: string }> { return this.client.request('add_domain', { domain }); }
+  async removeDomain(domain: string): Promise<{ status: string }> { return this.client.request('remove_domain', { domain }); }
 
-  // Sites (domains being tracked)
-  async listSites(): Promise<Site[]> {
-    const result = await this.client.request<{ sites: Site[] }>('/sites');
-    return result.sites ?? [];
+  async getRankings(domain: string, options?: { start_date?: string; end_date?: string; engine?: string }): Promise<RTRanking[]> {
+    return this.client.request<RTRanking[]>('rank', { domain, start_date: options?.start_date, end_date: options?.end_date, engine: options?.engine });
   }
+  async getRankAll(domain: string): Promise<RTRanking[]> { return this.client.request<RTRanking[]>('rank_all', { domain }); }
 
-  async getSite(siteHash: string): Promise<Site> {
-    return this.client.request<Site>('/site', { site_hash: siteHash });
-  }
+  async getKeywords(domain: string): Promise<string[]> { return this.client.request<string[]>('keywords', { domain }); }
+  async addKeyword(domain: string, keyword: string): Promise<{ status: string }> { return this.client.request('add_keyword', { domain, keyword }); }
+  async removeKeyword(domain: string, keyword: string): Promise<{ status: string }> { return this.client.request('remove_keyword', { domain, keyword }); }
 
-  // Keywords
-  async listKeywords(siteHash: string, options?: {
-    startDate?: string;
-    endDate?: string;
-    engine?: string;
-    tag?: string;
-  }): Promise<Keyword[]> {
-    const result = await this.client.request<{ keywords: Keyword[] }>('/keywords', {
-      site_hash: siteHash,
-      start_date: options?.startDate,
-      end_date: options?.endDate,
-      engine: options?.engine,
-      tag: options?.tag,
-    });
-    return result.keywords ?? [];
-  }
-
-  async addKeyword(siteHash: string, keyword: string, engines?: string[], tags?: string[]): Promise<{ success: boolean }> {
-    const params: Record<string, string> = { site_hash: siteHash, keyword };
-    if (engines?.length) params['engines[]'] = engines.join(',');
-    if (tags?.length) params['tags[]'] = tags.join(',');
-    return this.client.request('/keyword/add', params);
-  }
-
-  async removeKeyword(siteHash: string, keyword: string): Promise<{ success: boolean }> {
-    return this.client.request('/keyword/remove', { site_hash: siteHash, keyword });
-  }
-
-  // Rankings
-  async getRankings(siteHash: string, options?: {
-    startDate?: string;
-    endDate?: string;
-    engine?: string;
-    keyword?: string;
-  }): Promise<RankingEntry[]> {
-    const result = await this.client.request<{ rankings: RankingEntry[] }>('/rankings', {
-      site_hash: siteHash,
-      start_date: options?.startDate,
-      end_date: options?.endDate,
-      engine: options?.engine,
-      keyword: options?.keyword,
-    });
-    return result.rankings ?? [];
-  }
-
-  // Competitors
-  async listCompetitors(siteHash: string): Promise<Competitor[]> {
-    const result = await this.client.request<{ competitors: Competitor[] }>('/competitors', {
-      site_hash: siteHash,
-    });
-    return result.competitors ?? [];
-  }
-
-  async addCompetitor(siteHash: string, domain: string, label?: string): Promise<{ success: boolean }> {
-    return this.client.request('/competitor/add', { site_hash: siteHash, domain, label });
-  }
+  async getCompetitors(domain: string): Promise<RTCompetitor[]> { return this.client.request<RTCompetitor[]>('competitors', { domain }); }
 
   getClient(): RavenToolsClient { return this.client; }
 }

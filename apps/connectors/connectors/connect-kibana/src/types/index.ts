@@ -1,62 +1,13 @@
-export interface KibanaConfig {
-  baseUrl: string;
-  apiKey?: string;
-  username?: string;
-  password?: string;
-}
+export interface KibanaConfig { url: string; apiKey?: string; username?: string; password?: string; }
 
-export interface KibanaStatus {
-  name: string;
-  uuid: string;
-  version: { number: string; build_hash: string };
-  status: { overall: { level: string; summary: string } };
-}
-
-export interface SavedObject {
-  id: string;
-  type: string;
-  version?: string;
-  attributes: Record<string, unknown>;
-  references: Array<{ id: string; name: string; type: string }>;
-  namespaces?: string[];
-  updated_at?: string;
-  created_at?: string;
-}
-
-export interface DataView {
-  id: string;
-  name: string;
-  title: string;
-  timeFieldName?: string;
-  fields?: Record<string, unknown>;
-}
-
-export interface AlertingRule {
-  id: string;
-  name: string;
-  rule_type_id: string;
-  enabled: boolean;
-  schedule: { interval: string };
-  consumer: string;
-  actions: Array<{ id: string; group: string; params: Record<string, unknown> }>;
-  last_execution_date?: string;
-  last_run?: { outcome: string; warning?: string };
-}
-
-export interface Space {
-  id: string;
-  name: string;
-  description?: string;
-  color?: string;
-  initials?: string;
-  disabledFeatures: string[];
-}
+export interface KBDashboard { id: string; type: string; attributes: { title: string; description: string; panelsJSON: string; timeRestore: boolean; kibanaSavedObjectMeta: Record<string, unknown> }; }
+export interface KBSavedObject { id: string; type: string; attributes: Record<string, unknown>; updated_at: string; version: string; namespaces: string[]; }
+export interface KBSavedObjectList { saved_objects: KBSavedObject[]; total: number; per_page: number; page: number; }
+export interface KBSpace { id: string; name: string; description: string; color: string; initials: string; disabledFeatures: string[]; }
+export interface KBIndexPattern { id: string; title: string; timeFieldName: string; fields: { name: string; type: string; searchable: boolean; aggregatable: boolean }[]; }
+export interface KBStatus { name: string; uuid: string; version: { number: string; build_hash: string }; status: { overall: { state: string; title: string } }; }
 
 export class KibanaApiError extends Error {
   public readonly statusCode: number;
-  constructor(message: string, statusCode: number) {
-    super(message);
-    this.name = 'KibanaApiError';
-    this.statusCode = statusCode;
-  }
+  constructor(message: string, statusCode: number) { super(message); this.name = 'KibanaApiError'; this.statusCode = statusCode; }
 }
