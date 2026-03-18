@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
-
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+// Dropcontact Connector — B2B contact enrichment and email finder
+import { DropcontactClient } from './client';
+import type { DropcontactConfig, EnrichContactInput, EnrichResult, CreditInfo } from '../types';
+export { DropcontactClient } from './client';
+export class Dropcontact {
+  private readonly client: DropcontactClient;
+  constructor(config: DropcontactConfig) { this.client = new DropcontactClient(config); }
+  static fromEnv(): Dropcontact {
+    const apiKey = process.env.DROPCONTACT_API_KEY;
+    if (!apiKey) throw new Error('DROPCONTACT_API_KEY environment variable is required');
+    return new Dropcontact({ apiKey });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
+  /** Submit contacts for enrichment. Returns request_id for polling. */
+  async enrich(contacts: EnrichContactInput[], options?: { siren?: boolean; language?: string }): Promise<{ request_id: string; error?: boolean; reason?: string; credits_used?: number }> {
+    return this.client.request('/batch/enrich', {
+      method: 'POST',
+      body: { data: contacts, siren: options?.siren ?? false, language: options?.language ?? 'en' },
+    });
+  }
+  /** Get enrichment results (may be pending — check error field). */
+  async getEnrichment(requestId: string): Promise<EnrichResult> {
+    return this.client.request<EnrichResult>(`/batch/${requestId}`);
+  }
+  /** Enrich a single contact synchronously (polls until done or timeout). */
+  async enrichOne(contact: EnrichContactInput, maxWaitMs = 30000): Promise<EnrichResult> {
+    const { request_id } = await this.enrich([contact]);
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      const result = await this.getEnrichment(request_id);
+      if (!result.error) return result;
+      await new Promise(r => setTimeout(r, 3000));
     }
-    return new Connector({ apiKey, apiSecret });
+    throw new Error(`Enrichment ${request_id} timed out after ${maxWaitMs}ms`);
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  /** Check remaining credits. */
+  async getCredits(): Promise<CreditInfo> {
+    return this.client.request<CreditInfo>('/credits');
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): DropcontactClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

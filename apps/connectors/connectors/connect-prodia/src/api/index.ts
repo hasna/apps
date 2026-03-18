@@ -1,51 +1,70 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
-
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+// Prodia Connector — Fast AI image generation (Stable Diffusion)
+import { ProdiaClient } from './client';
+import type { ProdiaConfig, GenerateImageOptions, ProdiaJob, ProdiaModel } from '../types';
+export { ProdiaClient } from './client';
+export class Prodia {
+  private readonly client: ProdiaClient;
+  constructor(config: ProdiaConfig) { this.client = new ProdiaClient(config); }
+  static fromEnv(): Prodia {
+    const apiKey = process.env.PRODIA_API_KEY;
+    if (!apiKey) throw new Error('PRODIA_API_KEY environment variable is required');
+    return new Prodia({ apiKey });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
+  /** Generate an image (returns a job — poll with getJob until status="succeeded") */
+  async generate(options: GenerateImageOptions): Promise<ProdiaJob> {
+    return this.client.request<ProdiaJob>('/sd/generate', {
+      method: 'POST',
+      body: {
+        model: options.model,
+        prompt: options.prompt,
+        negative_prompt: options.negativePrompt,
+        steps: options.steps ?? 25,
+        cfg_scale: options.cfgScale ?? 7,
+        seed: options.seed ?? -1,
+        width: options.width ?? 512,
+        height: options.height ?? 512,
+        sampler: options.sampler ?? 'DPM++ 2M Karras',
+        upscale: options.upscale ?? false,
+      },
+    });
+  }
+  /** Generate image-to-image transformation */
+  async transform(options: GenerateImageOptions & { imageUrl: string; denoiseStrength?: number }): Promise<ProdiaJob> {
+    return this.client.request<ProdiaJob>('/sd/transform', {
+      method: 'POST',
+      body: {
+        imageUrl: options.imageUrl,
+        model: options.model,
+        prompt: options.prompt,
+        negative_prompt: options.negativePrompt,
+        denoising_strength: options.denoiseStrength ?? 0.6,
+        steps: options.steps ?? 25,
+        cfg_scale: options.cfgScale ?? 7,
+        seed: options.seed ?? -1,
+        sampler: options.sampler ?? 'DPM++ 2M Karras',
+      },
+    });
+  }
+  /** Poll job status — call until status is "succeeded" or "failed" */
+  async getJob(jobId: string): Promise<ProdiaJob> {
+    return this.client.request<ProdiaJob>(`/job/${jobId}`);
+  }
+  /** Wait for job completion (polls every 2 seconds, max 60s) */
+  async waitForJob(jobId: string, maxWaitMs = 60000): Promise<ProdiaJob> {
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      const job = await this.getJob(jobId);
+      if (job.status === 'succeeded' || job.status === 'failed') return job;
+      await new Promise(r => setTimeout(r, 2000));
     }
-    return new Connector({ apiKey, apiSecret });
+    throw new Error(`Job ${jobId} did not complete within ${maxWaitMs}ms`);
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listModels(): Promise<ProdiaModel[]> {
+    const models = await this.client.request<string[]>('/sd/models');
+    return models.map(model => ({ model }));
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listSamplers(): Promise<string[]> {
+    return this.client.request<string[]>('/sd/samplers');
   }
+  getClient(): ProdiaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
