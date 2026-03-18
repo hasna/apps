@@ -1,51 +1,46 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Yodiz Connector — Agile project management and issue tracking
+import { YodizClient } from './client';
+import type { YodizConfig, YZProject, YZUserStory, YZIssue, YZSprint, YZComment } from '../types';
+export { YodizClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Yodiz {
+  private readonly client: YodizClient;
+  constructor(config: YodizConfig) { this.client = new YodizClient(config); }
+  static fromEnv(): Yodiz {
+    const apiKey = process.env.YODIZ_API_KEY;
+    const apiToken = process.env.YODIZ_API_TOKEN;
+    if (!apiKey || !apiToken) throw new Error('YODIZ_API_KEY and YODIZ_API_TOKEN are required');
+    return new Yodiz({ apiKey, apiToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<YZProject[]> { return this.client.request<YZProject[]>('/projects'); }
+  async getProject(projectId: number): Promise<YZProject> { return this.client.request<YZProject>(`/projects/${projectId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listUserStories(projectId: number, options?: { sprint_id?: number; status_id?: number }): Promise<YZUserStory[]> {
+    return this.client.request<YZUserStory[]>(`/projects/${projectId}/userstories`, { params: { sprint_id: options?.sprint_id, status_id: options?.status_id } });
+  }
+  async getUserStory(projectId: number, storyId: number): Promise<YZUserStory> {
+    return this.client.request<YZUserStory>(`/projects/${projectId}/userstories/${storyId}`);
+  }
+  async createUserStory(projectId: number, data: { title: string; description?: string; priority_id?: number; sprint_id?: number; assigned_to_id?: number; story_points?: number }): Promise<YZUserStory> {
+    return this.client.request<YZUserStory>(`/projects/${projectId}/userstories`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listIssues(projectId: number, options?: { status_id?: number; type_id?: number }): Promise<YZIssue[]> {
+    return this.client.request<YZIssue[]>(`/projects/${projectId}/issues`, { params: { status_id: options?.status_id, type_id: options?.type_id } });
+  }
+  async createIssue(projectId: number, data: { title: string; description?: string; priority_id?: number; type_id?: number; assigned_to_id?: number }): Promise<YZIssue> {
+    return this.client.request<YZIssue>(`/projects/${projectId}/issues`, { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listSprints(projectId: number): Promise<YZSprint[]> { return this.client.request<YZSprint[]>(`/projects/${projectId}/sprints`); }
+
+  async listComments(entityType: string, entityId: number): Promise<YZComment[]> {
+    return this.client.request<YZComment[]>(`/${entityType}/${entityId}/comments`);
   }
+  async addComment(entityType: string, entityId: number, text: string): Promise<YZComment> {
+    return this.client.request<YZComment>(`/${entityType}/${entityId}/comments`, { method: 'POST', body: { text } });
+  }
+
+  getClient(): YodizClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
