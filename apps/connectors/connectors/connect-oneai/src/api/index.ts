@@ -1,51 +1,48 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// One AI Connector — Language AI for text analysis, summarization, and extraction
+import { OneAIClient } from './client';
+import type { OneAIConfig, OASkill, OAPipelineResult } from '../types';
+export { OneAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class OneAI {
+  private readonly client: OneAIClient;
+  constructor(config: OneAIConfig) { this.client = new OneAIClient(config); }
+  static fromEnv(): OneAI {
+    const apiKey = process.env.ONEAI_API_KEY;
+    if (!apiKey) throw new Error('ONEAI_API_KEY is required');
+    return new OneAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async pipeline(text: string, steps: OASkill[]): Promise<OAPipelineResult> {
+    return this.client.request<OAPipelineResult>('/pipeline', { body: { input: text, steps } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async summarize(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'summarize' }]);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async extractEntities(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'names' }]);
   }
+
+  async detectSentiment(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'sentiments' }]);
+  }
+
+  async extractKeywords(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'keywords' }]);
+  }
+
+  async detectTopics(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'article-topics' }]);
+  }
+
+  async detectLanguage(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'detect-language' }]);
+  }
+
+  async extractActionItems(text: string): Promise<OAPipelineResult> {
+    return this.pipeline(text, [{ skill: 'action-items' }]);
+  }
+
+  getClient(): OneAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
