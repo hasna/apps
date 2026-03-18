@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// TurboHire Connector — AI-powered recruitment and applicant tracking
+import { TurboHireClient } from './client';
+import type { TurboHireConfig, THJob, THCandidate, THCandidateList, THStage, THInterview } from '../types';
+export { TurboHireClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TurboHire {
+  private readonly client: TurboHireClient;
+  constructor(config: TurboHireConfig) { this.client = new TurboHireClient(config); }
+  static fromEnv(): TurboHire {
+    const apiKey = process.env.TURBOHIRE_API_KEY;
+    if (!apiKey) throw new Error('TURBOHIRE_API_KEY is required');
+    return new TurboHire({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listJobs(options?: { status?: string; page?: number }): Promise<THJob[]> {
+    return this.client.request<THJob[]>('/jobs', { params: { status: options?.status, page: options?.page } });
+  }
+  async getJob(jobId: string): Promise<THJob> { return this.client.request<THJob>(`/jobs/${jobId}`); }
+  async createJob(data: { title: string; department?: string; location?: string; type?: string; description?: string; requirements?: string }): Promise<THJob> {
+    return this.client.request<THJob>('/jobs', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listCandidates(jobId: string, options?: { page?: number; per_page?: number; stage_id?: string }): Promise<THCandidateList> {
+    return this.client.request<THCandidateList>(`/jobs/${jobId}/candidates`, { params: { page: options?.page, per_page: options?.per_page, stage_id: options?.stage_id } });
+  }
+  async getCandidate(jobId: string, candidateId: string): Promise<THCandidate> {
+    return this.client.request<THCandidate>(`/jobs/${jobId}/candidates/${candidateId}`);
+  }
+  async moveCandidate(jobId: string, candidateId: string, stageId: string): Promise<void> {
+    await this.client.request(`/jobs/${jobId}/candidates/${candidateId}/move`, { method: 'POST', body: { stage_id: stageId } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listStages(jobId: string): Promise<THStage[]> { return this.client.request<THStage[]>(`/jobs/${jobId}/stages`); }
+
+  async listInterviews(jobId: string, candidateId: string): Promise<THInterview[]> {
+    return this.client.request<THInterview[]>(`/jobs/${jobId}/candidates/${candidateId}/interviews`);
   }
+  async scheduleInterview(jobId: string, candidateId: string, data: { type: string; scheduled_at: string; duration: number; interviewer_ids: string[] }): Promise<THInterview> {
+    return this.client.request<THInterview>(`/jobs/${jobId}/candidates/${candidateId}/interviews`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+
+  getClient(): TurboHireClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

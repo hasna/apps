@@ -1,51 +1,31 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// SSLMate CertSpotter Connector — Certificate transparency monitoring and SSL cert search
+import { CertSpotterClient } from './client';
+import type { CertSpotterConfig, CSIssuance } from '../types';
+export { CertSpotterClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CertSpotter {
+  private readonly client: CertSpotterClient;
+  constructor(config: CertSpotterConfig) { this.client = new CertSpotterClient(config); }
+  static fromEnv(): CertSpotter {
+    const apiKey = process.env.CERTSPOTTER_API_KEY;
+    if (!apiKey) throw new Error('CERTSPOTTER_API_KEY is required');
+    return new CertSpotter({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getIssuances(domain: string, options?: { include_subdomains?: boolean; match_wildcards?: boolean; after?: string; expand?: string }): Promise<CSIssuance[]> {
+    return this.client.request<CSIssuance[]>('/issuances', { domain, include_subdomains: options?.include_subdomains, match_wildcards: options?.match_wildcards, after: options?.after, expand: options?.expand });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getIssuance(issuanceId: string): Promise<CSIssuance> {
+    return this.client.request<CSIssuance>(`/issuances/${issuanceId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async getSubdomains(domain: string, options?: { include_subdomains?: boolean; match_wildcards?: boolean }): Promise<string[]> {
+    const issuances = await this.getIssuances(domain, { include_subdomains: options?.include_subdomains ?? true, match_wildcards: options?.match_wildcards });
+    const subdomains = new Set<string>();
+    issuances.forEach(i => i.dns_names.forEach(name => subdomains.add(name)));
+    return Array.from(subdomains).sort();
   }
+
+  getClient(): CertSpotterClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
