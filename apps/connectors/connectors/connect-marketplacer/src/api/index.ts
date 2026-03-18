@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Marketplacer Connector — Online marketplace platform and management
+import { MarketplacerClient } from './client';
+import type { MarketplacerConfig, MPListing, MPOrder, MPOrderList, MPSeller, MPCategory } from '../types';
+export { MarketplacerClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Marketplacer {
+  private readonly client: MarketplacerClient;
+  constructor(config: MarketplacerConfig) { this.client = new MarketplacerClient(config); }
+  static fromEnv(): Marketplacer {
+    const apiKey = process.env.MARKETPLACER_API_KEY;
+    if (!apiKey) throw new Error('MARKETPLACER_API_KEY is required');
+    return new Marketplacer({ apiKey, baseUrl: process.env.MARKETPLACER_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listListings(options?: { page?: number; per_page?: number; status?: string; seller_id?: string }): Promise<{ listings: MPListing[]; total: number }> {
+    return this.client.request('/listings', { params: { page: options?.page, per_page: options?.per_page, status: options?.status, seller_id: options?.seller_id } });
+  }
+  async getListing(listingId: string): Promise<MPListing> { return this.client.request<MPListing>(`/listings/${listingId}`); }
+  async createListing(data: { title: string; description: string; price: number; category_id: string; variants?: { sku: string; price: number; stock: number }[] }): Promise<MPListing> {
+    return this.client.request<MPListing>('/listings', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateListing(listingId: string, data: { title?: string; description?: string; price?: number; status?: string }): Promise<MPListing> {
+    return this.client.request<MPListing>(`/listings/${listingId}`, { method: 'PATCH', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listOrders(options?: { page?: number; per_page?: number; status?: string }): Promise<MPOrderList> {
+    return this.client.request<MPOrderList>('/orders', { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
   }
+  async getOrder(orderId: string): Promise<MPOrder> { return this.client.request<MPOrder>(`/orders/${orderId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listSellers(): Promise<MPSeller[]> { return this.client.request<MPSeller[]>('/sellers'); }
+  async getSeller(sellerId: string): Promise<MPSeller> { return this.client.request<MPSeller>(`/sellers/${sellerId}`); }
+
+  async listCategories(): Promise<MPCategory[]> { return this.client.request<MPCategory[]>('/categories'); }
+
+  getClient(): MarketplacerClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
