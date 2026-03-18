@@ -277,4 +277,30 @@ Rules:
       };
     }
   );
+
+  // ── git_init ────────────────────────────────────────────────────────────
+
+  server.tool(
+    "git_init",
+    "Initialize a new git repo, optionally with .gitignore and initial commit.",
+    {
+      cwd: z.string().optional().describe("Directory to init (default: cwd)"),
+      gitignore: z.string().optional().describe("Content for .gitignore file"),
+      initialCommit: z.boolean().optional().describe("Create initial commit (default: true)"),
+    },
+    async ({ cwd, gitignore, initialCommit }) => {
+      const workDir = cwd ?? process.cwd();
+      await h.exec("git init", workDir, 5000);
+      if (gitignore) {
+        const { writeFileSync } = await import("fs");
+        const { join } = await import("path");
+        writeFileSync(join(workDir, ".gitignore"), gitignore);
+      }
+      if (initialCommit !== false) {
+        await h.exec("git add -A && git commit -m 'init' --allow-empty", workDir, 10000);
+      }
+      h.logCall("git_init", { command: "git init" });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ initialized: true, cwd: workDir }) }] };
+    }
+  );
 }

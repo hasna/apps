@@ -72,4 +72,23 @@ export function registerProcessTools(server: McpServer, h: ToolHelpers): void {
       return { content: [{ type: "text" as const, text: JSON.stringify({ port, ready }) }] };
     }
   );
+
+  // ── port_check ──────────────────────────────────────────────────────────
+
+  server.tool(
+    "port_check",
+    "Check if a port is in use and what process is using it.",
+    {
+      port: z.number().describe("Port number to check"),
+    },
+    async ({ port }) => {
+      const result = await h.exec(`lsof -i :${port} -P -n 2>/dev/null | head -5`, undefined, 5000);
+      const output = result.stdout.trim();
+      if (!output || result.exitCode !== 0) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ port, inUse: false }) }] };
+      }
+      const lines = output.split("\n").filter(l => l.trim());
+      return { content: [{ type: "text" as const, text: JSON.stringify({ port, inUse: true, processes: lines.slice(1).map(l => l.split(/\s+/).slice(0, 3).join(" ")) }) }] };
+    }
+  );
 }

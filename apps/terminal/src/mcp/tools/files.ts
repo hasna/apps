@@ -335,4 +335,35 @@ Be specific, not generic. Only flag real problems.`,
       return { content: [{ type: "text" as const, text: JSON.stringify({ review, scope: since ?? files }) }] };
     }
   );
+
+  // ── write_files ─────────────────────────────────────────────────────────
+
+  server.tool(
+    "write_files",
+    "Write multiple files in one call. Auto-creates parent directories. Saves N-1 round trips vs separate writes.",
+    {
+      files: z.array(z.object({
+        path: z.string().describe("File path (relative or absolute)"),
+        content: z.string().describe("File content"),
+      })).describe("Files to write"),
+    },
+    async ({ files }) => {
+      const { writeFileSync, mkdirSync, existsSync } = await import("fs");
+      const { dirname } = await import("path");
+      const results: { path: string; ok: boolean; bytes?: number; error?: string }[] = [];
+      for (const f of files.slice(0, 20)) {
+        try {
+          const filePath = h.resolvePath(f.path);
+          const dir = dirname(filePath);
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          writeFileSync(filePath, f.content);
+          results.push({ path: f.path, ok: true, bytes: f.content.length });
+        } catch (e: any) {
+          results.push({ path: f.path, ok: false, error: e.message?.slice(0, 100) });
+        }
+      }
+      h.logCall("write_files", { command: `${files.length} files` });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ written: results.filter(r => r.ok).length, total: results.length, results }) }] };
+    }
+  );
 }

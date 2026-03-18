@@ -18,10 +18,22 @@ export function registerMetaTools(server: McpServer, h: ToolHelpers): void {
 
   server.tool(
     "token_stats",
-    "Get token economy stats — how many tokens have been saved by structured output, compression, diffing, and caching.",
+    "Get full token economy — savings, costs, ROI. Includes round-trip multiplier (saved tokens repeated across ~5 turns).",
     async () => {
       const stats = getEconomyStats();
-      return { content: [{ type: "text" as const, text: JSON.stringify(stats) }] };
+      const { estimateSavingsUsd } = await import("../../economy.js");
+      const opus = estimateSavingsUsd(stats.totalTokensSaved, "anthropic-opus");
+      const sonnet = estimateSavingsUsd(stats.totalTokensSaved, "anthropic-sonnet");
+      const haiku = estimateSavingsUsd(stats.totalTokensSaved, "anthropic");
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        ...stats,
+        roundTrip: {
+          multiplier: 5,
+          billableTokensSaved: stats.totalTokensSaved * 5,
+          savingsUsd: { opus: opus.savingsUsd, sonnet: sonnet.savingsUsd, haiku: haiku.savingsUsd },
+        },
+        ratio: stats.totalTokensUsed > 0 ? Math.round((stats.totalTokensSaved / stats.totalTokensUsed) * 10) / 10 : 0,
+      }) }] };
     }
   );
 
