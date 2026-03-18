@@ -1049,6 +1049,91 @@ Match by function name, class name, method name (including ClassName.method), in
     }
   );
 
+  server.tool(
+    "smart_commit",
+    "AI-powered git commit. Analyzes all changes, groups into logical commits with generated messages, stages and commits each group, optionally pushes. One call replaces the entire git workflow. Agent just says 'commit my work'.",
+    {
+      push: z.boolean().optional().describe("Push after all commits (default: true)"),
+      hint: z.string().optional().describe("Optional context about the changes (e.g., 'fixed auth + added users endpoint')"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ push, hint, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+
+      // 1. Get all changed files
+      const status = await exec("git status --porcelain", workDir, 10000);
+      const diffStat = await exec("git diff --stat", workDir, 10000);
+      const untrackedDiff = await exec("git diff HEAD --stat", workDir, 10000);
+
+      const changedFiles = status.stdout.trim();
+      if (!changedFiles) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Nothing to commit — working tree clean" }) }] };
+      }
+
+      // 2. AI groups changes into logical commits
+      const provider = getOutputProvider();
+      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+
+      const grouping = await provider.complete(
+        `Changed files:\n${changedFiles}\n\nDiff stats:\n${diffStat.stdout}\n${untrackedDiff.stdout}${hint ? `\n\nContext: ${hint}` : ""}`,
+        {
+          model: outputModel,
+          system: `You are a git commit assistant. Group these changed files into logical commits. Return ONLY a JSON array:
+
+[{"message": "conventional commit message", "files": ["file1.ts", "file2.ts"]}]
+
+Rules:
+- Group related changes (same feature, same fix, same refactor)
+- Use conventional commits: feat:, fix:, refactor:, test:, docs:, chore:
+- Message should explain WHY, not WHAT (the diff shows what)
+- Each file appears in exactly one group
+- If all changes are related, use a single commit
+- Extract file paths from the status output (skip the status prefix like M, A, ??)`,
+          maxTokens: 1000,
+          temperature: 0,
+        }
+      );
+
+      let commits: { message: string; files: string[] }[] = [];
+      try {
+        const jsonMatch = grouping.match(/\[[\s\S]*\]/);
+        if (jsonMatch) commits = JSON.parse(jsonMatch[0]);
+      } catch {}
+
+      if (commits.length === 0) {
+        // Fallback: single commit with all files
+        commits = [{ message: hint ?? "chore: update files", files: changedFiles.split("\n").map(l => l.slice(3).trim()) }];
+      }
+
+      // 3. Execute each commit
+      const results: { message: string; files: number; ok: boolean }[] = [];
+      for (const c of commits) {
+        const fileArgs = c.files.map(f => `"${f}"`).join(" ");
+        const cmd = `git add ${fileArgs} && git commit -m ${JSON.stringify(c.message)}`;
+        const r = await exec(cmd, workDir, 15000);
+        results.push({ message: c.message, files: c.files.length, ok: r.exitCode === 0 });
+      }
+
+      // 4. Push if requested
+      let pushed = false;
+      if (push !== false) {
+        const pushResult = await exec("git push", workDir, 30000);
+        pushed = pushResult.exitCode === 0;
+      }
+
+      invalidateBootCache();
+      logCall("smart_commit", { command: `${commits.length} commits`, durationMs: Date.now() - start, aiProcessed: true });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        commits: results,
+        pushed,
+        total: results.length,
+        ok: results.every(r => r.ok),
+      }) }] };
+    }
+  );
+
   return server;
 }
 
