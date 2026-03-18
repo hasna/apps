@@ -1,51 +1,28 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Syncly Connector — Customer feedback intelligence platform
+import { SynclyClient } from './client';
+import type { SynclyConfig, SYFeedback, SYFeedbackList, SYInsight, SYCategory, SYIntegration } from '../types';
+export { SynclyClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Syncly {
+  private readonly client: SynclyClient;
+  constructor(config: SynclyConfig) { this.client = new SynclyClient(config); }
+  static fromEnv(): Syncly {
+    const apiKey = process.env.SYNCLY_API_KEY;
+    if (!apiKey) throw new Error('SYNCLY_API_KEY is required');
+    return new Syncly({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listFeedback(options?: { page?: number; per_page?: number; sentiment?: string; category?: string; source?: string }): Promise<SYFeedbackList> {
+    return this.client.request<SYFeedbackList>('/feedback', { params: { page: options?.page, per_page: options?.per_page, sentiment: options?.sentiment, category: options?.category, source: options?.source } });
   }
+  async getFeedback(feedbackId: string): Promise<SYFeedback> { return this.client.request<SYFeedback>(`/feedback/${feedbackId}`); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listInsights(): Promise<SYInsight[]> { return this.client.request<SYInsight[]>('/insights'); }
+  async getInsight(insightId: string): Promise<SYInsight> { return this.client.request<SYInsight>(`/insights/${insightId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listCategories(): Promise<SYCategory[]> { return this.client.request<SYCategory[]>('/categories'); }
+
+  async listIntegrations(): Promise<SYIntegration[]> { return this.client.request<SYIntegration[]>('/integrations'); }
+
+  getClient(): SynclyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
