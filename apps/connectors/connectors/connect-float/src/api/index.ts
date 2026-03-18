@@ -1,51 +1,47 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Float Connector — Resource management and team scheduling
+import { FloatClient } from './client';
+import type { FloatConfig, FLPerson, FLProject, FLTask, FLTimeOff, FLClient, FLDepartment } from '../types';
+export { FloatClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Float {
+  private readonly client: FloatClient;
+  constructor(config: FloatConfig) { this.client = new FloatClient(config); }
+  static fromEnv(): Float {
+    const token = process.env.FLOAT_TOKEN;
+    if (!token) throw new Error('FLOAT_TOKEN is required');
+    return new Float({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listPeople(options?: { page?: number; per_page?: number }): Promise<FLPerson[]> {
+    return this.client.request<FLPerson[]>('/people', { params: { page: options?.page, per_page: options?.per_page } });
+  }
+  async getPerson(personId: number): Promise<FLPerson> { return this.client.request<FLPerson>(`/people/${personId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listProjects(options?: { page?: number; per_page?: number; active?: number }): Promise<FLProject[]> {
+    return this.client.request<FLProject[]>('/projects', { params: { page: options?.page, per_page: options?.per_page, active: options?.active } });
+  }
+  async getProject(projectId: number): Promise<FLProject> { return this.client.request<FLProject>(`/projects/${projectId}`); }
+  async createProject(data: { name: string; client?: string; color?: string; budget_total?: number; tags?: string[] }): Promise<FLProject> {
+    return this.client.request<FLProject>('/projects', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTasks(options?: { start_date?: string; end_date?: string; people_id?: number; project_id?: number }): Promise<FLTask[]> {
+    return this.client.request<FLTask[]>('/tasks', { params: { start_date: options?.start_date, end_date: options?.end_date, people_id: options?.people_id, project_id: options?.project_id } });
+  }
+  async createTask(data: { project_id: number; people_id: number; name?: string; start_date: string; end_date: string; hours: number }): Promise<FLTask> {
+    return this.client.request<FLTask>('/tasks', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateTask(taskId: number, data: { name?: string; start_date?: string; end_date?: string; hours?: number }): Promise<FLTask> {
+    return this.client.request<FLTask>(`/tasks/${taskId}`, { method: 'PATCH', body: data as Record<string, unknown> });
+  }
+  async deleteTask(taskId: number): Promise<void> { await this.client.request(`/tasks/${taskId}`, { method: 'DELETE' }); }
+
+  async listTimeOff(options?: { people_id?: number; start_date?: string; end_date?: string }): Promise<FLTimeOff[]> {
+    return this.client.request<FLTimeOff[]>('/timeoffs', { params: { people_id: options?.people_id, start_date: options?.start_date, end_date: options?.end_date } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listClients(): Promise<FLClient[]> { return this.client.request<FLClient[]>('/clients'); }
+  async listDepartments(): Promise<FLDepartment[]> { return this.client.request<FLDepartment[]>('/departments'); }
+
+  getClient(): FloatClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

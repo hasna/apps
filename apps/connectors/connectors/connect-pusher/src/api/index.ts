@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Pusher Connector — Realtime messaging and channels
+import { PusherClient } from './client';
+import type { PusherConfig, PusherChannel, PusherChannelInfo, PusherUser, PusherBatchEvent } from '../types';
+export { PusherClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Pusher {
+  private readonly client: PusherClient;
+  constructor(config: PusherConfig) { this.client = new PusherClient(config); }
+  static fromEnv(): Pusher {
+    const appId = process.env.PUSHER_APP_ID;
+    const key = process.env.PUSHER_KEY;
+    const secret = process.env.PUSHER_SECRET;
+    const cluster = process.env.PUSHER_CLUSTER;
+    if (!appId || !key || !secret || !cluster) throw new Error('PUSHER_APP_ID, PUSHER_KEY, PUSHER_SECRET, and PUSHER_CLUSTER are required');
+    return new Pusher({ appId, key, secret, cluster });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async trigger(channel: string, event: string, data: unknown, socketId?: string): Promise<void> {
+    await this.client.request('/events', { method: 'POST', body: { name: event, channel, data: JSON.stringify(data), socket_id: socketId } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async triggerBatch(events: PusherBatchEvent[]): Promise<void> {
+    await this.client.request('/batch_events', { method: 'POST', body: { batch: events } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listChannels(options?: { filter_by_prefix?: string; info?: string }): Promise<{ channels: Record<string, PusherChannel> }> {
+    return this.client.request('/channels', { params: { filter_by_prefix: options?.filter_by_prefix, info: options?.info } });
   }
+
+  async getChannel(channelName: string, options?: { info?: string }): Promise<PusherChannelInfo> {
+    return this.client.request<PusherChannelInfo>(`/channels/${channelName}`, { params: { info: options?.info } });
+  }
+
+  async getChannelUsers(channelName: string): Promise<{ users: PusherUser[] }> {
+    return this.client.request(`/channels/${channelName}/users`);
+  }
+
+  getClient(): PusherClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
