@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// BugReplay Connector — Screen recording and bug reporting for QA
+import { BugReplayClient } from './client';
+import type { BugReplayConfig, BRBug, BRBugList, BRProject, BRComment } from '../types';
+export { BugReplayClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class BugReplay {
+  private readonly client: BugReplayClient;
+  constructor(config: BugReplayConfig) { this.client = new BugReplayClient(config); }
+  static fromEnv(): BugReplay {
+    const apiKey = process.env.BUGREPLAY_API_KEY;
+    if (!apiKey) throw new Error('BUGREPLAY_API_KEY is required');
+    return new BugReplay({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<BRProject[]> { return this.client.request<BRProject[]>('/projects'); }
+  async getProject(projectId: string): Promise<BRProject> { return this.client.request<BRProject>(`/projects/${projectId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listBugs(projectId: string, options?: { page?: number; per_page?: number; status?: string }): Promise<BRBugList> {
+    return this.client.request<BRBugList>(`/projects/${projectId}/bugs`, { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
+  }
+  async getBug(bugId: string): Promise<BRBug> { return this.client.request<BRBug>(`/bugs/${bugId}`); }
+  async updateBug(bugId: string, data: { status?: string; priority?: string; assignee_id?: string }): Promise<BRBug> {
+    return this.client.request<BRBug>(`/bugs/${bugId}`, { method: 'PATCH', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listComments(bugId: string): Promise<BRComment[]> { return this.client.request<BRComment[]>(`/bugs/${bugId}/comments`); }
+  async addComment(bugId: string, body: string): Promise<BRComment> {
+    return this.client.request<BRComment>(`/bugs/${bugId}/comments`, { method: 'POST', body: { body } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): BugReplayClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// OmniMind Connector — No-code AI assistant builder with custom knowledge bases
+import { OmniMindClient } from './client';
+import type { OmniMindConfig, OMProject, OMDataSource, OMQueryResult, OMWidget } from '../types';
+export { OmniMindClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class OmniMind {
+  private readonly client: OmniMindClient;
+  constructor(config: OmniMindConfig) { this.client = new OmniMindClient(config); }
+  static fromEnv(): OmniMind {
+    const apiKey = process.env.OMNIMIND_API_KEY;
+    if (!apiKey) throw new Error('OMNIMIND_API_KEY is required');
+    return new OmniMind({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listProjects(): Promise<OMProject[]> { return this.client.request<OMProject[]>('/projects'); }
+  async getProject(projectId: string): Promise<OMProject> { return this.client.request<OMProject>(`/projects/${projectId}`); }
+  async createProject(data: { name: string; description?: string; model?: string }): Promise<OMProject> {
+    return this.client.request<OMProject>('/projects', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async query(projectId: string, question: string, options?: { max_sources?: number }): Promise<OMQueryResult> {
+    return this.client.request<OMQueryResult>(`/projects/${projectId}/query`, { method: 'POST', body: { question, max_sources: options?.max_sources } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listDataSources(projectId: string): Promise<OMDataSource[]> { return this.client.request<OMDataSource[]>(`/projects/${projectId}/data-sources`); }
+  async addUrlSource(projectId: string, url: string): Promise<OMDataSource> {
+    return this.client.request<OMDataSource>(`/projects/${projectId}/data-sources`, { method: 'POST', body: { type: 'url', url } });
   }
+  async addTextSource(projectId: string, name: string, content: string): Promise<OMDataSource> {
+    return this.client.request<OMDataSource>(`/projects/${projectId}/data-sources`, { method: 'POST', body: { type: 'text', name, content } });
+  }
+  async deleteDataSource(projectId: string, dataSourceId: string): Promise<void> {
+    await this.client.request(`/projects/${projectId}/data-sources/${dataSourceId}`, { method: 'DELETE' });
+  }
+
+  async listWidgets(projectId: string): Promise<OMWidget[]> { return this.client.request<OMWidget[]>(`/projects/${projectId}/widgets`); }
+
+  getClient(): OmniMindClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
