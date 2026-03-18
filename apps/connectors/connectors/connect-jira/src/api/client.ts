@@ -105,6 +105,63 @@ export class JiraClient {
     return data as T;
   }
 
+  /**
+   * Make a request to an absolute URL (used for Jira Agile API which has a different base URL).
+   * Applies the same auth headers and response handling as request().
+   */
+  async requestAbsolute<T>(absoluteUrl: string, options: RequestOptions = {}): Promise<T> {
+    const { method = 'GET', params, body, headers = {} } = options;
+
+    const url = new URL(absoluteUrl);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          url.searchParams.append(key, String(value));
+        }
+      });
+    }
+
+    const requestHeaders: Record<string, string> = {
+      'Authorization': this.getAuthHeader(),
+      'Accept': 'application/json',
+      ...headers,
+    };
+
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+
+    const fetchOptions: RequestInit = { method, headers: requestHeaders };
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+
+    const response = await fetch(url.toString(), fetchOptions);
+
+    if (response.status === 204) return {} as T;
+
+    let data: unknown;
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const text = await response.text();
+      if (text) {
+        try { data = JSON.parse(text); } catch { data = text; }
+      }
+    } else {
+      data = await response.text();
+    }
+
+    if (!response.ok) {
+      const errorData = data as import('../types').JiraError | null;
+      const errorMessage = errorData?.errorMessages?.[0] ||
+        (errorData?.errors ? Object.values(errorData.errors).join(', ') : '') ||
+        response.statusText;
+      throw new JiraApiError(errorMessage, response.status, errorData || undefined);
+    }
+
+    return data as T;
+  }
+
   async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     return this.request<T>(path, { method: 'GET', params });
   }

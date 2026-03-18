@@ -161,19 +161,14 @@ export class Jira {
     name?: string;
     projectKeyOrId?: string;
   }): Promise<PaginatedResponse<Board>> {
-    const url = this.agileBaseUrl + '/board';
-    const response = await fetch(this.buildAgileUrl(url, options), {
-      headers: this.getAgileHeaders(),
-    });
-    return response.json();
+    return this.client.requestAbsolute<PaginatedResponse<Board>>(
+      `${this.agileBaseUrl}/board`,
+      { params: options }
+    );
   }
 
   async getBoard(boardId: number): Promise<Board> {
-    const url = this.agileBaseUrl + `/board/${boardId}`;
-    const response = await fetch(url, {
-      headers: this.getAgileHeaders(),
-    });
-    return response.json();
+    return this.client.requestAbsolute<Board>(`${this.agileBaseUrl}/board/${boardId}`);
   }
 
   async getBoardIssues(boardId: number, options?: {
@@ -181,11 +176,10 @@ export class Jira {
     maxResults?: number;
     jql?: string;
   }): Promise<SearchResponse<Issue>> {
-    const url = this.agileBaseUrl + `/board/${boardId}/issue`;
-    const response = await fetch(this.buildAgileUrl(url, options), {
-      headers: this.getAgileHeaders(),
-    });
-    return response.json();
+    return this.client.requestAbsolute<SearchResponse<Issue>>(
+      `${this.agileBaseUrl}/board/${boardId}/issue`,
+      { params: options }
+    );
   }
 
   // ============================================
@@ -197,19 +191,14 @@ export class Jira {
     maxResults?: number;
     state?: 'future' | 'active' | 'closed';
   }): Promise<PaginatedResponse<Sprint>> {
-    const url = this.agileBaseUrl + `/board/${boardId}/sprint`;
-    const response = await fetch(this.buildAgileUrl(url, options), {
-      headers: this.getAgileHeaders(),
-    });
-    return response.json();
+    return this.client.requestAbsolute<PaginatedResponse<Sprint>>(
+      `${this.agileBaseUrl}/board/${boardId}/sprint`,
+      { params: options }
+    );
   }
 
   async getSprint(sprintId: number): Promise<Sprint> {
-    const url = this.agileBaseUrl + `/sprint/${sprintId}`;
-    const response = await fetch(url, {
-      headers: this.getAgileHeaders(),
-    });
-    return response.json();
+    return this.client.requestAbsolute<Sprint>(`${this.agileBaseUrl}/sprint/${sprintId}`);
   }
 
   async getSprintIssues(sprintId: number, options?: {
@@ -217,47 +206,17 @@ export class Jira {
     maxResults?: number;
     jql?: string;
   }): Promise<SearchResponse<Issue>> {
-    const url = this.agileBaseUrl + `/sprint/${sprintId}/issue`;
-    const response = await fetch(this.buildAgileUrl(url, options), {
-      headers: this.getAgileHeaders(),
-    });
-    return response.json();
+    return this.client.requestAbsolute<SearchResponse<Issue>>(
+      `${this.agileBaseUrl}/sprint/${sprintId}/issue`,
+      { params: options }
+    );
   }
 
   async moveIssuesToSprint(sprintId: number, issueKeys: string[]): Promise<void> {
-    const url = this.agileBaseUrl + `/sprint/${sprintId}/issue`;
-    await fetch(url, {
-      method: 'POST',
-      headers: {
-        ...this.getAgileHeaders(),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ issues: issueKeys }),
-    });
-  }
-
-  // ============================================
-  // Helper Methods
-  // ============================================
-
-  private getAgileHeaders(): Record<string, string> {
-    const credentials = Buffer.from(`${(this.client as any).email}:${(this.client as any).apiToken}`).toString('base64');
-    return {
-      'Authorization': `Basic ${credentials}`,
-      'Accept': 'application/json',
-    };
-  }
-
-  private buildAgileUrl(baseUrl: string, params?: Record<string, string | number | boolean | undefined>): string {
-    const url = new URL(baseUrl);
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
-          url.searchParams.append(key, String(value));
-        }
-      });
-    }
-    return url.toString();
+    await this.client.requestAbsolute<void>(
+      `${this.agileBaseUrl}/sprint/${sprintId}/issue`,
+      { method: 'POST', body: { issues: issueKeys } }
+    );
   }
 
   getClient(): JiraClient {
