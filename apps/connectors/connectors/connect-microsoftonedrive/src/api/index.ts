@@ -1,51 +1,51 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Microsoft OneDrive Connector — Cloud file storage and sharing via Graph API
+import { OneDriveClient } from './client';
+import type { OneDriveConfig, ODDriveItem, ODDriveItemList, ODDrive, ODPermission } from '../types';
+export { OneDriveClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class OneDrive {
+  private readonly client: OneDriveClient;
+  constructor(config: OneDriveConfig) { this.client = new OneDriveClient(config); }
+  static fromEnv(): OneDrive {
+    const token = process.env.ONEDRIVE_TOKEN;
+    if (!token) throw new Error('ONEDRIVE_TOKEN is required');
+    return new OneDrive({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getDrive(): Promise<ODDrive> { return this.client.request<ODDrive>('/me/drive'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listChildren(itemId?: string): Promise<ODDriveItemList> {
+    const path = itemId ? `/me/drive/items/${itemId}/children` : '/me/drive/root/children';
+    return this.client.request<ODDriveItemList>(path);
+  }
+  async getItem(itemId: string): Promise<ODDriveItem> { return this.client.request<ODDriveItem>(`/me/drive/items/${itemId}`); }
+  async getItemByPath(path: string): Promise<ODDriveItem> { return this.client.request<ODDriveItem>(`/me/drive/root:/${path}`); }
+  async deleteItem(itemId: string): Promise<void> { await this.client.request(`/me/drive/items/${itemId}`, { method: 'DELETE' }); }
+  async moveItem(itemId: string, parentId: string, newName?: string): Promise<ODDriveItem> {
+    return this.client.request<ODDriveItem>(`/me/drive/items/${itemId}`, { method: 'PATCH', body: { parentReference: { id: parentId }, name: newName } as Record<string, unknown> });
+  }
+  async copyItem(itemId: string, parentId: string, newName?: string): Promise<void> {
+    await this.client.request(`/me/drive/items/${itemId}/copy`, { method: 'POST', body: { parentReference: { id: parentId }, name: newName } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async createFolder(parentId: string, name: string): Promise<ODDriveItem> {
+    const path = parentId ? `/me/drive/items/${parentId}/children` : '/me/drive/root/children';
+    return this.client.request<ODDriveItem>(path, { method: 'POST', body: { name, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async search(query: string): Promise<ODDriveItemList> {
+    return this.client.request<ODDriveItemList>(`/me/drive/root/search(q='${encodeURIComponent(query)}')`);
   }
+
+  async createSharingLink(itemId: string, type: 'view' | 'edit', scope?: 'anonymous' | 'organization'): Promise<{ link: { webUrl: string } }> {
+    return this.client.request(`/me/drive/items/${itemId}/createLink`, { method: 'POST', body: { type, scope: scope || 'anonymous' } });
+  }
+  async listPermissions(itemId: string): Promise<{ value: ODPermission[] }> {
+    return this.client.request(`/me/drive/items/${itemId}/permissions`);
+  }
+
+  async getRecentFiles(): Promise<ODDriveItemList> { return this.client.request<ODDriveItemList>('/me/drive/recent'); }
+  async getSharedWithMe(): Promise<ODDriveItemList> { return this.client.request<ODDriveItemList>('/me/drive/sharedWithMe'); }
+
+  getClient(): OneDriveClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

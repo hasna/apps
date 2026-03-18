@@ -1,51 +1,25 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// IPinfo Connector — IP address data and geolocation API
+import { IPinfoClient } from './client';
+import type { IPinfoConfig, IPDetails, IPASNDetails, IPRanges } from '../types';
+export { IPinfoClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class IPinfo {
+  private readonly client: IPinfoClient;
+  constructor(config: IPinfoConfig) { this.client = new IPinfoClient(config); }
+  static fromEnv(): IPinfo {
+    const token = process.env.IPINFO_TOKEN;
+    if (!token) throw new Error('IPINFO_TOKEN is required');
+    return new IPinfo({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async lookup(ip: string): Promise<IPDetails> { return this.client.request<IPDetails>(`/${ip}/json`); }
+  async getMyIP(): Promise<IPDetails> { return this.client.request<IPDetails>('/json'); }
+  async getField(ip: string, field: string): Promise<string> { return this.client.request<string>(`/${ip}/${field}`); }
+  async getASN(asn: string): Promise<IPASNDetails> { return this.client.request<IPASNDetails>(`/${asn}/json`); }
+  async getRanges(domain: string): Promise<IPRanges> { return this.client.request<IPRanges>(`/ranges/${domain}/json`); }
+  async getCountry(ip: string): Promise<string> { return this.client.request<string>(`/${ip}/country`); }
+  async getCity(ip: string): Promise<string> { return this.client.request<string>(`/${ip}/city`); }
+  async getOrg(ip: string): Promise<string> { return this.client.request<string>(`/${ip}/org`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
-  }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): IPinfoClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
