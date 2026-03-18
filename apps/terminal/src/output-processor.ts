@@ -140,6 +140,7 @@ export async function processOutput(
   command: string,
   output: string,
   originalPrompt?: string,
+  verbosity?: "minimal" | "normal" | "detailed",
 ): Promise<ProcessedOutput> {
   const lines = output.split("\n");
 
@@ -201,12 +202,16 @@ export async function processOutput(
     // Falls back to main provider if Groq unavailable
     const provider = getOutputProvider();
     const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+    const verbosityHint = verbosity === "minimal" ? "\nBe ULTRA concise — 1-2 lines max. Status + key number only."
+      : verbosity === "detailed" ? "\nBe thorough — include all relevant details, up to 15 lines."
+      : ""; // normal = default 8 lines from SUMMARIZE_PROMPT
+    const maxTok = verbosity === "minimal" ? 100 : verbosity === "detailed" ? 500 : 300;
     const summary = await provider.complete(
       `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}${hintsBlock}${profileHints}`,
       {
         model: outputModel,
-        system: SUMMARIZE_PROMPT,
-        maxTokens: 300,
+        system: SUMMARIZE_PROMPT + verbosityHint,
+        maxTokens: maxTok,
         temperature: 0.2,
       }
     );

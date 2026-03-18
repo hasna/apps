@@ -71,11 +71,22 @@ function resolvePath(p: string, cwd?: string): string {
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "terminal",
-    version: "3.4.0",
+    version: "4.2.0",
   });
 
   // Create a session for this MCP server instance
   const sessionId = createSession(process.cwd(), "mcp");
+
+  // ── Mementos: cross-session project memory ────────────────────────────────
+  let mementosProjectId: string | null = null;
+  try {
+    const mementos = require("@hasna/mementos");
+    const projectName = process.cwd().split("/").pop() ?? "unknown";
+    const project = mementos.registerProject(projectName, process.cwd());
+    mementosProjectId = project?.id ?? null;
+    mementos.registerAgent("terminal-mcp");
+    if (mementosProjectId) mementos.setFocus(mementosProjectId);
+  } catch {} // mementos optional — works without it
 
   /** Log a tool call to sessions.db for economy tracking */
   function logCall(tool: string, data: {
@@ -194,12 +205,13 @@ export function createServer(): McpServer {
       command: z.string().describe("Shell command to execute"),
       cwd: z.string().optional().describe("Working directory"),
       timeout: z.number().optional().describe("Timeout in ms (default: 30000)"),
+      verbosity: z.enum(["minimal", "normal", "detailed"]).optional().describe("Summary detail level (default: normal)"),
     },
-    async ({ command, cwd, timeout }) => {
+    async ({ command, cwd, timeout, verbosity }) => {
       const start = Date.now();
       const result = await exec(command, cwd, timeout ?? 30000, true);
       const output = (result.stdout + result.stderr).trim();
-      const processed = await processOutput(command, output);
+      const processed = await processOutput(command, output, undefined, verbosity);
 
       const detailKey = output.split("\n").length > 15 ? storeOutput(command, output) : undefined;
       logCall("execute_smart", { command, outputTokens: estimateTokens(output), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, exitCode: result.exitCode, aiProcessed: processed.aiProcessed });
@@ -1580,9 +1592,10 @@ Be specific, not generic. Only flag real problems.`,
     "Run multiple operations in ONE call. Saves N-1 round trips. Each op can be: execute (run command), read (file read/summarize), search (grep pattern), or symbols (file outline).",
     {
       ops: z.array(z.object({
-        type: z.enum(["execute", "read", "search", "symbols"]).describe("Operation type"),
+        type: z.enum(["execute", "read", "write", "search", "symbols"]).describe("Operation type"),
         command: z.string().optional().describe("Shell command (for execute)"),
-        path: z.string().optional().describe("File path (for read/symbols)"),
+        path: z.string().optional().describe("File path (for read/write/symbols)"),
+        content: z.string().optional().describe("File content (for write)"),
         pattern: z.string().optional().describe("Search pattern (for search)"),
         summarize: z.boolean().optional().describe("AI summarize (for read)"),
         format: z.enum(["raw", "summary"]).optional().describe("Output format (for execute)"),
@@ -1622,8 +1635,22 @@ Be specific, not generic. Only flag real problems.`,
             } else {
               results.push({ op: i, type: "read", path: op.path, content: result.content, lines: result.content.split("\n").length });
             }
+          } else if (op.type === "write" && op.path && op.content !== undefined) {
+            const filePath = resolvePath(op.path, workDir);
+            const { writeFileSync, mkdirSync, existsSync } = await import("fs");
+            const { dirname } = await import("path");
+            const dir = dirname(filePath);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+            writeFileSync(filePath, op.content);
+            results.push({ op: i, type: "write", path: op.path, ok: true, bytes: op.content.length });
           } else if (op.type === "search" && op.pattern) {
-            const result = await searchContent(op.pattern, op.path ? resolvePath(op.path, workDir) : workDir, {});
+            // Search accepts both files and directories — resolve to parent dir if file
+            let searchPath = op.path ? resolvePath(op.path, workDir) : workDir;
+            try {
+              const { statSync } = await import("fs");
+              if (statSync(searchPath).isFile()) searchPath = searchPath.replace(/\/[^/]+$/, "");
+            } catch {}
+            const result = await searchContent(op.pattern, searchPath, {});
             results.push({ op: i, type: "search", pattern: op.pattern, totalMatches: result.totalMatches, files: result.files.slice(0, 10) });
           } else if (op.type === "symbols" && op.path) {
             const filePath = resolvePath(op.path, workDir);
@@ -1651,6 +1678,53 @@ Be specific, not generic. Only flag real problems.`,
 
       logCall("batch", { command: `${ops.length} ops`, durationMs: Date.now() - start, aiProcessed: true });
       return { content: [{ type: "text" as const, text: JSON.stringify({ results, total: results.length, durationMs: Date.now() - start }) }] };
+    }
+  );
+
+  // ── Cross-session memory (mementos SDK) ────────────────────────────────────
+
+  server.tool(
+    "remember",
+    "Save a learning about this project for future sessions. Persists across restarts. Use for: project patterns, conventions, toolchain quirks, architectural decisions.",
+    {
+      key: z.string().describe("Short key (e.g., 'test-command', 'deploy-process', 'auth-pattern')"),
+      value: z.string().describe("What to remember"),
+      importance: z.number().optional().describe("1-10, default 7"),
+    },
+    async ({ key, value, importance }) => {
+      try {
+        const mementos = require("@hasna/mementos");
+        mementos.createMemory({ key, value, scope: "shared", category: "knowledge", importance: importance ?? 7 });
+        logCall("remember", { command: `remember: ${key}` });
+        return { content: [{ type: "text" as const, text: JSON.stringify({ saved: key }) }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message?.slice(0, 200) }) }] };
+      }
+    }
+  );
+
+  server.tool(
+    "recall",
+    "Recall project memories from previous sessions. Returns all saved learnings, patterns, and decisions for this project.",
+    {
+      search: z.string().optional().describe("Search query to filter memories"),
+      limit: z.number().optional().describe("Max memories to return (default: 20)"),
+    },
+    async ({ search, limit }) => {
+      try {
+        const mementos = require("@hasna/mementos");
+        let memories;
+        if (search) {
+          memories = mementos.searchMemories(search, { limit: limit ?? 20 });
+        } else {
+          memories = mementos.listMemories({ scope: "shared", limit: limit ?? 20 });
+        }
+        const items = (memories ?? []).map((m: any) => ({ key: m.key, value: m.value, importance: m.importance }));
+        logCall("recall", { command: `recall${search ? `: ${search}` : ""}` });
+        return { content: [{ type: "text" as const, text: JSON.stringify({ memories: items, total: items.length }) }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message?.slice(0, 200), memories: [] }) }] };
+      }
     }
   );
 
