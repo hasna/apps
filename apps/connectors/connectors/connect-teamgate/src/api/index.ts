@@ -1,51 +1,45 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Teamgate Connector — Sales CRM with pipeline management and analytics
+import { TeamgateClient } from './client';
+import type { TeamgateConfig, TGLead, TGDeal, TGCompany, TGPerson, TGPipeline, TGListResult } from '../types';
+export { TeamgateClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Teamgate {
+  private readonly client: TeamgateClient;
+  constructor(config: TeamgateConfig) { this.client = new TeamgateClient(config); }
+  static fromEnv(): Teamgate {
+    const authToken = process.env.TEAMGATE_AUTH_TOKEN;
+    const appKey = process.env.TEAMGATE_APP_KEY;
+    if (!authToken || !appKey) throw new Error('TEAMGATE_AUTH_TOKEN and TEAMGATE_APP_KEY are required');
+    return new Teamgate({ authToken, appKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listLeads(options?: { offset?: number; limit?: number; status?: string }): Promise<TGListResult<TGLead>> {
+    return this.client.request<TGListResult<TGLead>>('/leads', { params: { offset: options?.offset, limit: options?.limit, status: options?.status } });
+  }
+  async getLead(leadId: number): Promise<TGLead> { return this.client.request<TGLead>(`/leads/${leadId}`); }
+  async createLead(data: { name: string; email?: string; phone?: string; company?: string; source?: string }): Promise<TGLead> {
+    return this.client.request<TGLead>('/leads', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listDeals(options?: { offset?: number; limit?: number; pipeline_id?: number }): Promise<TGListResult<TGDeal>> {
+    return this.client.request<TGListResult<TGDeal>>('/deals', { params: { offset: options?.offset, limit: options?.limit, pipeline_id: options?.pipeline_id } });
+  }
+  async getDeal(dealId: number): Promise<TGDeal> { return this.client.request<TGDeal>(`/deals/${dealId}`); }
+  async createDeal(data: { name: string; value?: number; pipeline_id: number; stage_id: number; company_id?: number }): Promise<TGDeal> {
+    return this.client.request<TGDeal>('/deals', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateDeal(dealId: number, data: { stage_id?: number; value?: number; status?: string }): Promise<TGDeal> {
+    return this.client.request<TGDeal>(`/deals/${dealId}`, { method: 'PUT', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listCompanies(options?: { offset?: number; limit?: number }): Promise<TGListResult<TGCompany>> {
+    return this.client.request<TGListResult<TGCompany>>('/companies', { params: { offset: options?.offset, limit: options?.limit } });
   }
+  async listPeople(options?: { offset?: number; limit?: number }): Promise<TGListResult<TGPerson>> {
+    return this.client.request<TGListResult<TGPerson>>('/people', { params: { offset: options?.offset, limit: options?.limit } });
+  }
+
+  async listPipelines(): Promise<TGPipeline[]> { return this.client.request<TGPipeline[]>('/pipelines'); }
+
+  getClient(): TeamgateClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

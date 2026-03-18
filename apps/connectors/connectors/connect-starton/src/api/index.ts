@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Starton Connector — Blockchain infrastructure for smart contracts
+import { StartonClient } from './client';
+import type { StartonConfig, STSmartContract, STTransaction, STWallet, STNetwork, STIPFSFile } from '../types';
+export { StartonClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Starton {
+  private readonly client: StartonClient;
+  constructor(config: StartonConfig) { this.client = new StartonClient(config); }
+  static fromEnv(): Starton {
+    const apiKey = process.env.STARTON_API_KEY;
+    if (!apiKey) throw new Error('STARTON_API_KEY is required');
+    return new Starton({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async deploySmartContract(data: { network: string; name: string; abi: Record<string, unknown>[]; bytecode: string; params: unknown[]; signerWallet: string }): Promise<STSmartContract> {
+    return this.client.request<STSmartContract>('/smart-contract/deploy', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async listSmartContracts(options?: { network?: string; page?: number; limit?: number }): Promise<{ items: STSmartContract[] }> {
+    return this.client.request('/smart-contract', { params: { network: options?.network, page: options?.page, limit: options?.limit } });
+  }
+  async callSmartContract(network: string, address: string, functionName: string, params: unknown[], signerWallet: string): Promise<STTransaction> {
+    return this.client.request<STTransaction>(`/smart-contract/${network}/${address}/call`, { method: 'POST', body: { functionName, params, signerWallet } as Record<string, unknown> });
+  }
+  async readSmartContract(network: string, address: string, functionName: string, params: unknown[]): Promise<{ response: unknown }> {
+    return this.client.request(`/smart-contract/${network}/${address}/read`, { method: 'POST', body: { functionName, params } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getTransaction(transactionId: string): Promise<STTransaction> { return this.client.request<STTransaction>(`/transaction/${transactionId}`); }
+
+  async listWallets(): Promise<{ items: STWallet[] }> { return this.client.request('/kms/wallet'); }
+  async createWallet(data: { network: string; name?: string }): Promise<STWallet> {
+    return this.client.request<STWallet>('/kms/wallet', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listNetworks(): Promise<STNetwork[]> { return this.client.request<STNetwork[]>('/network'); }
+
+  async pinFileToIPFS(data: { name: string; cid?: string }): Promise<STIPFSFile> {
+    return this.client.request<STIPFSFile>('/ipfs/pin', { method: 'POST', body: data as Record<string, unknown> });
   }
+  async listIPFSFiles(): Promise<{ items: STIPFSFile[] }> { return this.client.request('/ipfs/pin'); }
+
+  getClient(): StartonClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
