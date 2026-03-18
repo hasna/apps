@@ -1,51 +1,54 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// WatchSignals Connector — Luxury watch market data and price tracking
+import { WatchSignalsClient } from './client';
+import type { WatchSignalsConfig, Watch, WatchPrice, PriceHistoryEntry, Brand, WatchSearchOptions } from '../types';
+export { WatchSignalsClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class WatchSignals {
+  private readonly client: WatchSignalsClient;
+  constructor(config: WatchSignalsConfig) { this.client = new WatchSignalsClient(config); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  static fromEnv(): WatchSignals {
+    const apiKey = process.env.WATCHSIGNALS_API_KEY;
+    if (!apiKey) throw new Error('WATCHSIGNALS_API_KEY environment variable is required');
+    return new WatchSignals({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Watches
+  async searchWatches(options?: WatchSearchOptions): Promise<{ watches: Watch[]; total: number; page: number }> {
+    return this.client.request('/watches', options as Record<string, string | number | undefined>);
+  }
+  async getWatch(watchId: string): Promise<Watch> {
+    return this.client.request<Watch>(`/watches/${watchId}`);
+  }
+  async getWatchByReference(brand: string, reference: string): Promise<Watch> {
+    return this.client.request<Watch>('/watches/lookup', { brand, reference });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  // Prices
+  async getWatchPrice(watchId: string, currency?: string): Promise<WatchPrice> {
+    return this.client.request<WatchPrice>(`/watches/${watchId}/price`, { currency });
+  }
+  async getPriceHistory(watchId: string, options?: { currency?: string; from?: string; to?: string; interval?: 'daily' | 'weekly' | 'monthly' }): Promise<PriceHistoryEntry[]> {
+    const r = await this.client.request<{ history: PriceHistoryEntry[] }>(`/watches/${watchId}/price/history`, options as Record<string, string | undefined>);
+    return r.history ?? [];
+  }
+  async getTopMovers(options?: { currency?: string; period?: '24h' | '7d' | '30d'; limit?: number }): Promise<Array<Watch & { priceChange: number; priceChangePercent: number }>> {
+    const r = await this.client.request<{ watches: Array<Watch & { priceChange: number; priceChangePercent: number }> }>('/market/top-movers', options as Record<string, string | number | undefined>);
+    return r.watches ?? [];
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  // Brands
+  async listBrands(): Promise<Brand[]> {
+    const r = await this.client.request<{ brands: Brand[] }>('/brands');
+    return r.brands ?? [];
   }
+  async getBrand(brandId: string): Promise<Brand> {
+    return this.client.request<Brand>(`/brands/${brandId}`);
+  }
+  async getBrandWatches(brandId: string, options?: { page?: number; limit?: number }): Promise<Watch[]> {
+    const r = await this.client.request<{ watches: Watch[] }>(`/brands/${brandId}/watches`, options as Record<string, number | undefined>);
+    return r.watches ?? [];
+  }
+
+  getClient(): WatchSignalsClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
