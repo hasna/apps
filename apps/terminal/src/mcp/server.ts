@@ -8,6 +8,7 @@ import { compress, stripAnsi } from "../compression.js";
 import { stripNoise } from "../noise-filter.js";
 import { estimateTokens } from "../tokens.js";
 import { processOutput } from "../output-processor.js";
+import { getOutputProvider } from "../providers/index.js";
 import { searchFiles, searchContent, semanticSearch } from "../search/index.js";
 import { listRecipes, listCollections, getRecipe, createRecipe } from "../recipes/storage.js";
 import { substituteVariables } from "../recipes/model.js";
@@ -762,14 +763,49 @@ export function createServer(): McpServer {
 
   server.tool(
     "symbols",
-    "Get a structured outline of a source file — functions, classes, interfaces, exports with line numbers. Replaces the common grep pattern: grep -n '^export|class|function' file.",
+    "Get a structured outline of any source file — functions, classes, methods, interfaces, exports with line numbers. Works for ALL languages (TypeScript, Python, Go, Rust, Java, C#, Ruby, PHP, etc.). AI-powered, not regex.",
     {
       path: z.string().describe("File path to extract symbols from"),
     },
     async ({ path: filePath }) => {
-      const { extractSymbolsFromFile } = await import("../search/semantic.js");
-      const symbols = extractSymbolsFromFile(filePath).filter(s => s.kind !== "import");
-      logCall("symbols", { command: filePath, outputTokens: symbols.length * 5, durationMs: 0 });
+      const start = Date.now();
+      const result = cachedRead(filePath, {});
+      if (!result.content || result.content.startsWith("Error:")) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot read ${filePath}` }) }] };
+      }
+
+      // AI extracts symbols — works for ANY language
+      const provider = getOutputProvider();
+      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+      const content = result.content.length > 6000 ? result.content.slice(0, 6000) : result.content;
+      const summary = await provider.complete(
+        `File: ${filePath}\n\n${content}`,
+        {
+          model: outputModel,
+          system: `Extract all symbols from this source file. Return ONLY a JSON array, no explanation.
+
+Each symbol: {"name": "symbolName", "kind": "function|class|method|interface|type|variable|export", "line": lineNumber, "signature": "brief signature"}
+
+For class methods, use "ClassName.methodName" as name with kind "method".
+Include: functions, classes, methods, interfaces, types, exported constants.
+Exclude: imports, local variables, comments.
+Line numbers must be accurate (count from 1).`,
+          maxTokens: 1000,
+          temperature: 0,
+        }
+      );
+
+      // Parse AI response
+      let symbols: any[] = [];
+      try {
+        const jsonMatch = summary.match(/\[[\s\S]*\]/);
+        if (jsonMatch) symbols = JSON.parse(jsonMatch[0]);
+      } catch {}
+
+      const outputTokens = estimateTokens(result.content);
+      const symbolTokens = estimateTokens(JSON.stringify(symbols));
+      logCall("symbols", { command: filePath, outputTokens, tokensSaved: Math.max(0, outputTokens - symbolTokens), durationMs: Date.now() - start, aiProcessed: true });
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify(symbols) }],
       };
@@ -786,21 +822,39 @@ export function createServer(): McpServer {
       name: z.string().describe("Symbol name (function, class, interface)"),
     },
     async ({ path: filePath, name }) => {
-      const { extractBlock, extractSymbolsFromFile } = await import("../search/semantic.js");
-      const block = extractBlock(filePath, name);
-      if (!block) {
-        // Return available symbols so the agent can pick the right one
-        const symbols = extractSymbolsFromFile(filePath);
-        const names = symbols.filter(s => s.kind !== "import").map(s => `${s.kind}: ${s.name} (L${s.line})`);
-        return { content: [{ type: "text" as const, text: JSON.stringify({
-          error: `Symbol '${name}' not found`,
-          available: names.slice(0, 20),
-        }) }] };
+      const start = Date.now();
+      const result = cachedRead(filePath, {});
+      if (!result.content || result.content.startsWith("Error:")) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot read ${filePath}` }) }] };
       }
-      return { content: [{ type: "text" as const, text: JSON.stringify({
-        name, code: block.code, startLine: block.startLine, endLine: block.endLine,
-        lines: block.endLine - block.startLine + 1,
-      }) }] };
+
+      // AI extracts the specific symbol — works for ANY language
+      const provider = getOutputProvider();
+      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+      const summary = await provider.complete(
+        `File: ${filePath}\nSymbol to extract: ${name}\n\n${result.content.slice(0, 8000)}`,
+        {
+          model: outputModel,
+          system: `Extract the complete code block for the symbol "${name}" from this file. Return ONLY a JSON object:
+{"name": "${name}", "code": "the complete code block", "startLine": N, "endLine": N}
+
+If the symbol is not found, return: {"error": "not found", "available": ["list", "of", "symbol", "names"]}
+
+Match by function name, class name, method name (including ClassName.method), interface, type, or variable name.`,
+          maxTokens: 2000,
+          temperature: 0,
+        }
+      );
+
+      let parsed: any = {};
+      try {
+        const jsonMatch = summary.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {}
+
+      logCall("read_symbol", { command: `${filePath}:${name}`, outputTokens: estimateTokens(result.content), tokensSaved: Math.max(0, estimateTokens(result.content) - estimateTokens(JSON.stringify(parsed))), durationMs: Date.now() - start, aiProcessed: true });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify(parsed) }] };
     }
   );
 
