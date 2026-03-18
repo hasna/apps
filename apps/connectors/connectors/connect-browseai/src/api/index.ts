@@ -1,51 +1,30 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Browse AI Connector — No-code web scraping and data extraction
+import { BrowseAIClient } from './client';
+import type { BrowseAIConfig, BARobot, BATask, BATaskList } from '../types';
+export { BrowseAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class BrowseAI {
+  private readonly client: BrowseAIClient;
+  constructor(config: BrowseAIConfig) { this.client = new BrowseAIClient(config); }
+  static fromEnv(): BrowseAI {
+    const apiKey = process.env.BROWSEAI_API_KEY;
+    if (!apiKey) throw new Error('BROWSEAI_API_KEY is required');
+    return new BrowseAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listRobots(): Promise<{ result: { robots: BARobot[] } }> { return this.client.request('/robots'); }
+  async getRobot(robotId: string): Promise<{ result: { robot: BARobot } }> { return this.client.request(`/robots/${robotId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async runRobot(robotId: string, inputParameters?: Record<string, string>): Promise<{ result: { robotTask: BATask } }> {
+    return this.client.request(`/robots/${robotId}/tasks`, { method: 'POST', body: { inputParameters } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTasks(robotId: string, options?: { page?: number }): Promise<BATaskList> {
+    return this.client.request<BATaskList>(`/robots/${robotId}/tasks`, { params: { page: options?.page } });
+  }
+  async getTask(robotId: string, taskId: string): Promise<{ result: { robotTask: BATask } }> {
+    return this.client.request(`/robots/${robotId}/tasks/${taskId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): BrowseAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

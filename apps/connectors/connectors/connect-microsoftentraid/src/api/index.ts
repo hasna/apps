@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Microsoft Entra ID Connector — Identity and access management
+import { MSEntraIDClient } from './client';
+import type { MSEntraIDConfig, MEUser, MEUserList, MEGroup, MEGroupList, MEApp } from '../types';
+export { MSEntraIDClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class MSEntraID {
+  private readonly client: MSEntraIDClient;
+  constructor(config: MSEntraIDConfig) { this.client = new MSEntraIDClient(config); }
+  static fromEnv(): MSEntraID {
+    const token = process.env.ENTRAID_TOKEN;
+    if (!token) throw new Error('ENTRAID_TOKEN is required');
+    return new MSEntraID({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listUsers(options?: { $top?: number; $filter?: string; $select?: string }): Promise<MEUserList> {
+    return this.client.request<MEUserList>('/users', { params: { $top: options?.$top, $filter: options?.$filter, $select: options?.$select } });
+  }
+  async getUser(userId: string): Promise<MEUser> { return this.client.request<MEUser>(`/users/${userId}`); }
+  async createUser(data: { displayName: string; mailNickname: string; userPrincipalName: string; passwordProfile: { password: string }; accountEnabled: boolean }): Promise<MEUser> {
+    return this.client.request<MEUser>('/users', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteUser(userId: string): Promise<void> { await this.client.request(`/users/${userId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listGroups(options?: { $top?: number; $filter?: string }): Promise<MEGroupList> {
+    return this.client.request<MEGroupList>('/groups', { params: { $top: options?.$top, $filter: options?.$filter } });
+  }
+  async getGroup(groupId: string): Promise<MEGroup> { return this.client.request<MEGroup>(`/groups/${groupId}`); }
+  async getGroupMembers(groupId: string): Promise<MEUserList> { return this.client.request<MEUserList>(`/groups/${groupId}/members`); }
+  async addGroupMember(groupId: string, userId: string): Promise<void> {
+    await this.client.request(`/groups/${groupId}/members/$ref`, { method: 'POST', body: { '@odata.id': `https://graph.microsoft.com/v1.0/directoryObjects/${userId}` } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listApplications(): Promise<{ value: MEApp[] }> { return this.client.request('/applications'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): MSEntraIDClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
