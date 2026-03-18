@@ -554,3 +554,84 @@ export interface UpdateReleaseOptions {
   prerelease?: boolean;
   make_latest?: 'true' | 'false' | 'legacy';
 }
+
+// ============================================
+// Actions / Workflows
+// ============================================
+
+export interface Workflow {
+  id: number;
+  node_id: string;
+  name: string;
+  path: string;
+  state: 'active' | 'deleted' | 'disabled_fork' | 'disabled_inactivity' | 'disabled_manually';
+  created_at: string;
+  updated_at: string;
+  url: string;
+  html_url: string;
+  badge_url: string;
+}
+
+export interface WorkflowRun {
+  id: number;
+  name: string | null;
+  node_id: string;
+  head_branch: string | null;
+  head_sha: string;
+  run_number: number;
+  run_attempt: number;
+  event: string;
+  status: 'queued' | 'in_progress' | 'completed' | 'waiting' | 'requested' | 'pending' | null;
+  conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | 'startup_failure' | null;
+  workflow_id: number;
+  url: string;
+  html_url: string;
+  created_at: string;
+  updated_at: string;
+  run_started_at: string;
+  actor: User;
+  triggering_actor: User;
+}
+
+export interface WorkflowJobStep {
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed';
+  conclusion: string | null;
+  number: number;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface WorkflowJob {
+  id: number;
+  run_id: number;
+  node_id: string;
+  head_sha: string;
+  url: string;
+  html_url: string;
+  status: 'queued' | 'in_progress' | 'completed' | 'waiting';
+  conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | null;
+  name: string;
+  steps: WorkflowJobStep[];
+  started_at: string;
+  completed_at: string | null;
+  runner_name: string | null;
+  runner_group_name: string | null;
+}
+
+export interface WorkflowDispatchOptions {
+  ref: string;
+  inputs?: Record<string, string>;
+}
+
+export interface ListWorkflowRunsOptions {
+  actor?: string;
+  branch?: string;
+  event?: string;
+  status?: 'queued' | 'in_progress' | 'completed' | 'waiting' | 'requested' | 'pending' | 'action_required' | 'cancelled' | 'failure' | 'neutral' | 'skipped' | 'stale' | 'success' | 'timed_out' | 'startup_failure';
+  per_page?: number;
+  page?: number;
+  created?: string;
+  exclude_pull_requests?: boolean;
+  head_sha?: string;
+}
