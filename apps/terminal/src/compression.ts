@@ -89,6 +89,13 @@ export function compress(command: string, output: string, options: CompressOptio
   const { maxTokens, stripAnsi: doStrip = true } = options;
   const originalTokens = estimateTokens(output);
 
+  // Short output — no-op, skip all processing
+  if (output.split("\n").length <= 20 && !maxTokens) {
+    const clean = doStrip ? stripAnsi(output) : output;
+    const cleanTokens = estimateTokens(clean);
+    return { content: clean, originalTokens, compressedTokens: cleanTokens, tokensSaved: Math.max(0, originalTokens - cleanTokens), savingsPercent: 0 };
+  }
+
   // Step 1: Strip ANSI codes
   let text = doStrip ? stripAnsi(output) : output;
 
