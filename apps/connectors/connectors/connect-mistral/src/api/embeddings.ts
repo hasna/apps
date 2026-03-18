@@ -4,6 +4,7 @@ import type {
   EmbeddingResponse,
   EmbeddingOptions,
 } from '../types';
+import { DEFAULT_EMBEDDING_MODEL } from '../types';
 
 /**
  * Embeddings API
@@ -19,7 +20,7 @@ export class EmbeddingsApi {
     options: EmbeddingOptions = {}
   ): Promise<EmbeddingResponse> {
     const request: EmbeddingRequest = {
-      model: options.model || 'mistral-embed',
+      model: options.model || DEFAULT_EMBEDDING_MODEL,
       input,
     };
 
