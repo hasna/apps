@@ -1,5 +1,5 @@
 import type { ShopifyClient } from './client';
-import type { Product, CreateProductRequest, UpdateProductRequest } from '../types';
+import type { Product, Variant, ProductImage, CreateProductRequest, UpdateProductRequest } from '../types';
 
 // Note: API responses use snake_case, we transform to camelCase types
 
@@ -248,5 +248,82 @@ export class ProductsApi {
       variantIds: image.variant_ids as number[],
       adminGraphqlApiId: image.admin_graphql_api_id as string,
     };
+  }
+
+  // ============================================
+  // Variants
+  // ============================================
+
+  /** List variants for a product */
+  async listVariants(productId: number): Promise<Variant[]> {
+    const result = await this.client.request<{ variants: Variant[] }>(
+      `/products/${productId}/variants.json`
+    );
+    return result.variants;
+  }
+
+  /** Get a single variant */
+  async getVariant(variantId: number): Promise<Variant> {
+    const result = await this.client.request<{ variant: Variant }>(
+      `/variants/${variantId}.json`
+    );
+    return result.variant;
+  }
+
+  /** Create a variant for a product */
+  async createVariant(productId: number, variant: Partial<Variant>): Promise<Variant> {
+    const result = await this.client.request<{ variant: Variant }>(
+      `/products/${productId}/variants.json`,
+      { method: 'POST', body: { variant } }
+    );
+    return result.variant;
+  }
+
+  /** Update a variant */
+  async updateVariant(variantId: number, variant: Partial<Variant>): Promise<Variant> {
+    const result = await this.client.request<{ variant: Variant }>(
+      `/variants/${variantId}.json`,
+      { method: 'PUT', body: { variant } }
+    );
+    return result.variant;
+  }
+
+  /** Delete a variant */
+  async deleteVariant(productId: number, variantId: number): Promise<void> {
+    await this.client.request(`/products/${productId}/variants/${variantId}.json`, { method: 'DELETE' });
+  }
+
+  // ============================================
+  // Images
+  // ============================================
+
+  /** List images for a product */
+  async listImages(productId: number): Promise<ProductImage[]> {
+    const result = await this.client.request<{ images: ProductImage[] }>(
+      `/products/${productId}/images.json`
+    );
+    return result.images;
+  }
+
+  /** Get a product image */
+  async getImage(productId: number, imageId: number): Promise<ProductImage> {
+    const result = await this.client.request<{ image: ProductImage }>(
+      `/products/${productId}/images/${imageId}.json`
+    );
+    return result.image;
+  }
+
+  /** Add an image to a product */
+  async createImage(productId: number, image: { src: string; alt?: string; variantIds?: number[] }): Promise<ProductImage> {
+    const result = await this.client.request<{ image: ProductImage }>(
+      `/products/${productId}/images.json`,
+      { method: 'POST', body: { image: { src: image.src, alt: image.alt, variant_ids: image.variantIds } } }
+    );
+    return result.image;
+  }
+
+  /** Delete a product image */
+  async deleteImage(productId: number, imageId: number): Promise<void> {
+    await this.client.request(`/products/${productId}/images/${imageId}.json`, { method: 'DELETE' });
   }
 }
