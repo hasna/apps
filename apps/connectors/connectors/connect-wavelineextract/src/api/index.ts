@@ -1,51 +1,27 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Waveline Extract Connector — Document data extraction and parsing
+import { WavelineClient } from './client';
+import type { WavelineConfig, WLExtraction, WLTemplate } from '../types';
+export { WavelineClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class WavelineExtract {
+  private readonly client: WavelineClient;
+  constructor(config: WavelineConfig) { this.client = new WavelineClient(config); }
+  static fromEnv(): WavelineExtract {
+    const apiKey = process.env.WAVELINE_API_KEY;
+    if (!apiKey) throw new Error('WAVELINE_API_KEY is required');
+    return new WavelineExtract({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async extractFromUrl(documentUrl: string, templateId?: string): Promise<WLExtraction> {
+    return this.client.request<WLExtraction>('/extract', { method: 'POST', body: { document_url: documentUrl, template_id: templateId } as Record<string, unknown> });
+  }
+  async getExtraction(extractionId: string): Promise<WLExtraction> { return this.client.request<WLExtraction>(`/extractions/${extractionId}`); }
+  async listExtractions(options?: { page?: number; status?: string }): Promise<{ extractions: WLExtraction[]; total: number }> {
+    return this.client.request('/extractions', { params: { page: options?.page, status: options?.status } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listTemplates(): Promise<WLTemplate[]> { return this.client.request<WLTemplate[]>('/templates'); }
+  async getTemplate(templateId: string): Promise<WLTemplate> { return this.client.request<WLTemplate>(`/templates/${templateId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): WavelineClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

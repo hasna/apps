@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// One Simple API Connector — Utility APIs for screenshots, PDFs, and scraping
+import { OneSimpleAPIClient } from './client';
+import type { OneSimpleAPIConfig, OSScreenshot, OSPdf, OSScrape, OSQRCode, OSExchangeRate } from '../types';
+export { OneSimpleAPIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class OneSimpleAPI {
+  private readonly client: OneSimpleAPIClient;
+  constructor(config: OneSimpleAPIConfig) { this.client = new OneSimpleAPIClient(config); }
+  static fromEnv(): OneSimpleAPI {
+    const apiKey = process.env.ONESIMPLEAPI_API_KEY;
+    if (!apiKey) throw new Error('ONESIMPLEAPI_API_KEY is required');
+    return new OneSimpleAPI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async screenshot(url: string, options?: { full_page?: boolean; width?: number; height?: number; format?: string }): Promise<OSScreenshot> {
+    return this.client.request<OSScreenshot>('/screenshot', { url, full_page: options?.full_page ? 'true' : undefined, width: options?.width, height: options?.height, output: options?.format });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async urlToPdf(url: string, options?: { format?: string; landscape?: boolean }): Promise<OSPdf> {
+    return this.client.request<OSPdf>('/pdf', { url, format: options?.format, landscape: options?.landscape ? 'true' : undefined });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async scrape(url: string): Promise<OSScrape> { return this.client.request<OSScrape>('/scrape', { url }); }
+
+  async generateQRCode(data: string, options?: { size?: number }): Promise<OSQRCode> {
+    return this.client.request<OSQRCode>('/qr_code', { data, size: options?.size });
   }
+
+  async getExchangeRate(base: string, target: string): Promise<OSExchangeRate> {
+    return this.client.request<OSExchangeRate>('/exchange_rate', { base, target });
+  }
+
+  async shortenUrl(url: string): Promise<{ short_url: string }> {
+    return this.client.request('/shorten', { url });
+  }
+
+  getClient(): OneSimpleAPIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
