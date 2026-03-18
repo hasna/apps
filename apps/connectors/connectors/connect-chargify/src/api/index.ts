@@ -1,51 +1,58 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Chargify Connector — Subscription billing and revenue management
+import { ChargifyClient } from './client';
+import type { ChargifyConfig, CFSubscription, CFCustomer, CFProduct, CFInvoice } from '../types';
+export { ChargifyClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class Chargify {
+  private readonly client: ChargifyClient;
+  constructor(config: ChargifyConfig) { this.client = new ChargifyClient(config); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  static fromEnv(): Chargify {
+    const apiKey = process.env.CHARGIFY_API_KEY;
+    const subdomain = process.env.CHARGIFY_SUBDOMAIN;
+    if (!apiKey || !subdomain) throw new Error('CHARGIFY_API_KEY and CHARGIFY_SUBDOMAIN are required');
+    return new Chargify({ apiKey, subdomain });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Subscriptions
+  async listSubscriptions(options?: { page?: number; perPage?: number; state?: string }): Promise<CFSubscription[]> {
+    const r = await this.client.request<Array<{ subscription: CFSubscription }>>('/subscriptions.json', { params: { page: options?.page, per_page: options?.perPage, state: options?.state } });
+    return r.map(s => s.subscription);
+  }
+  async getSubscription(id: number): Promise<CFSubscription> {
+    const r = await this.client.request<{ subscription: CFSubscription }>(`/subscriptions/${id}.json`); return r.subscription;
+  }
+  async cancelSubscription(id: number, options?: { message?: string; reasonCode?: string }): Promise<CFSubscription> {
+    const r = await this.client.request<{ subscription: CFSubscription }>(`/subscriptions/${id}.json`, { method: 'DELETE', body: { subscription: { cancellation_message: options?.message, cancellation_method: 'merchant' } } });
+    return r.subscription;
+  }
+  async reactivateSubscription(id: number): Promise<CFSubscription> {
+    const r = await this.client.request<{ subscription: CFSubscription }>(`/subscriptions/${id}/reactivate.json`, { method: 'PUT' }); return r.subscription;
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  // Customers
+  async listCustomers(options?: { page?: number; perPage?: number; q?: string }): Promise<CFCustomer[]> {
+    const r = await this.client.request<Array<{ customer: CFCustomer }>>('/customers.json', { params: options as Record<string, string | number | undefined> });
+    return r.map(c => c.customer);
+  }
+  async getCustomer(id: number): Promise<CFCustomer> {
+    const r = await this.client.request<{ customer: CFCustomer }>(`/customers/${id}.json`); return r.customer;
+  }
+  async createCustomer(data: { first_name: string; last_name: string; email: string; phone?: string; organization?: string }): Promise<CFCustomer> {
+    const r = await this.client.request<{ customer: CFCustomer }>('/customers.json', { method: 'POST', body: { customer: data } }); return r.customer;
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  // Products
+  async listProducts(productFamilyId?: number): Promise<CFProduct[]> {
+    const path = productFamilyId ? `/product_families/${productFamilyId}/products.json` : '/products.json';
+    const r = await this.client.request<Array<{ product: CFProduct }>>(path);
+    return r.map(p => p.product);
   }
+
+  // Invoices
+  async listInvoices(options?: { subscriptionId?: number; status?: string; page?: number }): Promise<{ invoices: CFInvoice[] }> {
+    return this.client.request('/invoices.json', { params: { subscription_id: options?.subscriptionId, status: options?.status, page: options?.page } });
+  }
+
+  getClient(): ChargifyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
