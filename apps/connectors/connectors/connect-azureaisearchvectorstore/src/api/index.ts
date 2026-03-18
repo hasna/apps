@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Azure AI Search Vector Store Connector — Vector search and indexing for AI
+import { AzureAISearchClient } from './client';
+import type { AzureAISearchConfig, AZSIndex, AZSSearchResult, AZSIndexResult, AZSVectorQuery } from '../types';
+export { AzureAISearchClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AzureAISearch {
+  private readonly client: AzureAISearchClient;
+  constructor(config: AzureAISearchConfig) { this.client = new AzureAISearchClient(config); }
+  static fromEnv(): AzureAISearch {
+    const serviceName = process.env.AZURE_SEARCH_SERVICE;
+    const apiKey = process.env.AZURE_SEARCH_API_KEY;
+    if (!serviceName || !apiKey) throw new Error('AZURE_SEARCH_SERVICE and AZURE_SEARCH_API_KEY are required');
+    return new AzureAISearch({ serviceName, apiKey, apiVersion: process.env.AZURE_SEARCH_API_VERSION });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listIndexes(): Promise<{ value: AZSIndex[] }> { return this.client.request('/indexes'); }
+  async getIndex(indexName: string): Promise<AZSIndex> { return this.client.request<AZSIndex>(`/indexes/${indexName}`); }
+  async createIndex(index: { name: string; fields: { name: string; type: string; key?: boolean; searchable?: boolean; filterable?: boolean; dimensions?: number; vectorSearchProfile?: string }[] }): Promise<AZSIndex> {
+    return this.client.request<AZSIndex>('/indexes', { method: 'POST', body: index as Record<string, unknown> });
+  }
+  async deleteIndex(indexName: string): Promise<void> { await this.client.request(`/indexes/${indexName}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async search(indexName: string, query: { search?: string; filter?: string; select?: string; top?: number; skip?: number; orderby?: string; vectorQueries?: AZSVectorQuery[] }): Promise<AZSSearchResult> {
+    return this.client.request<AZSSearchResult>(`/indexes/${indexName}/docs/search`, { method: 'POST', body: query as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getDocument(indexName: string, key: string, options?: { select?: string }): Promise<Record<string, unknown>> {
+    return this.client.request(`/indexes/${indexName}/docs/${key}`, { params: { $select: options?.select } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async indexDocuments(indexName: string, actions: { '@search.action': 'upload' | 'merge' | 'mergeOrUpload' | 'delete'; [key: string]: unknown }[]): Promise<AZSIndexResult> {
+    return this.client.request<AZSIndexResult>(`/indexes/${indexName}/docs/index`, { method: 'POST', body: { value: actions } as Record<string, unknown> });
   }
+
+  async countDocuments(indexName: string): Promise<number> {
+    const result = await this.client.request<number>(`/indexes/${indexName}/docs/$count`);
+    return result;
+  }
+
+  getClient(): AzureAISearchClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
