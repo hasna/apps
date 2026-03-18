@@ -11,6 +11,7 @@ export type { LLMProvider, ProviderOptions, StreamCallbacks, ProviderConfig } fr
 export { DEFAULT_PROVIDER_CONFIG } from "./base.js";
 
 let _provider: LLMProvider | null = null;
+let _outputProvider: LLMProvider | null = null;
 let _failedProviders: Set<string> = new Set();
 
 /** Get the active LLM provider. Auto-detects based on available API keys. */
@@ -25,7 +26,28 @@ export function getProvider(config?: ProviderConfig): LLMProvider {
 /** Reset the cached provider (useful when config changes). */
 export function resetProvider() {
   _provider = null;
+  _outputProvider = null;
   _failedProviders.clear();
+}
+
+/**
+ * Get the provider optimized for output summarization.
+ * Priority: Groq (fastest, 234ms avg) > Cerebras > xAI > Anthropic.
+ * Falls back to the main provider if Groq is unavailable.
+ */
+export function getOutputProvider(): LLMProvider {
+  if (_outputProvider) return _outputProvider;
+
+  // Prefer Groq for output processing (fastest + best compression in evals)
+  const groq = new GroqProvider();
+  if (groq.isAvailable()) {
+    _outputProvider = groq;
+    return groq;
+  }
+
+  // Fall back to main provider
+  _outputProvider = getProvider();
+  return _outputProvider;
 }
 
 /** Get a fallback-wrapped provider that tries alternatives on failure */

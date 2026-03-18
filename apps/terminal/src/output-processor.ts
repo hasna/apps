@@ -1,7 +1,7 @@
 // AI-powered output processor — uses cheap AI to intelligently summarize any output
 // NOTHING is hardcoded. The AI decides what's important, what's noise, what to keep.
 
-import { getProvider } from "./providers/index.js";
+import { getProvider, getOutputProvider } from "./providers/index.js";
 import { estimateTokens } from "./tokens.js";
 import { recordSaving } from "./economy.js";
 import { discoverOutputHints } from "./context-hints.js";
@@ -31,9 +31,85 @@ export interface ProcessedOutput {
 }
 
 const MIN_LINES_TO_PROCESS = 15;
-// Reserve ~2000 chars for system prompt + hints + profile + overhead
-const PROMPT_OVERHEAD_CHARS = 2000;
-const MAX_OUTPUT_FOR_AI = 6000; // chars of output to send to AI (leaves room for prompt overhead)
+const MAX_OUTPUT_FOR_AI = 6000;
+
+// ── Output fingerprinting — skip AI for outputs we can summarize instantly ──
+// These patterns match common terminal outputs that don't need AI interpretation.
+// Returns a short summary string, or null if AI should handle it.
+
+function fingerprint(command: string, output: string, exitCode?: number): string | null {
+  const trimmed = output.trim();
+  const lines = trimmed.split("\n").filter(l => l.trim());
+
+  // Empty output with success = command succeeded silently (build, lint, etc.)
+  if (lines.length === 0 && (exitCode === 0 || exitCode === undefined)) {
+    return "✓ Success (no output)";
+  }
+
+  // Single-line trivial outputs — pass through without AI
+  if (lines.length === 1 && trimmed.length < 80) {
+    return trimmed; // Already concise enough
+  }
+
+  // Git: common known patterns
+  if (/^Already up to date\.?$/i.test(trimmed)) return "✓ Already up to date";
+  if (/^nothing to commit, working tree clean$/i.test(trimmed)) return "✓ Clean working tree, nothing to commit";
+  if (/^On branch \S+\nnothing to commit/m.test(trimmed)) {
+    const branch = trimmed.match(/^On branch (\S+)/)?.[1];
+    return `✓ On branch ${branch}, clean working tree`;
+  }
+  if (/^Your branch is up to date/m.test(trimmed) && /nothing to commit/m.test(trimmed)) {
+    const branch = trimmed.match(/^On branch (\S+)/m)?.[1] ?? "?";
+    return `✓ Branch ${branch} up to date, clean`;
+  }
+
+  // Build/compile success with no errors
+  if (/^(tsc|bun|npm|yarn|pnpm)\s/.test(command)) {
+    if (lines.length <= 3 && (exitCode === 0 || exitCode === undefined) && !/error|Error|ERROR|fail|FAIL/.test(trimmed)) {
+      return `✓ Build succeeded${lines.length > 0 ? ` (${lines.length} lines)` : ""}`;
+    }
+  }
+
+  // npm/bun install success
+  if (/\binstall(ed)?\b.*\d+\s+packages?/i.test(trimmed) && !/error|Error|fail/i.test(trimmed)) {
+    const pkgMatch = trimmed.match(/(\d+)\s+packages?/);
+    return `✓ Installed ${pkgMatch?.[1] ?? "?"} packages`;
+  }
+
+  // Permission denied / not found — short errors pass through
+  if (lines.length <= 3 && /permission denied|command not found|No such file|ENOENT/i.test(trimmed)) {
+    return trimmed; // Already short enough, preserve error verbatim
+  }
+
+  // Hash-based dedup: if we've seen this exact output before, return cached summary
+  const hash = simpleHash(trimmed);
+  const cached = outputCache.get(hash);
+  if (cached) return cached;
+
+  return null; // No fingerprint match — AI should handle this
+}
+
+// Simple string hash for output dedup
+function simpleHash(s: string): number {
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
+// LRU cache for output summaries (keyed by content hash)
+const OUTPUT_CACHE_MAX = 200;
+const outputCache = new Map<number, string>();
+
+function cacheOutputSummary(output: string, summary: string): void {
+  const hash = simpleHash(output.trim());
+  if (outputCache.size >= OUTPUT_CACHE_MAX) {
+    const oldest = outputCache.keys().next().value;
+    if (oldest !== undefined) outputCache.delete(oldest);
+  }
+  outputCache.set(hash, summary);
+}
 
 const SUMMARIZE_PROMPT = `You are an intelligent terminal assistant. Given a user's original question and the command output, ANSWER THE QUESTION directly.
 
@@ -59,6 +135,23 @@ export async function processOutput(
   originalPrompt?: string,
 ): Promise<ProcessedOutput> {
   const lines = output.split("\n");
+
+  // Fingerprint check — skip AI entirely for known patterns (0ms, $0)
+  const fp = fingerprint(command, output);
+  if (fp && !originalPrompt) {
+    const saved = Math.max(0, estimateTokens(output) - estimateTokens(fp));
+    if (saved > 0) recordSaving("compressed", saved);
+    return {
+      summary: fp,
+      full: output,
+      tokensSaved: saved,
+      aiTokensUsed: 0,
+      aiProcessed: false,
+      aiCostUsd: 0,
+      savingsValueUsd: 0,
+      netSavingsUsd: 0,
+    };
+  }
 
   // Short output — skip AI UNLESS we have an original prompt (NL mode needs answer framing)
   if (lines.length <= MIN_LINES_TO_PROCESS && !originalPrompt) {
@@ -97,10 +190,14 @@ export async function processOutput(
     const profileBlock = formatProfileHints(command);
     const profileHints = profileBlock ? `\n\n${profileBlock}` : "";
 
-    const provider = getProvider();
+    // Use output-optimized provider (Groq llama-8b: fastest + best compression)
+    // Falls back to main provider if Groq unavailable
+    const provider = getOutputProvider();
+    const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
     const summary = await provider.complete(
       `${originalPrompt ? `User asked: ${originalPrompt}\n` : ""}Command: ${command}\nOutput (${lines.length} lines):\n${toSummarize}${hintsBlock}${profileHints}`,
       {
+        model: outputModel,
         system: SUMMARIZE_PROMPT,
         maxTokens: 300,
         temperature: 0.2,
@@ -137,6 +234,9 @@ export async function processOutput(
     if (netSavingsUsd > 0 && saved > 0) {
       recordSaving("compressed", saved);
     }
+
+    // Cache the AI summary for future identical outputs
+    cacheOutputSummary(output, summary);
 
     return {
       summary,

@@ -459,17 +459,27 @@ else if (args.length > 0) {
   const perms = config.permissions;
   const sessionCtx = formatContext();
 
+  // ── Direct command detection ──
+  // If input looks like a shell command (starts with known binary), skip AI translation entirely.
+  // This saves one AI call ($0.0008) per invocation for agents that already know the command.
+  const KNOWN_BINARIES = /^(ls|cd|cat|head|tail|grep|rg|find|wc|du|df|git|bun|npm|pnpm|yarn|node|python3?|pip|curl|wget|ssh|scp|chmod|chown|chgrp|mkdir|rmdir|rm|cp|mv|touch|ln|tar|gzip|gunzip|zip|unzip|sed|awk|sort|uniq|cut|tr|tee|xargs|echo|printf|env|export|source|which|whereis|whatis|man|date|cal|uptime|whoami|hostname|uname|ps|top|htop|kill|killall|lsof|netstat|ss|ifconfig|ip|ping|dig|nslookup|docker|kubectl|make|cmake|cargo|go|rustc|gcc|g\+\+|clang|java|javac|mvn|gradle|npx|bunx|tsx|deno|tree|file|stat|readlink|realpath|basename|dirname|pwd|test|true|false|sleep|timeout|time|watch|diff|patch|rsync|lsblk|mount|umount|fdisk|free|vmstat|iostat|sar|strace|ltrace|gdb|lldb|sqlite3|psql|mysql|redis-cli|mongosh|jq|yq|bat|fd|exa|fzf|gh|hub|terraform|ansible|helm|k9s|lazygit|tmux|screen|nc|nmap|openssl|base64|md5|shasum|xxd|od|hexdump|strings|nm|objdump|readelf|ldd|ldconfig|pkg-config|brew|apt|yum|dnf|pacman|snap|flatpak|systemctl|service|journalctl|dmesg|crontab|at|nohup|bg|fg|jobs|disown|wait|nice|renice|ionice|chrt|taskset|ulimit|sysctl|getconf|locale|iconv|perl|ruby|php|lua|R|julia|swift|kotlin|scala|elixir|mix|rebar3|tsc|eslint|prettier|biome|ruff|black|isort|mypy|pyright|pylint|flake8|pytest|vitest|jest|mocha|ava|tap|phpunit|rspec|minitest|unittest2|nose2|coverage|nyc|c8|v8-profiler)(\s|$)/;
+
+  const isDirectCommand = KNOWN_BINARIES.test(prompt.trim()) || /^[.\/~]/.test(prompt.trim()) || /\|/.test(prompt);
+
   // Check usage learning cache first (zero AI cost for repeated queries)
   const learned = getLearned(prompt);
   if (learned && !offlineMode) {
     console.error(`[open-terminal] cached: $ ${learned}`);
   }
 
-  // Step 1: AI translates NL → shell command (with session context for follow-ups)
+  // Step 1: Determine command — either direct passthrough or AI translation
   let command: string;
 
-  if (offlineMode) {
-    // Offline: treat prompt as literal command, apply noise filter only
+  if (isDirectCommand) {
+    // Direct command — skip AI translation entirely (saves 1 AI call)
+    command = prompt;
+  } else if (offlineMode) {
+    // Offline: treat prompt as literal command
     console.error("[open-terminal] offline mode (no API key) — running as literal command");
     command = prompt;
   } else if (learned) {
