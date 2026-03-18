@@ -800,14 +800,16 @@ export function createServer(): McpServer {
       }
 
       // AI extracts symbols — works for ANY language
-      const provider = getOutputProvider();
-      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
-      const content = result.content.length > 6000 ? result.content.slice(0, 6000) : result.content;
-      const summary = await provider.complete(
-        `File: ${filePath}\n\n${content}`,
-        {
-          model: outputModel,
-          system: `Extract all symbols from this source file. Return ONLY a JSON array, no explanation.
+      let symbols: any[] = [];
+      try {
+        const provider = getOutputProvider();
+        const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+        const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
+        const summary = await provider.complete(
+          `File: ${filePath}\n\n${content}`,
+          {
+            model: outputModel,
+            system: `Extract all symbols from this source file. Return ONLY a JSON array, no explanation.
 
 Each symbol: {"name": "symbolName", "kind": "function|class|method|interface|type|variable|export", "line": lineNumber, "signature": "brief signature"}
 
@@ -815,17 +817,17 @@ For class methods, use "ClassName.methodName" as name with kind "method".
 Include: functions, classes, methods, interfaces, types, exported constants.
 Exclude: imports, local variables, comments.
 Line numbers must be accurate (count from 1).`,
-          maxTokens: 1000,
-          temperature: 0,
-        }
-      );
+            maxTokens: 2000,
+            temperature: 0,
+          }
+        );
 
-      // Parse AI response
-      let symbols: any[] = [];
-      try {
         const jsonMatch = summary.match(/\[[\s\S]*\]/);
         if (jsonMatch) symbols = JSON.parse(jsonMatch[0]);
-      } catch {}
+      } catch (err: any) {
+        // Surface the error instead of silently returning []
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `AI symbol extraction failed: ${err.message?.slice(0, 200)}`, file: filePath }) }] };
+      }
 
       const outputTokens = estimateTokens(result.content);
       const symbolTokens = estimateTokens(JSON.stringify(symbols));
