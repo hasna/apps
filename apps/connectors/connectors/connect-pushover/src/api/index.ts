@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
-
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+// Pushover Connector — Real-time push notifications
+import { PushoverClient } from './client';
+import type { PushoverConfig, PushoverMessage, PushoverSendResult, PushoverUser } from '../types';
+export { PushoverClient } from './client';
+export class Pushover {
+  private readonly client: PushoverClient;
+  constructor(config: PushoverConfig) { this.client = new PushoverClient(config); }
+  static fromEnv(): Pushover {
+    const token = process.env.PUSHOVER_TOKEN;
+    const userKey = process.env.PUSHOVER_USER_KEY;
+    if (!token || !userKey) throw new Error('PUSHOVER_TOKEN and PUSHOVER_USER_KEY are required');
+    return new Pushover({ token, userKey });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  /** Send a push notification */
+  async send(message: string, options?: Omit<PushoverMessage, 'token' | 'user' | 'message'>): Promise<PushoverSendResult> {
+    return this.client.post<PushoverSendResult>('/messages.json', { user: this.client.userKey, message, ...options });
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  /** Send a high-priority notification (requires retry + expiry for priority=2) */
+  async sendAlert(message: string, title?: string, options?: { priority?: 1 | 2; retry?: number; expiry?: number }): Promise<PushoverSendResult> {
+    return this.send(message, { title, priority: options?.priority ?? 1, retry: options?.priority === 2 ? (options?.retry ?? 60) : undefined, expire: options?.priority === 2 ? (options?.expiry ?? 3600) : undefined });
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  /** Verify a user/group key */
+  async verifyUser(device?: string): Promise<PushoverUser> {
+    return this.client.get<PushoverUser>('/users/validate.json', { user: this.client.userKey, ...(device ? { device } : {}) });
   }
+  /** Check app/API limits */
+  async getLimits(): Promise<{ limit: number; remaining: number; reset: number }> {
+    const r = await this.client.get<PushoverUser>('/users/validate.json', { user: this.client.userKey });
+    return r.app_limits;
+  }
+  getClient(): PushoverClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
