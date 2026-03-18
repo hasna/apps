@@ -5,6 +5,19 @@ import { getDatabase, now } from "./database.js";
 /** How long (ms) before an agent is considered stale and its name can be taken over */
 const AGENT_ACTIVE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
+/**
+ * Returns names from the pool that are not currently held by an active agent.
+ * Active = last_seen_at within the past 30 minutes.
+ */
+export function getAvailableNamesFromPool(pool: string[], db: Database): string[] {
+  const cutoff = new Date(Date.now() - AGENT_ACTIVE_WINDOW_MS).toISOString();
+  const activeNames = new Set(
+    (db.query("SELECT name FROM agents WHERE last_seen_at > ?").all(cutoff) as { name: string }[])
+      .map((r) => r.name.toLowerCase()),
+  );
+  return pool.filter((name) => !activeNames.has(name.toLowerCase()));
+}
+
 function shortUuid(): string {
   return crypto.randomUUID().slice(0, 8);
 }
@@ -31,6 +44,26 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const d = db || getDatabase();
   const normalizedName = input.name.trim().toLowerCase();
 
+  // Pool validation: if a pool is provided, the name must be in it
+  if (input.pool && input.pool.length > 0) {
+    const poolLower = input.pool.map((n) => n.toLowerCase());
+    if (!poolLower.includes(normalizedName)) {
+      const available = getAvailableNamesFromPool(input.pool, d);
+      const suggestion = available.length > 0 ? available[0]! : null;
+      return {
+        conflict: true,
+        pool_violation: true,
+        existing_id: "",
+        existing_name: normalizedName,
+        last_seen_at: "",
+        session_hint: null,
+        working_dir: input.working_dir || null,
+        suggestions: available.slice(0, 5),
+        message: `"${normalizedName}" is not in this project's agent pool [${input.pool.join(", ")}]. ${available.length > 0 ? `Try: ${available.slice(0, 3).join(", ")}` : "No names are currently available — wait for an active agent to go stale."}${suggestion ? ` Suggested: ${suggestion}` : ""}`,
+      };
+    }
+  }
+
   const existing = getAgentByName(normalizedName, d);
   if (existing) {
     const lastSeenMs = new Date(existing.last_seen_at).getTime();
@@ -41,6 +74,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
     // Hard block: active agent with a different known session
     if (isActive && differentSession) {
       const minutesAgo = Math.round((Date.now() - lastSeenMs) / 60000);
+      const suggestions = input.pool ? getAvailableNamesFromPool(input.pool, d) : [];
       return {
         conflict: true,
         existing_id: existing.id,
@@ -48,7 +82,8 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
         last_seen_at: existing.last_seen_at,
         session_hint: existing.session_id ? existing.session_id.slice(0, 8) : null,
         working_dir: existing.working_dir,
-        message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago, session ${existing.session_id?.slice(0, 8)}…, dir: ${existing.working_dir ?? "unknown"}). Are you that agent? If so, pass session_id="${existing.session_id}" to reclaim it. Otherwise choose a different name.`,
+        suggestions: suggestions.slice(0, 5),
+        message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago, session ${existing.session_id?.slice(0, 8)}…, dir: ${existing.working_dir ?? "unknown"}). Are you that agent? If so, pass session_id="${existing.session_id}" to reclaim it. Otherwise choose a different name.${suggestions.length > 0 ? ` Available: ${suggestions.slice(0, 3).join(", ")}` : ""}`,
       };
     }
 

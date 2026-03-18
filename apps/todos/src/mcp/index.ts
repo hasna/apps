@@ -50,11 +50,11 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgent, deleteAgent } from "../db/agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgent, deleteAgent, getAvailableNamesFromPool } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
-import { getAgentTaskListId } from "../lib/config.js";
+import { getAgentTaskListId, getAgentPoolForProject } from "../lib/config.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import {
   getChecklist,
@@ -1296,19 +1296,27 @@ server.tool(
 if (shouldRegisterTool("register_agent")) {
 server.tool(
   "register_agent",
-  "Register an agent. Pass session_id (unique per coding session) to prevent name conflicts. Returns conflict error if name is taken by an active agent in a different session.",
+  "Register an agent. Name must be from the project's configured pool. Returns a conflict error with available name suggestions if the name is taken or not allowed.",
   {
-    name: z.string(),
+    name: z.string().describe("Agent name — must be from the project's allowed pool (Roman names by default). Use suggest_agent_name first if unsure."),
     description: z.string().optional(),
     session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
-    working_dir: z.string().optional().describe("Working directory of this session — helps identify who holds the name in a conflict"),
+    working_dir: z.string().optional().describe("Working directory of this session — used to look up the project's agent pool and identify who holds the name in a conflict"),
   },
   async ({ name, description, session_id, working_dir }) => {
     try {
-      const result = registerAgent({ name, description, session_id, working_dir });
+      // Look up the pool for this project (from config, based on working_dir)
+      const pool = getAgentPoolForProject(working_dir);
+      const result = registerAgent({ name, description, session_id, working_dir, pool });
       if (isAgentConflict(result)) {
+        const suggestLine = result.suggestions && result.suggestions.length > 0
+          ? `\nAvailable names: ${result.suggestions.join(", ")}`
+          : "";
+        const hint = result.pool_violation
+          ? `POOL_VIOLATION: ${result.message}${suggestLine}`
+          : `CONFLICT: ${result.message}${suggestLine}`;
         return {
-          content: [{ type: "text" as const, text: `CONFLICT: ${result.message}` }],
+          content: [{ type: "text" as const, text: hint }],
           isError: true,
         };
       }
@@ -1316,9 +1324,37 @@ server.tool(
       return {
         content: [{
           type: "text" as const,
-          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
+          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}\nPool: [${pool.join(", ")}]\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
         }],
       };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// suggest_agent_name
+if (shouldRegisterTool("suggest_agent_name")) {
+server.tool(
+  "suggest_agent_name",
+  "Get available agent names for a project. Call this before register_agent to avoid conflicts.",
+  {
+    working_dir: z.string().optional().describe("Your working directory — used to look up the project's allowed name pool"),
+  },
+  async ({ working_dir }) => {
+    try {
+      const pool = getAgentPoolForProject(working_dir);
+      const available = getAvailableNamesFromPool(pool, getDatabase());
+      const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const active = listAgents().filter(a => a.last_seen_at > cutoff && pool.map(n => n.toLowerCase()).includes(a.name));
+      const lines = [
+        `Project pool: ${pool.join(", ")}`,
+        `Available now (${available.length}): ${available.length > 0 ? available.join(", ") : "none — all names in use"}`,
+        active.length > 0 ? `Active agents: ${active.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}` : "Active agents: none",
+        available.length > 0 ? `\nSuggested: ${available[0]}` : "\nNo names available yet. Wait for an active agent to go stale (30min timeout).",
+      ];
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -2690,7 +2726,7 @@ server.tool(
       "create_project","list_projects","add_project_source","remove_project_source","list_project_sources",
       "add_checklist_item","check_checklist_item","update_checklist_item","remove_checklist_item","get_checklist",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
-      "register_agent","list_agents","get_agent","rename_agent","delete_agent",
+      "register_agent","suggest_agent_name","list_agents","get_agent","rename_agent","delete_agent",
       "get_my_tasks","get_org_chart","set_reports_to",
       "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
       "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
@@ -2762,7 +2798,8 @@ server.tool(
       delete_plan: "Delete a plan. Tasks in the plan are orphaned, not deleted.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
 
       // Agents
-      register_agent: "Register an agent. ALWAYS pass session_id (unique per session) to prevent name conflicts. Returns CONFLICT error if name is active in another session — pick a different name or reclaim with matching session_id.\n  Params: name(string, req), description(string), session_id(string — unique per session, e.g. PID+timestamp), working_dir(string)\n  Example: {name: 'maximus', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
+      suggest_agent_name: "Get available agent names for your project before registering. Shows the pool, which names are active, and the best suggestion.\n  Params: working_dir(string — your working directory, used to look up project pool)\n  Example: {working_dir: '/workspace/platform'}",
+      register_agent: "Register an agent. Name must be from the project's pool (call suggest_agent_name first). Returns CONFLICT or POOL_VIOLATION with suggestions if name is taken or not allowed.\n  Params: name(string, req), description(string), session_id(string — unique per session, e.g. PID+timestamp), working_dir(string, req — used to determine project pool)\n  Example: {name: 'cassius', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
       list_agents: "List all registered agents with IDs, names, and last seen timestamps. No params.",
       get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",

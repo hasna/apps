@@ -164,6 +164,7 @@ export interface RegisterAgentInput {
   role?: string;
   title?: string;
   level?: string;
+  pool?: string[]; // allowed names for this project — if provided, name must be in this list
   permissions?: string[];
   reports_to?: string;
   org_id?: string;
@@ -181,6 +182,8 @@ export interface AgentConflictError {
   session_hint: string | null; // first 8 chars of session_id
   working_dir: string | null;
   message: string;
+  suggestions?: string[]; // available names from the project pool to try instead
+  pool_violation?: true;  // the requested name is not in this project's allowed pool
 }
 
 // Task List

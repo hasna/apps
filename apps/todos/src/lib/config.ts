@@ -32,7 +32,21 @@ export interface TodosConfig {
   task_prefix?: TaskPrefixConfig;
   completion_guard?: CompletionGuardConfig;
   project_overrides?: Record<string, ProjectOverrideConfig>;
+  /** Global pool of allowed agent names. Used when no project-specific pool matches. */
+  agent_pool?: string[];
+  /** Per-project agent name pools, keyed by working directory path prefix. */
+  project_pools?: Record<string, string[]>;
 }
+
+/**
+ * Built-in default agent name pool (Roman names convention).
+ * Used when no pool is configured in config.json.
+ */
+export const DEFAULT_AGENT_POOL: string[] = [
+  "maximus", "cassius", "aurelius", "brutus", "titus",
+  "nero", "cicero", "seneca", "cato", "julius",
+  "marcus", "lucius", "quintus", "gaius", "publius",
+];
 
 function getConfigPath(): string {
   return join(process.env["HOME"] || HOME, ".todos", "config.json");
@@ -92,6 +106,32 @@ const GUARD_DEFAULTS: Required<CompletionGuardConfig> = {
   window_minutes: 10,
   cooldown_seconds: 60,
 };
+
+/**
+ * Get the agent name pool for a given working directory.
+ * Checks project_pools for the longest matching path prefix, then falls back
+ * to agent_pool, then to the built-in DEFAULT_AGENT_POOL.
+ */
+export function getAgentPoolForProject(workingDir?: string): string[] {
+  const config = loadConfig();
+
+  if (workingDir && config.project_pools) {
+    // Find the longest matching path prefix
+    let bestKey: string | null = null;
+    let bestLen = 0;
+    for (const key of Object.keys(config.project_pools)) {
+      if (workingDir.startsWith(key) && key.length > bestLen) {
+        bestKey = key;
+        bestLen = key.length;
+      }
+    }
+    if (bestKey && config.project_pools[bestKey]) {
+      return config.project_pools[bestKey]!;
+    }
+  }
+
+  return config.agent_pool || DEFAULT_AGENT_POOL;
+}
 
 export function getCompletionGuardConfig(projectPath?: string | null): Required<CompletionGuardConfig> {
   const config = loadConfig();
