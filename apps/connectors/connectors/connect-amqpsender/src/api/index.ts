@@ -1,51 +1,44 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// AMQP Sender Connector — AMQP message queue producer (RabbitMQ compatible)
+import { AMQPSenderClient } from './client';
+import type { AMQPSenderConfig, AMQPExchange, AMQPQueue, AMQPConnectionInfo } from '../types';
+export { AMQPSenderClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class AMQPSender {
+  private readonly client: AMQPSenderClient;
+  constructor(config: AMQPSenderConfig) { this.client = new AMQPSenderClient(config); }
+  static fromEnv(): AMQPSender {
+    const url = process.env.AMQP_URL;
+    if (!url) throw new Error('AMQP_URL is required');
+    return new AMQPSender({ url, exchange: process.env.AMQP_EXCHANGE, routingKey: process.env.AMQP_ROUTING_KEY });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Management API (RabbitMQ HTTP API)
+  async listExchanges(vhost?: string): Promise<AMQPExchange[]> {
+    return this.client.managementRequest<AMQPExchange[]>(`/exchanges/${encodeURIComponent(vhost || '/')}`);
+  }
+  async getExchange(name: string, vhost?: string): Promise<AMQPExchange> {
+    return this.client.managementRequest<AMQPExchange>(`/exchanges/${encodeURIComponent(vhost || '/')}/${encodeURIComponent(name)}`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listQueues(vhost?: string): Promise<AMQPQueue[]> {
+    return this.client.managementRequest<AMQPQueue[]>(`/queues/${encodeURIComponent(vhost || '/')}`);
+  }
+  async getQueue(name: string, vhost?: string): Promise<AMQPQueue> {
+    return this.client.managementRequest<AMQPQueue>(`/queues/${encodeURIComponent(vhost || '/')}/${encodeURIComponent(name)}`);
+  }
+  async purgeQueue(name: string, vhost?: string): Promise<void> {
+    await this.client.managementRequest(`/queues/${encodeURIComponent(vhost || '/')}/${encodeURIComponent(name)}/contents`, { method: 'DELETE' });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async publishToQueue(queue: string, message: string, vhost?: string): Promise<void> {
+    await this.client.managementRequest(`/exchanges/${encodeURIComponent(vhost || '/')}/%2F/publish`, {
+      method: 'POST', body: { routing_key: queue, payload: message, payload_encoding: 'string', properties: {} }
+    });
   }
+
+  async getOverview(): Promise<AMQPConnectionInfo & Record<string, unknown>> {
+    return this.client.managementRequest('/overview');
+  }
+
+  getClient(): AMQPSenderClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
