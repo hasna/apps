@@ -89,9 +89,11 @@ export async function searchContent(
   const filtered = filteredCount > 0 ? [{ count: filteredCount, reason: "excluded directories" }] : [];
 
   const rawTokens = Math.ceil(raw.length / 4);
+  const truncated = totalMatches > files.reduce((s, f) => s + f.matches.length, 0);
   const result: ContentSearchResult = { query: pattern, totalMatches, files, filtered };
   const resultTokens = Math.ceil(JSON.stringify(result).length / 4);
   result.tokensSaved = Math.max(0, rawTokens - resultTokens);
+  (result as any).truncated = truncated;
 
   // Overflow guard — warn when results are truncated
   if (totalMatches > maxResults * 3) {
