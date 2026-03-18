@@ -1,51 +1,63 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Verifalia Connector — Email address validation and verification
+import { VerifaliaClient } from './client';
+import type { VerifaliaConfig, ValidationJob, EmailValidationEntry } from '../types';
+export { VerifaliaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class Verifalia {
+  private readonly client: VerifaliaClient;
+  constructor(config: VerifaliaConfig) { this.client = new VerifaliaClient(config); }
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  static fromEnv(): Verifalia {
+    const username = process.env.VERIFALIA_USERNAME;
+    const password = process.env.VERIFALIA_PASSWORD;
+    if (!username || !password) throw new Error('VERIFALIA_USERNAME and VERIFALIA_PASSWORD are required');
+    return new Verifalia({ username, password });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  /** Submit emails for validation. Returns job ID — poll with getJob until status=Completed. */
+  async submitValidation(emails: string[], options?: { quality?: 'Standard' | 'High' | 'Extreme'; deduplication?: 'Off' | 'Safe' | 'Relaxed' }): Promise<ValidationJob> {
+    return this.client.request<ValidationJob>('/email-validations', {
+      method: 'POST',
+      body: {
+        entries: emails.map(e => ({ inputData: e })),
+        quality: options?.quality || 'Standard',
+        deduplication: options?.deduplication || 'Safe',
+      },
+    });
+  }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
+  /** Get job status and results */
+  async getJob(jobId: string): Promise<ValidationJob> {
+    return this.client.request<ValidationJob>(`/email-validations/${jobId}`);
+  }
+
+  /** Wait for job completion, then return results */
+  async waitForResults(jobId: string, maxWaitMs = 60000): Promise<EmailValidationEntry[]> {
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      const job = await this.getJob(jobId);
+      if (job.status === 'Completed') return job.entries?.data ?? [];
+      if (job.status === 'Expired' || job.status === 'Deleted') throw new Error(`Job ${jobId} ended with status: ${job.status}`);
+      await new Promise(r => setTimeout(r, 3000));
     }
-    return new Connector({ apiKey, apiSecret });
+    throw new Error(`Job ${jobId} did not complete within ${maxWaitMs}ms`);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  /** Convenience: validate emails synchronously */
+  async validate(emails: string | string[], options?: Parameters<Verifalia['submitValidation']>[1]): Promise<EmailValidationEntry[]> {
+    const list = Array.isArray(emails) ? emails : [emails];
+    const job = await this.submitValidation(list, options);
+    return this.waitForResults(job.id);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  /** Delete a validation job */
+  async deleteJob(jobId: string): Promise<void> { await this.client.request(`/email-validations/${jobId}`, { method: 'DELETE' }); }
+
+  /** List past validation jobs */
+  async listJobs(): Promise<ValidationJob[]> {
+    const r = await this.client.request<{ data: ValidationJob[] }>('/email-validations');
+    return r.data ?? [];
   }
+
+  getClient(): VerifaliaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

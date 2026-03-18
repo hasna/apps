@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Grain Connector — Meeting recording and highlights
+import { GrainClient } from './client';
+import type { GrainConfig, GrainRecording, GrainHighlight, GrainStory } from '../types';
+export { GrainClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Grain {
+  private readonly client: GrainClient;
+  constructor(config: GrainConfig) { this.client = new GrainClient(config); }
+  static fromEnv(): Grain {
+    const apiKey = process.env.GRAIN_API_KEY;
+    if (!apiKey) throw new Error('GRAIN_API_KEY environment variable is required');
+    return new Grain({ apiKey });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listRecordings(options?: { limit?: number; page?: number }): Promise<GrainRecording[]> {
+    const r = await this.client.request<{ recordings: GrainRecording[] }>('/recordings', { params: options as Record<string, number | undefined> });
+    return r.recordings ?? [];
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getRecording(id: string): Promise<GrainRecording> { return this.client.request<GrainRecording>(`/recordings/${id}`); }
+  async getTranscript(recordingId: string): Promise<string> {
+    const r = await this.client.request<{ transcript: string }>(`/recordings/${recordingId}/transcript`);
+    return r.transcript;
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listHighlights(options?: { recordingId?: string; limit?: number }): Promise<GrainHighlight[]> {
+    const r = await this.client.request<{ highlights: GrainHighlight[] }>('/highlights', {
+      params: { recording_id: options?.recordingId, limit: options?.limit },
+    });
+    return r.highlights ?? [];
   }
+  async getHighlight(id: string): Promise<GrainHighlight> { return this.client.request<GrainHighlight>(`/highlights/${id}`); }
+  async listStories(options?: { limit?: number }): Promise<GrainStory[]> {
+    const r = await this.client.request<{ stories: GrainStory[] }>('/stories', { params: options as Record<string, number | undefined> });
+    return r.stories ?? [];
+  }
+  async getStory(id: string): Promise<GrainStory> { return this.client.request<GrainStory>(`/stories/${id}`); }
+  getClient(): GrainClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
