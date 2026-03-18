@@ -1,51 +1,42 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Carbon Black Connector — Endpoint security and threat detection
+import { CarbonBlackClient } from './client';
+import type { CarbonBlackConfig, CBDevice, CBDeviceList, CBAlert, CBAlertList, CBProcess } from '../types';
+export { CarbonBlackClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CarbonBlack {
+  private readonly client: CarbonBlackClient;
+  constructor(config: CarbonBlackConfig) { this.client = new CarbonBlackClient(config); }
+  static fromEnv(): CarbonBlack {
+    const url = process.env.CARBONBLACK_URL;
+    const orgKey = process.env.CARBONBLACK_ORG_KEY;
+    const apiId = process.env.CARBONBLACK_API_ID;
+    const apiSecretKey = process.env.CARBONBLACK_API_SECRET;
+    if (!url || !orgKey || !apiId || !apiSecretKey) throw new Error('CARBONBLACK_URL, CARBONBLACK_ORG_KEY, CARBONBLACK_API_ID, and CARBONBLACK_API_SECRET are required');
+    return new CarbonBlack({ url, orgKey, apiId, apiSecretKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async searchDevices(query: string, options?: { rows?: number; start?: number }): Promise<CBDeviceList> {
+    return this.client.request<CBDeviceList>('/devices/_search', { method: 'POST', body: { query, rows: options?.rows, start: options?.start } as Record<string, unknown> });
+  }
+  async getDevice(deviceId: number): Promise<CBDevice> { return this.client.request<CBDevice>(`/devices/${deviceId}`); }
+  async quarantineDevice(deviceId: number): Promise<void> {
+    await this.client.request(`/device_actions`, { method: 'POST', body: { action_type: 'QUARANTINE', device_id: [deviceId], options: { toggle: 'ON' } } });
+  }
+  async unquarantineDevice(deviceId: number): Promise<void> {
+    await this.client.request(`/device_actions`, { method: 'POST', body: { action_type: 'QUARANTINE', device_id: [deviceId], options: { toggle: 'OFF' } } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async searchAlerts(query: string, options?: { rows?: number; sort_field?: string }): Promise<CBAlertList> {
+    return this.client.request<CBAlertList>('/alerts/_search', { method: 'POST', body: { query, rows: options?.rows, sort_field: options?.sort_field } as Record<string, unknown> });
+  }
+  async getAlert(alertId: string): Promise<CBAlert> { return this.client.request<CBAlert>(`/alerts/${alertId}`); }
+  async dismissAlert(alertId: string, comment?: string): Promise<void> {
+    await this.client.request(`/alerts/${alertId}/workflow`, { method: 'POST', body: { state: 'DISMISSED', comment } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async searchProcesses(query: string, options?: { rows?: number; start?: number }): Promise<{ results: CBProcess[]; num_found: number }> {
+    return this.client.request('/processes/_search', { method: 'POST', body: { query, rows: options?.rows, start: options?.start } as Record<string, unknown> });
   }
+
+  getClient(): CarbonBlackClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
