@@ -2,7 +2,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
@@ -34,7 +34,7 @@ function fmtSession(s: Record<string, unknown>): string {
 // ── Lean tool definitions (1-2 sentences, no verbose docs) ───────────────────
 
 const TOOLS = [
-  { name: 'get_cost_summary',      description: 'Cost summary (total_usd, sessions, requests, tokens, human summary). period: today|week|month|all', inputSchema: { type: 'object', properties: { period: { type: 'string', enum: ['today','week','month','all'] } } } },
+  { name: 'get_cost_summary',      description: 'Cost summary (total_usd, sessions, requests, tokens, human summary). period: today|week|month|year|all', inputSchema: { type: 'object', properties: { period: { type: 'string', enum: ['today','week','month','year','all'] } } } },
   { name: 'get_sessions',          description: 'List sessions. Returns compact table. Params: agent, project, limit(20)', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, project: { type: 'string' }, limit: { type: 'number' } } } },
   { name: 'get_top_sessions',      description: 'Top sessions by cost. Params: n(10), agent', inputSchema: { type: 'object', properties: { n: { type: 'number' }, agent: { type: 'string' } } } },
   { name: 'get_model_breakdown',   description: 'Cost per model. No params.', inputSchema: { type: 'object', properties: {} } },
@@ -45,10 +45,13 @@ const TOOLS = [
   { name: 'sync',                  description: 'Ingest new cost data. sources: all|claude|codex|gemini', inputSchema: { type: 'object', properties: { sources: { type: 'string', enum: ['all','claude','codex','gemini'] } } } },
   { name: 'search_tools',          description: 'List tool names matching query. Use first to find relevant tools.', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } },
   { name: 'describe_tools',        description: 'Get param hints for specific tools by name.', inputSchema: { type: 'object', properties: { names: { type: 'array', items: { type: 'string' } } }, required: ['names'] } },
+  { name: 'get_goals',    description: 'All spending goals with current progress. No params.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'set_goal',     description: 'Create/update a spending goal. period(day|week|month|year), limit_usd, project_path?, agent?', inputSchema: { type: 'object', properties: { period: { type: 'string' }, limit_usd: { type: 'number' }, project_path: { type: 'string' }, agent: { type: 'string' } }, required: ['period', 'limit_usd'] } },
+  { name: 'remove_goal',  description: 'Delete a goal by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
 ]
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
-  get_cost_summary:      'period(today|week|month|all) → {total_usd, sessions, requests, tokens, summary}',
+  get_cost_summary:      'period(today|week|month|year|all) → {total_usd, sessions, requests, tokens, summary}',
   get_sessions:          'agent(claude|codex), project(partial), limit(20) → compact session table',
   get_top_sessions:      'n(10), agent(claude|codex) → top sessions by cost',
   get_model_breakdown:   'no params → model, requests, tokens, cost',
@@ -57,6 +60,9 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_daily:             'days(30) → daily cost table grouped by date and agent',
   get_session_detail:    'session_id(prefix ok) → per-request breakdown with model, tokens, cost',
   sync:                  'sources(all|claude|codex|gemini) → {files, requests, sessions} ingested',
+  get_goals:   'no params → period, scope, limit, spent, percent, status(ON TRACK/AT RISK/OVER)',
+  set_goal:    'period(day|week|month|year), limit_usd, project_path?, agent? → creates/updates goal',
+  remove_goal: 'id → deletes goal',
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
@@ -201,6 +207,39 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           parts.push(`gemini: ${r['sessions']} sessions`)
         }
         return { content: [{ type: 'text', text: parts.join('\n') || 'done' }] }
+      }
+
+      case 'get_goals': {
+        const goals = getGoalStatuses(db) as unknown as Array<Record<string, unknown>>
+        if (goals.length === 0) return { content: [{ type: 'text', text: 'No goals set.' }] }
+        const lines = ['period   scope                limit      spent      used%  status']
+        for (const g of goals) {
+          const scope = String(g['project_path'] ?? g['agent'] ?? 'global').slice(0, 20)
+          const pct = Number(g['percent_used']).toFixed(1)
+          const status = g['is_over'] ? 'OVER' : g['is_at_risk'] ? 'AT RISK' : 'ON TRACK'
+          lines.push(`${String(g['period']).padEnd(9)}${scope.padEnd(21)}${fmtUsd(Number(g['limit_usd'])).padEnd(11)}${fmtUsd(Number(g['current_spend_usd'])).padEnd(11)}${pct}%  ${status}`)
+        }
+        return { content: [{ type: 'text', text: lines.join('\n') }] }
+      }
+
+      case 'set_goal': {
+        const { randomUUID } = await import('crypto')
+        const now = new Date().toISOString()
+        upsertGoal(db, {
+          id: randomUUID(),
+          period: String(a['period'] ?? 'month') as 'day' | 'week' | 'month' | 'year',
+          project_path: (a['project_path'] as string | undefined) ?? null,
+          agent: (a['agent'] as string | undefined) ?? null,
+          limit_usd: Number(a['limit_usd']),
+          created_at: now,
+          updated_at: now,
+        })
+        return { content: [{ type: 'text', text: `Goal set: ${a['period']} $${a['limit_usd']}` }] }
+      }
+
+      case 'remove_goal': {
+        deleteGoal(db, String(a['id'] ?? ''))
+        return { content: [{ type: 'text', text: 'Goal removed.' }] }
       }
 
       default:

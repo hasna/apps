@@ -174,3 +174,29 @@ export const syncSources = (sources: 'all' | 'claude' | 'codex' = 'all') =>
     method: 'POST',
     body: JSON.stringify({ sources }),
   })
+
+// Goals
+export interface GoalStatus {
+  id: string
+  period: 'day' | 'week' | 'month' | 'year'
+  project_path: string | null
+  agent: string | null
+  limit_usd: number
+  current_spend_usd: number
+  percent_used: number
+  is_on_track: boolean
+  is_at_risk: boolean
+  is_over: boolean
+}
+
+export const getGoals = () =>
+  request<{ data: GoalStatus[] }>('/api/goals')
+
+export const createGoal = (goal: { period: string; limit_usd: number; project_path?: string; agent?: string }) =>
+  request<{ data: GoalStatus }>('/api/goals', {
+    method: 'POST',
+    body: JSON.stringify(goal),
+  })
+
+export const deleteGoalApi = (id: string) =>
+  request<{ success: boolean }>(`/api/goals/${id}`, { method: 'DELETE' })

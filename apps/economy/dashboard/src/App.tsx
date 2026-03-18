@@ -7,6 +7,7 @@ import { SessionsTab } from "@/tabs/SessionsTab";
 import { ModelsTab } from "@/tabs/ModelsTab";
 import { ProjectsTab } from "@/tabs/ProjectsTab";
 import { BudgetsTab } from "@/tabs/BudgetsTab";
+import { GoalsTab } from "@/tabs/GoalsTab";
 import { PricingTab } from "@/tabs/PricingTab";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +18,7 @@ import {
   navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
 
-type Tab = "overview" | "sessions" | "models" | "projects" | "budgets" | "pricing";
+type Tab = "overview" | "sessions" | "models" | "projects" | "budgets" | "goals" | "pricing";
 
 const navItems: { key: Tab; label: string }[] = [
   { key: "overview", label: "Overview" },
@@ -25,6 +26,7 @@ const navItems: { key: Tab; label: string }[] = [
   { key: "models", label: "Models" },
   { key: "projects", label: "Projects" },
   { key: "budgets", label: "Budgets" },
+  { key: "goals", label: "Goals" },
   { key: "pricing", label: "Pricing" },
 ];
 
@@ -125,6 +127,7 @@ function AppInner() {
         {tab === "models" && <ModelsTab key={reloadKey} />}
         {tab === "projects" && <ProjectsTab key={reloadKey} />}
         {tab === "budgets" && <BudgetsTab key={reloadKey} />}
+        {tab === "goals" && <GoalsTab key={reloadKey} />}
         {tab === "pricing" && <PricingTab key={reloadKey} />}
       </main>
     </div>

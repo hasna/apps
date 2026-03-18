@@ -85,6 +85,16 @@ function initSchema(db: Database): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS goals (
+      id TEXT PRIMARY KEY,
+      period TEXT NOT NULL,
+      project_path TEXT,
+      agent TEXT,
+      limit_usd REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS ingest_state (
       source TEXT NOT NULL,
       key TEXT NOT NULL,
@@ -115,6 +125,7 @@ function periodWhere(period: Period): string {
     case 'today': return `DATE(timestamp) = DATE('now')`
     case 'week': return `timestamp >= DATE('now', '-7 days')`
     case 'month': return `timestamp >= DATE('now', '-30 days')`
+    case 'year': return `timestamp >= DATE('now', '-365 days')`
     case 'all': return '1=1'
   }
 }
@@ -124,6 +135,7 @@ function sessionPeriodWhere(period: Period): string {
     case 'today': return `DATE(started_at) = DATE('now')`
     case 'week': return `started_at >= DATE('now', '-7 days')`
     case 'month': return `started_at >= DATE('now', '-30 days')`
+    case 'year': return `started_at >= DATE('now', '-365 days')`
     case 'all': return '1=1'
   }
 }
@@ -249,14 +261,20 @@ export function queryModelBreakdown(db: Database): ModelBreakdown[] {
 
 export function queryProjectBreakdown(db: Database): ProjectBreakdown[] {
   return db.prepare(`
-    SELECT project_path, project_name,
-           COUNT(*) as sessions,
-           COALESCE(SUM(total_tokens), 0) as total_tokens,
-           COALESCE(SUM(request_count), 0) as requests,
-           COALESCE(SUM(total_cost_usd), 0) as cost_usd,
-           MAX(started_at) as last_active
-    FROM sessions
-    GROUP BY project_path ORDER BY cost_usd DESC
+    SELECT
+      s.project_path,
+      COALESCE(p.name, s.project_name) as project_name,
+      COUNT(DISTINCT s.id) as sessions,
+      COUNT(r.id) as requests,
+      COALESCE(SUM(r.cost_usd), COALESCE(SUM(s.total_cost_usd), 0)) as cost_usd,
+      COALESCE(SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens), 0) as total_tokens,
+      MAX(s.started_at) as last_active
+    FROM sessions s
+    LEFT JOIN projects p ON p.path = s.project_path OR p.name = s.project_name
+    LEFT JOIN requests r ON r.session_id = s.id
+    WHERE s.project_path != '' OR s.project_name != ''
+    GROUP BY s.project_path
+    ORDER BY cost_usd DESC
   `).all() as ProjectBreakdown[]
 }
 
@@ -341,6 +359,76 @@ export function getBudgetStatuses(db: Database): BudgetStatus[] {
       percent_used: percent,
       is_over_limit: percent >= 100,
       is_over_alert: percent >= b.alert_at_percent,
+    }
+  })
+}
+
+// ── Goals ─────────────────────────────────────────────────────────────────────
+
+export interface Goal {
+  id: string
+  period: 'day' | 'week' | 'month' | 'year'
+  project_path: string | null
+  agent: string | null
+  limit_usd: number
+  created_at: string
+  updated_at: string
+}
+
+export interface GoalStatus extends Goal {
+  current_spend_usd: number
+  percent_used: number
+  is_on_track: boolean
+  is_at_risk: boolean
+  is_over: boolean
+}
+
+export function upsertGoal(db: Database, goal: Goal): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO goals
+      (id, period, project_path, agent, limit_usd, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    goal.id, goal.period, goal.project_path ?? null, goal.agent ?? null,
+    goal.limit_usd, goal.created_at, goal.updated_at,
+  )
+}
+
+export function deleteGoal(db: Database, id: string): void {
+  db.prepare(`DELETE FROM goals WHERE id = ?`).run(id)
+}
+
+export function listGoals(db: Database): Goal[] {
+  return db.prepare(`SELECT * FROM goals ORDER BY created_at DESC`).all() as Goal[]
+}
+
+export function getGoalStatuses(db: Database): GoalStatus[] {
+  const goals = listGoals(db)
+  return goals.map(g => {
+    const periodStart = g.period === 'day' ? "DATE('now')"
+      : g.period === 'week' ? "DATE('now', '-7 days')"
+      : g.period === 'month' ? "DATE('now', '-30 days')"
+      : "DATE('now', '-365 days')"
+    let spendQuery = `SELECT COALESCE(SUM(cost_usd), 0) as spend FROM requests WHERE timestamp >= ${periodStart}`
+    const params: (string | null)[] = []
+    if (g.project_path) {
+      spendQuery += ` AND session_id IN (SELECT id FROM sessions WHERE project_path = ?)`
+      params.push(g.project_path)
+    }
+    if (g.agent) {
+      spendQuery += ` AND agent = ?`
+      params.push(g.agent)
+    }
+    const row = db.prepare(spendQuery).get(...params) as { spend: number }
+    const spend = row.spend
+    const percent = g.limit_usd > 0 ? (spend / g.limit_usd) * 100 : 0
+    return {
+      ...g,
+      current_spend_usd: spend,
+      percent_used: percent,
+      is_on_track: percent < 70,
+      is_at_risk: percent >= 70 && percent <= 100,
+      is_over: percent > 100,
     }
   })
 }

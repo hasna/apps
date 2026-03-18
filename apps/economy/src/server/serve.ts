@@ -5,6 +5,7 @@ import {
   getBudgetStatuses, upsertBudget, deleteBudget,
   listProjects, upsertProject, deleteProject,
   listModelPricing, upsertModelPricing, deleteModelPricing,
+  upsertGoal, deleteGoal, getGoalStatuses,
   openDatabase,
 } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
@@ -188,6 +189,30 @@ export function createHandler(db: Database) {
       if (!session) return err('Session not found', 404)
       const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
       return ok(requests, { session_id: session['id'], count: requests.length })
+    }
+
+    // Goals
+    if (path === '/api/goals' && method === 'GET') {
+      return ok(getGoalStatuses(db))
+    }
+    if (path === '/api/goals' && method === 'POST') {
+      const body = await req.json() as Record<string, unknown>
+      const now = new Date().toISOString()
+      upsertGoal(db, {
+        id: randomUUID(),
+        period: (body['period'] as 'day' | 'week' | 'month' | 'year') ?? 'month',
+        project_path: (body['project_path'] as string | null) ?? null,
+        agent: (body['agent'] as string | null) ?? null,
+        limit_usd: Number(body['limit_usd']),
+        created_at: now,
+        updated_at: now,
+      })
+      return ok({ ok: true })
+    }
+    const goalMatch = path.match(/^\/api\/goals\/(.+)$/)
+    if (goalMatch && method === 'DELETE') {
+      deleteGoal(db, goalMatch[1]!)
+      return ok({ ok: true })
     }
 
     return err('Not found', 404)

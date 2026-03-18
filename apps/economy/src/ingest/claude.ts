@@ -161,7 +161,7 @@ export async function ingestClaude(
               id: sessionId,
               agent: 'claude',
               project_path: detectedProject ? detectedProject.path : effectiveCwd,
-              project_name: detectedProject ? detectedProject.name : basename(effectiveCwd),
+              project_name: detectedProject ? detectedProject.name : '',
               started_at: timestamp,
               ended_at: null,
               total_cost_usd: 0,

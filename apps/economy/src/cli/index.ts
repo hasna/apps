@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander'
 import chalk from 'chalk'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
@@ -1031,6 +1031,95 @@ menubarCmd
   .action(async () => {
     const { menubarStop } = await import('./commands/menubar.js')
     menubarStop()
+  })
+
+// ── goal ──────────────────────────────────────────────────────────────────────
+
+const goalCmd = program.command('goal').description('Manage spending goals')
+
+goalCmd
+  .command('set')
+  .description('Set a spending goal')
+  .option('--period <period>', 'Period: day|week|month|year', 'month')
+  .option('--limit <usd>', 'Goal limit in USD')
+  .option('--project <path>', 'Scope to project path')
+  .option('--agent <agent>', 'Scope to agent')
+  .action((opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
+    if (!opts.limit) { console.error(chalk.red('--limit is required')); process.exit(1) }
+    const db = openDatabase()
+    const now = new Date().toISOString()
+    upsertGoal(db, {
+      id: randomUUID(),
+      period: (opts.period ?? 'month') as 'day' | 'week' | 'month' | 'year',
+      project_path: opts.project ?? null,
+      agent: opts.agent as Agent ?? null,
+      limit_usd: Number(opts.limit),
+      created_at: now,
+      updated_at: now,
+    })
+    console.log(chalk.green(`✓ Goal set: ${opts.period ?? 'month'} $${opts.limit}${opts.project ? ` (${opts.project})` : ''}`))
+  })
+
+goalCmd
+  .command('list')
+  .description('List all goals with progress')
+  .action(() => {
+    const db = openDatabase()
+    const statuses = getGoalStatuses(db)
+    if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
+    console.log()
+    printTable(
+      ['Period', 'Scope', 'Limit', 'Spent', 'Used%', 'Status'],
+      statuses.map(g => {
+        const pct = g.percent_used.toFixed(1)
+        const scope = g.project_path ?? g.agent ?? 'global'
+        const status = g.is_over ? chalk.red('OVER') : g.is_at_risk ? chalk.yellow('AT RISK') : chalk.green('ON TRACK')
+        const pctColor = g.is_over ? chalk.red(pct + '%') : g.is_at_risk ? chalk.yellow(pct + '%') : chalk.green(pct + '%')
+        return [
+          g.period,
+          chalk.white(scope),
+          fmt(g.limit_usd),
+          fmt(g.current_spend_usd),
+          pctColor,
+          status,
+        ]
+      }),
+    )
+    console.log()
+  })
+
+goalCmd
+  .command('remove <id>')
+  .description('Remove a goal')
+  .action((id: string) => {
+    const db = openDatabase()
+    deleteGoal(db, id)
+    console.log(chalk.green(`✓ Goal removed`))
+  })
+
+goalCmd
+  .command('status')
+  .description('Quick goal progress summary')
+  .action(() => {
+    const db = openDatabase()
+    const statuses = getGoalStatuses(db)
+    if (statuses.length === 0) { console.log(chalk.yellow('No goals set.')); return }
+    console.log()
+    for (const g of statuses) {
+      const scope = g.project_path ?? g.agent ?? 'global'
+      const pct = Math.min(g.percent_used, 100)
+      const barFilled = Math.round(pct / 10)
+      const barEmpty = 10 - barFilled
+      const bar = '█'.repeat(barFilled) + '░'.repeat(barEmpty)
+      const statusStr = g.is_over
+        ? chalk.red('✗ OVER')
+        : g.is_at_risk
+        ? chalk.yellow('⚠ AT RISK')
+        : chalk.green('✓ ON TRACK')
+      const label = `${g.period} (${scope})`.padEnd(20)
+      console.log(`  ${label}  ${bar}  ${fmt(g.current_spend_usd)} / ${fmt(g.limit_usd)}  (${g.percent_used.toFixed(0)}%)  ${statusStr}`)
+    }
+    console.log()
   })
 
 program.parse()
