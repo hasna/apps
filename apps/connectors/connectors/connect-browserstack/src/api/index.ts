@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// BrowserStack Connector — Cross-browser and mobile app testing
+import { BrowserStackClient } from './client';
+import type { BrowserStackConfig, BSBrowser, BSBuild, BSSession, BSProject, BSPlan } from '../types';
+export { BrowserStackClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class BrowserStack {
+  private readonly client: BrowserStackClient;
+  constructor(config: BrowserStackConfig) { this.client = new BrowserStackClient(config); }
+  static fromEnv(): BrowserStack {
+    const username = process.env.BROWSERSTACK_USERNAME;
+    const accessKey = process.env.BROWSERSTACK_ACCESS_KEY;
+    if (!username || !accessKey) throw new Error('BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY are required');
+    return new BrowserStack({ username, accessKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listBrowsers(): Promise<BSBrowser[]> { return this.client.request<BSBrowser[]>('/automate/browsers.json'); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listBuilds(options?: { limit?: number; offset?: number; status?: string }): Promise<BSBuild[]> {
+    return this.client.request<BSBuild[]>('/automate/builds.json', { params: { limit: options?.limit, offset: options?.offset, status: options?.status } });
   }
+  async getBuild(buildId: string): Promise<BSBuild> { return this.client.request<BSBuild>(`/automate/builds/${buildId}.json`); }
+  async deleteBuild(buildId: string): Promise<void> { await this.client.request(`/automate/builds/${buildId}.json`, { method: 'DELETE' }); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listSessions(buildId: string, options?: { limit?: number; offset?: number }): Promise<BSSession[]> {
+    return this.client.request<BSSession[]>(`/automate/builds/${buildId}/sessions.json`, { params: { limit: options?.limit, offset: options?.offset } });
   }
+  async getSession(sessionId: string): Promise<BSSession> { return this.client.request<BSSession>(`/automate/sessions/${sessionId}.json`); }
+  async deleteSession(sessionId: string): Promise<void> { await this.client.request(`/automate/sessions/${sessionId}.json`, { method: 'DELETE' }); }
+  async getSessionLogs(sessionId: string): Promise<string> { return this.client.request<string>(`/automate/sessions/${sessionId}/logs`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listProjects(): Promise<BSProject[]> { return this.client.request<BSProject[]>('/automate/projects.json'); }
+
+  async getPlan(): Promise<BSPlan> { return this.client.request<BSPlan>('/automate/plan.json'); }
+
+  getClient(): BrowserStackClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
