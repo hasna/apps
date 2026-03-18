@@ -1,51 +1,29 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Supportive Koala Connector — Automated personalized image generation
+import { SupportiveKoalaClient } from './client';
+import type { SupportiveKoalaConfig, SKTemplate, SKImage, SKGenerateOptions } from '../types';
+export { SupportiveKoalaClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class SupportiveKoala {
+  private readonly client: SupportiveKoalaClient;
+  constructor(config: SupportiveKoalaConfig) { this.client = new SupportiveKoalaClient(config); }
+  static fromEnv(): SupportiveKoala {
+    const apiKey = process.env.SUPPORTIVEKOALA_API_KEY;
+    if (!apiKey) throw new Error('SUPPORTIVEKOALA_API_KEY is required');
+    return new SupportiveKoala({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listTemplates(): Promise<SKTemplate[]> { return this.client.request<SKTemplate[]>('/templates'); }
+  async getTemplate(templateId: string): Promise<SKTemplate> { return this.client.request<SKTemplate>(`/templates/${templateId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async generateImage(options: SKGenerateOptions): Promise<SKImage> {
+    return this.client.request<SKImage>('/images', { method: 'POST', body: options as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getImage(imageId: string): Promise<SKImage> { return this.client.request<SKImage>(`/images/${imageId}`); }
+  async listImages(options?: { template_id?: string; page?: number; per_page?: number }): Promise<SKImage[]> {
+    return this.client.request<SKImage[]>('/images', { params: { template_id: options?.template_id, page: options?.page, per_page: options?.per_page } });
   }
+  async deleteImage(imageId: string): Promise<void> { await this.client.request(`/images/${imageId}`, { method: 'DELETE' }); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): SupportiveKoalaClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
