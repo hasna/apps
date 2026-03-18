@@ -5,7 +5,6 @@ import { Database } from 'bun:sqlite'
 import {
   upsertSession, getIngestState, setIngestState,
 } from '../db/database.js'
-import { computeCost } from '../lib/pricing.js'
 
 const CODEX_DB_PATH = join(homedir(), '.codex', 'state_5.sqlite')
 const CODEX_CONFIG_PATH = join(homedir(), '.codex', 'config.toml')
@@ -37,7 +36,6 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
     return { sessions: 0 }
   }
 
-  const model = readCodexModel()
   let codexDb: Database | null = null
   let ingested = 0
 

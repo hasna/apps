@@ -1,12 +1,15 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { join, basename, dirname } from 'path'
+import { join, basename } from 'path'
 import { Database } from 'bun:sqlite'
-import { randomUUID } from 'crypto'
 import {
   upsertRequest, upsertSession, rollupSession,
   getIngestState, setIngestState,
 } from '../db/database.js'
+
+function autoDetectProject(cwd: string, projects: Array<{path: string, name: string}>): { path: string; name: string } | undefined {
+  return projects.find(p => cwd === p.path || cwd.startsWith(p.path + '/'))
+}
 import { computeCostFromDb } from '../lib/pricing.js'
 import type { EconomySession } from '../types/index.js'
 
@@ -71,13 +74,15 @@ export async function ingestClaude(
   let totalRequests = 0
   const touchedSessions = new Set<string>()
 
+  // Load registered projects once for auto-detection (longest path first for best match)
+  const registeredProjects = db.prepare(`SELECT path, name FROM projects ORDER BY LENGTH(path) DESC`).all() as Array<{path: string, name: string}>
+
   const projectDirs = readdirSync(PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory())
 
   for (const projectDirEntry of projectDirs) {
     const projectDirPath = join(PROJECTS_DIR, projectDirEntry.name)
     const projectPath = dirNameToPath(projectDirEntry.name)
-    const projectName = basename(projectPath)
 
     const jsonlFiles = collectJsonlFiles(projectDirPath)
 
@@ -149,11 +154,14 @@ export async function ingestClaude(
         if (!touchedSessions.has(sessionId)) {
           const existing = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId)
           if (!existing) {
+            const effectiveCwd = sessionCwd || projectPath
+            // Auto-detect registered project from cwd
+            const detectedProject = autoDetectProject(effectiveCwd, registeredProjects)
             const session: EconomySession = {
               id: sessionId,
               agent: 'claude',
-              project_path: sessionCwd || projectPath,
-              project_name: basename(sessionCwd || projectPath),
+              project_path: detectedProject ? detectedProject.path : effectiveCwd,
+              project_name: detectedProject ? detectedProject.name : basename(effectiveCwd),
               started_at: timestamp,
               ended_at: null,
               total_cost_usd: 0,

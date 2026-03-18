@@ -109,4 +109,5 @@ export interface SessionFilter {
   limit?: number
   offset?: number
   since?: string
+  search?: string
 }
