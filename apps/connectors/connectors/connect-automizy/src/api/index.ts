@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Automizy Connector — Email marketing automation
+import { AutomizyClient } from './client';
+import type { AutomizyConfig, AZContact, AZContactList, AZSmartList, AZCampaign, AZAutomation, AZTag, AZForm } from '../types';
+export { AutomizyClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Automizy {
+  private readonly client: AutomizyClient;
+  constructor(config: AutomizyConfig) { this.client = new AutomizyClient(config); }
+  static fromEnv(): Automizy {
+    const token = process.env.AUTOMIZY_TOKEN;
+    if (!token) throw new Error('AUTOMIZY_TOKEN is required');
+    return new Automizy({ token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listContacts(options?: { page?: number; limit?: number }): Promise<AZContactList> {
+    return this.client.request<AZContactList>('/contacts', { params: { page: options?.page, limit: options?.limit } });
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getContact(contactId: number): Promise<AZContact> { return this.client.request<AZContact>(`/contacts/${contactId}`); }
+  async createContact(data: { email: string; firstname?: string; lastname?: string; tags?: string[]; custom_fields?: Record<string, string> }): Promise<AZContact> {
+    return this.client.request<AZContact>('/contacts', { method: 'POST', body: data as Record<string, unknown> });
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async updateContact(contactId: number, data: { firstname?: string; lastname?: string; tags?: string[]; custom_fields?: Record<string, string> }): Promise<AZContact> {
+    return this.client.request<AZContact>(`/contacts/${contactId}`, { method: 'PATCH', body: data as Record<string, unknown> });
   }
+  async deleteContact(contactId: number): Promise<void> { await this.client.request(`/contacts/${contactId}`, { method: 'DELETE' }); }
+
+  async listSmartLists(): Promise<AZSmartList[]> { return this.client.request<AZSmartList[]>('/smart-lists'); }
+  async getSmartList(listId: number): Promise<AZSmartList> { return this.client.request<AZSmartList>(`/smart-lists/${listId}`); }
+
+  async listCampaigns(): Promise<AZCampaign[]> { return this.client.request<AZCampaign[]>('/campaigns'); }
+  async getCampaign(campaignId: number): Promise<AZCampaign> { return this.client.request<AZCampaign>(`/campaigns/${campaignId}`); }
+
+  async listAutomations(): Promise<AZAutomation[]> { return this.client.request<AZAutomation[]>('/automations'); }
+  async getAutomation(automationId: number): Promise<AZAutomation> { return this.client.request<AZAutomation>(`/automations/${automationId}`); }
+
+  async listTags(): Promise<AZTag[]> { return this.client.request<AZTag[]>('/tags'); }
+  async tagContact(contactId: number, tagName: string): Promise<void> { await this.client.request(`/contacts/${contactId}/tag`, { method: 'POST', body: { name: tagName } }); }
+  async untagContact(contactId: number, tagName: string): Promise<void> { await this.client.request(`/contacts/${contactId}/untag`, { method: 'POST', body: { name: tagName } }); }
+
+  async listForms(): Promise<AZForm[]> { return this.client.request<AZForm[]>('/forms'); }
+
+  getClient(): AutomizyClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

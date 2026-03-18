@@ -1,51 +1,35 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// APITemplate.io Connector — PDF and image generation from templates
+import { ApiTemplateClient } from './client';
+import type { ApiTemplateConfig, ATTemplate, ATTemplateList, ATCreateResult, ATMergeData, ATAccountInfo } from '../types';
+export { ApiTemplateClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ApiTemplate {
+  private readonly client: ApiTemplateClient;
+  constructor(config: ApiTemplateConfig) { this.client = new ApiTemplateClient(config); }
+  static fromEnv(): ApiTemplate {
+    const apiKey = process.env.APITEMPLATE_API_KEY;
+    if (!apiKey) throw new Error('APITEMPLATE_API_KEY is required');
+    return new ApiTemplate({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listTemplates(): Promise<ATTemplateList> { return this.client.request<ATTemplateList>('/list-templates'); }
+  async getTemplate(templateId: string): Promise<ATTemplate> { return this.client.request<ATTemplate>(`/get-template`, { params: { template_id: templateId } }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async createPdf(templateId: string, data: ATMergeData, options?: { filename?: string; export_type?: string }): Promise<ATCreateResult> {
+    return this.client.request<ATCreateResult>('/create-pdf', { method: 'POST', params: { template_id: templateId }, body: { ...data, ...options } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async createImage(templateId: string, data: ATMergeData, options?: { filename?: string; export_type?: string }): Promise<ATCreateResult> {
+    return this.client.request<ATCreateResult>('/create-image', { method: 'POST', params: { template_id: templateId }, body: { ...data, ...options } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async createPdfFromHtml(html: string, options?: { filename?: string; landscape?: boolean; page_size?: string }): Promise<ATCreateResult> {
+    return this.client.request<ATCreateResult>('/create-pdf-from-html', { method: 'POST', body: { html, ...options } as Record<string, unknown> });
   }
+
+  async getAccountInfo(): Promise<ATAccountInfo> { return this.client.request<ATAccountInfo>('/account-information'); }
+
+  async deleteObject(transactionRef: string): Promise<void> { await this.client.request('/delete-object', { method: 'GET', params: { transaction_ref: transactionRef } }); }
+
+  getClient(): ApiTemplateClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
