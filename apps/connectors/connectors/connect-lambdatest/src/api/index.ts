@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// LambdaTest Connector — Cross-browser testing and test automation
+import { LambdaTestClient } from './client';
+import type { LambdaTestConfig, LTBuild, LTSession, LTSessionList, LTTunnel, LTPlatform } from '../types';
+export { LambdaTestClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class LambdaTest {
+  private readonly client: LambdaTestClient;
+  constructor(config: LambdaTestConfig) { this.client = new LambdaTestClient(config); }
+  static fromEnv(): LambdaTest {
+    const username = process.env.LAMBDATEST_USERNAME;
+    const accessKey = process.env.LAMBDATEST_ACCESS_KEY;
+    if (!username || !accessKey) throw new Error('LAMBDATEST_USERNAME and LAMBDATEST_ACCESS_KEY are required');
+    return new LambdaTest({ username, accessKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listBuilds(options?: { offset?: number; limit?: number; status?: string }): Promise<{ data: LTBuild[] }> {
+    return this.client.request('/builds', { params: { offset: options?.offset, limit: options?.limit, status: options?.status } });
   }
+  async getBuild(buildId: string): Promise<{ data: LTBuild }> { return this.client.request(`/builds/${buildId}`); }
+  async deleteBuild(buildId: string): Promise<void> { await this.client.request(`/builds/${buildId}`, { method: 'DELETE' }); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listSessions(buildId: string, options?: { offset?: number; limit?: number }): Promise<LTSessionList> {
+    return this.client.request<LTSessionList>(`/builds/${buildId}/sessions`, { params: { offset: options?.offset, limit: options?.limit } });
   }
+  async getSession(sessionId: string): Promise<{ data: LTSession }> { return this.client.request(`/sessions/${sessionId}`); }
+  async deleteSession(sessionId: string): Promise<void> { await this.client.request(`/sessions/${sessionId}`, { method: 'DELETE' }); }
+  async getSessionLogs(sessionId: string): Promise<{ data: string }> { return this.client.request(`/sessions/${sessionId}/log/command`); }
+  async getSessionScreenshots(sessionId: string): Promise<{ data: string[] }> { return this.client.request(`/sessions/${sessionId}/screenshots`); }
+  async stopSession(sessionId: string): Promise<void> { await this.client.request(`/sessions/${sessionId}/stop`, { method: 'PUT' }); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listTunnels(): Promise<{ data: LTTunnel[] }> { return this.client.request('/tunnels'); }
+
+  async listPlatforms(): Promise<LTPlatform[]> { return this.client.request<LTPlatform[]>('/platforms'); }
+
+  getClient(): LambdaTestClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
