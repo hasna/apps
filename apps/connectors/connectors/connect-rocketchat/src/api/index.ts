@@ -1,51 +1,49 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Rocket.Chat Connector — Open-source team messaging and collaboration
+import { RocketChatClient } from './client';
+import type { RocketChatConfig, RCUser, RCChannel, RCMessage, RCMessageList } from '../types';
+export { RocketChatClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class RocketChat {
+  private readonly client: RocketChatClient;
+  constructor(config: RocketChatConfig) { this.client = new RocketChatClient(config); }
+  static fromEnv(): RocketChat {
+    const url = process.env.ROCKETCHAT_URL;
+    const authToken = process.env.ROCKETCHAT_AUTH_TOKEN;
+    const userId = process.env.ROCKETCHAT_USER_ID;
+    if (!url || !authToken || !userId) throw new Error('ROCKETCHAT_URL, ROCKETCHAT_AUTH_TOKEN, and ROCKETCHAT_USER_ID are required');
+    return new RocketChat({ url, authToken, userId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getMe(): Promise<RCUser> { return this.client.request<RCUser>('/me'); }
+  async listUsers(options?: { count?: number; offset?: number }): Promise<{ users: RCUser[]; total: number }> {
+    return this.client.request('/users.list', { params: { count: options?.count, offset: options?.offset } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listChannels(options?: { count?: number; offset?: number }): Promise<{ channels: RCChannel[]; total: number }> {
+    return this.client.request('/channels.list', { params: { count: options?.count, offset: options?.offset } });
+  }
+  async getChannelInfo(roomId: string): Promise<{ channel: RCChannel }> { return this.client.request('/channels.info', { params: { roomId } }); }
+  async createChannel(name: string, members?: string[]): Promise<{ channel: RCChannel }> {
+    return this.client.request('/channels.create', { method: 'POST', body: { name, members } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async sendMessage(roomId: string, text: string): Promise<{ message: RCMessage }> {
+    return this.client.request('/chat.sendMessage', { method: 'POST', body: { message: { rid: roomId, msg: text } } });
   }
+  async getMessages(roomId: string, options?: { count?: number; offset?: number }): Promise<RCMessageList> {
+    return this.client.request<RCMessageList>('/channels.history', { params: { roomId, count: options?.count, offset: options?.offset } });
+  }
+  async deleteMessage(msgId: string, roomId: string): Promise<void> {
+    await this.client.request('/chat.delete', { method: 'POST', body: { msgId, roomId } });
+  }
+
+  async searchMessages(roomId: string, searchText: string): Promise<RCMessageList> {
+    return this.client.request<RCMessageList>('/chat.search', { params: { roomId, searchText } });
+  }
+
+  async setStatus(status: string, message?: string): Promise<void> {
+    await this.client.request('/users.setStatus', { method: 'POST', body: { status, message } });
+  }
+
+  getClient(): RocketChatClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
