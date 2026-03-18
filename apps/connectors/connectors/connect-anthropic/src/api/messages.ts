@@ -22,7 +22,7 @@ export class MessagesApi {
     options: ChatOptions = {}
   ): Promise<MessagesResponse> {
     const request: MessagesRequest = {
-      model: options.model || 'claude-sonnet-4-20250514',
+      model: options.model || DEFAULT_MODEL,
       messages,
       max_tokens: options.maxTokens || 4096,
       stream: false,
@@ -60,7 +60,7 @@ export class MessagesApi {
   ): Promise<MessagesResponse> {
     return this.ask(prompt, {
       ...options,
-      model: options.model || 'claude-sonnet-4-20250514',
+      model: options.model || DEFAULT_MODEL,
       systemPrompt: 'You are an expert programmer. Write clean, efficient, well-documented code. Only output code unless explanation is explicitly requested.',
     });
   }
