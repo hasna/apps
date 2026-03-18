@@ -124,6 +124,11 @@ export class HuggingFaceClient {
     return this.request<T>(path, { method: 'DELETE', params });
   }
 
+  /** Get the raw API key (needed by InferenceApi for direct fetch) */
+  getApiKey(): string {
+    return this.apiKey;
+  }
+
   /**
    * Get a preview of the API key (for display/debugging)
    */

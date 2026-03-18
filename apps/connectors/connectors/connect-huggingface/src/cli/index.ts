@@ -188,55 +188,167 @@ configCmd
   });
 
 // ============================================
-// Example API Commands - Replace with HuggingFace API commands
+// Models Commands
 // ============================================
-const exampleCmd = program
-  .command('example')
-  .description('Example API commands (replace with HuggingFace commands)');
+const modelsCmd = program.command('models').description('Search and browse HuggingFace models');
 
-exampleCmd
-  .command('list')
-  .description('List resources')
-  .option('-n, --max <number>', 'Maximum results', '10')
-  .action(async (opts) => {
+modelsCmd
+  .command('search')
+  .description('Search models')
+  .argument('[query]', 'Search query')
+  .option('--task <task>', 'Filter by task (text-generation, text2text-generation, etc)')
+  .option('--library <lib>', 'Filter by library (transformers, gguf, pytorch)')
+  .option('--author <author>', 'Filter by author')
+  .option('--sort <field>', 'Sort by: likes, downloads, trending, lastModified', 'trending')
+  .option('--limit <n>', 'Max results', '20')
+  .action(async (query, opts) => {
     try {
       const client = getClient();
-      const result = await client.example.list({ maxResults: parseInt(opts.max) });
-      print(result, getFormat(exampleCmd));
-    } catch (err) {
-      error(String(err));
-      process.exit(1);
-    }
+      const results = await client.models.search({
+        search: query, filter: opts.task, library: opts.library,
+        author: opts.author, sort: opts.sort, limit: parseInt(opts.limit),
+      });
+      print(results.map(m => ({ id: m.id, task: m.pipeline_tag, library: m.library_name, downloads: m.downloads, likes: m.likes })), getFormat(modelsCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
   });
 
-exampleCmd
+modelsCmd
   .command('get <id>')
-  .description('Get a resource by ID')
-  .action(async (id: string) => {
+  .description('Get model details (e.g. meta-llama/Meta-Llama-3-8B)')
+  .action(async (id) => {
     try {
       const client = getClient();
-      const result = await client.example.get(id);
-      print(result, getFormat(exampleCmd));
-    } catch (err) {
-      error(String(err));
-      process.exit(1);
-    }
+      const result = await client.models.get(id);
+      print(result, getFormat(modelsCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
   });
 
-exampleCmd
-  .command('create')
-  .description('Create a new resource')
-  .requiredOption('-n, --name <name>', 'Resource name')
-  .action(async (opts) => {
+modelsCmd
+  .command('files <id>')
+  .description('List files in a model repo')
+  .action(async (id) => {
     try {
       const client = getClient();
-      const result = await client.example.create({ name: opts.name });
-      success('Resource created!');
-      print(result, getFormat(exampleCmd));
-    } catch (err) {
-      error(String(err));
-      process.exit(1);
-    }
+      const files = await client.models.files(id);
+      print(files.map(f => ({ name: f.rfilename, size: f.lfs?.size ?? f.size ?? null })), getFormat(modelsCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+// ============================================
+// Inference Commands
+// ============================================
+const inferCmd = program.command('inference').description('Run model inference via HF Inference API');
+
+inferCmd
+  .command('text-generation <model>')
+  .description('Generate text from a prompt')
+  .requiredOption('--prompt <text>', 'Input prompt')
+  .option('--max-tokens <n>', 'Max new tokens', '256')
+  .option('--temperature <t>', 'Temperature', '0.7')
+  .action(async (model, opts) => {
+    try {
+      const client = getClient();
+      const results = await client.inference.textGeneration(model, opts.prompt, {
+        max_new_tokens: parseInt(opts.maxTokens), temperature: parseFloat(opts.temperature),
+      });
+      print(results, getFormat(inferCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+inferCmd
+  .command('chat <model>')
+  .description('Chat completion (for chat models)')
+  .requiredOption('--messages <json>', 'Messages JSON array')
+  .option('--max-tokens <n>', 'Max new tokens', '256')
+  .option('--temperature <t>', 'Temperature', '0.7')
+  .action(async (model, opts) => {
+    try {
+      const messages = JSON.parse(opts.messages);
+      const client = getClient();
+      const result = await client.inference.chat(model, messages, {
+        max_new_tokens: parseInt(opts.maxTokens), temperature: parseFloat(opts.temperature),
+      });
+      print(result, getFormat(inferCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+// ============================================
+// Datasets Commands
+// ============================================
+const datasetsCmd = program.command('datasets').description('Search and browse HuggingFace datasets');
+
+datasetsCmd
+  .command('search')
+  .description('Search datasets')
+  .argument('[query]', 'Search query')
+  .option('--author <author>', 'Filter by author')
+  .option('--sort <field>', 'Sort by: likes, downloads, trending', 'trending')
+  .option('--limit <n>', 'Max results', '20')
+  .action(async (query, opts) => {
+    try {
+      const client = getClient();
+      const results = await client.datasets.search({
+        search: query, author: opts.author, sort: opts.sort, limit: parseInt(opts.limit),
+      });
+      print(results.map(d => ({ id: d.id, downloads: d.downloads, likes: d.likes, tags: d.tags?.slice(0, 5) })), getFormat(datasetsCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+datasetsCmd
+  .command('get <id>')
+  .description('Get dataset details')
+  .action(async (id) => {
+    try {
+      const client = getClient();
+      const result = await client.datasets.get(id);
+      print(result, getFormat(datasetsCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+datasetsCmd
+  .command('preview <id>')
+  .description('Preview first N rows of a dataset')
+  .option('--split <split>', 'Dataset split', 'train')
+  .option('--rows <n>', 'Number of rows', '10')
+  .action(async (id, opts) => {
+    try {
+      const client = getClient();
+      const result = await client.datasets.preview(id, 'default', opts.split, parseInt(opts.rows));
+      print(result, getFormat(datasetsCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+// ============================================
+// Spaces Commands
+// ============================================
+const spacesCmd = program.command('spaces').description('Search and browse HuggingFace Spaces');
+
+spacesCmd
+  .command('search')
+  .description('Search spaces')
+  .argument('[query]', 'Search query')
+  .option('--author <author>', 'Filter by author')
+  .option('--sort <field>', 'Sort by: likes, trending', 'trending')
+  .option('--limit <n>', 'Max results', '20')
+  .action(async (query, opts) => {
+    try {
+      const client = getClient();
+      const results = await client.spaces.search({
+        search: query, author: opts.author, sort: opts.sort, limit: parseInt(opts.limit),
+      });
+      print(results.map(s => ({ id: s.id, sdk: s.sdk, likes: s.likes })), getFormat(spacesCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
+  });
+
+spacesCmd
+  .command('get <id>')
+  .description('Get space details')
+  .action(async (id) => {
+    try {
+      const client = getClient();
+      const result = await client.spaces.get(id);
+      print(result, getFormat(spacesCmd));
+    } catch (err) { error(String(err)); process.exit(1); }
   });
 
 // Parse and execute
