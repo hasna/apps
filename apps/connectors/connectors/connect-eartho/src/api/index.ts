@@ -1,51 +1,31 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Eartho Connector — Universal login and authentication platform
+import { EarthoClient } from './client';
+import type { EarthoConfig, EOUser, EOAccess, EOConnection } from '../types';
+export { EarthoClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Eartho {
+  private readonly client: EarthoClient;
+  constructor(config: EarthoConfig) { this.client = new EarthoClient(config); }
+  static fromEnv(): Eartho {
+    const clientId = process.env.EARTHO_CLIENT_ID;
+    const clientSecret = process.env.EARTHO_CLIENT_SECRET;
+    if (!clientId || !clientSecret) throw new Error('EARTHO_CLIENT_ID and EARTHO_CLIENT_SECRET are required');
+    return new Eartho({ clientId, clientSecret });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listUsers(options?: { page?: number; limit?: number }): Promise<{ users: EOUser[] }> {
+    return this.client.request('/users', { params: { page: options?.page, limit: options?.limit } });
+  }
+  async getUser(uid: string): Promise<EOUser> { return this.client.request<EOUser>(`/users/${uid}`); }
+  async deleteUser(uid: string): Promise<void> { await this.client.request(`/users/${uid}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listAccesses(): Promise<{ accesses: EOAccess[] }> { return this.client.request('/accesses'); }
+  async getAccess(accessId: string): Promise<EOAccess> { return this.client.request<EOAccess>(`/accesses/${accessId}`); }
+  async createAccess(data: { name: string; description?: string; type?: string; price?: number; currency?: string }): Promise<EOAccess> {
+    return this.client.request<EOAccess>('/accesses', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listConnections(): Promise<{ connections: EOConnection[] }> { return this.client.request('/connections'); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): EarthoClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
