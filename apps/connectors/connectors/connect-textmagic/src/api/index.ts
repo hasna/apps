@@ -1,17 +1,11 @@
-// Textmagic Connector — Business SMS platform
-
+// Textmagic Connector — Business SMS platform for bulk messaging
 import { TextmagicClient } from './client';
-import type { TextmagicConfig, TextmagicMessage, SendMessageResult, Contact, TextmagicAccount } from '../types';
-
+import type { TextmagicConfig, TMMessage, TMMessageList, TMContact, TMContactList, TMList, TMTemplate } from '../types';
 export { TextmagicClient } from './client';
 
 export class Textmagic {
   private readonly client: TextmagicClient;
-
-  constructor(config: TextmagicConfig) {
-    this.client = new TextmagicClient(config);
-  }
-
+  constructor(config: TextmagicConfig) { this.client = new TextmagicClient(config); }
   static fromEnv(): Textmagic {
     const username = process.env.TEXTMAGIC_USERNAME;
     const apiKey = process.env.TEXTMAGIC_API_KEY;
@@ -19,54 +13,30 @@ export class Textmagic {
     return new Textmagic({ username, apiKey });
   }
 
-  async getAccount(): Promise<TextmagicAccount> {
-    return this.client.request<TextmagicAccount>('/user');
+  async sendMessage(phones: string, text: string): Promise<{ id: number; href: string }> {
+    return this.client.request('/messages', { method: 'POST', body: { phones, text } });
   }
-
-  async sendMessage(options: { text: string; phones?: string[]; contacts?: number[]; lists?: number[]; sendingTime?: string }): Promise<SendMessageResult> {
-    return this.client.request<SendMessageResult>('/messages', {
-      method: 'POST',
-      body: {
-        text: options.text,
-        phones: options.phones?.join(','),
-        contacts: options.contacts?.join(','),
-        lists: options.lists?.join(','),
-        sendingTime: options.sendingTime,
-      },
-    });
+  async getMessage(messageId: number): Promise<TMMessage> { return this.client.request<TMMessage>(`/messages/${messageId}`); }
+  async listMessages(options?: { page?: number; limit?: number }): Promise<TMMessageList> {
+    return this.client.request<TMMessageList>('/messages', { params: { page: options?.page, limit: options?.limit } });
   }
+  async deleteMessage(messageId: number): Promise<void> { await this.client.request(`/messages/${messageId}`, { method: 'DELETE' }); }
 
-  async listMessages(options?: { page?: number; limit?: number; query?: string }): Promise<{ resources: TextmagicMessage[]; page: number; pageCount: number; limit: number; totalCount: number }> {
-    return this.client.request('/messages', { params: options as Record<string, number | string | undefined> });
+  async listContacts(options?: { page?: number; limit?: number }): Promise<TMContactList> {
+    return this.client.request<TMContactList>('/contacts', { params: { page: options?.page, limit: options?.limit } });
   }
-
-  async getMessage(messageId: number): Promise<TextmagicMessage> {
-    return this.client.request<TextmagicMessage>(`/messages/${messageId}`);
-  }
-
-  async deleteMessage(messageId: number): Promise<void> {
-    await this.client.request(`/messages/${messageId}`, { method: 'DELETE' });
-  }
-
-  async listContacts(options?: { page?: number; limit?: number; search?: string }): Promise<{ resources: Contact[] }> {
-    return this.client.request('/contacts', { params: options as Record<string, string | number | undefined> });
-  }
-
-  async getContact(contactId: number): Promise<Contact> {
-    return this.client.request<Contact>(`/contacts/${contactId}`);
-  }
-
+  async getContact(contactId: number): Promise<TMContact> { return this.client.request<TMContact>(`/contacts/${contactId}`); }
   async createContact(data: { phone: string; firstName?: string; lastName?: string; email?: string; companyName?: string }): Promise<{ id: number; href: string }> {
     return this.client.request('/contacts', { method: 'POST', body: data as Record<string, unknown> });
   }
+  async deleteContact(contactId: number): Promise<void> { await this.client.request(`/contacts/${contactId}`, { method: 'DELETE' }); }
 
-  async updateContact(contactId: number, data: Partial<Parameters<Textmagic['createContact']>[0]>): Promise<void> {
-    await this.client.request(`/contacts/${contactId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  async listLists(options?: { page?: number; limit?: number }): Promise<{ page: number; resources: TMList[] }> {
+    return this.client.request('/lists', { params: { page: options?.page, limit: options?.limit } });
   }
 
-  async deleteContact(contactId: number): Promise<void> {
-    await this.client.request(`/contacts/${contactId}`, { method: 'DELETE' });
-  }
+  async listTemplates(): Promise<{ page: number; resources: TMTemplate[] }> { return this.client.request('/templates'); }
+  async getTemplate(templateId: number): Promise<TMTemplate> { return this.client.request<TMTemplate>(`/templates/${templateId}`); }
 
   getClient(): TextmagicClient { return this.client; }
 }

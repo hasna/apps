@@ -1,56 +1,13 @@
-export interface TextmagicConfig {
-  username: string;
-  apiKey: string;
-  baseUrl?: string;
-}
+export interface TextmagicConfig { username: string; apiKey: string; }
 
-export interface TextmagicMessage {
-  id: number;
-  receiver: string;
-  messageTime: string;
-  status: string;
-  text: string;
-  charset: string;
-  price: number;
-  partsCount: number;
-  country: string;
-}
-
-export interface SendMessageResult {
-  id: number;
-  href: string;
-  type: string;
-  sessionId: number;
-  bulkId: number;
-  messageId: number;
-  scheduleId: number;
-}
-
-export interface Contact {
-  id: number;
-  phone: string;
-  email: string | null;
-  firstName: string;
-  lastName: string;
-  companyName: string | null;
-  country: { id: string; name: string } | null;
-}
-
-export interface TextmagicAccount {
-  id: number;
-  username: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  balance: number;
-  currency: { id: string; htmlSymbol: string };
-}
+export interface TMMessage { id: number; sender: string; receiver: string; text: string; status: string; charset: string; country: string; price: number; parts_count: number; message_time: string; }
+export interface TMMessageList { page: number; limit: number; pageCount: number; resources: TMMessage[]; }
+export interface TMContact { id: number; firstName: string; lastName: string; phone: string; email: string; companyName: string; country: { id: string; name: string }; customFieldValues: Record<string, string>[]; }
+export interface TMContactList { page: number; limit: number; pageCount: number; resources: TMContact[]; }
+export interface TMList { id: number; name: string; description: string; membersCount: number; shared: boolean; }
+export interface TMTemplate { id: number; name: string; body: string; lastModified: string; }
 
 export class TextmagicApiError extends Error {
   public readonly statusCode: number;
-  constructor(message: string, statusCode: number) {
-    super(message);
-    this.name = 'TextmagicApiError';
-    this.statusCode = statusCode;
-  }
+  constructor(message: string, statusCode: number) { super(message); this.name = 'TextmagicApiError'; this.statusCode = statusCode; }
 }
