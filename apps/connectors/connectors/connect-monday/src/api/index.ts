@@ -536,4 +536,123 @@ export class Monday {
   getClient(): MondayClient {
     return this.client;
   }
+
+  // ============================================
+  // Board Operations (additional)
+  // ============================================
+
+  async archiveBoard(boardId: string | number): Promise<{ id: string }> {
+    const query = `
+      mutation($board_id: ID!) {
+        archive_board(board_id: $board_id) { id }
+      }
+    `;
+    const result = await this.client.mutation<{ archive_board: { id: string } }>(query, { board_id: boardId });
+    return result.archive_board;
+  }
+
+  async deleteBoard(boardId: string | number): Promise<{ id: string }> {
+    const query = `
+      mutation($board_id: ID!) {
+        delete_board(board_id: $board_id) { id }
+      }
+    `;
+    const result = await this.client.mutation<{ delete_board: { id: string } }>(query, { board_id: boardId });
+    return result.delete_board;
+  }
+
+  async duplicateBoard(boardId: string | number, boardName?: string, duplicateType?: 'duplicate_board_with_structure' | 'duplicate_board_with_pulses' | 'duplicate_board_with_pulses_and_updates'): Promise<Board> {
+    const query = `
+      mutation($board_id: ID!, $duplicate_type: DuplicateBoardType!, $board_name: String) {
+        duplicate_board(board_id: $board_id, duplicate_type: $duplicate_type, board_name: $board_name) {
+          board { id name description board_kind state workspace_id }
+        }
+      }
+    `;
+    const result = await this.client.mutation<{ duplicate_board: { board: Board } }>(query, {
+      board_id: boardId,
+      duplicate_type: duplicateType || 'duplicate_board_with_structure',
+      board_name: boardName,
+    });
+    return result.duplicate_board.board;
+  }
+
+  // ============================================
+  // Group Operations (additional)
+  // ============================================
+
+  async listGroups(boardId: string | number): Promise<Group[]> {
+    const query = `
+      query($board_id: ID!) {
+        boards(ids: [$board_id]) {
+          groups {
+            id
+            title
+            color
+            position
+            archived
+          }
+        }
+      }
+    `;
+    const result = await this.client.query<{ boards: Array<{ groups: Group[] }> }>(query, { board_id: boardId });
+    return result.boards[0]?.groups ?? [];
+  }
+
+  async deleteGroup(boardId: string | number, groupId: string): Promise<{ id: string; deleted: boolean }> {
+    const query = `
+      mutation($board_id: ID!, $group_id: String!) {
+        delete_group(board_id: $board_id, group_id: $group_id) { id deleted }
+      }
+    `;
+    const result = await this.client.mutation<{ delete_group: { id: string; deleted: boolean } }>(query, {
+      board_id: boardId,
+      group_id: groupId,
+    });
+    return result.delete_group;
+  }
+
+  // ============================================
+  // Item Operations (additional)
+  // ============================================
+
+  async archiveItem(itemId: string | number): Promise<{ id: string }> {
+    const query = `
+      mutation($item_id: ID!) {
+        archive_item(item_id: $item_id) { id }
+      }
+    `;
+    const result = await this.client.mutation<{ archive_item: { id: string } }>(query, { item_id: itemId });
+    return result.archive_item;
+  }
+
+  async changeColumnValues(itemId: string | number, boardId: string | number, columnValues: Record<string, unknown>): Promise<Item> {
+    const query = `
+      mutation($item_id: ID!, $board_id: ID!, $column_values: JSON!) {
+        change_multiple_column_values(item_id: $item_id, board_id: $board_id, column_values: $column_values) {
+          id name state
+          column_values { id text type value }
+        }
+      }
+    `;
+    const result = await this.client.mutation<{ change_multiple_column_values: Item }>(query, {
+      item_id: itemId,
+      board_id: boardId,
+      column_values: JSON.stringify(columnValues),
+    });
+    return result.change_multiple_column_values;
+  }
+
+  async moveItemToGroup(itemId: string | number, groupId: string): Promise<Item> {
+    const query = `
+      mutation($item_id: ID!, $group_id: String!) {
+        move_item_to_group(item_id: $item_id, group_id: $group_id) { id name state group { id title } }
+      }
+    `;
+    const result = await this.client.mutation<{ move_item_to_group: Item }>(query, {
+      item_id: itemId,
+      group_id: groupId,
+    });
+    return result.move_item_to_group;
+  }
 }
