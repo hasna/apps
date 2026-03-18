@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Jina AI Connector — Neural search, embeddings, and reader
+import { JinaAIClient } from './client';
+import type { JinaAIConfig, JinaEmbeddingResponse, JinaRerankResponse, JinaReaderResult, JinaClassifyResult } from '../types';
+export { JinaAIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class JinaAI {
+  private readonly client: JinaAIClient;
+  constructor(config: JinaAIConfig) { this.client = new JinaAIClient(config); }
+  static fromEnv(): JinaAI {
+    const apiKey = process.env.JINA_API_KEY;
+    if (!apiKey) throw new Error('JINA_API_KEY is required');
+    return new JinaAI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async embed(input: string | string[], options?: { model?: string; encoding_type?: string }): Promise<JinaEmbeddingResponse> {
+    return this.client.request<JinaEmbeddingResponse>('/embeddings', { body: { input: Array.isArray(input) ? input : [input], model: options?.model || 'jina-embeddings-v3', encoding_type: options?.encoding_type } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async rerank(query: string, documents: string[], options?: { model?: string; top_n?: number }): Promise<JinaRerankResponse> {
+    return this.client.request<JinaRerankResponse>('/rerank', { body: { query, documents: documents.map(d => ({ text: d })), model: options?.model || 'jina-reranker-v2-base-multilingual', top_n: options?.top_n } as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async classify(input: string[], labels: string[], options?: { model?: string }): Promise<JinaClassifyResult> {
+    return this.client.request<JinaClassifyResult>('/classify', { body: { input, labels, model: options?.model } as Record<string, unknown> });
   }
+
+  async read(url: string): Promise<JinaReaderResult> {
+    return this.client.readerRequest<JinaReaderResult>(url);
+  }
+
+  getClient(): JinaAIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

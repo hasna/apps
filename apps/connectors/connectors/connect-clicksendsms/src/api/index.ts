@@ -1,51 +1,40 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// ClickSend SMS Connector — SMS, MMS, and communication APIs
+import { ClickSendClient } from './client';
+import type { ClickSendConfig, CSSmsMessage, CSSmsResult, CSSmsHistory, CSContact, CSContactList, CSAccount } from '../types';
+export { ClickSendClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class ClickSendSMS {
+  private readonly client: ClickSendClient;
+  constructor(config: ClickSendConfig) { this.client = new ClickSendClient(config); }
+  static fromEnv(): ClickSendSMS {
+    const username = process.env.CLICKSEND_USERNAME;
+    const apiKey = process.env.CLICKSEND_API_KEY;
+    if (!username || !apiKey) throw new Error('CLICKSEND_USERNAME and CLICKSEND_API_KEY are required');
+    return new ClickSendSMS({ username, apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async sendSms(messages: CSSmsMessage[]): Promise<{ messages: CSSmsResult[] }> {
+    return this.client.request('/sms/send', { method: 'POST', body: { messages } as Record<string, unknown> });
+  }
+  async getSmsHistory(options?: { page?: number; limit?: number }): Promise<CSSmsHistory> {
+    return this.client.request<CSSmsHistory>('/sms/history', { params: { page: options?.page, limit: options?.limit } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listContactLists(): Promise<CSContactList[]> { return this.client.request<CSContactList[]>('/lists'); }
+  async getContactList(listId: number): Promise<CSContactList> { return this.client.request<CSContactList>(`/lists/${listId}`); }
+  async createContactList(listName: string): Promise<CSContactList> {
+    return this.client.request<CSContactList>('/lists', { method: 'POST', body: { list_name: listName } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listContacts(listId: number, options?: { page?: number; limit?: number }): Promise<CSContact[]> {
+    return this.client.request<CSContact[]>(`/lists/${listId}/contacts`, { params: { page: options?.page, limit: options?.limit } });
   }
+  async createContact(listId: number, data: { phone_number: string; first_name?: string; last_name?: string; email?: string }): Promise<CSContact> {
+    return this.client.request<CSContact>(`/lists/${listId}/contacts`, { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteContact(listId: number, contactId: number): Promise<void> { await this.client.request(`/lists/${listId}/contacts/${contactId}`, { method: 'DELETE' }); }
+
+  async getAccount(): Promise<CSAccount> { return this.client.request<CSAccount>('/account'); }
+
+  getClient(): ClickSendClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
