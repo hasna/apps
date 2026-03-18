@@ -1,51 +1,39 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Zammad Connector — Open-source helpdesk and customer support ticketing
+import { ZammadClient } from './client';
+import type { ZammadConfig, ZDTicket, ZDUser, ZDGroup, ZDArticle, ZDOrganization } from '../types';
+export { ZammadClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Zammad {
+  private readonly client: ZammadClient;
+  constructor(config: ZammadConfig) { this.client = new ZammadClient(config); }
+  static fromEnv(): Zammad {
+    const url = process.env.ZAMMAD_URL;
+    const token = process.env.ZAMMAD_TOKEN;
+    if (!url || !token) throw new Error('ZAMMAD_URL and ZAMMAD_TOKEN are required');
+    return new Zammad({ url, token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listTickets(options?: { page?: number; per_page?: number }): Promise<ZDTicket[]> { return this.client.request<ZDTicket[]>('/tickets', { params: options as Record<string, number | undefined> }); }
+  async getTicket(id: number): Promise<ZDTicket> { return this.client.request<ZDTicket>(`/tickets/${id}`); }
+  async createTicket(data: { title: string; group: string; customer_id: number; article: { subject: string; body: string; type?: string } }): Promise<ZDTicket> {
+    return this.client.request<ZDTicket>('/tickets', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateTicket(id: number, data: Partial<{ title: string; state_id: number; priority_id: number; owner_id: number }>): Promise<ZDTicket> {
+    return this.client.request<ZDTicket>(`/tickets/${id}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async deleteTicket(id: number): Promise<void> { await this.client.request(`/tickets/${id}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getTicketArticles(ticketId: number): Promise<ZDArticle[]> { return this.client.request<ZDArticle[]>(`/ticket_articles/by_ticket/${ticketId}`); }
+  async createArticle(ticketId: number, data: { subject?: string; body: string; type?: string; internal?: boolean }): Promise<ZDArticle> {
+    return this.client.request<ZDArticle>('/ticket_articles', { method: 'POST', body: { ticket_id: ticketId, ...data } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listUsers(options?: { page?: number; per_page?: number }): Promise<ZDUser[]> { return this.client.request<ZDUser[]>('/users', { params: options as Record<string, number | undefined> }); }
+  async getUser(id: number): Promise<ZDUser> { return this.client.request<ZDUser>(`/users/${id}`); }
+  async searchUsers(query: string): Promise<ZDUser[]> { return this.client.request<ZDUser[]>('/users/search', { params: { query } }); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listGroups(): Promise<ZDGroup[]> { return this.client.request<ZDGroup[]>('/groups'); }
+  async listOrganizations(): Promise<ZDOrganization[]> { return this.client.request<ZDOrganization[]>('/organizations'); }
+
+  getClient(): ZammadClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
