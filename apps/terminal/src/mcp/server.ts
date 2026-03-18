@@ -69,7 +69,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "execute",
-    "Run a shell command and return raw output. Prefer execute_smart for most tasks — it AI-summarizes output, saving 80% tokens. Use execute only when you need the full unprocessed output (e.g., to parse it yourself).",
+    "Run a shell command. Format guide: no format/raw for git commit/push (<50 tokens). format=compressed for long build output (CPU-only, no AI). format=json or format=summary for AI-summarized output (234ms, saves 80% tokens). Prefer execute_smart for most tasks.",
     {
       command: z.string().describe("Shell command to execute"),
       cwd: z.string().optional().describe("Working directory (default: server cwd)"),
@@ -136,7 +136,7 @@ export function createServer(): McpServer {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({
             exitCode: result.exitCode, output: compressed.content, duration: result.duration,
-            tokensSaved: compressed.tokensSaved, savingsPercent: compressed.savingsPercent,
+            ...(compressed.tokensSaved > 0 ? { tokensSaved: compressed.tokensSaved, savingsPercent: compressed.savingsPercent } : {}),
           }) }],
         };
       }
