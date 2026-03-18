@@ -1,51 +1,30 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Formcarry Connector — Form backend for static sites and apps
+import { FormcarryClient } from './client';
+import type { FormcarryConfig, FCForm, FCSubmission } from '../types';
+export { FormcarryClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Formcarry {
+  private readonly client: FormcarryClient;
+  constructor(config: FormcarryConfig) { this.client = new FormcarryClient(config); }
+  static fromEnv(): Formcarry {
+    const apiKey = process.env.FORMCARRY_API_KEY;
+    if (!apiKey) throw new Error('FORMCARRY_API_KEY environment variable is required');
+    return new Formcarry({ apiKey });
   }
-
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listForms(): Promise<FCForm[]> { const r = await this.client.request<{ data: FCForm[] }>('/forms'); return r.data ?? []; }
+  async getForm(formId: string): Promise<FCForm> { const r = await this.client.request<{ data: FCForm }>(`/forms/${formId}`); return r.data; }
+  async listSubmissions(formId: string, options?: { page?: number; limit?: number; archived?: boolean; spam?: boolean }): Promise<FCSubmission[]> {
+    const r = await this.client.request<{ data: FCSubmission[] }>(`/forms/${formId}/submissions`, { params: options as Record<string, string | number | undefined> });
+    return r.data ?? [];
   }
-
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async getSubmission(formId: string, submissionId: string): Promise<FCSubmission> {
+    const r = await this.client.request<{ data: FCSubmission }>(`/forms/${formId}/submissions/${submissionId}`); return r.data;
   }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async archiveSubmission(formId: string, submissionId: string): Promise<void> {
+    await this.client.request(`/forms/${formId}/submissions/${submissionId}`, { method: 'PATCH', body: { archived: true } });
   }
+  async deleteSubmission(formId: string, submissionId: string): Promise<void> {
+    await this.client.request(`/forms/${formId}/submissions/${submissionId}`, { method: 'DELETE' });
+  }
+  getClient(): FormcarryClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
