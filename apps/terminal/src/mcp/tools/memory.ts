@@ -3,6 +3,30 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z, type ToolHelpers } from "./helpers.js";
 
+// Fallback memory store when mementos SDK not available
+function getLocalMemoryFile(): string {
+  const { join } = require("path");
+  return join(process.cwd(), ".terminal", "memories.json");
+}
+
+function loadLocalMemories(): { key: string; value: string; importance: number }[] {
+  const { existsSync, readFileSync } = require("fs");
+  const file = getLocalMemoryFile();
+  if (!existsSync(file)) return [];
+  try { return JSON.parse(readFileSync(file, "utf8")); } catch { return []; }
+}
+
+function saveLocalMemory(key: string, value: string, importance: number): void {
+  const { existsSync, writeFileSync, mkdirSync } = require("fs");
+  const { dirname } = require("path");
+  const file = getLocalMemoryFile();
+  const dir = dirname(file);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const memories = loadLocalMemories().filter(m => m.key !== key); // dedup by key
+  memories.push({ key, value, importance });
+  writeFileSync(file, JSON.stringify(memories, null, 2));
+}
+
 export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
 
   // ── remember ──────────────────────────────────────────────────────────────
@@ -16,14 +40,16 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
       importance: z.number().optional().describe("1-10, default 7"),
     },
     async ({ key, value, importance }) => {
+      const imp = importance ?? 7;
+      // Try mementos SDK first, fall back to local file
       try {
         const mementos = require("@hasna/mementos");
-        mementos.createMemory({ key, value, scope: "shared", category: "knowledge", importance: importance ?? 7 });
-        h.logCall("remember", { command: `remember: ${key}` });
-        return { content: [{ type: "text" as const, text: JSON.stringify({ saved: key }) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message?.slice(0, 200) }) }] };
+        mementos.createMemory({ key, value, scope: "shared", category: "knowledge", importance: imp });
+      } catch {
+        saveLocalMemory(key, value, imp);
       }
+      h.logCall("remember", { command: `remember: ${key}` });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ saved: key }) }] };
     }
   );
 
@@ -37,20 +63,24 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
       limit: z.number().optional().describe("Max memories to return (default: 20)"),
     },
     async ({ search, limit }) => {
+      let items: { key: string; value: string; importance: number }[] = [];
+      // Try mementos SDK first, fall back to local file
       try {
         const mementos = require("@hasna/mementos");
-        let memories;
+        const memories = search
+          ? mementos.searchMemories(search, { limit: limit ?? 20 })
+          : mementos.listMemories({ scope: "shared", limit: limit ?? 20 });
+        items = (memories ?? []).map((m: any) => ({ key: m.key, value: m.value, importance: m.importance }));
+      } catch {
+        let local = loadLocalMemories();
         if (search) {
-          memories = mementos.searchMemories(search, { limit: limit ?? 20 });
-        } else {
-          memories = mementos.listMemories({ scope: "shared", limit: limit ?? 20 });
+          const q = search.toLowerCase();
+          local = local.filter(m => m.key.toLowerCase().includes(q) || m.value.toLowerCase().includes(q));
         }
-        const items = (memories ?? []).map((m: any) => ({ key: m.key, value: m.value, importance: m.importance }));
-        h.logCall("recall", { command: `recall${search ? `: ${search}` : ""}` });
-        return { content: [{ type: "text" as const, text: JSON.stringify({ memories: items, total: items.length }) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: e.message?.slice(0, 200), memories: [] }) }] };
+        items = local.slice(0, limit ?? 20);
       }
+      h.logCall("recall", { command: `recall${search ? `: ${search}` : ""}` });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ memories: items, total: items.length }) }] };
     }
   );
 

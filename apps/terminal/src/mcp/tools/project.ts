@@ -8,6 +8,61 @@ import { processOutput } from "../../output-processor.js";
 import { getOutputProvider } from "../../providers/index.js";
 import { getBootContext } from "../../session-boot.js";
 
+/** Detect project toolchain from filesystem */
+function detectToolchain(workDir: string): { runner: string; ecosystem: string } {
+  const { existsSync, readFileSync } = require("fs");
+  const { join } = require("path");
+
+  // JS/TS: bun > pnpm > yarn > npm
+  const hasBun = existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bun.lock")) || (() => {
+    try { return !!JSON.parse(readFileSync(join(workDir, "package.json"), "utf8")).engines?.bun; } catch { return false; }
+  })();
+  if (hasBun) return { runner: "bun", ecosystem: "js" };
+  if (existsSync(join(workDir, "pnpm-lock.yaml"))) return { runner: "pnpm", ecosystem: "js" };
+  if (existsSync(join(workDir, "yarn.lock"))) return { runner: "yarn", ecosystem: "js" };
+  if (existsSync(join(workDir, "deno.json")) || existsSync(join(workDir, "deno.jsonc"))) return { runner: "deno", ecosystem: "js" };
+
+  // Rust
+  if (existsSync(join(workDir, "Cargo.toml"))) return { runner: "cargo", ecosystem: "rust" };
+
+  // Go
+  if (existsSync(join(workDir, "go.mod"))) return { runner: "go", ecosystem: "go" };
+
+  // Python: poetry > pip
+  if (existsSync(join(workDir, "poetry.lock"))) return { runner: "poetry", ecosystem: "python" };
+  if (existsSync(join(workDir, "Pipfile"))) return { runner: "pipenv", ecosystem: "python" };
+  if (existsSync(join(workDir, "pyproject.toml")) || existsSync(join(workDir, "requirements.txt"))) return { runner: "pip", ecosystem: "python" };
+
+  // Ruby
+  if (existsSync(join(workDir, "Gemfile"))) return { runner: "bundle", ecosystem: "ruby" };
+
+  // PHP
+  if (existsSync(join(workDir, "composer.json"))) return { runner: "composer", ecosystem: "php" };
+
+  // Elixir
+  if (existsSync(join(workDir, "mix.exs"))) return { runner: "mix", ecosystem: "elixir" };
+
+  // .NET
+  if (existsSync(join(workDir, "*.csproj")) || existsSync(join(workDir, "*.fsproj")) || existsSync(join(workDir, "Directory.Build.props"))) return { runner: "dotnet", ecosystem: "dotnet" };
+
+  // Dart/Flutter
+  if (existsSync(join(workDir, "pubspec.yaml"))) return { runner: "dart", ecosystem: "dart" };
+
+  // Swift
+  if (existsSync(join(workDir, "Package.swift"))) return { runner: "swift", ecosystem: "swift" };
+
+  // Zig
+  if (existsSync(join(workDir, "build.zig"))) return { runner: "zig", ecosystem: "zig" };
+
+  // Make (generic)
+  if (existsSync(join(workDir, "Makefile"))) return { runner: "make", ecosystem: "make" };
+
+  // Fallback: npm if package.json exists
+  if (existsSync(join(workDir, "package.json"))) return { runner: "npm", ecosystem: "js" };
+
+  return { runner: "npm", ecosystem: "unknown" };
+}
+
 export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
 
   // ── boot ──────────────────────────────────────────────────────────────────
@@ -73,31 +128,32 @@ export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
     async ({ task, args, cwd }) => {
       const start = Date.now();
       const workDir = cwd ?? process.cwd();
+      const { runner, ecosystem } = detectToolchain(workDir);
+      const extra = args ? ` ${args}` : "";
 
-      // Detect toolchain from project files
-      const { existsSync } = await import("fs");
-      const { join } = await import("path");
-      let runner = "npm run";
-      if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bun.lock"))) runner = "bun run";
-      else if (existsSync(join(workDir, "pnpm-lock.yaml"))) runner = "pnpm run";
-      else if (existsSync(join(workDir, "yarn.lock"))) runner = "yarn";
-      else if (existsSync(join(workDir, "Cargo.toml"))) runner = "cargo";
-      else if (existsSync(join(workDir, "go.mod"))) runner = "go";
-      else if (existsSync(join(workDir, "Makefile"))) runner = "make";
+      // Map intent to command per ecosystem
+      const taskMap: Record<string, Record<string, string>> = {
+        rust:    { test: "cargo test", build: "cargo build", lint: "cargo clippy", format: "cargo fmt", check: "cargo check" },
+        go:      { test: "go test ./...", build: "go build ./...", lint: "golangci-lint run", format: "gofmt -w .", check: "go vet ./..." },
+        python:  { test: "pytest", build: "python -m build", lint: "ruff check .", format: "ruff format .", check: "mypy .", typecheck: "mypy ." },
+        ruby:    { test: "bundle exec rake test", build: "bundle exec rake build", lint: "bundle exec rubocop", format: "bundle exec rubocop -a" },
+        php:     { test: "composer test", build: "composer build", lint: "composer lint", format: "composer format" },
+        elixir:  { test: "mix test", build: "mix compile", lint: "mix credo", format: "mix format", check: "mix dialyzer" },
+        dotnet:  { test: "dotnet test", build: "dotnet build", lint: "dotnet format --verify-no-changes", format: "dotnet format", check: "dotnet build --no-incremental" },
+        dart:    { test: "dart test", build: "dart compile exe", lint: "dart analyze", format: "dart format ." },
+        swift:   { test: "swift test", build: "swift build", lint: "swiftlint", format: "swiftformat ." },
+        zig:     { test: "zig build test", build: "zig build" },
+        make:    { test: "make test", build: "make build", lint: "make lint", format: "make format", check: "make check" },
+      };
 
-      // Map intent to command
       let cmd: string;
-      if (runner === "cargo") {
-        cmd = `cargo ${task}${args ? ` ${args}` : ""}`;
-      } else if (runner === "go") {
-        const goMap: Record<string, string> = { test: "go test ./...", build: "go build ./...", lint: "golangci-lint run", format: "gofmt -w .", check: "go vet ./..." };
-        cmd = goMap[task] ?? `go ${task}`;
-      } else if (runner === "make") {
-        cmd = `make ${task}${args ? ` ${args}` : ""}`;
+      if (ecosystem === "js") {
+        const prefix = runner === "yarn" ? "yarn" : `${runner} run`;
+        cmd = `${prefix} ${task}${extra}`;
+      } else if (taskMap[ecosystem]?.[task]) {
+        cmd = `${taskMap[ecosystem][task]}${extra}`;
       } else {
-        // JS/TS ecosystem
-        const jsMap: Record<string, string> = { test: "test", build: "build", lint: "lint", dev: "dev", start: "start", typecheck: "typecheck", format: "format", check: "check" };
-        cmd = `${runner} ${jsMap[task] ?? task}${args ? ` ${args}` : ""}`;
+        cmd = `${runner} ${task}${extra}`;
       }
 
       const result = await h.exec(cmd, workDir, 120000);
@@ -119,7 +175,7 @@ export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
 
   server.tool(
     "install",
-    "Install packages — auto-detects bun/npm/pnpm/yarn/pip/cargo. Agent says what to install, we figure out how.",
+    "Install packages — auto-detects toolchain for any language. Agent says what to install, we figure out how.",
     {
       packages: z.array(z.string()).describe("Package names to install"),
       dev: z.boolean().optional().describe("Install as dev dependency (default: false)"),
@@ -128,28 +184,30 @@ export function registerProjectTools(server: McpServer, h: ToolHelpers): void {
     async ({ packages, dev, cwd }) => {
       const start = Date.now();
       const workDir = cwd ?? process.cwd();
-      const { existsSync } = await import("fs");
-      const { join } = await import("path");
-
-      let cmd: string;
+      const { runner, ecosystem } = detectToolchain(workDir);
       const pkgs = packages.join(" ");
-      const devFlag = dev ? " -D" : "";
 
-      if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bun.lock"))) {
-        cmd = `bun add${devFlag} ${pkgs}`;
-      } else if (existsSync(join(workDir, "pnpm-lock.yaml"))) {
-        cmd = `pnpm add${devFlag} ${pkgs}`;
-      } else if (existsSync(join(workDir, "yarn.lock"))) {
-        cmd = `yarn add${dev ? " --dev" : ""} ${pkgs}`;
-      } else if (existsSync(join(workDir, "package.json"))) {
-        cmd = `npm install${dev ? " --save-dev" : ""} ${pkgs}`;
-      } else if (existsSync(join(workDir, "requirements.txt")) || existsSync(join(workDir, "pyproject.toml"))) {
-        cmd = `pip install ${pkgs}`;
-      } else if (existsSync(join(workDir, "Cargo.toml"))) {
-        cmd = `cargo add ${pkgs}`;
-      } else {
-        cmd = `npm install${dev ? " --save-dev" : ""} ${pkgs}`;
-      }
+      const installMap: Record<string, { cmd: string; devCmd: string }> = {
+        bun:      { cmd: `bun add ${pkgs}`,             devCmd: `bun add -D ${pkgs}` },
+        pnpm:     { cmd: `pnpm add ${pkgs}`,            devCmd: `pnpm add -D ${pkgs}` },
+        yarn:     { cmd: `yarn add ${pkgs}`,             devCmd: `yarn add --dev ${pkgs}` },
+        npm:      { cmd: `npm install ${pkgs}`,          devCmd: `npm install --save-dev ${pkgs}` },
+        deno:     { cmd: `deno add ${pkgs}`,             devCmd: `deno add --dev ${pkgs}` },
+        cargo:    { cmd: `cargo add ${pkgs}`,            devCmd: `cargo add --dev ${pkgs}` },
+        go:       { cmd: `go get ${pkgs}`,               devCmd: `go get ${pkgs}` },
+        pip:      { cmd: `pip install ${pkgs}`,          devCmd: `pip install ${pkgs}` },
+        poetry:   { cmd: `poetry add ${pkgs}`,           devCmd: `poetry add --group dev ${pkgs}` },
+        pipenv:   { cmd: `pipenv install ${pkgs}`,       devCmd: `pipenv install --dev ${pkgs}` },
+        bundle:   { cmd: `bundle add ${pkgs}`,           devCmd: `bundle add ${pkgs} --group development` },
+        composer: { cmd: `composer require ${pkgs}`,      devCmd: `composer require --dev ${pkgs}` },
+        mix:      { cmd: `mix deps.get`,                  devCmd: `mix deps.get` },
+        dotnet:   { cmd: `dotnet add package ${pkgs}`,    devCmd: `dotnet add package ${pkgs}` },
+        dart:     { cmd: `dart pub add ${pkgs}`,          devCmd: `dart pub add --dev ${pkgs}` },
+        swift:    { cmd: `swift package add ${pkgs}`,     devCmd: `swift package add ${pkgs}` },
+      };
+
+      const entry = installMap[runner] ?? installMap.npm;
+      const cmd = dev ? entry.devCmd : entry.cmd;
 
       const result = await h.exec(cmd, workDir, 60000);
       const output = (result.stdout + result.stderr).trim();
