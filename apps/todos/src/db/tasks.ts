@@ -62,9 +62,14 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   // Prepend short_id to title if generated
   const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
+  // assigned_by = who created this task (always the calling agent)
+  // assigned_from_project = which project they were in when they assigned it
+  const assignedBy = input.assigned_by || input.agent_id;
+  const assignedFromProject = input.assigned_from_project || null;
+
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -94,6 +99,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       input.spawns_template_id || null,
       input.reason || null,
       input.spawned_from_session || null,
+      assignedBy || null,
+      assignedFromProject || null,
     ],
   );
 

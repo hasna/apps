@@ -255,6 +255,8 @@ export interface Task {
   confidence: number | null;
   reason: string | null;
   spawned_from_session: string | null;
+  assigned_by: string | null; // agent_id who created/assigned this task
+  assigned_from_project: string | null; // project_id the assigning agent was in
 }
 
 // Checklist item — ordered sub-steps within a task
@@ -317,6 +319,8 @@ export interface CreateTaskInput {
   spawns_template_id?: string;
   reason?: string;
   spawned_from_session?: string;
+  assigned_by?: string;
+  assigned_from_project?: string;
 }
 
 export interface UpdateTaskInput {
@@ -436,6 +440,8 @@ export interface TaskRow {
   confidence: number | null;
   reason: string | null;
   spawned_from_session: string | null;
+  assigned_by: string | null;
+  assigned_from_project: string | null;
 }
 
 export interface SessionRow {

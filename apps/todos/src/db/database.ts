@@ -470,6 +470,13 @@ const MIGRATIONS = [
   CREATE UNIQUE INDEX IF NOT EXISTS idx_task_files_task_path ON task_files(task_id, path);
   INSERT OR IGNORE INTO _migrations (id) VALUES (25);
   `,
+  // Migration 26: Task provenance — who assigned this task and from which project
+  `
+  ALTER TABLE tasks ADD COLUMN assigned_by TEXT;
+  ALTER TABLE tasks ADD COLUMN assigned_from_project TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_assigned_by ON tasks(assigned_by);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (26);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -659,6 +666,8 @@ function ensureSchema(db: Database): void {
   ensureColumn("tasks", "confidence", "REAL");
   ensureColumn("tasks", "reason", "TEXT");
   ensureColumn("tasks", "spawned_from_session", "TEXT");
+  ensureColumn("tasks", "assigned_by", "TEXT");
+  ensureColumn("tasks", "assigned_from_project", "TEXT");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
@@ -700,6 +709,7 @@ function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_checklists_task ON task_checklists(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_assigned_by ON tasks(assigned_by)");
 }
 
 function backfillTaskTags(db: Database): void {

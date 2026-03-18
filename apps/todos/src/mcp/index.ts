@@ -251,7 +251,7 @@ function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
 if (shouldRegisterTool("create_task")) {
 server.tool(
   "create_task",
-  "Create a new task",
+  "Create a new task. Requires agent_id — agent must be registered via register_agent first. The assigning agent's active project is auto-detected as assigned_from_project.",
   {
     title: z.string(),
     description: z.string().optional(),
@@ -259,7 +259,7 @@ server.tool(
     parent_id: z.string().optional(),
     priority: z.enum(["low", "medium", "high", "critical"]).optional(),
     status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
-    agent_id: z.string().optional(),
+    agent_id: z.string().describe("Required. Your registered agent ID or name. Use register_agent first if you haven't."),
     assigned_to: z.string().optional(),
     session_id: z.string().optional(),
     working_dir: z.string().optional(),
@@ -273,15 +273,30 @@ server.tool(
     spawns_template_id: z.string().optional().describe("Template ID to auto-create as next task when this task is completed (pipeline/handoff chains)"),
     reason: z.string().optional().describe("Why this task exists — context for agents picking it up"),
     spawned_from_session: z.string().optional().describe("Session ID that created this task (for tracing task lineage)"),
+    assigned_from_project: z.string().optional().describe("Override: project ID the assigning agent is working from. Auto-detected from agent focus if omitted."),
   },
   async (params) => {
     try {
-      const resolved = { ...params };
-      if (resolved.project_id) resolved.project_id = resolveId(resolved.project_id, "projects");
-      if (resolved.parent_id) resolved.parent_id = resolveId(resolved.parent_id);
-      if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id, "plans");
-      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
-      const task = createTask(resolved);
+      // Enforce agent registration — agent must be signed in to create tasks
+      if (!params.agent_id) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "AGENT_REQUIRED", message: "agent_id is required to create tasks. Register your agent first using register_agent." }) }], isError: true };
+      }
+
+      const resolved = { ...params } as Record<string, unknown>;
+      if (resolved["project_id"]) resolved["project_id"] = resolveId(resolved["project_id"] as string, "projects");
+      if (resolved["parent_id"]) resolved["parent_id"] = resolveId(resolved["parent_id"] as string);
+      if (resolved["plan_id"]) resolved["plan_id"] = resolveId(resolved["plan_id"] as string, "plans");
+      if (resolved["task_list_id"]) resolved["task_list_id"] = resolveId(resolved["task_list_id"] as string, "task_lists");
+
+      // Auto-detect assigned_from_project from the calling agent's active focus/project
+      if (!resolved["assigned_from_project"]) {
+        const focus = getAgentFocus(params.agent_id);
+        if (focus?.project_id) {
+          resolved["assigned_from_project"] = focus.project_id;
+        }
+      }
+
+      const task = createTask(resolved as unknown as Parameters<typeof createTask>[0]);
       return { content: [{ type: "text" as const, text: `created: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
