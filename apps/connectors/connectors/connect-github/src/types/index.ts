@@ -495,3 +495,62 @@ export class GitHubApiError extends Error {
     this.documentationUrl = documentationUrl;
   }
 }
+
+// ============================================
+// Releases
+// ============================================
+
+export interface ReleaseAsset {
+  id: number;
+  url: string;
+  browser_download_url: string;
+  name: string;
+  label: string | null;
+  state: 'uploaded' | 'open';
+  content_type: string;
+  size: number;
+  download_count: number;
+  created_at: string;
+  updated_at: string;
+  uploader: User;
+}
+
+export interface Release {
+  id: number;
+  url: string;
+  html_url: string;
+  assets_url: string;
+  upload_url: string;
+  tarball_url: string | null;
+  zipball_url: string | null;
+  tag_name: string;
+  target_commitish: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  created_at: string;
+  published_at: string | null;
+  author: User;
+  assets: ReleaseAsset[];
+}
+
+export interface CreateReleaseOptions {
+  target_commitish?: string;
+  name?: string;
+  body?: string;
+  draft?: boolean;
+  prerelease?: boolean;
+  generate_release_notes?: boolean;
+  make_latest?: 'true' | 'false' | 'legacy';
+}
+
+export interface UpdateReleaseOptions {
+  tag_name?: string;
+  target_commitish?: string;
+  name?: string;
+  body?: string;
+  draft?: boolean;
+  prerelease?: boolean;
+  make_latest?: 'true' | 'false' | 'legacy';
+}
