@@ -38,16 +38,6 @@ export interface TodosConfig {
   project_pools?: Record<string, string[]>;
 }
 
-/**
- * Built-in default agent name pool (Roman names convention).
- * Used when no pool is configured in config.json.
- */
-export const DEFAULT_AGENT_POOL: string[] = [
-  "maximus", "cassius", "aurelius", "brutus", "titus",
-  "nero", "cicero", "seneca", "cato", "julius",
-  "marcus", "lucius", "quintus", "gaius", "publius",
-];
-
 function getConfigPath(): string {
   return join(process.env["HOME"] || HOME, ".todos", "config.json");
 }
@@ -110,9 +100,9 @@ const GUARD_DEFAULTS: Required<CompletionGuardConfig> = {
 /**
  * Get the agent name pool for a given working directory.
  * Checks project_pools for the longest matching path prefix, then falls back
- * to agent_pool, then to the built-in DEFAULT_AGENT_POOL.
+ * to agent_pool. Returns null if no pool is configured (no name restriction).
  */
-export function getAgentPoolForProject(workingDir?: string): string[] {
+export function getAgentPoolForProject(workingDir?: string): string[] | null {
   const config = loadConfig();
 
   if (workingDir && config.project_pools) {
@@ -130,7 +120,7 @@ export function getAgentPoolForProject(workingDir?: string): string[] {
     }
   }
 
-  return config.agent_pool || DEFAULT_AGENT_POOL;
+  return config.agent_pool || null;
 }
 
 export function getCompletionGuardConfig(projectPath?: string | null): Required<CompletionGuardConfig> {

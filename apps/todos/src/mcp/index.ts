@@ -1296,9 +1296,9 @@ server.tool(
 if (shouldRegisterTool("register_agent")) {
 server.tool(
   "register_agent",
-  "Register an agent. Name must be from the project's configured pool. Returns a conflict error with available name suggestions if the name is taken or not allowed.",
+  "Register an agent. If a name pool is configured (via agent_pool or project_pools in config), name must be from that pool. Returns conflict with suggestions if name is taken or not allowed.",
   {
-    name: z.string().describe("Agent name — must be from the project's allowed pool (Roman names by default). Use suggest_agent_name first if unsure."),
+    name: z.string().describe("Agent name. If a pool is configured for this project, name must be in the pool. Use suggest_agent_name to check."),
     description: z.string().optional(),
     capabilities: z.array(z.string()).optional().describe("Agent capabilities/skills for task routing (e.g. ['typescript', 'testing', 'devops'])"),
     session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
@@ -1306,9 +1306,9 @@ server.tool(
   },
   async ({ name, description, capabilities, session_id, working_dir }) => {
     try {
-      // Look up the pool for this project (from config, based on working_dir)
+      // Look up the pool for this project (from config, based on working_dir) — null = no restriction
       const pool = getAgentPoolForProject(working_dir);
-      const result = registerAgent({ name, description, capabilities, session_id, working_dir, pool });
+      const result = registerAgent({ name, description, capabilities, session_id, working_dir, pool: pool || undefined });
       if (isAgentConflict(result)) {
         const suggestLine = result.suggestions && result.suggestions.length > 0
           ? `\nAvailable names: ${result.suggestions.join(", ")}`
@@ -1322,10 +1322,11 @@ server.tool(
         };
       }
       const agent = result;
+      const poolLine = pool ? `\nPool: [${pool.join(", ")}]` : "";
       return {
         content: [{
           type: "text" as const,
-          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}\nPool: [${pool.join(", ")}]\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
+          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}${poolLine}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
         }],
       };
     } catch (e) {
@@ -1339,21 +1340,35 @@ server.tool(
 if (shouldRegisterTool("suggest_agent_name")) {
 server.tool(
   "suggest_agent_name",
-  "Get available agent names for a project. Call this before register_agent to avoid conflicts.",
+  "Get available agent names for a project. Shows configured pool, active agents, and suggestions. If no pool is configured, any name is allowed.",
   {
-    working_dir: z.string().optional().describe("Your working directory — used to look up the project's allowed name pool"),
+    working_dir: z.string().optional().describe("Your working directory — used to look up the project's allowed name pool from config"),
   },
   async ({ working_dir }) => {
     try {
       const pool = getAgentPoolForProject(working_dir);
-      const available = getAvailableNamesFromPool(pool, getDatabase());
       const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-      const active = listAgents().filter(a => a.last_seen_at > cutoff && pool.map(n => n.toLowerCase()).includes(a.name));
+      const allActive = listAgents().filter(a => a.last_seen_at > cutoff);
+
+      if (!pool) {
+        // No pool configured — any name works, just show active agents to avoid conflicts
+        const lines = [
+          "No agent pool configured — any name is allowed.",
+          allActive.length > 0
+            ? `Active agents (avoid these names): ${allActive.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}`
+            : "No active agents.",
+          "\nTo restrict names, configure agent_pool or project_pools in ~/.todos/config.json",
+        ];
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      }
+
+      const available = getAvailableNamesFromPool(pool, getDatabase());
+      const activeInPool = allActive.filter(a => pool.map(n => n.toLowerCase()).includes(a.name));
       const lines = [
         `Project pool: ${pool.join(", ")}`,
         `Available now (${available.length}): ${available.length > 0 ? available.join(", ") : "none — all names in use"}`,
-        active.length > 0 ? `Active agents: ${active.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}` : "Active agents: none",
-        available.length > 0 ? `\nSuggested: ${available[0]}` : "\nNo names available yet. Wait for an active agent to go stale (30min timeout).",
+        activeInPool.length > 0 ? `Active agents: ${activeInPool.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}` : "Active agents: none",
+        available.length > 0 ? `\nSuggested: ${available[0]}` : "\nNo names available. Wait for an active agent to go stale (30min timeout).",
       ];
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     } catch (e) {
@@ -2799,8 +2814,8 @@ server.tool(
       delete_plan: "Delete a plan. Tasks in the plan are orphaned, not deleted.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
 
       // Agents
-      suggest_agent_name: "Get available agent names for your project before registering. Shows the pool, which names are active, and the best suggestion.\n  Params: working_dir(string — your working directory, used to look up project pool)\n  Example: {working_dir: '/workspace/platform'}",
-      register_agent: "Register an agent. Name must be from the project's pool (call suggest_agent_name first). Returns CONFLICT or POOL_VIOLATION with suggestions if name is taken or not allowed.\n  Params: name(string, req), description(string), session_id(string — unique per session, e.g. PID+timestamp), working_dir(string, req — used to determine project pool)\n  Example: {name: 'cassius', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
+      suggest_agent_name: "Check available agent names before registering. Shows active agents and, if a pool is configured, which pool names are free.\n  Params: working_dir(string — your working directory, used to look up project pool from config)\n  Example: {working_dir: '/workspace/platform'}",
+      register_agent: "Register an agent. If agent_pool or project_pools is configured, name must be from the pool. Returns CONFLICT (name active) or POOL_VIOLATION (name not in pool) with suggestions.\n  Params: name(string, req), description(string), capabilities(string[]), session_id(string — unique per session), working_dir(string — used to determine project pool)\n  Example: {name: 'my-agent', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
       list_agents: "List all registered agents with IDs, names, and last seen timestamps. No params.",
       get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",
