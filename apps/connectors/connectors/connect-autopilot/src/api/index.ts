@@ -1,51 +1,43 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Autopilot Connector — Marketing automation and customer journey mapping
+import { AutopilotClient } from './client';
+import type { AutopilotConfig, APContact, APContactList, APList, APJourney, APSmartSegment } from '../types';
+export { AutopilotClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Autopilot {
+  private readonly client: AutopilotClient;
+  constructor(config: AutopilotConfig) { this.client = new AutopilotClient(config); }
+  static fromEnv(): Autopilot {
+    const apiKey = process.env.AUTOPILOT_API_KEY;
+    if (!apiKey) throw new Error('AUTOPILOT_API_KEY is required');
+    return new Autopilot({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getContact(contactId: string): Promise<APContact> { return this.client.request<APContact>(`/contact/${contactId}`); }
+  async getContactByEmail(email: string): Promise<APContact> { return this.client.request<APContact>(`/contact/${email}`); }
+  async createOrUpdateContact(data: { Email: string; FirstName?: string; LastName?: string; Company?: string; Phone?: string; custom?: Record<string, unknown> }): Promise<{ contact_id: string }> {
+    return this.client.request('/contact', { method: 'POST', body: { contact: data } });
+  }
+  async deleteContact(contactId: string): Promise<void> { await this.client.request(`/contact/${contactId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listContacts(options?: { bookmark?: string }): Promise<APContactList> {
+    const path = options?.bookmark ? `/contacts/${options.bookmark}` : '/contacts';
+    return this.client.request<APContactList>(path);
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listLists(): Promise<{ lists: APList[] }> { return this.client.request('/lists'); }
+  async addContactToList(listId: string, contactId: string): Promise<void> {
+    await this.client.request(`/list/${listId}/contact/${contactId}`, { method: 'POST' });
+  }
+  async removeContactFromList(listId: string, contactId: string): Promise<void> {
+    await this.client.request(`/list/${listId}/contact/${contactId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listJourneys(): Promise<{ journeys: APJourney[] }> { return this.client.request('/journeys'); }
+  async addContactToJourney(journeyId: string, contactId: string): Promise<void> {
+    await this.client.request(`/journey/${journeyId}/contact/${contactId}`, { method: 'POST' });
   }
+
+  async listSmartSegments(): Promise<{ smart_segments: APSmartSegment[] }> { return this.client.request('/smart_segments'); }
+
+  getClient(): AutopilotClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

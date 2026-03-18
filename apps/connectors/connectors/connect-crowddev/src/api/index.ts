@@ -1,51 +1,31 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Crowd.dev Connector — Developer community analytics and engagement
+import { CrowdDevClient } from './client';
+import type { CrowdDevConfig, CDMember, CDMemberList, CDActivity, CDActivityList, CDOrganization } from '../types';
+export { CrowdDevClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CrowdDev {
+  private readonly client: CrowdDevClient;
+  constructor(config: CrowdDevConfig) { this.client = new CrowdDevClient(config); }
+  static fromEnv(): CrowdDev {
+    const apiKey = process.env.CROWDDEV_API_KEY;
+    const tenantId = process.env.CROWDDEV_TENANT_ID;
+    if (!apiKey || !tenantId) throw new Error('CROWDDEV_API_KEY and CROWDDEV_TENANT_ID are required');
+    return new CrowdDev({ apiKey, tenantId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listMembers(options?: { limit?: number; offset?: number; filter?: Record<string, unknown> }): Promise<CDMemberList> {
+    return this.client.request<CDMemberList>('/member', { method: 'POST', body: { limit: options?.limit, offset: options?.offset, filter: options?.filter } as Record<string, unknown> });
+  }
+  async getMember(memberId: string): Promise<CDMember> { return this.client.request<CDMember>(`/member/${memberId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listActivities(options?: { limit?: number; offset?: number; filter?: Record<string, unknown> }): Promise<CDActivityList> {
+    return this.client.request<CDActivityList>('/activity', { method: 'POST', body: { limit: options?.limit, offset: options?.offset, filter: options?.filter } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listOrganizations(options?: { limit?: number; offset?: number }): Promise<{ rows: CDOrganization[]; count: number }> {
+    return this.client.request('/organization', { method: 'POST', body: { limit: options?.limit, offset: options?.offset } as Record<string, unknown> });
   }
+  async getOrganization(orgId: string): Promise<CDOrganization> { return this.client.request<CDOrganization>(`/organization/${orgId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CrowdDevClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
