@@ -1,33 +1,39 @@
-// UserVoice Connector — Product feedback and customer insights
+// UserVoice Connector — Product feedback and customer insight platform
 import { UserVoiceClient } from './client';
-import type { UserVoiceConfig, UVSuggestion, UVUser, UVForum, UVTicket } from '../types';
+import type { UserVoiceConfig, UVSuggestion, UVSuggestionList, UVUser, UVUserList, UVForum, UVStatus, UVCategory, UVComment } from '../types';
 export { UserVoiceClient } from './client';
+
 export class UserVoice {
   private readonly client: UserVoiceClient;
   constructor(config: UserVoiceConfig) { this.client = new UserVoiceClient(config); }
   static fromEnv(): UserVoice {
-    const apiKey = process.env.USERVOICE_API_KEY;
+    const token = process.env.USERVOICE_TOKEN;
     const subdomain = process.env.USERVOICE_SUBDOMAIN;
-    if (!apiKey || !subdomain) throw new Error('USERVOICE_API_KEY and USERVOICE_SUBDOMAIN are required');
-    return new UserVoice({ apiKey, subdomain });
+    if (!token || !subdomain) throw new Error('USERVOICE_TOKEN and USERVOICE_SUBDOMAIN are required');
+    return new UserVoice({ token, subdomain });
   }
-  async listForums(): Promise<UVForum[]> { const r = await this.client.request<{ forums: UVForum[] }>('/forums'); return r.forums ?? []; }
-  async listSuggestions(forumId?: number, options?: { sort?: string; page?: number; perPage?: number; status?: string }): Promise<UVSuggestion[]> {
-    const path = forumId ? `/forums/${forumId}/suggestions` : '/suggestions';
-    const r = await this.client.request<{ suggestions: UVSuggestion[] }>(path, { params: { sort: options?.sort, page: options?.page, per_page: options?.perPage, status: options?.status } });
-    return r.suggestions ?? [];
+
+  async listSuggestions(options?: { page?: number; per_page?: number; state?: string; sort?: string; forum_id?: number }): Promise<UVSuggestionList> {
+    return this.client.request<UVSuggestionList>('/admin/suggestions', { params: { page: options?.page, per_page: options?.per_page, state: options?.state, sort: options?.sort, forum_id: options?.forum_id } });
   }
-  async getSuggestion(suggestionId: number): Promise<UVSuggestion> { return (await this.client.request<{ suggestion: UVSuggestion }>(`/suggestions/${suggestionId}`)).suggestion; }
-  async createSuggestion(forumId: number, title: string, body?: string): Promise<UVSuggestion> {
-    const r = await this.client.request<{ suggestion: UVSuggestion }>(`/forums/${forumId}/suggestions`, { method: 'POST', body: { suggestion: { title, body } } });
-    return r.suggestion;
+  async getSuggestion(suggestionId: number): Promise<{ suggestion: UVSuggestion }> { return this.client.request(`/admin/suggestions/${suggestionId}`); }
+  async updateSuggestionStatus(suggestionId: number, statusId: number): Promise<{ suggestion: UVSuggestion }> {
+    return this.client.request(`/admin/suggestions/${suggestionId}/status`, { method: 'PUT', body: { status_id: statusId } });
   }
-  async updateSuggestionStatus(suggestionId: number, status: string): Promise<UVSuggestion> {
-    const r = await this.client.request<{ suggestion: UVSuggestion }>(`/suggestions/${suggestionId}`, { method: 'PUT', body: { suggestion: { status } } });
-    return r.suggestion;
+
+  async listComments(suggestionId: number): Promise<{ comments: UVComment[] }> { return this.client.request(`/admin/suggestions/${suggestionId}/comments`); }
+  async createComment(suggestionId: number, body: string): Promise<{ comment: UVComment }> {
+    return this.client.request(`/admin/suggestions/${suggestionId}/comments`, { method: 'POST', body: { comment: { body } } });
   }
-  async listUsers(options?: { page?: number; perPage?: number }): Promise<UVUser[]> { const r = await this.client.request<{ users: UVUser[] }>('/users', { params: options as Record<string, number | undefined> }); return r.users ?? []; }
-  async getUser(userId: number): Promise<UVUser> { return (await this.client.request<{ user: UVUser }>(`/users/${userId}`)).user; }
-  async listTickets(options?: { page?: number; perPage?: number; state?: string }): Promise<UVTicket[]> { const r = await this.client.request<{ tickets: UVTicket[] }>('/tickets', { params: options as Record<string, string | number | undefined> }); return r.tickets ?? []; }
+
+  async listUsers(options?: { page?: number; per_page?: number }): Promise<UVUserList> {
+    return this.client.request<UVUserList>('/admin/users', { params: { page: options?.page, per_page: options?.per_page } });
+  }
+  async getUser(userId: number): Promise<{ user: UVUser }> { return this.client.request(`/admin/users/${userId}`); }
+
+  async listForums(): Promise<{ forums: UVForum[] }> { return this.client.request('/admin/forums'); }
+  async listStatuses(): Promise<{ statuses: UVStatus[] }> { return this.client.request('/admin/statuses'); }
+  async listCategories(forumId: number): Promise<{ categories: UVCategory[] }> { return this.client.request(`/admin/forums/${forumId}/categories`); }
+
   getClient(): UserVoiceClient { return this.client; }
 }
