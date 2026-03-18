@@ -1,51 +1,44 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Matrix Connector — Open network for decentralized communication
+import { MatrixClient } from './client';
+import type { MatrixConfig, MXRoom, MXEvent, MXSync, MXUser, MXRoomMessages } from '../types';
+export { MatrixClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Matrix {
+  private readonly client: MatrixClient;
+  constructor(config: MatrixConfig) { this.client = new MatrixClient(config); }
+  static fromEnv(): Matrix {
+    const homeserver = process.env.MATRIX_HOMESERVER;
+    const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+    if (!homeserver || !accessToken) throw new Error('MATRIX_HOMESERVER and MATRIX_ACCESS_TOKEN are required');
+    return new Matrix({ homeserver, accessToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async whoami(): Promise<{ user_id: string }> { return this.client.request('/account/whoami'); }
+  async getProfile(userId: string): Promise<MXUser> { return this.client.request<MXUser>(`/profile/${userId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listJoinedRooms(): Promise<{ joined_rooms: string[] }> { return this.client.request('/joined_rooms'); }
+  async getRoomState(roomId: string): Promise<MXEvent[]> { return this.client.request<MXEvent[]>(`/rooms/${roomId}/state`); }
+  async getRoomMessages(roomId: string, options?: { from?: string; dir?: 'b' | 'f'; limit?: number }): Promise<MXRoomMessages> {
+    return this.client.request<MXRoomMessages>(`/rooms/${roomId}/messages`, { params: { from: options?.from, dir: options?.dir || 'b', limit: options?.limit } });
+  }
+  async getRoomMembers(roomId: string): Promise<{ chunk: MXEvent[] }> { return this.client.request(`/rooms/${roomId}/members`); }
+
+  async sendMessage(roomId: string, body: string, options?: { msgtype?: string; format?: string; formatted_body?: string }): Promise<{ event_id: string }> {
+    const txnId = `m${Date.now()}`;
+    return this.client.request(`/rooms/${roomId}/send/m.room.message/${txnId}`, { method: 'PUT', body: { msgtype: options?.msgtype || 'm.text', body, format: options?.format, formatted_body: options?.formatted_body } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async joinRoom(roomIdOrAlias: string): Promise<{ room_id: string }> {
+    return this.client.request(`/join/${encodeURIComponent(roomIdOrAlias)}`, { method: 'POST' });
+  }
+  async leaveRoom(roomId: string): Promise<void> { await this.client.request(`/rooms/${roomId}/leave`, { method: 'POST' }); }
+  async createRoom(data: { name?: string; topic?: string; visibility?: 'public' | 'private'; invite?: string[] }): Promise<{ room_id: string }> {
+    return this.client.request('/createRoom', { method: 'POST', body: data as Record<string, unknown> });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async sync(options?: { since?: string; timeout?: number; filter?: string }): Promise<MXSync> {
+    return this.client.request<MXSync>('/sync', { params: { since: options?.since, timeout: options?.timeout, filter: options?.filter } });
   }
+
+  getClient(): MatrixClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
