@@ -8,11 +8,6 @@ export interface OpenAIConfig {
 
 // Models (2026)
 export type OpenAIModel =
-  // GPT-5 series (2025-2026, latest)
-  | 'gpt-5.4'
-  | 'gpt-5.2'
-  | 'gpt-5.1'
-  | 'gpt-5'
   // GPT-4.1 series (2025)
   | 'gpt-4.1'
   | 'gpt-4.1-mini'
@@ -41,11 +36,6 @@ export type TTSModel = 'tts-1' | 'tts-1-hd' | 'gpt-4o-mini-tts';
 export type STTModel = 'whisper-1' | 'gpt-4o-transcribe';
 
 export const OPENAI_MODELS: OpenAIModel[] = [
-  // GPT-5 series
-  'gpt-5.4',
-  'gpt-5.2',
-  'gpt-5.1',
-  'gpt-5',
   // GPT-4.1
   'gpt-4.1',
   'gpt-4.1-mini',
