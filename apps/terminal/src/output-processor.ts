@@ -41,8 +41,12 @@ function fingerprint(command: string, output: string, exitCode?: number): string
   const trimmed = output.trim();
   const lines = trimmed.split("\n").filter(l => l.trim());
 
-  // Empty output with success = command succeeded silently (build, lint, etc.)
+  // Empty output with success — provide context-aware confirmation
   if (lines.length === 0 && (exitCode === 0 || exitCode === undefined)) {
+    // Write commands get a specific confirmation
+    if (/\btee\b|>\s*\S|>>|cat\s*<<|echo\s.*>|sed\s+-i|cp\b|mv\b|mkdir\b|touch\b/.test(command)) {
+      return "✓ Write succeeded (no output)";
+    }
     return "✓ Success (no output)";
   }
 
