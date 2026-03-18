@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Gender API Connector — Gender detection from names
+import { GenderAPIClient } from './client';
+import type { GenderAPIConfig, GAResult } from '../types';
+export { GenderAPIClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class GenderAPI {
+  private readonly client: GenderAPIClient;
+  constructor(config: GenderAPIConfig) { this.client = new GenderAPIClient(config); }
+  static fromEnv(): GenderAPI {
+    const apiKey = process.env.GENDERAPI_API_KEY;
+    if (!apiKey) throw new Error('GENDERAPI_API_KEY is required');
+    return new GenderAPI({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async detect(name: string, options?: { country?: string; language?: string }): Promise<GAResult> {
+    return this.client.request<GAResult>('/get', { name, country: options?.country, language: options?.language });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async detectByEmail(email: string): Promise<GAResult> {
+    return this.client.request<GAResult>('/get', { email });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async detectBatch(names: string[], country?: string): Promise<GAResult[]> {
+    return this.client.request<GAResult[]>('/get', { name: names.join(';'), country });
   }
+
+  async getStats(): Promise<{ is_limit_reached: boolean; limit: number; remaining_requests: number }> {
+    return this.client.request('/get-stats');
+  }
+
+  getClient(): GenderAPIClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

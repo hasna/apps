@@ -1,51 +1,33 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// DaySchedule Connector — Appointment scheduling, booking pages, and calendar
+import { DayScheduleClient } from './client';
+import type { DayScheduleConfig, DSBooking, DSBookingList, DSEventType, DSAvailability, DSTeamMember } from '../types';
+export { DayScheduleClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class DaySchedule {
+  private readonly client: DayScheduleClient;
+  constructor(config: DayScheduleConfig) { this.client = new DayScheduleClient(config); }
+  static fromEnv(): DaySchedule {
+    const apiKey = process.env.DAYSCHEDULE_API_KEY;
+    if (!apiKey) throw new Error('DAYSCHEDULE_API_KEY is required');
+    return new DaySchedule({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listBookings(options?: { page?: number; per_page?: number; status?: string; event_type_id?: string }): Promise<DSBookingList> {
+    return this.client.request<DSBookingList>('/bookings', { params: { page: options?.page, per_page: options?.per_page, status: options?.status, event_type_id: options?.event_type_id } });
+  }
+  async getBooking(bookingId: string): Promise<DSBooking> { return this.client.request<DSBooking>(`/bookings/${bookingId}`); }
+  async cancelBooking(bookingId: string, reason?: string): Promise<void> {
+    await this.client.request(`/bookings/${bookingId}/cancel`, { method: 'POST', body: { reason } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listEventTypes(): Promise<DSEventType[]> { return this.client.request<DSEventType[]>('/event-types'); }
+  async getEventType(eventTypeId: string): Promise<DSEventType> { return this.client.request<DSEventType>(`/event-types/${eventTypeId}`); }
+
+  async getAvailability(eventTypeId: string, date: string, timezone?: string): Promise<DSAvailability> {
+    return this.client.request<DSAvailability>(`/event-types/${eventTypeId}/availability`, { params: { date, timezone } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listTeamMembers(): Promise<DSTeamMember[]> { return this.client.request<DSTeamMember[]>('/team'); }
+
+  getClient(): DayScheduleClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
