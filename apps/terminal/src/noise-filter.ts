@@ -41,16 +41,24 @@ const NOISE_PATTERNS: RegExp[] = [
   /^\s*\d+(\.\d+)?\s*[KMG]?B\s*\/\s*\d+(\.\d+)?\s*[KMG]?B\b/,
 ];
 
-// Sensitive env var patterns — redact values, keep names only if needed
+// Sensitive env var patterns — ONLY match actual env var assignments (export X=val, X=val at line start)
+// NOT code lines like `const API_KEY = process.env.API_KEY` or `this.token = config.token`
 const SENSITIVE_PATTERNS = [
-  /^(.*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH).*?)=(.+)$/i,
-  /^(.*(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET).*?)=(.+)$/i,
+  // export KEY_NAME="value" or KEY_NAME=value (shell env vars only)
+  /^(export\s+[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z_]*)=(.+)$/,
+  // Plain env assignment at start of line (no leading whitespace = not code)
+  /^([A-Z_]*(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|AUTH_TOKEN)[A-Z_]*)=(.+)$/,
 ];
 
-/** Redact sensitive values in output (env vars, credentials) */
+/** Redact sensitive values in output (env vars only, not code) */
 function redactSensitive(line: string): string {
+  const trimmed = line.trim();
+  // Skip lines that look like code (have leading whitespace, semicolons, const/let/var, etc.)
+  if (/^\s*(const|let|var|this\.|private|public|protected|import|export\s+(default|const|let|function|class)|\/\/|\/\*|\*)/.test(line)) {
+    return line; // Code — never redact
+  }
   for (const pattern of SENSITIVE_PATTERNS) {
-    const match = line.match(pattern);
+    const match = trimmed.match(pattern);
     if (match) {
       return `${match[1]}=[REDACTED]`;
     }

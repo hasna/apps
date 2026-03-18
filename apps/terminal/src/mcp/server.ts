@@ -24,9 +24,9 @@ import { captureSnapshot } from "../snapshots.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function exec(command: string, cwd?: string, timeout?: number): Promise<{ exitCode: number; stdout: string; stderr: string; duration: number; rewritten?: string }> {
-  // Auto-optimize command before execution
-  const rw = rewriteCommand(command);
+function exec(command: string, cwd?: string, timeout?: number, allowRewrite: boolean = false): Promise<{ exitCode: number; stdout: string; stderr: string; duration: number; rewritten?: string }> {
+  // Only rewrite when explicitly allowed (execute_smart, not raw execute)
+  const rw = allowRewrite ? rewriteCommand(command) : { changed: false, rewritten: command };
   const actualCommand = rw.changed ? rw.rewritten : command;
   return new Promise((resolve) => {
     const start = Date.now();
@@ -156,7 +156,7 @@ export function createServer(): McpServer {
       timeout: z.number().optional().describe("Timeout in ms (default: 30000)"),
     },
     async ({ command, cwd, timeout }) => {
-      const result = await exec(command, cwd, timeout ?? 30000);
+      const result = await exec(command, cwd, timeout ?? 30000, true); // allow rewrite for smart mode
       const output = (result.stdout + result.stderr).trim();
       const processed = await processOutput(command, output);
 
