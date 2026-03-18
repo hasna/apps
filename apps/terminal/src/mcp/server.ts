@@ -690,13 +690,28 @@ export function createServer(): McpServer {
       const result = cachedRead(path, { offset, limit });
 
       if (summarize && result.content.length > 500) {
-        const processed = await processOutput(`cat ${path}`, result.content);
-        logCall("read_file", { command: path, outputTokens: estimateTokens(result.content), tokensSaved: processed.tokensSaved, durationMs: Date.now() - start, aiProcessed: true });
+        // AI-native file summary — ask directly what the file does
+        const provider = getOutputProvider();
+        const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+        const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
+        const summary = await provider.complete(
+          `File: ${path}\n\n${content}`,
+          {
+            model: outputModel,
+            system: `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose. Be specific — name the actual functions and what they do. Never just say "N lines of code."`,
+            maxTokens: 300,
+            temperature: 0.2,
+          }
+        );
+        const outputTokens = estimateTokens(result.content);
+        const summaryTokens = estimateTokens(summary);
+        const saved = Math.max(0, outputTokens - summaryTokens);
+        logCall("read_file", { command: path, outputTokens, tokensSaved: saved, durationMs: Date.now() - start, aiProcessed: true });
         return {
           content: [{ type: "text" as const, text: JSON.stringify({
-            summary: processed.summary,
+            summary,
             lines: result.content.split("\n").length,
-            tokensSaved: processed.tokensSaved,
+            tokensSaved: saved,
             cached: result.cached,
           }) }],
         };
