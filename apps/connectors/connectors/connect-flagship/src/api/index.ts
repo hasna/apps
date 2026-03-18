@@ -1,51 +1,33 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Flagship Connector — Feature flagging and experimentation platform
+import { FlagshipClient } from './client';
+import type { FlagshipConfig, FSFlag, FSCampaign, FSVisitor } from '../types';
+export { FlagshipClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Flagship {
+  private readonly client: FlagshipClient;
+  constructor(config: FlagshipConfig) { this.client = new FlagshipClient(config); }
+  static fromEnv(): Flagship {
+    const apiKey = process.env.FLAGSHIP_API_KEY;
+    const environmentId = process.env.FLAGSHIP_ENV_ID;
+    if (!apiKey || !environmentId) throw new Error('FLAGSHIP_API_KEY and FLAGSHIP_ENV_ID are required');
+    return new Flagship({ apiKey, environmentId });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getFlags(visitorId: string, context?: Record<string, unknown>): Promise<{ campaigns: FSCampaign[]; flags: Record<string, FSFlag> }> {
+    return this.client.request('/campaigns', { method: 'POST', body: { visitor_id: visitorId, context: context || {}, trigger_hit: false } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async activateFlag(visitorId: string, campaignId: string, variationGroupId: string, variationId: string): Promise<void> {
+    await this.client.request('/activate', { method: 'POST', body: { vid: visitorId, cid: campaignId, vgid: variationGroupId, caid: variationId } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async sendEvent(visitorId: string, type: string, data: Record<string, unknown>): Promise<void> {
+    await this.client.request('/events', { method: 'POST', body: { visitor_id: visitorId, type, data } });
   }
+
+  async sendHit(visitorId: string, hit: { type: string; action?: string; category?: string; label?: string; value?: number }): Promise<void> {
+    await this.client.request('/events', { method: 'POST', body: { visitor_id: visitorId, type: 'EVENT', data: hit } });
+  }
+
+  getClient(): FlagshipClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Hybrid Analysis Connector — Malware analysis and threat detection sandbox
+import { HybridAnalysisClient } from './client';
+import type { HybridAnalysisConfig, HAReport, HASearchResult, HAOverview, HAQuota } from '../types';
+export { HybridAnalysisClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class HybridAnalysis {
+  private readonly client: HybridAnalysisClient;
+  constructor(config: HybridAnalysisConfig) { this.client = new HybridAnalysisClient(config); }
+  static fromEnv(): HybridAnalysis {
+    const apiKey = process.env.HYBRIDANALYSIS_API_KEY;
+    if (!apiKey) throw new Error('HYBRIDANALYSIS_API_KEY is required');
+    return new HybridAnalysis({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async getReport(hash: string): Promise<HAReport[]> { return this.client.request<HAReport[]>(`/report/${hash}/summary`); }
+  async getOverview(hash: string): Promise<HAOverview> { return this.client.request<HAOverview>(`/overview/${hash}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async searchHash(hash: string): Promise<HASearchResult> {
+    return this.client.request<HASearchResult>('/search/hash', { method: 'POST', body: { hash }, form: true });
+  }
+  async searchTerms(query: string): Promise<HASearchResult> {
+    return this.client.request<HASearchResult>('/search/terms', { method: 'POST', body: { filename: query }, form: true });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async quickScanUrl(url: string, options?: { scan_type?: string }): Promise<{ id: string; sha256: string }> {
+    return this.client.request('/quick-scan/url', { method: 'POST', body: { url, scan_type: options?.scan_type || 'all' }, form: true });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async getQuota(): Promise<HAQuota> { return this.client.request<HAQuota>('/key/current'); }
+
+  getClient(): HybridAnalysisClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
