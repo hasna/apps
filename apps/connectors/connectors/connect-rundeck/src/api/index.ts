@@ -1,51 +1,38 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Rundeck Connector — Operations automation and runbook management
+import { RundeckClient } from './client';
+import type { RundeckConfig, RDProject, RDJob, RDExecution, RDExecutionList, RDNode } from '../types';
+export { RundeckClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Rundeck {
+  private readonly client: RundeckClient;
+  constructor(config: RundeckConfig) { this.client = new RundeckClient(config); }
+  static fromEnv(): Rundeck {
+    const url = process.env.RUNDECK_URL;
+    const token = process.env.RUNDECK_TOKEN;
+    if (!url || !token) throw new Error('RUNDECK_URL and RUNDECK_TOKEN are required');
+    return new Rundeck({ url, token });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listProjects(): Promise<RDProject[]> { return this.client.request<RDProject[]>('/projects'); }
+  async getProject(projectName: string): Promise<RDProject> { return this.client.request<RDProject>(`/project/${projectName}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listJobs(projectName: string, options?: { groupPath?: string; jobFilter?: string }): Promise<RDJob[]> {
+    return this.client.request<RDJob[]>(`/project/${projectName}/jobs`, { params: { groupPath: options?.groupPath, jobFilter: options?.jobFilter } });
+  }
+  async getJob(jobId: string): Promise<RDJob> { return this.client.request<RDJob>(`/job/${jobId}`); }
+  async runJob(jobId: string, options?: Record<string, string>): Promise<RDExecution> {
+    return this.client.request<RDExecution>(`/job/${jobId}/run`, { method: 'POST', body: { options } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listExecutions(projectName: string, options?: { max?: number; offset?: number; statusFilter?: string }): Promise<RDExecutionList> {
+    return this.client.request<RDExecutionList>(`/project/${projectName}/executions`, { params: { max: options?.max, offset: options?.offset, statusFilter: options?.statusFilter } });
+  }
+  async getExecution(executionId: number): Promise<RDExecution> { return this.client.request<RDExecution>(`/execution/${executionId}`); }
+  async abortExecution(executionId: number): Promise<{ abort: { status: string } }> {
+    return this.client.request(`/execution/${executionId}/abort`, { method: 'POST' });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listNodes(projectName: string): Promise<RDNode[]> { return this.client.request<RDNode[]>(`/project/${projectName}/resources`); }
+
+  getClient(): RundeckClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
