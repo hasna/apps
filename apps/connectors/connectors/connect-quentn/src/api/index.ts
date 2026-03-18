@@ -1,51 +1,42 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Quentn Connector — Marketing automation and CRM for email and sales funnels
+import { QuentnClient } from './client';
+import type { QuentnConfig, QNContact, QNContactList, QNTag, QNCampaign, QNTerm, QNCustomField } from '../types';
+export { QuentnClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Quentn {
+  private readonly client: QuentnClient;
+  constructor(config: QuentnConfig) { this.client = new QuentnClient(config); }
+  static fromEnv(): Quentn {
+    const apiKey = process.env.QUENTN_API_KEY;
+    if (!apiKey) throw new Error('QUENTN_API_KEY is required');
+    return new Quentn({ apiKey, baseUrl: process.env.QUENTN_BASE_URL });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listContacts(options?: { offset?: number; limit?: number; search?: string }): Promise<QNContactList> {
+    return this.client.request<QNContactList>('/contacts', { params: { offset: options?.offset, limit: options?.limit, search: options?.search } });
+  }
+  async getContact(contactId: number): Promise<QNContact> { return this.client.request<QNContact>(`/contacts/${contactId}`); }
+  async createContact(data: { mail: string; first_name?: string; last_name?: string; company?: string; tags?: number[] }): Promise<{ id: number }> {
+    return this.client.request('/contacts', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async updateContact(contactId: number, data: { first_name?: string; last_name?: string; company?: string; tags?: number[] }): Promise<void> {
+    await this.client.request(`/contacts/${contactId}`, { method: 'PUT', body: data as Record<string, unknown> });
+  }
+  async deleteContact(contactId: number): Promise<void> { await this.client.request(`/contacts/${contactId}`, { method: 'DELETE' }); }
+  async addTagToContact(contactId: number, tagId: number): Promise<void> {
+    await this.client.request(`/contacts/${contactId}/tags/${tagId}`, { method: 'POST' });
+  }
+  async removeTagFromContact(contactId: number, tagId: number): Promise<void> {
+    await this.client.request(`/contacts/${contactId}/tags/${tagId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listTags(): Promise<QNTag[]> { return this.client.request<QNTag[]>('/tags'); }
+  async createTag(name: string, description?: string): Promise<{ id: number }> {
+    return this.client.request('/tags', { method: 'POST', body: { name, description } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  async listTerms(): Promise<QNTerm[]> { return this.client.request<QNTerm[]>('/terms'); }
+  async listCustomFields(): Promise<QNCustomField[]> { return this.client.request<QNCustomField[]>('/custom-fields'); }
+
+  getClient(): QuentnClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

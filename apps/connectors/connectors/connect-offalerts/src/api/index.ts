@@ -1,51 +1,32 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Off Alerts Connector — Price drop and deal alerts for online shopping
+import { OffAlertsClient } from './client';
+import type { OffAlertsConfig, OAAlert, OAAlertList, OAPriceHistory, OAProduct } from '../types';
+export { OffAlertsClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class OffAlerts {
+  private readonly client: OffAlertsClient;
+  constructor(config: OffAlertsConfig) { this.client = new OffAlertsClient(config); }
+  static fromEnv(): OffAlerts {
+    const apiKey = process.env.OFFALERTS_API_KEY;
+    if (!apiKey) throw new Error('OFFALERTS_API_KEY is required');
+    return new OffAlerts({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listAlerts(options?: { page?: number; per_page?: number; status?: string }): Promise<OAAlertList> {
+    return this.client.request<OAAlertList>('/alerts', { params: { page: options?.page, per_page: options?.per_page, status: options?.status } });
+  }
+  async getAlert(alertId: string): Promise<OAAlert> { return this.client.request<OAAlert>(`/alerts/${alertId}`); }
+  async createAlert(data: { product_url: string; target_price: number; email: string }): Promise<OAAlert> {
+    return this.client.request<OAAlert>('/alerts', { method: 'POST', body: data as Record<string, unknown> });
+  }
+  async deleteAlert(alertId: string): Promise<void> { await this.client.request(`/alerts/${alertId}`, { method: 'DELETE' }); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async getProduct(productUrl: string): Promise<OAProduct> {
+    return this.client.request<OAProduct>('/products/lookup', { params: { url: productUrl } });
+  }
+  async getPriceHistory(productUrl: string): Promise<OAPriceHistory> {
+    return this.client.request<OAPriceHistory>('/products/price-history', { params: { url: productUrl } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
-
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): OffAlertsClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
