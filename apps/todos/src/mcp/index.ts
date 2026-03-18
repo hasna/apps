@@ -1300,14 +1300,15 @@ server.tool(
   {
     name: z.string().describe("Agent name — must be from the project's allowed pool (Roman names by default). Use suggest_agent_name first if unsure."),
     description: z.string().optional(),
+    capabilities: z.array(z.string()).optional().describe("Agent capabilities/skills for task routing (e.g. ['typescript', 'testing', 'devops'])"),
     session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
     working_dir: z.string().optional().describe("Working directory of this session — used to look up the project's agent pool and identify who holds the name in a conflict"),
   },
-  async ({ name, description, session_id, working_dir }) => {
+  async ({ name, description, capabilities, session_id, working_dir }) => {
     try {
       // Look up the pool for this project (from config, based on working_dir)
       const pool = getAgentPoolForProject(working_dir);
-      const result = registerAgent({ name, description, session_id, working_dir, pool });
+      const result = registerAgent({ name, description, capabilities, session_id, working_dir, pool });
       if (isAgentConflict(result)) {
         const suggestLine = result.suggestions && result.suggestions.length > 0
           ? `\nAvailable names: ${result.suggestions.join(", ")}`
@@ -3034,6 +3035,401 @@ server.tool(
       if (handoff.blockers?.length) lines.push(`Blocked: ${handoff.blockers.join(", ")}`);
       if (handoff.next_steps?.length) lines.push(`Next: ${handoff.next_steps.join(", ")}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === TASK RELATIONSHIPS ===
+
+if (shouldRegisterTool("add_task_relationship")) {
+server.tool(
+  "add_task_relationship",
+  "Create a semantic relationship between two tasks (related_to, conflicts_with, similar_to, duplicates, supersedes, modifies_same_file).",
+  {
+    source_task_id: z.string().describe("Source task ID"),
+    target_task_id: z.string().describe("Target task ID"),
+    relationship_type: z.enum(["related_to", "conflicts_with", "similar_to", "duplicates", "supersedes", "modifies_same_file"]).describe("Type of relationship"),
+    created_by: z.string().optional().describe("Agent ID who created this relationship"),
+  },
+  async ({ source_task_id, target_task_id, relationship_type, created_by }) => {
+    try {
+      const { addTaskRelationship } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+      const rel = addTaskRelationship({
+        source_task_id: resolveId(source_task_id),
+        target_task_id: resolveId(target_task_id),
+        relationship_type,
+        created_by,
+      });
+      return { content: [{ type: "text" as const, text: `Relationship created: ${rel.source_task_id.slice(0,8)} --[${rel.relationship_type}]--> ${rel.target_task_id.slice(0,8)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("remove_task_relationship")) {
+server.tool(
+  "remove_task_relationship",
+  "Remove a semantic relationship between tasks by ID or by source+target+type.",
+  {
+    id: z.string().optional().describe("Relationship ID to remove"),
+    source_task_id: z.string().optional().describe("Source task ID (use with target_task_id + type)"),
+    target_task_id: z.string().optional().describe("Target task ID"),
+    relationship_type: z.enum(["related_to", "conflicts_with", "similar_to", "duplicates", "supersedes", "modifies_same_file"]).optional(),
+  },
+  async ({ id, source_task_id, target_task_id, relationship_type }) => {
+    try {
+      const { removeTaskRelationship, removeTaskRelationshipByPair } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+      let removed = false;
+      if (id) {
+        removed = removeTaskRelationship(id);
+      } else if (source_task_id && target_task_id && relationship_type) {
+        removed = removeTaskRelationshipByPair(resolveId(source_task_id), resolveId(target_task_id), relationship_type);
+      } else {
+        return { content: [{ type: "text" as const, text: "Provide either 'id' or 'source_task_id + target_task_id + relationship_type'" }], isError: true };
+      }
+      return { content: [{ type: "text" as const, text: removed ? "Relationship removed." : "Relationship not found." }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_task_relationships")) {
+server.tool(
+  "get_task_relationships",
+  "Get all semantic relationships for a task.",
+  {
+    task_id: z.string().describe("Task ID"),
+    relationship_type: z.enum(["related_to", "conflicts_with", "similar_to", "duplicates", "supersedes", "modifies_same_file"]).optional(),
+  },
+  async ({ task_id, relationship_type }) => {
+    try {
+      const { getTaskRelationships } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+      const rels = getTaskRelationships(resolveId(task_id), relationship_type);
+      if (rels.length === 0) return { content: [{ type: "text" as const, text: "No relationships found." }] };
+      const lines = rels.map(r => `${r.source_task_id.slice(0,8)} --[${r.relationship_type}]--> ${r.target_task_id.slice(0,8)}${r.metadata && Object.keys(r.metadata).length > 0 ? ` (${JSON.stringify(r.metadata)})` : ""}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("detect_file_relationships")) {
+server.tool(
+  "detect_file_relationships",
+  "Auto-detect tasks that modify the same files and create modifies_same_file relationships.",
+  {
+    task_id: z.string().describe("Task ID to detect file relationships for"),
+  },
+  async ({ task_id }) => {
+    try {
+      const { autoDetectFileRelationships } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+      const created = autoDetectFileRelationships(resolveId(task_id));
+      return { content: [{ type: "text" as const, text: created.length > 0 ? `Created ${created.length} file relationship(s).` : "No file overlaps detected." }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === KNOWLEDGE GRAPH ===
+
+if (shouldRegisterTool("sync_kg")) {
+server.tool(
+  "sync_kg",
+  "Sync all existing relationships into the knowledge graph edges table. Idempotent.",
+  {},
+  async () => {
+    try {
+      const { syncKgEdges } = require("../db/kg.js") as typeof import("../db/kg.js");
+      const result = syncKgEdges();
+      return { content: [{ type: "text" as const, text: `Knowledge graph synced: ${result.synced} edge(s) processed.` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_related_entities")) {
+server.tool(
+  "get_related_entities",
+  "Get entities related to a given entity in the knowledge graph.",
+  {
+    entity_id: z.string().describe("Entity ID (task, agent, project, file path)"),
+    relation_type: z.string().optional().describe("Filter by relation type (depends_on, assigned_to, reports_to, references_file, in_project, in_plan, etc.)"),
+    entity_type: z.string().optional().describe("Filter by entity type (task, agent, project, file, plan)"),
+    direction: z.enum(["outgoing", "incoming", "both"]).optional().describe("Edge direction"),
+    limit: z.number().optional().describe("Max results"),
+  },
+  async ({ entity_id, relation_type, entity_type, direction, limit }) => {
+    try {
+      const { getRelated } = require("../db/kg.js") as typeof import("../db/kg.js");
+      const edges = getRelated(entity_id, { relation_type, entity_type, direction, limit });
+      if (edges.length === 0) return { content: [{ type: "text" as const, text: "No related entities found." }] };
+      const lines = edges.map(e => `${e.source_id.slice(0,12)}(${e.source_type}) --[${e.relation_type}]--> ${e.target_id.slice(0,12)}(${e.target_type})`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("find_path")) {
+server.tool(
+  "find_path",
+  "Find paths between two entities in the knowledge graph.",
+  {
+    source_id: z.string().describe("Starting entity ID"),
+    target_id: z.string().describe("Target entity ID"),
+    max_depth: z.number().optional().describe("Maximum path depth (default: 5)"),
+    relation_types: z.array(z.string()).optional().describe("Filter by relation types"),
+  },
+  async ({ source_id, target_id, max_depth, relation_types }) => {
+    try {
+      const { findPath } = require("../db/kg.js") as typeof import("../db/kg.js");
+      const paths = findPath(source_id, target_id, { max_depth, relation_types });
+      if (paths.length === 0) return { content: [{ type: "text" as const, text: "No path found." }] };
+      const lines = paths.map((path, i) => {
+        const steps = path.map(e => `${e.source_id.slice(0,8)} --[${e.relation_type}]--> ${e.target_id.slice(0,8)}`);
+        return `Path ${i + 1} (${path.length} hops):\n  ${steps.join("\n  ")}`;
+      });
+      return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_impact_analysis")) {
+server.tool(
+  "get_impact_analysis",
+  "Analyze what entities are affected if a given entity changes. Traverses the knowledge graph.",
+  {
+    entity_id: z.string().describe("Entity ID to analyze impact for"),
+    max_depth: z.number().optional().describe("Maximum traversal depth (default: 3)"),
+    relation_types: z.array(z.string()).optional().describe("Filter by relation types"),
+  },
+  async ({ entity_id, max_depth, relation_types }) => {
+    try {
+      const { getImpactAnalysis } = require("../db/kg.js") as typeof import("../db/kg.js");
+      const impact = getImpactAnalysis(entity_id, { max_depth, relation_types });
+      if (impact.length === 0) return { content: [{ type: "text" as const, text: "No downstream impact detected." }] };
+      const byDepth = new Map<number, typeof impact>();
+      for (const i of impact) {
+        if (!byDepth.has(i.depth)) byDepth.set(i.depth, []);
+        byDepth.get(i.depth)!.push(i);
+      }
+      const lines = [`Impact analysis: ${impact.length} affected entities`];
+      for (const [depth, entities] of [...byDepth.entries()].sort((a, b) => a[0] - b[0])) {
+        lines.push(`\nDepth ${depth}:`);
+        for (const e of entities) {
+          lines.push(`  ${e.entity_id.slice(0,12)} (${e.entity_type}) via ${e.relation}`);
+        }
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_critical_path")) {
+server.tool(
+  "get_critical_path",
+  "Find tasks that block the most downstream work (critical path analysis).",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    limit: z.number().optional().describe("Max results (default: 20)"),
+  },
+  async ({ project_id, limit }) => {
+    try {
+      const { getCriticalPath } = require("../db/kg.js") as typeof import("../db/kg.js");
+      const result = getCriticalPath({ project_id: project_id ? resolveId(project_id, "projects") : undefined, limit });
+      if (result.length === 0) return { content: [{ type: "text" as const, text: "No critical path data. Run sync_kg first to populate the knowledge graph." }] };
+      const lines = result.map((r, i) => `${i + 1}. ${r.task_id.slice(0,8)} blocks ${r.blocking_count} task(s), max depth ${r.depth}`);
+      return { content: [{ type: "text" as const, text: `Critical path:\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === AGENT CAPABILITIES ===
+
+if (shouldRegisterTool("get_capable_agents")) {
+server.tool(
+  "get_capable_agents",
+  "Find agents that match given capabilities, sorted by match score.",
+  {
+    capabilities: z.array(z.string()).describe("Required capabilities to match against"),
+    min_score: z.number().optional().describe("Minimum match score 0.0-1.0 (default: 0.1)"),
+    limit: z.number().optional().describe("Max results"),
+  },
+  async ({ capabilities, min_score, limit }) => {
+    try {
+      const { getCapableAgents } = require("../db/agents.js") as typeof import("../db/agents.js");
+      const results = getCapableAgents(capabilities, { min_score, limit });
+      if (results.length === 0) return { content: [{ type: "text" as const, text: "No agents match the given capabilities." }] };
+      const lines = results.map(r => `${r.agent.name} (${r.agent.id}) score:${(r.score * 100).toFixed(0)}% caps:[${r.agent.capabilities.join(",")}]`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === PATROL & REVIEW ===
+
+if (shouldRegisterTool("patrol_tasks")) {
+server.tool(
+  "patrol_tasks",
+  "Scan for task issues: stuck tasks, low-confidence completions, orphaned tasks, zombie-blocked tasks, and pending reviews.",
+  {
+    stuck_minutes: z.number().optional().describe("Minutes threshold for stuck detection (default: 60)"),
+    confidence_threshold: z.number().optional().describe("Confidence threshold for low-confidence detection (default: 0.5)"),
+    project_id: z.string().optional().describe("Filter by project"),
+  },
+  async ({ stuck_minutes, confidence_threshold, project_id }) => {
+    try {
+      const { patrolTasks } = require("../db/patrol.js") as typeof import("../db/patrol.js");
+      const result = patrolTasks({
+        stuck_minutes,
+        confidence_threshold,
+        project_id: project_id ? resolveId(project_id, "projects") : undefined,
+      });
+      if (result.total_issues === 0) return { content: [{ type: "text" as const, text: "All clear — no issues detected." }] };
+      const lines = [`Found ${result.total_issues} issue(s):\n`];
+      for (const issue of result.issues) {
+        lines.push(`[${issue.severity.toUpperCase()}] ${issue.type}: ${issue.task_title.slice(0,60)} (${issue.task_id.slice(0,8)})`);
+        lines.push(`  ${issue.detail}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_review_queue")) {
+server.tool(
+  "get_review_queue",
+  "Get tasks that need review: requires_approval but unapproved, or low confidence completions.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    limit: z.number().optional().describe("Max results (default: all)"),
+  },
+  async ({ project_id, limit }) => {
+    try {
+      const { getReviewQueue } = require("../db/patrol.js") as typeof import("../db/patrol.js");
+      const tasks = getReviewQueue({
+        project_id: project_id ? resolveId(project_id, "projects") : undefined,
+        limit,
+      });
+      if (tasks.length === 0) return { content: [{ type: "text" as const, text: "Review queue is empty." }] };
+      const lines = tasks.map(t => {
+        const conf = t.confidence != null ? ` confidence:${t.confidence}` : "";
+        const approval = t.requires_approval && !t.approved_by ? " [needs approval]" : "";
+        return `${(t.short_id || t.id.slice(0,8))} ${t.title.slice(0,60)}${conf}${approval}`;
+      });
+      return { content: [{ type: "text" as const, text: `Review queue (${tasks.length}):\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("score_task")) {
+server.tool(
+  "score_task",
+  "Score a completed task's quality (0.0-1.0). Stores in task metadata for agent performance tracking.",
+  {
+    task_id: z.string().describe("Task ID to score"),
+    score: z.number().min(0).max(1).describe("Quality score 0.0-1.0"),
+    reviewer_id: z.string().optional().describe("Agent ID of reviewer"),
+  },
+  async ({ task_id, score, reviewer_id }) => {
+    try {
+      const { scoreTask } = require("../db/agent-metrics.js") as typeof import("../db/agent-metrics.js");
+      scoreTask(resolveId(task_id), score, reviewer_id);
+      return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} scored: ${score}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === AGENT METRICS & LEADERBOARD ===
+
+if (shouldRegisterTool("get_agent_metrics")) {
+server.tool(
+  "get_agent_metrics",
+  "Get performance metrics for an agent: completion rate, speed, confidence, review scores.",
+  {
+    agent_id: z.string().describe("Agent ID or name"),
+    project_id: z.string().optional().describe("Filter by project"),
+  },
+  async ({ agent_id, project_id }) => {
+    try {
+      const { getAgentMetrics } = require("../db/agent-metrics.js") as typeof import("../db/agent-metrics.js");
+      const metrics = getAgentMetrics(agent_id, {
+        project_id: project_id ? resolveId(project_id, "projects") : undefined,
+      });
+      if (!metrics) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+      const lines = [
+        `Agent: ${metrics.agent_name} (${metrics.agent_id})`,
+        `Completed: ${metrics.tasks_completed} | Failed: ${metrics.tasks_failed} | In Progress: ${metrics.tasks_in_progress}`,
+        `Completion Rate: ${(metrics.completion_rate * 100).toFixed(1)}%`,
+        metrics.avg_completion_minutes != null ? `Avg Completion Time: ${metrics.avg_completion_minutes} min` : null,
+        metrics.avg_confidence != null ? `Avg Confidence: ${(metrics.avg_confidence * 100).toFixed(1)}%` : null,
+        metrics.review_score_avg != null ? `Avg Review Score: ${(metrics.review_score_avg * 100).toFixed(1)}%` : null,
+        `Composite Score: ${(metrics.composite_score * 100).toFixed(1)}%`,
+      ].filter(Boolean);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_leaderboard")) {
+server.tool(
+  "get_leaderboard",
+  "Get agent leaderboard ranked by composite performance score.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    limit: z.number().optional().describe("Max entries (default: 20)"),
+  },
+  async ({ project_id, limit }) => {
+    try {
+      const { getLeaderboard } = require("../db/agent-metrics.js") as typeof import("../db/agent-metrics.js");
+      const entries = getLeaderboard({
+        project_id: project_id ? resolveId(project_id, "projects") : undefined,
+        limit,
+      });
+      if (entries.length === 0) return { content: [{ type: "text" as const, text: "No agents with task activity found." }] };
+      const lines = entries.map(e =>
+        `#${e.rank} ${e.agent_name.padEnd(15)} score:${(e.composite_score * 100).toFixed(0).padStart(3)}% done:${String(e.tasks_completed).padStart(3)} rate:${(e.completion_rate * 100).toFixed(0)}%`
+      );
+      return { content: [{ type: "text" as const, text: `Leaderboard:\n${lines.join("\n")}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }

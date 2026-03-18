@@ -26,6 +26,7 @@ function rowToAgent(row: AgentRow): Agent {
   return {
     ...row,
     permissions: JSON.parse(row.permissions || '["*"]') as string[],
+    capabilities: JSON.parse(row.capabilities || "[]") as string[],
     metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
   };
 }
@@ -111,11 +112,12 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, title, level, permissions, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, normalizedName, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
-     JSON.stringify(input.permissions || ["*"]), input.reports_to || null,
+     JSON.stringify(input.permissions || ["*"]), JSON.stringify(input.capabilities || []),
+     input.reports_to || null,
      input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp,
      input.session_id || null, input.working_dir || null],
   );
@@ -152,7 +154,7 @@ export function updateAgentActivity(id: string, db?: Database): void {
 
 export function updateAgent(
   id: string,
-  input: { name?: string; description?: string; role?: string; title?: string; level?: string; permissions?: string[]; reports_to?: string | null; org_id?: string | null; metadata?: Record<string, unknown> },
+  input: { name?: string; description?: string; role?: string; title?: string; level?: string; permissions?: string[]; capabilities?: string[]; reports_to?: string | null; org_id?: string | null; metadata?: Record<string, unknown> },
   db?: Database,
 ): Agent {
   const d = db || getDatabase();
@@ -177,6 +179,10 @@ export function updateAgent(
   if (input.permissions !== undefined) {
     sets.push("permissions = ?");
     params.push(JSON.stringify(input.permissions));
+  }
+  if (input.capabilities !== undefined) {
+    sets.push("capabilities = ?");
+    params.push(JSON.stringify(input.capabilities));
   }
   if (input.title !== undefined) {
     sets.push("title = ?");
@@ -236,4 +242,42 @@ export function getOrgChart(db?: Database): OrgNode[] {
 export interface OrgNode {
   agent: Agent;
   reports: OrgNode[];
+}
+
+/**
+ * Match agent capabilities against required capabilities (task tags).
+ * Returns a score from 0.0 (no match) to 1.0 (perfect match).
+ */
+export function matchCapabilities(agentCapabilities: string[], requiredCapabilities: string[]): number {
+  if (requiredCapabilities.length === 0) return 1.0; // No requirements = any agent matches
+  if (agentCapabilities.length === 0) return 0.0;
+
+  const agentSet = new Set(agentCapabilities.map(c => c.toLowerCase()));
+  let matches = 0;
+  for (const req of requiredCapabilities) {
+    if (agentSet.has(req.toLowerCase())) matches++;
+  }
+  return matches / requiredCapabilities.length;
+}
+
+/**
+ * Get agents that match the given capabilities, sorted by match score.
+ */
+export function getCapableAgents(
+  capabilities: string[],
+  opts?: { min_score?: number; limit?: number },
+  db?: Database,
+): { agent: Agent; score: number }[] {
+  const agents = listAgents(db);
+  const minScore = opts?.min_score ?? 0.1;
+
+  const scored = agents
+    .map(agent => ({
+      agent,
+      score: matchCapabilities(agent.capabilities, capabilities),
+    }))
+    .filter(entry => entry.score >= minScore)
+    .sort((a, b) => b.score - a.score);
+
+  return opts?.limit ? scored.slice(0, opts.limit) : scored;
 }

@@ -134,6 +134,7 @@ export interface Agent {
   permissions: string[];
   reports_to: string | null; // agent ID of manager
   org_id: string | null;
+  capabilities: string[]; // agent skills/capabilities for task routing
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
@@ -149,6 +150,7 @@ export interface AgentRow {
   title: string | null;
   level: string | null;
   permissions: string | null;
+  capabilities: string | null;
   reports_to: string | null;
   org_id: string | null;
   metadata: string | null;
@@ -166,6 +168,7 @@ export interface RegisterAgentInput {
   level?: string;
   pool?: string[]; // allowed names for this project — if provided, name must be in this list
   permissions?: string[];
+  capabilities?: string[];
   reports_to?: string;
   org_id?: string;
   metadata?: Record<string, unknown>;

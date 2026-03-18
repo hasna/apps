@@ -91,6 +91,8 @@ export {
   deleteAgent,
   getDirectReports,
   getOrgChart,
+  matchCapabilities,
+  getCapableAgents,
 } from "./db/agents.js";
 export type { OrgNode } from "./db/agents.js";
 
@@ -148,6 +150,31 @@ export type { ResourceLock } from "./db/locks.js";
 
 // Orgs
 export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
+
+// Task Relationships
+export {
+  addTaskRelationship,
+  getTaskRelationship,
+  removeTaskRelationship,
+  removeTaskRelationshipByPair,
+  getTaskRelationships,
+  findRelatedTaskIds,
+  autoDetectFileRelationships,
+} from "./db/task-relationships.js";
+export { RELATIONSHIP_TYPES } from "./db/task-relationships.js";
+export type { TaskRelationship, AddTaskRelationshipInput, RelationshipType } from "./db/task-relationships.js";
+
+// Knowledge Graph
+export { syncKgEdges, getRelated, findPath, getImpactAnalysis, getCriticalPath, addKgEdge, removeKgEdges } from "./db/kg.js";
+export type { KgEdge } from "./db/kg.js";
+
+// Patrol & Review
+export { patrolTasks, getReviewQueue } from "./db/patrol.js";
+export type { PatrolIssue, PatrolResult } from "./db/patrol.js";
+
+// Agent Metrics
+export { getAgentMetrics, getLeaderboard, scoreTask } from "./db/agent-metrics.js";
+export type { AgentMetrics, LeaderboardEntry } from "./db/agent-metrics.js";
 
 // Search
 export { searchTasks } from "./lib/search.js";

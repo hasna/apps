@@ -477,6 +477,47 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_assigned_by ON tasks(assigned_by);
   INSERT OR IGNORE INTO _migrations (id) VALUES (26);
   `,
+  // Migration 27: Semantic task relationships
+  `
+  CREATE TABLE IF NOT EXISTS task_relationships (
+    id TEXT PRIMARY KEY,
+    source_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    target_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL CHECK(relationship_type IN ('related_to', 'conflicts_with', 'similar_to', 'duplicates', 'supersedes', 'modifies_same_file')),
+    metadata TEXT DEFAULT '{}',
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (source_task_id != target_task_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_rel_source ON task_relationships(source_task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_rel_target ON task_relationships(target_task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_rel_type ON task_relationships(relationship_type);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (27);
+  `,
+  // Migration 28: Knowledge graph edges table
+  `
+  CREATE TABLE IF NOT EXISTS kg_edges (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_id, source_type, target_id, target_type, relation_type)
+  );
+  CREATE INDEX IF NOT EXISTS idx_kg_source ON kg_edges(source_id, source_type);
+  CREATE INDEX IF NOT EXISTS idx_kg_target ON kg_edges(target_id, target_type);
+  CREATE INDEX IF NOT EXISTS idx_kg_relation ON kg_edges(relation_type);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (28);
+  `,
+  // Migration 29: Agent capabilities for capability-based task routing
+  `
+  ALTER TABLE agents ADD COLUMN capabilities TEXT DEFAULT '[]';
+  INSERT OR IGNORE INTO _migrations (id) VALUES (29);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -645,6 +686,32 @@ function ensureSchema(db: Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
 
+  ensureTable("task_relationships", `
+    CREATE TABLE task_relationships (
+      id TEXT PRIMARY KEY,
+      source_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      target_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      relationship_type TEXT NOT NULL,
+      metadata TEXT DEFAULT '{}',
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      CHECK (source_task_id != target_task_id)
+    )`);
+
+  ensureTable("kg_edges", `
+    CREATE TABLE kg_edges (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      relation_type TEXT NOT NULL,
+      weight REAL NOT NULL DEFAULT 1.0,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source_id, source_type, target_id, target_type, relation_type)
+    )`);
+
   // ── Columns (ALTER TABLE is not idempotent in SQLite, so check first) ──
 
   // Projects
@@ -676,6 +743,7 @@ function ensureSchema(db: Database): void {
   ensureColumn("agents", "title", "TEXT");
   ensureColumn("agents", "level", "TEXT");
   ensureColumn("agents", "org_id", "TEXT");
+  ensureColumn("agents", "capabilities", "TEXT DEFAULT '[]'");
 
   // Projects
   ensureColumn("projects", "org_id", "TEXT");
@@ -710,6 +778,16 @@ function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_sources_type ON project_sources(type)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_assigned_by ON tasks(assigned_by)");
+
+  // Task relationships indexes
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_source ON task_relationships(source_task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_target ON task_relationships(target_task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_type ON task_relationships(relationship_type)");
+
+  // Knowledge graph indexes
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_source ON kg_edges(source_id, source_type)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_target ON kg_edges(target_id, target_type)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_relation ON kg_edges(relation_type)");
 }
 
 function backfillTaskTags(db: Database): void {
