@@ -1,51 +1,41 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Customer.io Connector — Messaging automation platform
+import { CustomerIOClient } from './client';
+import type { CustomerIOConfig, CIOCustomer, CIOSegment, CIOCampaign, CIOMessageList } from '../types';
+export { CustomerIOClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class CustomerIO {
+  private readonly client: CustomerIOClient;
+  constructor(config: CustomerIOConfig) { this.client = new CustomerIOClient(config); }
+  static fromEnv(): CustomerIO {
+    const siteId = process.env.CUSTOMERIO_SITE_ID;
+    const apiKey = process.env.CUSTOMERIO_API_KEY;
+    if (!siteId || !apiKey) throw new Error('CUSTOMERIO_SITE_ID and CUSTOMERIO_API_KEY are required');
+    return new CustomerIO({ siteId, apiKey, appApiKey: process.env.CUSTOMERIO_APP_API_KEY });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  // Track API (Basic auth)
+  async identify(customerId: string, attributes: Record<string, unknown>): Promise<void> {
+    await this.client.trackRequest(`/customers/${customerId}`, { method: 'PUT', body: attributes });
+  }
+  async deleteCustomer(customerId: string): Promise<void> {
+    await this.client.trackRequest(`/customers/${customerId}`, { method: 'DELETE' });
+  }
+  async track(customerId: string, eventName: string, data?: Record<string, unknown>): Promise<void> {
+    await this.client.trackRequest(`/customers/${customerId}/events`, { method: 'POST', body: { name: eventName, data } });
+  }
+  async trackAnonymous(eventName: string, data?: Record<string, unknown>): Promise<void> {
+    await this.client.trackRequest('/events', { method: 'POST', body: { name: eventName, data } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  // App API (Bearer auth)
+  async listSegments(): Promise<{ segments: CIOSegment[] }> { return this.client.appRequest('/segments'); }
+  async getSegmentMembers(segmentId: number): Promise<{ ids: string[] }> { return this.client.appRequest(`/segments/${segmentId}/membership`); }
+  async listCampaigns(): Promise<{ campaigns: CIOCampaign[] }> { return this.client.appRequest('/campaigns'); }
+  async getCampaign(campaignId: number): Promise<CIOCampaign> { return this.client.appRequest<CIOCampaign>(`/campaigns/${campaignId}`); }
+  async listMessages(options?: { limit?: number; start?: string }): Promise<CIOMessageList> {
+    return this.client.appRequest<CIOMessageList>('/messages', { params: { limit: options?.limit, start: options?.start } });
   }
+  async getCustomer(customerId: string): Promise<{ customer: CIOCustomer }> { return this.client.appRequest(`/customers/${customerId}/attributes`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
-  }
+  getClient(): CustomerIOClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
