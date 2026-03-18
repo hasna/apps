@@ -21,6 +21,15 @@ import type {
 
 export { SalesforceClient } from './client';
 
+
+/**
+ * Escape a string value for safe use in SOQL queries.
+ * Prevents SOQL injection by escaping single quotes.
+ */
+function escapeSoql(value: string): string {
+  return value.replace(/'/g, "\\'");
+}
+
 export class Salesforce {
   private client: SalesforceClient;
 
@@ -108,7 +117,7 @@ export class Salesforce {
     const limit = params?.limit || 100;
     let query = `SELECT ${fields} FROM Contact`;
     if (params?.accountId) {
-      query += ` WHERE AccountId = '${params.accountId}'`;
+      query += ` WHERE AccountId = '${escapeSoql(params.accountId)}'`;
     }
     query += ` ORDER BY CreatedDate DESC LIMIT ${limit}`;
     return this.query<Contact>(query);
@@ -158,7 +167,7 @@ export class Salesforce {
     const limit = params?.limit || 100;
     let query = `SELECT ${fields} FROM Lead`;
     if (params?.status) {
-      query += ` WHERE Status = '${params.status}'`;
+      query += ` WHERE Status = '${escapeSoql(params.status)}'`;
     }
     query += ` ORDER BY CreatedDate DESC LIMIT ${limit}`;
     return this.query<Lead>(query);
@@ -210,10 +219,10 @@ export class Salesforce {
     let query = `SELECT ${fields} FROM Opportunity`;
     const conditions: string[] = [];
     if (params?.accountId) {
-      conditions.push(`AccountId = '${params.accountId}'`);
+      conditions.push(`AccountId = '${escapeSoql(params.accountId)}'`);
     }
     if (params?.stageName) {
-      conditions.push(`StageName = '${params.stageName}'`);
+      conditions.push(`StageName = '${escapeSoql(params.stageName)}'`);
     }
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
@@ -268,10 +277,10 @@ export class Salesforce {
     let query = `SELECT ${fields} FROM Task`;
     const conditions: string[] = [];
     if (params?.whoId) {
-      conditions.push(`WhoId = '${params.whoId}'`);
+      conditions.push(`WhoId = '${escapeSoql(params.whoId)}'`);
     }
     if (params?.whatId) {
-      conditions.push(`WhatId = '${params.whatId}'`);
+      conditions.push(`WhatId = '${escapeSoql(params.whatId)}'`);
     }
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
