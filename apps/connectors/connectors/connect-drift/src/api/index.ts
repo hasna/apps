@@ -1,51 +1,50 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Drift Connector — Conversational marketing and sales
+import { DriftClient } from './client';
+import type { DriftConfig, DriftContact, DriftConversation, DriftMessage, DriftUser } from '../types';
+export { DriftClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Drift {
+  private readonly client: DriftClient;
+  constructor(config: DriftConfig) { this.client = new DriftClient(config); }
+  static fromEnv(): Drift {
+    const accessToken = process.env.DRIFT_ACCESS_TOKEN;
+    if (!accessToken) throw new Error('DRIFT_ACCESS_TOKEN environment variable is required');
+    return new Drift({ accessToken });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async listContacts(options?: { limit?: number; cursor?: string }): Promise<{ data: DriftContact[]; pagination?: { next?: string } }> {
+    return this.client.request('/contacts', { params: options as Record<string, string | number | undefined> });
+  }
+  async getContact(contactId: number): Promise<{ data: DriftContact }> {
+    return this.client.request(`/contacts/${contactId}`);
+  }
+  async createContact(email: string, attributes?: Record<string, unknown>): Promise<{ data: DriftContact }> {
+    return this.client.request('/contacts', { method: 'POST', body: { attributes: { email, ...attributes } } });
+  }
+  async deleteContact(contactId: number): Promise<void> {
+    await this.client.request(`/contacts/${contactId}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listConversations(options?: { limit?: number; next?: string }): Promise<{ data: DriftConversation[]; pagination?: { next?: string } }> {
+    return this.client.request('/conversations', { params: options as Record<string, string | number | undefined> });
+  }
+  async getConversation(conversationId: number): Promise<{ data: DriftConversation }> {
+    return this.client.request(`/conversations/${conversationId}`);
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listMessages(conversationId: number): Promise<{ data: DriftMessage[] }> {
+    return this.client.request(`/conversations/${conversationId}/messages`);
   }
+  async sendMessage(conversationId: number, body: string, type?: 'chat' | 'private_note'): Promise<{ data: DriftMessage }> {
+    return this.client.request(`/conversations/${conversationId}/messages`, { method: 'POST', body: { body, type: type || 'chat' } });
+  }
+
+  async listUsers(): Promise<{ data: DriftUser[] }> {
+    return this.client.request('/users/list');
+  }
+  async getUser(userId: number): Promise<{ data: DriftUser }> {
+    return this.client.request(`/users/${userId}`);
+  }
+
+  getClient(): DriftClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
