@@ -333,7 +333,7 @@ export class Salesforce {
     const limit = params?.limit || 100;
     let query = `SELECT ${fields} FROM User`;
     if (params?.isActive !== undefined) {
-      query += ` WHERE IsActive = ${params.isActive}`;
+      query += ` WHERE IsActive = ${Boolean(params.isActive)}`;
     }
     query += ` LIMIT ${limit}`;
     return this.query<User>(query);
