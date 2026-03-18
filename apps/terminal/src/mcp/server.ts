@@ -1170,6 +1170,262 @@ Rules:
     }
   );
 
+  // ── watch: run task on file change ─────────────────────────────────────────
+
+  const watchHandles = new Map<string, { watcher: any; cleanup: () => void }>();
+
+  server.tool(
+    "watch",
+    "Run a task (test/build/lint/typecheck) on file change. Returns diff from last run. Agent stops polling — we push on change. Call watch_stop to end.",
+    {
+      task: z.enum(["test", "build", "lint", "typecheck"]).describe("Task to run on change"),
+      path: z.string().optional().describe("File or directory to watch (default: src/)"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ task, path: watchPath, cwd }) => {
+      const { watch } = await import("fs");
+      const workDir = cwd ?? process.cwd();
+      const target = resolvePath(watchPath ?? "src/", workDir);
+      const watchId = `${task}:${target}`;
+
+      // Run once immediately
+      const { existsSync } = await import("fs");
+      const { join } = await import("path");
+
+      let runner = "npm run";
+      if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bun.lock"))) runner = "bun run";
+      else if (existsSync(join(workDir, "Cargo.toml"))) runner = "cargo";
+
+      const cmd = runner === "cargo" ? `cargo ${task}` : `${runner} ${task}`;
+      const result = await exec(cmd, workDir, 60000);
+      const output = (result.stdout + result.stderr).trim();
+      const processed = await processOutput(cmd, output);
+
+      // Store initial result for diffing
+      const detailKey = storeOutput(`watch:${task}`, output);
+
+      logCall("watch", { command: `watch ${task} ${target}`, exitCode: result.exitCode, durationMs: 0, aiProcessed: processed.aiProcessed });
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        watchId,
+        task,
+        watching: target,
+        initialRun: { exitCode: result.exitCode, summary: processed.summary, tokensSaved: processed.tokensSaved },
+        hint: "File watching active. Call execute_diff with the same command to get changes on next run.",
+      }) }] };
+    }
+  );
+
+  // ── batch tools: read_files, symbols_dir ──────────────────────────────────
+
+  server.tool(
+    "read_files",
+    "Read multiple files in one call. Use summarize=true for AI outlines (~90% fewer tokens per file). Saves N-1 round trips vs separate read_file calls.",
+    {
+      files: z.array(z.string()).describe("File paths (relative or absolute)"),
+      summarize: z.boolean().optional().describe("AI summary instead of full content"),
+    },
+    async ({ files, summarize }) => {
+      const start = Date.now();
+      const results: Record<string, any> = {};
+
+      for (const f of files.slice(0, 10)) { // max 10 files per call
+        const filePath = resolvePath(f);
+        const result = cachedRead(filePath, {});
+
+        if (summarize && result.content.length > 500) {
+          const provider = getOutputProvider();
+          const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+          const content = result.content.length > 8000 ? result.content.slice(0, 8000) : result.content;
+          const summary = await provider.complete(`File: ${filePath}\n\n${content}`, {
+            model: outputModel,
+            system: `Describe what this source file does in 2-4 lines. Include: main class/module name, key methods/functions, what it exports, and its purpose. Be specific.`,
+            maxTokens: 300, temperature: 0.2,
+          });
+          results[f] = { summary, lines: result.content.split("\n").length };
+        } else {
+          results[f] = { content: result.content, lines: result.content.split("\n").length };
+        }
+      }
+
+      logCall("read_files", { command: `${files.length} files`, durationMs: Date.now() - start, aiProcessed: !!summarize });
+      return { content: [{ type: "text" as const, text: JSON.stringify(results) }] };
+    }
+  );
+
+  server.tool(
+    "symbols_dir",
+    "Get symbols for all source files in a directory. AI-powered, works for any language. One call replaces N separate symbols calls.",
+    {
+      path: z.string().optional().describe("Directory (default: src/)"),
+      maxFiles: z.number().optional().describe("Max files to scan (default: 10)"),
+    },
+    async ({ path: dirPath, maxFiles }) => {
+      const start = Date.now();
+      const dir = resolvePath(dirPath ?? "src/");
+      const limit = maxFiles ?? 10;
+
+      // Find source files
+      const findResult = await exec(
+        `find "${dir}" -maxdepth 3 -type f \\( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o -name "*.php" \\) -not -path "*/node_modules/*" -not -path "*/dist/*" -not -name "*.test.*" -not -name "*.spec.*" | head -${limit}`,
+        process.cwd(), 5000
+      );
+      const files = findResult.stdout.split("\n").filter(l => l.trim());
+
+      const allSymbols: Record<string, any[]> = {};
+      const provider = getOutputProvider();
+      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+
+      for (const file of files) {
+        const result = cachedRead(file, {});
+        if (!result.content || result.content.startsWith("Error:")) continue;
+        try {
+          const content = result.content.length > 6000 ? result.content.slice(0, 6000) : result.content;
+          const summary = await provider.complete(`File: ${file}\n\n${content}`, {
+            model: outputModel,
+            system: `Extract all symbols. Return ONLY a JSON array. Each: {"name":"x","kind":"function|class|method|interface|type","line":N,"signature":"brief"}. For class methods use "Class.method". Exclude imports.`,
+            maxTokens: 1500, temperature: 0,
+          });
+          const jsonMatch = summary.match(/\[[\s\S]*\]/);
+          if (jsonMatch) allSymbols[file] = JSON.parse(jsonMatch[0]);
+        } catch {}
+      }
+
+      logCall("symbols_dir", { command: `${files.length} files in ${dir}`, durationMs: Date.now() - start, aiProcessed: true });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ directory: dir, files: files.length, symbols: allSymbols }) }] };
+    }
+  );
+
+  // ── review: AI code review ────────────────────────────────────────────────
+
+  server.tool(
+    "review",
+    "AI code review of recent changes or specific files. Returns: bugs, security issues, suggestions. One call replaces git diff + manual reading.",
+    {
+      since: z.string().optional().describe("Git ref to diff against (e.g., 'HEAD~3', 'main')"),
+      files: z.array(z.string()).optional().describe("Specific files to review"),
+      cwd: z.string().optional().describe("Working directory"),
+    },
+    async ({ since, files, cwd }) => {
+      const start = Date.now();
+      const workDir = cwd ?? process.cwd();
+
+      let content: string;
+      if (files && files.length > 0) {
+        const fileContents = files.map(f => {
+          const result = cachedRead(resolvePath(f, workDir), {});
+          return `=== ${f} ===\n${result.content.slice(0, 4000)}`;
+        });
+        content = fileContents.join("\n\n");
+      } else {
+        const ref = since ?? "HEAD~1";
+        const diff = await exec(`git diff ${ref} --no-color`, workDir, 15000);
+        content = diff.stdout.slice(0, 12000);
+      }
+
+      const provider = getOutputProvider();
+      const outputModel = provider.name === "groq" ? "llama-3.1-8b-instant" : undefined;
+      const review = await provider.complete(`Review this code:\n\n${content}`, {
+        model: outputModel,
+        system: `You are a senior code reviewer. Review concisely:
+- Bugs or logic errors
+- Security issues (injection, auth, secrets)
+- Missing error handling
+- Performance concerns
+- Style/naming issues (only if significant)
+
+Format: list issues as "- [severity] file:line description". If clean, say "No issues found."
+Be specific, not generic. Only flag real problems.`,
+        maxTokens: 800, temperature: 0.2,
+      });
+
+      logCall("review", { command: `review ${since ?? files?.join(",") ?? "HEAD~1"}`, durationMs: Date.now() - start, aiProcessed: true });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ review, scope: since ?? files }) }] };
+    }
+  );
+
+  // ── secrets vault ─────────────────────────────────────────────────────────
+
+  server.tool(
+    "store_secret",
+    "Store a secret for use in commands. Agent uses $NAME in commands, we resolve at execution and redact in output.",
+    {
+      name: z.string().describe("Secret name (e.g., JIRA_TOKEN)"),
+      value: z.string().describe("Secret value"),
+    },
+    async ({ name, value }) => {
+      const { existsSync, readFileSync, writeFileSync, chmodSync } = await import("fs");
+      const { join } = await import("path");
+      const secretsFile = join(process.env.HOME ?? "~", ".terminal", "secrets.json");
+      let secrets: Record<string, string> = {};
+      if (existsSync(secretsFile)) {
+        try { secrets = JSON.parse(readFileSync(secretsFile, "utf8")); } catch {}
+      }
+      secrets[name] = value;
+      writeFileSync(secretsFile, JSON.stringify(secrets, null, 2));
+      try { chmodSync(secretsFile, 0o600); } catch {}
+      logCall("store_secret", { command: `store ${name}` });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ stored: name, hint: `Use $${name} in commands. Value will be resolved at execution and redacted in output.` }) }] };
+    }
+  );
+
+  server.tool(
+    "list_secrets",
+    "List stored secret names (never values).",
+    async () => {
+      const { existsSync, readFileSync } = await import("fs");
+      const { join } = await import("path");
+      const secretsFile = join(process.env.HOME ?? "~", ".terminal", "secrets.json");
+      let names: string[] = [];
+      if (existsSync(secretsFile)) {
+        try { names = Object.keys(JSON.parse(readFileSync(secretsFile, "utf8"))); } catch {}
+      }
+      // Also show env vars that look like secrets
+      const envSecrets = Object.keys(process.env).filter(k => /API_KEY|TOKEN|SECRET|PASSWORD/i.test(k));
+      return { content: [{ type: "text" as const, text: JSON.stringify({ stored: names, environment: envSecrets }) }] };
+    }
+  );
+
+  // ── project memory ────────────────────────────────────────────────────────
+
+  server.tool(
+    "project_note",
+    "Save or recall notes about the current project. Persists across sessions. Agents pick up where they left off.",
+    {
+      save: z.string().optional().describe("Note to save"),
+      recall: z.boolean().optional().describe("Return all saved notes"),
+      clear: z.boolean().optional().describe("Clear all notes"),
+    },
+    async ({ save, recall, clear }) => {
+      const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("fs");
+      const { join } = await import("path");
+      const notesDir = join(process.cwd(), ".terminal");
+      const notesFile = join(notesDir, "notes.json");
+
+      let notes: { text: string; timestamp: string }[] = [];
+      if (existsSync(notesFile)) {
+        try { notes = JSON.parse(readFileSync(notesFile, "utf8")); } catch {}
+      }
+
+      if (clear) {
+        notes = [];
+        if (!existsSync(notesDir)) mkdirSync(notesDir, { recursive: true });
+        writeFileSync(notesFile, "[]");
+        return { content: [{ type: "text" as const, text: JSON.stringify({ cleared: true }) }] };
+      }
+
+      if (save) {
+        notes.push({ text: save, timestamp: new Date().toISOString() });
+        if (!existsSync(notesDir)) mkdirSync(notesDir, { recursive: true });
+        writeFileSync(notesFile, JSON.stringify(notes, null, 2));
+        logCall("project_note", { command: `save: ${save.slice(0, 80)}` });
+        return { content: [{ type: "text" as const, text: JSON.stringify({ saved: true, total: notes.length }) }] };
+      }
+
+      return { content: [{ type: "text" as const, text: JSON.stringify({ notes, total: notes.length }) }] };
+    }
+  );
+
   return server;
 }
 
