@@ -1,51 +1,36 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Tisane Labs Connector — NLP for content moderation, sentiment, and language understanding
+import { TisaneLabsClient } from './client';
+import type { TisaneLabsConfig, TLParseResult, TLLanguageDetection, TLTransformResult } from '../types';
+export { TisaneLabsClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class TisaneLabs {
+  private readonly client: TisaneLabsClient;
+  constructor(config: TisaneLabsConfig) { this.client = new TisaneLabsClient(config); }
+  static fromEnv(): TisaneLabs {
+    const apiKey = process.env.TISANELABS_API_KEY;
+    if (!apiKey) throw new Error('TISANELABS_API_KEY is required');
+    return new TisaneLabs({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async parse(text: string, language: string, options?: { abuse_detection?: boolean; sentiment_analysis?: boolean; entity_extraction?: boolean; topic_extraction?: boolean }): Promise<TLParseResult> {
+    return this.client.request<TLParseResult>('/parse', { content: text, language, settings: { abuse: options?.abuse_detection !== false, sentiment: options?.sentiment_analysis !== false, entities: options?.entity_extraction !== false, topics: options?.topic_extraction !== false } });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async detectAbuse(text: string, language: string): Promise<TLParseResult> {
+    return this.client.request<TLParseResult>('/parse', { content: text, language, settings: { abuse: true, sentiment: false, entities: false, topics: false } });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async analyzeSentiment(text: string, language: string): Promise<TLParseResult> {
+    return this.client.request<TLParseResult>('/parse', { content: text, language, settings: { abuse: false, sentiment: true, entities: false, topics: false } });
   }
+
+  async detectLanguage(text: string): Promise<TLLanguageDetection[]> {
+    return this.client.request<TLLanguageDetection[]>('/detectLanguage', { content: text });
+  }
+
+  async transform(text: string, language: string, operation: string): Promise<TLTransformResult> {
+    return this.client.request<TLTransformResult>('/transform', { content: text, language, operation });
+  }
+
+  getClient(): TisaneLabsClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';

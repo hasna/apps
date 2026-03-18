@@ -1,51 +1,30 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// HeySummit Connector — Virtual summit and event management
+import { HeySummitClient } from './client';
+import type { HeySummitConfig, HSEvent, HSTalk, HSSpeaker, HSAttendee, HSAttendeeList } from '../types';
+export { HeySummitClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class HeySummit {
+  private readonly client: HeySummitClient;
+  constructor(config: HeySummitConfig) { this.client = new HeySummitClient(config); }
+  static fromEnv(): HeySummit {
+    const apiKey = process.env.HEYSUMMIT_API_KEY;
+    if (!apiKey) throw new Error('HEYSUMMIT_API_KEY is required');
+    return new HeySummit({ apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  async listEvents(): Promise<HSEvent[]> { return this.client.request<HSEvent[]>('/events'); }
+  async getEvent(eventId: number): Promise<HSEvent> { return this.client.request<HSEvent>(`/events/${eventId}`); }
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
-  }
+  async listTalks(eventId: number): Promise<HSTalk[]> { return this.client.request<HSTalk[]>(`/events/${eventId}/talks`); }
+  async getTalk(talkId: number): Promise<HSTalk> { return this.client.request<HSTalk>(`/talks/${talkId}`); }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
-  }
+  async listSpeakers(eventId: number): Promise<HSSpeaker[]> { return this.client.request<HSSpeaker[]>(`/events/${eventId}/speakers`); }
+  async getSpeaker(speakerId: number): Promise<HSSpeaker> { return this.client.request<HSSpeaker>(`/speakers/${speakerId}`); }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listAttendees(eventId: number, options?: { page?: number }): Promise<HSAttendeeList> {
+    return this.client.request<HSAttendeeList>(`/events/${eventId}/attendees`, { params: { page: options?.page } });
   }
+  async getAttendee(attendeeId: number): Promise<HSAttendee> { return this.client.request<HSAttendee>(`/attendees/${attendeeId}`); }
+
+  getClient(): HeySummitClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
