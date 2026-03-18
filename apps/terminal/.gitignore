@@ -1,4 +1,11 @@
 node_modules/
 dist/
 .env
+.env.*
+.secrets
+.secrets/
 temp/
+.connectors/
+*.pem
+*.key
+imported_modules.txt
