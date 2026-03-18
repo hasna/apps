@@ -1,51 +1,37 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+// Evervault Connector — Encryption and data security infrastructure
+import { EvervaultClient } from './client';
+import type { EvervaultConfig, EVEncryptResult, EVDecryptResult, EVFunction, EVFunctionRunResult, EVCage, EVApp } from '../types';
+export { EvervaultClient } from './client';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
-
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
-
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+export class Evervault {
+  private readonly client: EvervaultClient;
+  constructor(config: EvervaultConfig) { this.client = new EvervaultClient(config); }
+  static fromEnv(): Evervault {
+    const appId = process.env.EVERVAULT_APP_ID;
+    const apiKey = process.env.EVERVAULT_API_KEY;
+    if (!appId || !apiKey) throw new Error('EVERVAULT_APP_ID and EVERVAULT_API_KEY are required');
+    return new Evervault({ appId, apiKey });
   }
 
-  /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
-   */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
-
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
-    }
-    return new Connector({ apiKey, apiSecret });
+  async encrypt(data: unknown): Promise<EVEncryptResult> {
+    return this.client.request<EVEncryptResult>('/encrypt', { method: 'POST', body: { data } as Record<string, unknown> });
+  }
+  async decrypt(data: unknown): Promise<EVDecryptResult> {
+    return this.client.request<EVDecryptResult>('/decrypt', { method: 'POST', body: { data } as Record<string, unknown> });
   }
 
-  /**
-   * Get a preview of the API key (for debugging)
-   */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  async listFunctions(): Promise<EVFunction[]> { return this.client.request<EVFunction[]>('/functions'); }
+  async runFunction(functionName: string, data: Record<string, unknown>): Promise<EVFunctionRunResult> {
+    return this.client.request<EVFunctionRunResult>(`/functions/${functionName}/runs`, { method: 'POST', body: data });
   }
 
-  /**
-   * Get the underlying client for direct API access
-   */
-  getClient(): ConnectorClient {
-    return this.client;
+  async listCages(): Promise<EVCage[]> { return this.client.request<EVCage[]>('/cages'); }
+
+  async getApp(): Promise<EVApp> { return this.client.request<EVApp>('/apps/current'); }
+
+  async createToken(data: unknown, expiry?: number): Promise<{ token: string; expiry: number }> {
+    return this.client.request('/client-side-tokens', { method: 'POST', body: { payload: data, expiry } as Record<string, unknown> });
   }
+
+  getClient(): EvervaultClient { return this.client; }
 }
-
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
