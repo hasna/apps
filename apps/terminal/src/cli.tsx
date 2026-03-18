@@ -21,6 +21,13 @@ EXAMPLES:
   terminal "kill port 3000"
   terminal "how many lines of code"
 
+SETUP:
+  install                      Set up MCP server for all AI agents (Claude, Codex, Gemini)
+  install --claude             Set up for Claude Code only
+  install --codex              Set up for Codex only
+  install --gemini             Set up for Gemini CLI only
+  uninstall                    Remove from all agents
+
 SUBCOMMANDS:
   repo                         Git repo state (branch + status + log)
   symbols <file>               File outline (functions, classes, exports)
@@ -29,8 +36,7 @@ SUBCOMMANDS:
   sessions [stats|<id>]        Session history and analytics
   recipe add|list|run|delete   Reusable command recipes
   collection create|list       Recipe collections
-  mcp serve                    Start MCP server for AI agents
-  mcp install --claude|--codex Install MCP server
+  mcp serve                    Start MCP server (called by agents, not you)
   discover [--days=N] [--json]  Scan Claude sessions, show token savings potential
   snapshot                     Terminal state as JSON
   --help                       Show this help
@@ -63,6 +69,20 @@ if (args[0] === "--version" || args[0] === "-v") {
   process.exit(0);
 }
 
+// ── Install / Uninstall ──────────────────────────────────────────────────────
+
+if (args[0] === "install") {
+  const { handleInstall } = await import("./mcp/install.js");
+  handleInstall(args.slice(1));
+  process.exit(0);
+}
+
+if (args[0] === "uninstall") {
+  const { handleInstall } = await import("./mcp/install.js");
+  handleInstall(["uninstall"]);
+  process.exit(0);
+}
+
 // ── MCP commands ─────────────────────────────────────────────────────────────
 
 if (args[0] === "mcp") {
@@ -73,10 +93,11 @@ if (args[0] === "mcp") {
       process.exit(1);
     });
   } else if (args[1] === "install") {
-    const { handleMcpInstall } = await import("./mcp/install.js");
-    handleMcpInstall(args.slice(2));
+    // Legacy: `terminal mcp install` still works
+    const { handleInstall } = await import("./mcp/install.js");
+    handleInstall(args.slice(2));
   } else {
-    console.log("Usage: t mcp [serve|install]");
+    console.log("Usage: terminal mcp serve");
   }
 }
 
