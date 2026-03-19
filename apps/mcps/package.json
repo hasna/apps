@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun run build:dashboard && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run build:dashboard && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && node -e \"const fs=require('fs');const f='bin/mcp.js';const c=fs.readFileSync(f,'utf8');if(!c.startsWith('#!/'))fs.writeFileSync(f,'#!/usr/bin/env bun\\n'+c);fs.chmodSync(f,0o755);\" && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "dev": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
