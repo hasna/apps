@@ -41,7 +41,8 @@ async function main() {
   if (port !== requestedPort) {
     console.log(`Port ${requestedPort} in use, using ${port}`);
   }
-  startServer(port);
+  const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true";
+  startServer(port, { open: !noOpen });
 }
 
 main();

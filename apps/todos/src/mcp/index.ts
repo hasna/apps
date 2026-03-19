@@ -50,7 +50,7 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgent, deleteAgent, getAvailableNamesFromPool } from "../db/agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
@@ -99,11 +99,11 @@ const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
 const MINIMAL_TOOLS = new Set([
   "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
   "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
-  "get_tasks_changed_since",
+  "get_tasks_changed_since", "heartbeat",
 ]);
 
 const STANDARD_EXCLUDED = new Set([
-  "get_org_chart", "set_reports_to", "rename_agent", "delete_agent",
+  "get_org_chart", "set_reports_to", "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
   "create_template", "list_templates", "create_task_from_template", "delete_template",
   "approve_task",
@@ -1380,16 +1380,19 @@ server.tool(
 if (shouldRegisterTool("list_agents")) {
 server.tool(
   "list_agents",
-  "List all registered agents",
-  {},
-  async () => {
+  "List all registered agents. By default shows only active agents — set include_archived to see archived ones too.",
+  {
+    include_archived: z.boolean().optional().describe("Include archived agents in the list (default: false)"),
+  },
+  async ({ include_archived }) => {
     try {
-      const agents = listAgents();
+      const agents = listAgents({ include_archived: include_archived ?? false });
       if (agents.length === 0) {
         return { content: [{ type: "text" as const, text: "No agents registered." }] };
       }
       const text = agents.map((a) => {
-        return `${a.id} | ${a.name}${a.description ? ` - ${a.description}` : ""} (last seen: ${a.last_seen_at})`;
+        const statusTag = a.status === "archived" ? " [archived]" : "";
+        return `${a.id} | ${a.name}${statusTag}${a.description ? ` - ${a.description}` : ""} (last seen: ${a.last_seen_at})`;
       }).join("\n");
       return { content: [{ type: "text" as const, text: `${agents.length} agent(s):\n${text}` }] };
     } catch (e) {
@@ -1470,7 +1473,7 @@ server.tool(
 if (shouldRegisterTool("delete_agent")) {
 server.tool(
   "delete_agent",
-  "Delete an agent permanently. Resolve by id or name.",
+  "Archive an agent (soft delete). The agent is hidden from list_agents but preserved for task history. Use unarchive_agent to restore. Resolve by id or name.",
   {
     id: z.string().optional(),
     name: z.string().optional(),
@@ -1484,13 +1487,77 @@ server.tool(
       if (!agent) {
         return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
       }
-      const deleted = deleteAgent(agent.id);
+      const archived = archiveAgent(agent.id);
       return {
         content: [{
           type: "text" as const,
-          text: deleted ? `Agent deleted: ${agent.name} (${agent.id})` : `Failed to delete agent: ${agent.name}`,
+          text: archived ? `Agent archived: ${agent.name} (${agent.id}). Use unarchive_agent to restore.` : `Failed to archive agent: ${agent.name}`,
         }],
-        isError: !deleted,
+        isError: !archived,
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// unarchive_agent
+if (shouldRegisterTool("unarchive_agent")) {
+server.tool(
+  "unarchive_agent",
+  "Restore an archived agent back to active status. Resolve by id or name.",
+  {
+    id: z.string().optional(),
+    name: z.string().optional(),
+  },
+  async ({ id, name }) => {
+    try {
+      if (!id && !name) {
+        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+      }
+      const agent = id ? getAgent(id) : getAgentByName(name!);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+      }
+      if (agent.status === "active") {
+        return { content: [{ type: "text" as const, text: `Agent ${agent.name} is already active.` }] };
+      }
+      const restored = unarchiveAgent(agent.id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: restored ? `Agent restored: ${agent.name} (${agent.id}) is now active.` : `Failed to restore agent: ${agent.name}`,
+        }],
+        isError: !restored,
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// heartbeat
+if (shouldRegisterTool("heartbeat")) {
+server.tool(
+  "heartbeat",
+  "Update your last_seen_at timestamp to signal you're still active. Call periodically during long tasks to prevent being marked stale.",
+  {
+    agent_id: z.string().describe("Your agent ID or name."),
+  },
+  async ({ agent_id }) => {
+    try {
+      const agent = getAgent(agent_id) || getAgentByName(agent_id);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+      }
+      updateAgentActivity(agent.id);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Heartbeat: ${agent.name} (${agent.id}) — last_seen_at updated to ${new Date().toISOString()}`,
+        }],
       };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -2740,7 +2807,7 @@ server.tool(
       "create_project","list_projects","add_project_source","remove_project_source","list_project_sources",
       "add_checklist_item","check_checklist_item","update_checklist_item","remove_checklist_item","get_checklist",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
-      "register_agent","suggest_agent_name","list_agents","get_agent","rename_agent","delete_agent",
+      "register_agent","suggest_agent_name","list_agents","get_agent","rename_agent","delete_agent","unarchive_agent","heartbeat",
       "get_my_tasks","get_org_chart","set_reports_to",
       "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
       "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
@@ -2814,10 +2881,12 @@ server.tool(
       // Agents
       suggest_agent_name: "Check available agent names before registering. Shows active agents and, if a pool is configured, which pool names are free.\n  Params: working_dir(string — your working directory, used to look up project pool from config)\n  Example: {working_dir: '/workspace/platform'}",
       register_agent: "Register an agent. Any name is allowed — pool is advisory. Returns CONFLICT if name is held by a recently-active agent.\n  Params: name(string, req), description(string), capabilities(string[]), session_id(string — unique per session), working_dir(string — used to determine project pool)\n  Example: {name: 'my-agent', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
-      list_agents: "List all registered agents with IDs, names, and last seen timestamps. No params.",
+      list_agents: "List all registered agents (active by default). Set include_archived: true to see archived agents.\n  Params: include_archived(boolean, optional)\n  Example: {include_archived: true}",
       get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",
-      delete_agent: "Delete an agent permanently. Resolve by id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
+      delete_agent: "Archive an agent (soft delete). Agent is preserved for task history but hidden from list_agents. Use unarchive_agent to restore.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
+      unarchive_agent: "Restore an archived agent back to active status.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
+      heartbeat: "Update last_seen_at timestamp to signal you're still active. Call periodically during long tasks.\n  Params: agent_id(string, req — your agent ID or name)\n  Example: {agent_id: 'maximus'}",
       get_my_tasks: "Get all tasks assigned to/created by an agent, with stats (pending/active/done/rate).\n  Params: agent_name(string, req)\n  Example: {agent_name: 'maximus'}",
       get_org_chart: "Get agent org chart showing reporting hierarchy. No params.",
       set_reports_to: "Set who an agent reports to in the org chart. Omit manager_name for top-level.\n  Params: agent_name(string, req), manager_name(string, optional)\n  Example: {agent_name: 'brutus', manager_name: 'maximus'}",

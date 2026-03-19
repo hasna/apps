@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent } from "./agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent, archiveAgent, unarchiveAgent } from "./agents.js";
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -178,14 +178,56 @@ describe("updateAgent", () => {
   });
 });
 
-describe("deleteAgent", () => {
-  it("should delete existing agent", () => {
+describe("deleteAgent (soft delete / archive)", () => {
+  it("should archive existing agent", () => {
     const agent = registerAgent({ name: "doomed" });
     expect(deleteAgent(agent.id)).toBe(true);
-    expect(getAgent(agent.id)).toBeNull();
+    const archived = getAgent(agent.id);
+    expect(archived).not.toBeNull();
+    expect(archived!.status).toBe("archived");
+  });
+
+  it("should hide archived agents from listAgents by default", () => {
+    const agent = registerAgent({ name: "hidden" });
+    deleteAgent(agent.id);
+    const agents = listAgents();
+    expect(agents.find(a => a.id === agent.id)).toBeUndefined();
+  });
+
+  it("should show archived agents when include_archived is true", () => {
+    const agent = registerAgent({ name: "visible" });
+    deleteAgent(agent.id);
+    const agents = listAgents({ include_archived: true });
+    const found = agents.find(a => a.id === agent.id);
+    expect(found).not.toBeUndefined();
+    expect(found!.status).toBe("archived");
   });
 
   it("should return false for non-existent agent", () => {
     expect(deleteAgent("nope")).toBe(false);
+  });
+});
+
+describe("archiveAgent / unarchiveAgent", () => {
+  it("should archive and restore an agent", () => {
+    const agent = registerAgent({ name: "toggle" });
+    expect(agent.status).toBe("active");
+
+    const archived = archiveAgent(agent.id);
+    expect(archived!.status).toBe("archived");
+
+    const restored = unarchiveAgent(agent.id);
+    expect(restored!.status).toBe("active");
+  });
+
+  it("should reactivate archived agent on re-register", () => {
+    const agent = registerAgent({ name: "comeback" });
+    archiveAgent(agent.id);
+    expect(getAgent(agent.id)!.status).toBe("archived");
+
+    // Re-register should reactivate
+    const result = registerAgent({ name: "comeback" });
+    expect(isAgentConflict(result)).toBe(false);
+    expect((result as any).status).toBe("active");
   });
 });

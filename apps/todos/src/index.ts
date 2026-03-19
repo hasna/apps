@@ -89,6 +89,8 @@ export {
   updateAgent,
   updateAgentActivity,
   deleteAgent,
+  archiveAgent,
+  unarchiveAgent,
   getDirectReports,
   getOrgChart,
   matchCapabilities,

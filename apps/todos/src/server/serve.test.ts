@@ -43,9 +43,9 @@ beforeAll(async () => {
   dbPath = join(tmpDir, "test.db");
 
   proc = Bun.spawn({
-    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`],
+    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open"],
     cwd: join(import.meta.dir, "..", ".."),
-    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
     stdout: "pipe",
     stderr: "pipe",
   });
