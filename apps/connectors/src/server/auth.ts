@@ -181,9 +181,9 @@ function loadTokens(name: string): OAuthTokens | null {
   const profileConfig = loadProfileConfig(name);
   if (profileConfig.refreshToken || profileConfig.accessToken) {
     return {
-      accessToken: profileConfig.accessToken as string | undefined,
+      accessToken: (profileConfig.accessToken as string) ?? "",
       refreshToken: profileConfig.refreshToken as string | undefined,
-      expiresAt: profileConfig.expiresAt as number | undefined,
+      expiresAt: (profileConfig.expiresAt as number) ?? 0,
       tokenType: profileConfig.tokenType as string | undefined,
       scope: profileConfig.scope as string | undefined,
     };

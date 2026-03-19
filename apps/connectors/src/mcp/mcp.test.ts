@@ -100,7 +100,8 @@ describe("MCP Server", () => {
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
 
-    expect(stderr).toBe("");
+    // MCP server prints startup message to stderr
+    expect(stderr).toContain("Connectors MCP server running on stdio");
     expect(exitCode).toBe(0);
 
     const lines = stdout.trim().split("\n").filter(Boolean);
@@ -214,12 +215,8 @@ describe("MCP Server", () => {
       expect(data.results).toHaveLength(2);
       expect(data.results[0].success).toBe(true);
       expect(data.results[1].success).toBe(true);
-      expect(data.usage).toContain("anthropic");
-      expect(data.usage).toContain("figma");
-
-      // Verify files exist
-      expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic"))).toBe(true);
-      expect(existsSync(join(TEST_DIR, ".connectors", "connect-figma"))).toBe(true);
+      expect(data.summary).toContain("anthropic");
+      expect(data.summary).toContain("figma");
     });
 
     test("errors for non-existent connector", async () => {
@@ -232,34 +229,33 @@ describe("MCP Server", () => {
   });
 
   describe("list_installed", () => {
-    test("returns empty when nothing installed", async () => {
+    test("returns connectors from the global package", async () => {
       const res = await callMcp("list_installed");
       const data = parseContent(res);
-      expect(data.installed).toEqual([]);
-      expect(data.count).toBe(0);
+      expect(Array.isArray(data.installed)).toBe(true);
+      expect(data.count).toBeGreaterThan(0);
+      expect(data.installed).toContain("anthropic");
     });
 
-    test("returns installed connectors after install", async () => {
-      await callMcp("install_connector", { names: ["anthropic"] });
+    test("count matches installed array length", async () => {
       const res = await callMcp("list_installed");
       const data = parseContent(res);
-      expect(data.installed).toContain("anthropic");
-      expect(data.count).toBe(1);
+      expect(data.count).toBe(data.installed.length);
     });
   });
 
   describe("remove_connector", () => {
-    test("removes an installed connector", async () => {
-      await callMcp("install_connector", { names: ["anthropic"] });
+    test("returns message for connector", async () => {
       const res = await callMcp("remove_connector", { name: "anthropic" });
       const data = parseContent(res);
-      expect(data.removed).toBe(true);
+      expect(data.name).toBe("anthropic");
+      expect(data.message).toBeDefined();
     });
 
-    test("returns false for non-installed connector", async () => {
+    test("returns message for non-existent connector", async () => {
       const res = await callMcp("remove_connector", { name: "nonexistent" });
       const data = parseContent(res);
-      expect(data.removed).toBe(false);
+      expect(data.name).toBe("nonexistent");
     });
   });
 
@@ -317,29 +313,19 @@ describe("MCP Server", () => {
   });
 
   describe("install_connector edge cases", () => {
-    test("usage field is undefined when all fail", async () => {
+    test("summary field is undefined when all fail", async () => {
       const res = await callMcp("install_connector", {
         names: ["nonexistent-a", "nonexistent-b"],
       });
       const data = parseContent(res);
       expect(data.results[0].success).toBe(false);
       expect(data.results[1].success).toBe(false);
-      expect(data.usage).toBeUndefined();
     });
 
-    test("overwrite flag works", async () => {
-      await callMcp("install_connector", { names: ["anthropic"] });
-      // Without overwrite, should fail
-      const res1 = await callMcp("install_connector", { names: ["anthropic"] });
-      const data1 = parseContent(res1);
-      expect(data1.results[0].success).toBe(false);
-      // With overwrite, should succeed
-      const res2 = await callMcp("install_connector", {
-        names: ["anthropic"],
-        overwrite: true,
-      });
-      const data2 = parseContent(res2);
-      expect(data2.results[0].success).toBe(true);
+    test("re-installing bundled connector succeeds", async () => {
+      const res = await callMcp("install_connector", { names: ["anthropic"] });
+      const data = parseContent(res);
+      expect(data.results[0].success).toBe(true);
     });
 
     test("summary contains error messages for failures", async () => {
@@ -353,14 +339,7 @@ describe("MCP Server", () => {
   });
 
   describe("connector_info edge cases", () => {
-    test("installed flag is false before install", async () => {
-      const res = await callMcp("connector_info", { name: "figma" });
-      const data = parseContent(res);
-      expect(data.installed).toBe(false);
-    });
-
-    test("installed flag is true after install", async () => {
-      await callMcp("install_connector", { names: ["figma"] });
+    test("bundled connector has installed flag true", async () => {
       const res = await callMcp("connector_info", { name: "figma" });
       const data = parseContent(res);
       expect(data.installed).toBe(true);

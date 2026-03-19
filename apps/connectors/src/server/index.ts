@@ -20,4 +20,5 @@ function parsePort(): number {
   return DEFAULT_PORT;
 }
 
-startServer(parsePort());
+const shouldOpen = !process.argv.includes("--no-open");
+startServer(parsePort(), { open: shouldOpen });

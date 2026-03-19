@@ -8,7 +8,7 @@ describe("server entry (connectors-serve)", () => {
     // Pick a random port to avoid conflicts
     const port = 40000 + Math.floor(Math.random() * 20000);
 
-    const proc = Bun.spawn(["bun", SERVER_ENTRY, "--port", String(port)], {
+    const proc = Bun.spawn(["bun", SERVER_ENTRY, "--port", String(port), "--no-open"], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -31,7 +31,7 @@ describe("server entry (connectors-serve)", () => {
   test("starts with --port= syntax", async () => {
     const port = 40000 + Math.floor(Math.random() * 20000);
 
-    const proc = Bun.spawn(["bun", SERVER_ENTRY, `--port=${port}`], {
+    const proc = Bun.spawn(["bun", SERVER_ENTRY, `--port=${port}`, "--no-open"], {
       stdout: "pipe",
       stderr: "pipe",
     });
