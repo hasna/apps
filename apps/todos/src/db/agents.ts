@@ -45,25 +45,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const d = db || getDatabase();
   const normalizedName = input.name.trim().toLowerCase();
 
-  // Pool validation: if a pool is provided, the name must be in it
-  if (input.pool && input.pool.length > 0) {
-    const poolLower = input.pool.map((n) => n.toLowerCase());
-    if (!poolLower.includes(normalizedName)) {
-      const available = getAvailableNamesFromPool(input.pool, d);
-      const suggestion = available.length > 0 ? available[0]! : null;
-      return {
-        conflict: true,
-        pool_violation: true,
-        existing_id: "",
-        existing_name: normalizedName,
-        last_seen_at: "",
-        session_hint: null,
-        working_dir: input.working_dir || null,
-        suggestions: available.slice(0, 5),
-        message: `"${normalizedName}" is not in this project's agent pool [${input.pool.join(", ")}]. ${available.length > 0 ? `Try: ${available.slice(0, 3).join(", ")}` : "No names are currently available — wait for an active agent to go stale."}${suggestion ? ` Suggested: ${suggestion}` : ""}`,
-      };
-    }
-  }
+  // Pool is advisory — any name is allowed, pool just provides suggestions on conflict
 
   const existing = getAgentByName(normalizedName, d);
   if (existing) {

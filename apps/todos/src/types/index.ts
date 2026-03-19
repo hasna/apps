@@ -166,7 +166,7 @@ export interface RegisterAgentInput {
   role?: string;
   title?: string;
   level?: string;
-  pool?: string[]; // allowed names for this project — if provided, name must be in this list
+  pool?: string[]; // advisory pool — used for suggestions on conflict, not enforced
   permissions?: string[];
   capabilities?: string[];
   reports_to?: string;
@@ -186,7 +186,6 @@ export interface AgentConflictError {
   working_dir: string | null;
   message: string;
   suggestions?: string[]; // available names from the project pool to try instead
-  pool_violation?: true;  // the requested name is not in this project's allowed pool
 }
 
 // Task List

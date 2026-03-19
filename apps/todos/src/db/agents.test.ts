@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { registerAgent, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent } from "./agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent } from "./agents.js";
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -44,6 +44,52 @@ describe("registerAgent", () => {
     });
     expect(agent.description).toBe("A custom bot");
     expect(agent.metadata).toEqual({ version: "1.0", features: ["search"] });
+  });
+});
+
+describe("registerAgent — pool is advisory", () => {
+  it("should allow names outside the pool", () => {
+    const result = registerAgent({ name: "tacitus", pool: ["maximus", "cassius", "brutus"] });
+    expect(isAgentConflict(result)).toBe(false);
+    expect((result as any).name).toBe("tacitus");
+  });
+
+  it("should allow names inside the pool", () => {
+    const result = registerAgent({ name: "maximus", pool: ["maximus", "cassius", "brutus"] });
+    expect(isAgentConflict(result)).toBe(false);
+    expect((result as any).name).toBe("maximus");
+  });
+
+  it("should block login to recently-active agent with different session", () => {
+    // Register agent with session A
+    const agent = registerAgent({ name: "cassius", session_id: "session-aaa" });
+    expect(isAgentConflict(agent)).toBe(false);
+
+    // Try to take over with session B — should be blocked (agent is active)
+    const result = registerAgent({ name: "cassius", session_id: "session-bbb" });
+    expect(isAgentConflict(result)).toBe(true);
+    expect((result as any).message).toContain("already active");
+  });
+
+  it("should allow login to same agent with same session_id", () => {
+    registerAgent({ name: "brutus", session_id: "session-xxx" });
+    const result = registerAgent({ name: "brutus", session_id: "session-xxx" });
+    expect(isAgentConflict(result)).toBe(false);
+    expect((result as any).name).toBe("brutus");
+  });
+
+  it("should allow takeover of stale agent", () => {
+    const db = getDatabase();
+    // Register agent, then manually set last_seen_at to >30 min ago
+    const agent = registerAgent({ name: "nero", session_id: "old-session" });
+    expect(isAgentConflict(agent)).toBe(false);
+    const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, (agent as any).id]);
+
+    // New session should take over
+    const result = registerAgent({ name: "nero", session_id: "new-session" });
+    expect(isAgentConflict(result)).toBe(false);
+    expect((result as any).name).toBe("nero");
   });
 });
 

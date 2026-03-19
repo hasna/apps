@@ -1296,9 +1296,9 @@ server.tool(
 if (shouldRegisterTool("register_agent")) {
 server.tool(
   "register_agent",
-  "Register an agent. If a name pool is configured (via agent_pool or project_pools in config), name must be from that pool. Returns conflict with suggestions if name is taken or not allowed.",
+  "Register an agent. Any name is allowed — the configured pool is advisory, not enforced. Returns a conflict error if the name is held by a recently-active agent.",
   {
-    name: z.string().describe("Agent name. If a pool is configured for this project, name must be in the pool. Use suggest_agent_name to check."),
+    name: z.string().describe("Agent name — any name is allowed. Use suggest_agent_name to see pool suggestions and avoid conflicts."),
     description: z.string().optional(),
     capabilities: z.array(z.string()).optional().describe("Agent capabilities/skills for task routing (e.g. ['typescript', 'testing', 'devops'])"),
     session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
@@ -1313,9 +1313,7 @@ server.tool(
         const suggestLine = result.suggestions && result.suggestions.length > 0
           ? `\nAvailable names: ${result.suggestions.join(", ")}`
           : "";
-        const hint = result.pool_violation
-          ? `POOL_VIOLATION: ${result.message}${suggestLine}`
-          : `CONFLICT: ${result.message}${suggestLine}`;
+        const hint = `CONFLICT: ${result.message}${suggestLine}`;
         return {
           content: [{ type: "text" as const, text: hint }],
           isError: true,
@@ -2815,7 +2813,7 @@ server.tool(
 
       // Agents
       suggest_agent_name: "Check available agent names before registering. Shows active agents and, if a pool is configured, which pool names are free.\n  Params: working_dir(string — your working directory, used to look up project pool from config)\n  Example: {working_dir: '/workspace/platform'}",
-      register_agent: "Register an agent. If agent_pool or project_pools is configured, name must be from the pool. Returns CONFLICT (name active) or POOL_VIOLATION (name not in pool) with suggestions.\n  Params: name(string, req), description(string), capabilities(string[]), session_id(string — unique per session), working_dir(string — used to determine project pool)\n  Example: {name: 'my-agent', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
+      register_agent: "Register an agent. Any name is allowed — pool is advisory. Returns CONFLICT if name is held by a recently-active agent.\n  Params: name(string, req), description(string), capabilities(string[]), session_id(string — unique per session), working_dir(string — used to determine project pool)\n  Example: {name: 'my-agent', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
       list_agents: "List all registered agents with IDs, names, and last seen timestamps. No params.",
       get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",
