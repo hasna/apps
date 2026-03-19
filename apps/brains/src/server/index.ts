@@ -1,30 +1,18 @@
-// Fellow agents: server/MCP versions now come from package metadata so releases cannot drift.
+#!/usr/bin/env bun
 // HTTP server placeholder for @hasna/brains
 // Will expose REST API for model management and training data
 
-import { getPackageVersion } from "../lib/package-metadata.js";
-
 const port = Number(process.env["PORT"] ?? 7020);
-const service = "brains";
 
-export function createServerFetchHandler(version = getPackageVersion()) {
-  return (req: Request): Response => {
+console.log(`brains server starting on port ${port}`);
+
+Bun.serve({
+  port,
+  fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/health") {
-      return Response.json({ status: "ok", service, version });
+      return Response.json({ status: "ok", service: "brains", version: "0.0.1" });
     }
     return Response.json({ error: "not found" }, { status: 404 });
-  };
-}
-
-export function startServer(serverPort = port) {
-  console.log(`${service} server starting on port ${serverPort}`);
-  return Bun.serve({
-    port: serverPort,
-    fetch: createServerFetchHandler(),
-  });
-}
-
-if (import.meta.main) {
-  startServer();
-}
+  },
+});
