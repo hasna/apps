@@ -121,16 +121,15 @@ describe("CLI", () => {
       expect(exitCode).toBe(1);
     });
 
-    test("--installed shows bundled connectors", async () => {
+    test("--installed shows no connectors initially", async () => {
       const { stdout } = await run("list --installed");
-      expect(stdout).toContain("anthropic");
+      expect(stdout).toContain("No connectors installed");
     });
 
-    test("--installed --json outputs non-empty array of bundled connectors", async () => {
+    test("--installed --json outputs empty array initially", async () => {
       const { stdout } = await run("list --installed --json");
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBeGreaterThan(0);
+      expect(data).toEqual([]);
     });
 
     test("--installed shows installed connectors after install", async () => {
@@ -218,6 +217,9 @@ describe("CLI", () => {
       expect(stdout).toContain("✓");
       expect(stdout).toContain("anthropic");
       expect(exitCode).toBe(0);
+
+      const dest = join(TEST_DIR, ".connectors", "connect-anthropic");
+      expect(existsSync(dest)).toBe(true);
     });
 
     test("installs multiple connectors", async () => {
@@ -233,15 +235,16 @@ describe("CLI", () => {
       expect(exitCode).toBe(1);
     });
 
-    test("re-installing bundled connector succeeds", async () => {
+    test("errors when already installed without overwrite", async () => {
       await run("install anthropic");
       const { stdout, exitCode } = await run("install anthropic");
-      expect(stdout).toContain("✓");
-      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Already installed");
+      expect(exitCode).toBe(1);
     });
 
-    test("install succeeds for valid connector", async () => {
-      const { stdout, exitCode } = await run("install figma");
+    test("succeeds with --overwrite", async () => {
+      await run("install anthropic");
+      const { stdout, exitCode } = await run("install anthropic --overwrite");
       expect(stdout).toContain("✓");
       expect(exitCode).toBe(0);
     });
@@ -271,10 +274,15 @@ describe("CLI", () => {
   });
 
   describe("remove", () => {
-    test("remove reports not installed for bundled connectors", async () => {
+    test("removes an installed connector", async () => {
+      await run("install anthropic");
       const { stdout, exitCode } = await run("remove anthropic");
-      expect(stdout).toContain("not installed");
-      expect(exitCode).toBe(1);
+      expect(stdout).toContain("✓");
+      expect(stdout).toContain("Removed");
+      expect(exitCode).toBe(0);
+
+      const dest = join(TEST_DIR, ".connectors", "connect-anthropic");
+      expect(existsSync(dest)).toBe(false);
     });
 
     test("errors for non-installed connector", async () => {
@@ -284,11 +292,12 @@ describe("CLI", () => {
     });
 
     test("--json outputs valid JSON", async () => {
+      await run("install anthropic");
       const { stdout, exitCode } = await run("remove anthropic --json");
       const data = JSON.parse(stdout);
       expect(data.connector).toBe("anthropic");
-      expect(data.removed).toBe(false);
-      expect(exitCode).toBe(1);
+      expect(data.removed).toBe(true);
+      expect(exitCode).toBe(0);
     });
 
     test("--json with failure", async () => {
@@ -455,11 +464,13 @@ describe("CLI", () => {
   });
 
   describe("install edge cases", () => {
-    test("install multiple connectors succeeds", async () => {
-      const { stdout, exitCode } = await run("install anthropic stripe");
-      expect(stdout).toContain("anthropic");
-      expect(stdout).toContain("stripe");
-      expect(exitCode).toBe(0);
+    test("install updates index.ts correctly", async () => {
+      await run("install anthropic stripe");
+      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
+      const { readFileSync } = await import("fs");
+      const content = readFileSync(indexPath, "utf-8");
+      expect(content).toContain("export * as anthropic");
+      expect(content).toContain("export * as stripe");
     });
 
     test("--json with mixed success/failure", async () => {
@@ -749,21 +760,23 @@ describe("CLI", () => {
       expect(data.error).toContain("not found");
     });
 
-    test("returns results for bundled connectors", async () => {
-      const { stdout } = await run("test --json");
+    test("returns empty results when nothing installed", async () => {
+      const { stdout, exitCode } = await run("test --json");
+      expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data.results)).toBe(true);
-      expect(data.tested).toBeGreaterThan(0);
-    }, 30000);
+      expect(data.results).toEqual([]);
+      expect(data.tested).toBe(0);
+    });
 
     test("skips connectors without test endpoints", async () => {
-      const { stdout } = await run("test shopify --json");
+      await run("install shopify");
+      const { stdout, exitCode } = await run("test --json");
       const data = JSON.parse(stdout);
       const shopify = data.results.find((r: any) => r.name === "shopify");
       if (shopify) {
         expect(["skip", "no-key"]).toContain(shopify.status);
       }
-    }, 30000);
+    });
   });
 
   describe("ops", () => {
