@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -50,11 +50,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-todos.git"
+    "url": "https://github.com/hasna/todos.git"
   },
-  "homepage": "https://github.com/hasna/open-todos",
+  "homepage": "https://github.com/hasna/todos",
   "bugs": {
-    "url": "https://github.com/hasna/open-todos/issues"
+    "url": "https://github.com/hasna/todos/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
