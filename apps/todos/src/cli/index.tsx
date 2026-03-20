@@ -1940,6 +1940,40 @@ program
     }
   });
 
+// agent-update <name>
+program
+  .command("agent-update <name>")
+  .alias("agents-update")
+  .description("Update an agent's description, role, or other fields")
+  .option("--description <text>", "New description")
+  .option("--role <role>", "New role")
+  .option("--title <title>", "New title")
+  .action((name: string, opts) => {
+    const globalOpts = program.opts();
+    try {
+      const { getAgentByName: findByName, updateAgent: doUpdate } = require("../db/agents.js") as any;
+      const agent = findByName(name);
+      if (!agent) {
+        console.error(chalk.red(`Agent not found: ${name}`));
+        process.exit(1);
+      }
+      const updates: Record<string, unknown> = {};
+      if (opts.description !== undefined) updates.description = opts.description;
+      if (opts.role !== undefined) updates.role = opts.role;
+      if (opts.title !== undefined) updates.title = opts.title;
+      const updated = doUpdate(agent.id, updates);
+      if (globalOpts.json) {
+        output(updated, true);
+      } else {
+        console.log(chalk.green(`Updated agent: ${updated.name} (${updated.id.slice(0, 8)})`));
+        if (updated.description) console.log(chalk.dim(`  Description: ${updated.description}`));
+        if (updated.role) console.log(chalk.dim(`  Role: ${updated.role}`));
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // agent <name> — rich single-agent view
 program
   .command("agent <name>")

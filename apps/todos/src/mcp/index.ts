@@ -1483,6 +1483,40 @@ server.tool(
 );
 }
 
+// update_agent
+if (shouldRegisterTool("update_agent")) {
+server.tool(
+  "update_agent",
+  "Update an agent's description, role, title, or other metadata. Resolve by id or name.",
+  {
+    id: z.string().optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    role: z.string().optional(),
+    title: z.string().optional(),
+    level: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    permissions: z.array(z.string()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  },
+  async ({ id, name, ...updates }) => {
+    try {
+      if (!id && !name) {
+        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+      }
+      const agent = id ? getAgent(id) : getAgentByName(name!);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+      }
+      const updated = updateAgent(agent.id, updates);
+      return { content: [{ type: "text" as const, text: `Agent updated: ${updated.name} (${updated.id.slice(0, 8)})` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // delete_agent
 if (shouldRegisterTool("delete_agent")) {
 server.tool(
