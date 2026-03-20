@@ -530,6 +530,8 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
     if (opts.space) { extraWhere += " AND m.space = ?"; ftsParams.push(opts.space); }
     if (opts.from) { extraWhere += " AND m.from_agent = ?"; ftsParams.push(opts.from); }
     if (opts.to) { extraWhere += " AND m.to_agent = ?"; ftsParams.push(opts.to); }
+    if (opts.since) { extraWhere += " AND m.created_at >= ?"; ftsParams.push(opts.since); }
+    if (opts.until) { extraWhere += " AND m.created_at <= ?"; ftsParams.push(opts.until); }
 
     const orderClause = sortByRelevance ? "ORDER BY rank" : "ORDER BY m.created_at DESC, m.id DESC";
 
@@ -566,6 +568,8 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   if (opts.space) { conditions.push("space = ?"); params.push(opts.space); }
   if (opts.from) { conditions.push("from_agent = ?"); params.push(opts.from); }
   if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
+  if (opts.since) { conditions.push("created_at >= ?"); params.push(opts.since); }
+  if (opts.until) { conditions.push("created_at <= ?"); params.push(opts.until); }
 
   const where = `WHERE ${conditions.join(" AND ")}`;
 

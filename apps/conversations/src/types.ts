@@ -127,8 +127,11 @@ export interface SearchMessagesOptions {
   space?: string;
   from?: string;
   to?: string;
+  since?: string;
+  until?: string;
   limit?: number;
   sort?: "relevance" | "recent";
+  snippet_length?: number;
 }
 
 export interface SearchResult extends Message {

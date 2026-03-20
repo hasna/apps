@@ -189,20 +189,27 @@ server.registerTool("mark_read", {
 });
 
 server.registerTool("search_messages", {
-  description: "Full-text search across messages.",
+  description: "Full-text search across messages. Uses FTS5 with BM25 ranking if available, falls back to LIKE. Returns messages with snippet and relevance_score.",
   inputSchema: {
-    query: z.string(),
-    space: z.string().optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
-    limit: z.coerce.number().optional(),
+    query: z.string().describe("Search query. Wrap in quotes for exact phrase: '\"BUG-005\"'"),
+    space: z.string().optional().describe("Limit to a specific space"),
+    from: z.string().optional().describe("Filter by sender"),
+    to: z.string().optional().describe("Filter by recipient"),
+    since: z.string().optional().describe("ISO 8601 date — only messages after this"),
+    until: z.string().optional().describe("ISO 8601 date — only messages before this"),
+    sort: z.enum(["relevance", "recent"]).optional().describe("Sort order (default: relevance)"),
+    limit: z.coerce.number().optional().describe("Max results (default: 20)"),
   },
 }, async (args: Record<string, any>) => {
-  const { query, space, from, to, limit } = args;
-  const messages = searchMessages({ query, space, from, to, limit });
+  const { query, space, from, to, since, until, sort, limit } = args;
+  const results = searchMessages({ query, space, from, to, since, until, sort, limit });
 
   return {
-    content: [{ type: "text", text: JSON.stringify(messages) }],
+    content: [{ type: "text", text: JSON.stringify({
+      results,
+      count: results.length,
+      query,
+    }) }],
   };
 });
 
