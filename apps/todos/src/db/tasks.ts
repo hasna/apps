@@ -68,8 +68,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const assignedFromProject = input.assigned_from_project || null;
 
   d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       shortId,
@@ -101,6 +101,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
       input.spawned_from_session || null,
       assignedBy || null,
       assignedFromProject || null,
+      input.task_type || null,
     ],
   );
 
@@ -255,6 +256,16 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     conditions.push("recurrence_rule IS NOT NULL");
   } else if (filter.has_recurrence === false) {
     conditions.push("recurrence_rule IS NULL");
+  }
+
+  if (filter.task_type) {
+    if (Array.isArray(filter.task_type)) {
+      conditions.push(`task_type IN (${filter.task_type.map(() => "?").join(",")})`);
+      params.push(...filter.task_type);
+    } else {
+      conditions.push("task_type = ?");
+      params.push(filter.task_type);
+    }
   }
 
   const PRIORITY_RANK = `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`;
@@ -452,6 +463,10 @@ export function updateTask(
   if (input.recurrence_rule !== undefined) {
     sets.push("recurrence_rule = ?");
     params.push(input.recurrence_rule);
+  }
+  if (input.task_type !== undefined) {
+    sets.push("task_type = ?");
+    params.push(input.task_type ?? null);
   }
 
   params.push(id, input.version);

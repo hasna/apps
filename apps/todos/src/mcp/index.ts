@@ -274,6 +274,7 @@ server.tool(
     reason: z.string().optional().describe("Why this task exists — context for agents picking it up"),
     spawned_from_session: z.string().optional().describe("Session ID that created this task (for tracing task lineage)"),
     assigned_from_project: z.string().optional().describe("Override: project ID the assigning agent is working from. Auto-detected from agent focus if omitted."),
+    task_type: z.string().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or any custom string"),
   },
   async (params) => {
     try {
@@ -327,6 +328,7 @@ server.tool(
     has_recurrence: z.boolean().optional(),
     due_today: z.boolean().optional(),
     overdue: z.boolean().optional(),
+    task_type: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by task type: bug, feature, chore, improvement, docs, test, security, or custom"),
     limit: z.number().optional(),
     offset: z.number().optional(),
     summary_only: z.boolean().optional().describe("When true, return only id, short_id, title, status, priority — minimal tokens for navigation"),
@@ -464,6 +466,7 @@ server.tool(
     metadata: z.record(z.unknown()).optional(),
     plan_id: z.string().optional(),
     task_list_id: z.string().optional(),
+    task_type: z.string().nullable().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or custom. null to clear."),
   },
   async ({ id, ...rest }) => {
     try {

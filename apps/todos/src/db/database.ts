@@ -576,6 +576,12 @@ const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN started_at TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (34);
   `,
+  // Migration 35: Add task_type field for structured classification (bug, feature, chore, etc.)
+  `
+  ALTER TABLE tasks ADD COLUMN task_type TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (35);
+  `,
 ];
 
 let _db: Database | null = null;
