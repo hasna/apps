@@ -69,6 +69,9 @@ import {
   createRelationship,
   listRelationships,
   deleteRelationship,
+  createCompanyRelationship,
+  listCompanyRelationships,
+  deleteCompanyRelationship,
 } from "../db/relationships.js";
 import { listActivity } from "../db/activity.js";
 import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
@@ -824,6 +827,41 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "add_company_relationship",
+      description: "Declare a typed relationship between a contact and a company (client, vendor, partner, employee, contractor, investor, advisor, other).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          company_id: { type: "string" },
+          relationship_type: { type: "string", enum: ["client", "vendor", "partner", "employee", "contractor", "investor", "advisor", "other"] },
+          notes: { type: "string" },
+        },
+        required: ["contact_id", "company_id", "relationship_type"],
+      },
+    },
+    {
+      name: "list_company_relationships",
+      description: "List typed contact↔company relationships, optionally filtered by contact, company, or type.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          company_id: { type: "string" },
+          relationship_type: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "delete_company_relationship",
+      description: "Delete a contact↔company relationship by ID.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
       name: "import_contacts_from_gmail",
       description: "Extract unique contacts from Gmail messages matching a search query and batch-upsert them. Requires connect-gmail auth login first. Returns { imported, skipped, errors }.",
       inputSchema: {
@@ -1439,6 +1477,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const contact = autoLinkContactToCompany(a.contact_id as string);
         if (!contact) return { content: [{ type: "text", text: "null" }] };
         return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "add_company_relationship": {
+        const rel = createCompanyRelationship({
+          contact_id: a.contact_id as string,
+          company_id: a.company_id as string,
+          relationship_type: a.relationship_type as "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "other",
+          notes: a.notes as string | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(rel, null, 2) }] };
+      }
+
+      case "list_company_relationships": {
+        const rels = listCompanyRelationships({
+          contact_id: a.contact_id as string | undefined,
+          company_id: a.company_id as string | undefined,
+          relationship_type: a.relationship_type as "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "other" | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(rels, null, 2) }] };
+      }
+
+      case "delete_company_relationship": {
+        deleteCompanyRelationship(a.id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
       }
 
       case "import_contacts_from_gmail": {

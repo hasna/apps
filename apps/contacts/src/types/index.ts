@@ -344,6 +344,35 @@ export interface CreateRelationshipInput {
   notes?: string;
 }
 
+// ─── Company Relationships ────────────────────────────────────────────────────
+
+export type CompanyRelationshipType = "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "other";
+
+export interface CompanyRelationship {
+  id: string;
+  contact_id: string;
+  company_id: string;
+  relationship_type: CompanyRelationshipType;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface CreateCompanyRelationshipInput {
+  contact_id: string;
+  company_id: string;
+  relationship_type: CompanyRelationshipType;
+  notes?: string;
+}
+
+export interface CompanyRelationshipRow {
+  id: string;
+  contact_id: string;
+  company_id: string;
+  relationship_type: string;
+  notes: string | null;
+  created_at: string;
+}
+
 // ─── Activity Log ─────────────────────────────────────────────────────────────
 
 export interface ActivityLog {
