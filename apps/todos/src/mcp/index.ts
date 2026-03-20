@@ -2821,6 +2821,61 @@ server.tool(
 );
 }
 
+// === FAILURE TASKS ===
+
+if (shouldRegisterTool("create_failure_task")) {
+server.tool(
+  "create_failure_task",
+  "Create a task from a test/build/typecheck failure. Auto-assigns to the most likely agent based on file ownership and org chart.",
+  {
+    failure_type: z.enum(["test", "build", "typecheck", "runtime", "other"]).describe("Type of failure"),
+    title: z.string().optional().describe("Task title (auto-generated from error if omitted)"),
+    error_message: z.string().describe("The error message or summary"),
+    file_path: z.string().optional().describe("File where the failure occurred"),
+    stack_trace: z.string().optional().describe("Stack trace or detailed output (truncated to 2000 chars)"),
+    project_id: z.string().optional().describe("Project to associate the task with"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Default: high for build/typecheck, medium for test"),
+  },
+  async ({ failure_type, title, error_message, file_path, stack_trace, project_id, priority }) => {
+    try {
+      const { createTask } = require("../db/tasks.js") as any;
+      const { autoAssignTask } = await import("../lib/auto-assign.js");
+
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const defaultPriority = (failure_type === "build" || failure_type === "typecheck") ? "high" : "medium";
+      const taskPriority = priority ?? defaultPriority;
+
+      const autoTitle = title || `${failure_type.toUpperCase()} failure${file_path ? ` in ${file_path.split("/").pop()}` : ""}: ${error_message.slice(0, 60)}`;
+      const description = [
+        `**Failure type:** ${failure_type}`,
+        file_path ? `**File:** ${file_path}` : null,
+        `**Error:**\n\`\`\`\n${error_message.slice(0, 500)}\n\`\`\``,
+        stack_trace ? `**Stack trace:**\n\`\`\`\n${stack_trace.slice(0, 1500)}\n\`\`\`` : null,
+      ].filter(Boolean).join("\n\n");
+
+      const task = createTask({
+        title: autoTitle,
+        description,
+        priority: taskPriority,
+        project_id: resolvedProjectId,
+        tags: ["failure", failure_type, "auto-created"],
+        status: "pending",
+      });
+
+      // Auto-assign using Cerebras/capability routing
+      const assignResult = await autoAssignTask(task.id);
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ task_id: task.id, short_id: task.short_id, title: task.title, assigned_to: assignResult.agent_name, assign_method: assignResult.method }, null, 2),
+        }],
+      };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 // === AUTO-ASSIGN ===
 
 if (shouldRegisterTool("auto_assign_task")) {

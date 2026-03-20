@@ -3129,6 +3129,58 @@ program
     console.log(chalk.dim(`\n  as_of: ${new Date().toISOString()}`));
   });
 
+// report-failure — create a task from a test/build failure
+program
+  .command("report-failure")
+  .description("Create a task from a test/build/typecheck failure and auto-assign it")
+  .requiredOption("--error <message>", "Error message or summary")
+  .option("--type <type>", "Failure type: test, build, typecheck, runtime, other", "test")
+  .option("--file <path>", "File where failure occurred")
+  .option("--stack <trace>", "Stack trace or detailed output")
+  .option("--title <title>", "Custom task title (auto-generated if omitted)")
+  .option("--priority <p>", "Priority: low, medium, high, critical")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const { createTask } = require("../db/tasks.js") as any;
+    const { autoAssignTask } = await import("../lib/auto-assign.js");
+    const projectId = autoProject(globalOpts);
+
+    const failureType = opts.type || "test";
+    const defaultPriority = (failureType === "build" || failureType === "typecheck") ? "high" : "medium";
+    const taskPriority = opts.priority || defaultPriority;
+
+    const autoTitle = opts.title || `${failureType.toUpperCase()} failure${opts.file ? ` in ${(opts.file as string).split("/").pop()}` : ""}: ${(opts.error as string).slice(0, 60)}`;
+    const descParts = [
+      `**Failure type:** ${failureType}`,
+      opts.file ? `**File:** ${opts.file}` : null,
+      `**Error:**\n\`\`\`\n${(opts.error as string).slice(0, 500)}\n\`\`\``,
+      opts.stack ? `**Stack trace:**\n\`\`\`\n${(opts.stack as string).slice(0, 1500)}\n\`\`\`` : null,
+    ].filter(Boolean).join("\n\n");
+
+    const task = createTask({
+      title: autoTitle,
+      description: descParts,
+      priority: taskPriority,
+      project_id: projectId || undefined,
+      tags: ["failure", failureType, "auto-created"],
+      status: "pending",
+    });
+
+    const assignResult = await autoAssignTask(task.id);
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ task_id: task.id, short_id: task.short_id, title: task.title, assigned_to: assignResult.agent_name, method: assignResult.method }));
+      return;
+    }
+
+    console.log(chalk.green(`✓ Created task ${task.short_id || task.id.slice(0, 8)}: ${task.title}`));
+    if (assignResult.agent_name) {
+      console.log(chalk.cyan(`  Assigned to: ${assignResult.agent_name} (via ${assignResult.method})`));
+      if (assignResult.reason) console.log(chalk.dim(`  Reason: ${assignResult.reason}`));
+    }
+  });
+
 // Default action: help or TUI
 program.action(async () => {
   if (process.stdout.isTTY) {
