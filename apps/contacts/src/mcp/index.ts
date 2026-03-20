@@ -74,6 +74,7 @@ import { listActivity } from "../db/activity.js";
 import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
+import { extractContactsFromGmail } from "../lib/gmail-import.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -822,6 +823,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["contact_id"],
       },
     },
+    {
+      name: "import_contacts_from_gmail",
+      description: "Extract unique contacts from Gmail messages matching a search query and batch-upsert them. Requires connect-gmail auth login first. Returns { imported, skipped, errors }.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Gmail search query, e.g. 'from:(company.com) newer_than:30d'" },
+          max_messages: { type: "number", description: "Max messages to scan (default 200, max 500)" },
+          gmail_profile: { type: "string", description: "connect-gmail profile to use (default: 'default')" },
+          tag_ids: { type: "array", items: { type: "string" }, description: "Tag IDs to apply to all imported contacts" },
+          group_id: { type: "string", description: "Group ID to add all imported contacts to" },
+          dry_run: { type: "boolean", description: "If true, extract contacts but do not save to database" },
+        },
+        required: ["query"],
+      },
+    },
   ],
 }));
 
@@ -1422,6 +1439,73 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const contact = autoLinkContactToCompany(a.contact_id as string);
         if (!contact) return { content: [{ type: "text", text: "null" }] };
         return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "import_contacts_from_gmail": {
+        const db = getDatabase();
+        const extracted = await extractContactsFromGmail({
+          query: a.query as string,
+          max_messages: a.max_messages as number | undefined,
+          gmail_profile: a.gmail_profile as string | undefined,
+          tag_ids: a.tag_ids as string[] | undefined,
+          group_id: a.group_id as string | undefined,
+        });
+
+        if (a.dry_run) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ dry_run: true, would_import: extracted.length, contacts: extracted }, null, 2),
+            }],
+          };
+        }
+
+        let imported = 0;
+        let skipped = 0;
+        const errors: string[] = [];
+
+        for (const { email, contact_input, company_hint } of extracted) {
+          try {
+            // Check if contact already exists by email
+            const emailRow = db.prepare(
+              `SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`
+            ).get(email) as { contact_id: string } | null;
+
+            if (emailRow) {
+              skipped++;
+              continue;
+            }
+
+            const contact = createContact(contact_input);
+
+            // Add to group if specified
+            if (a.group_id && typeof a.group_id === "string") {
+              try {
+                db.prepare(
+                  `INSERT OR IGNORE INTO contact_groups (contact_id, group_id) VALUES (?, ?)`
+                ).run(contact.id, a.group_id as string);
+              } catch {
+                // non-fatal
+              }
+            }
+
+            // Auto-link to company if we have a hint
+            if (company_hint) {
+              autoLinkContactToCompany(contact.id);
+            }
+
+            imported++;
+          } catch (err) {
+            errors.push(`${email}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ imported, skipped, errors: errors.length, error_details: errors }, null, 2),
+          }],
+        };
       }
 
       default:
