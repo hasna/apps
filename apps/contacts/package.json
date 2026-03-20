@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contacts",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Contact management for AI coding agents — CLI + MCP + Web",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,12 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "dashboard/dist", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "dashboard/dist",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "build:core": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
@@ -27,12 +32,30 @@
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build"
   },
-  "keywords": ["contacts", "mcp", "ai", "coding-agent", "claude", "cli", "rolodex", "address-book"],
-  "publishConfig": {"access": "public"},
-  "repository": {"type": "git", "url": "https://github.com/hasna/contacts.git"},
+  "keywords": [
+    "contacts",
+    "mcp",
+    "ai",
+    "coding-agent",
+    "claude",
+    "cli",
+    "rolodex",
+    "address-book"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/contacts.git"
+  },
   "homepage": "https://github.com/hasna/contacts",
-  "bugs": {"url": "https://github.com/hasna/contacts/issues"},
-  "engines": {"bun": ">=1.0.0"},
+  "bugs": {
+    "url": "https://github.com/hasna/contacts/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
