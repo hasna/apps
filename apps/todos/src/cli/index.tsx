@@ -1524,6 +1524,43 @@ program
     }
   });
 
+// heartbeat
+program
+  .command("heartbeat [agent]")
+  .description("Update last_seen_at to signal you're still active")
+  .action((agent?: string) => {
+    const globalOpts = program.opts();
+    const agentId = agent || globalOpts.agent;
+    if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent or pass as argument.")); process.exit(1); }
+    const { updateAgentActivity, getAgent } = require("../db/agents.js") as any;
+    const a = getAgent(agentId) || require("../db/agents.js").getAgentByName(agentId);
+    if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+    updateAgentActivity(a.id);
+    if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
+    else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+  });
+
+// focus
+program
+  .command("focus [project]")
+  .description("Focus on a project (or clear focus if no project given)")
+  .action((project?: string) => {
+    const globalOpts = program.opts();
+    const agentId = globalOpts.agent;
+    if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent.")); process.exit(1); }
+    const db = getDatabase();
+    if (project) {
+      const { getProjectByPath, getProjectByName } = require("../db/projects.js") as any;
+      const p = getProjectByPath(process.cwd(), db) || getProjectByName(project, db);
+      const projectId = p?.id || project;
+      db.run("UPDATE agents SET active_project_id = ? WHERE id = ? OR name = ?", [projectId, agentId, agentId]);
+      console.log(chalk.green(`Focused on: ${p?.name || projectId}`));
+    } else {
+      db.run("UPDATE agents SET active_project_id = NULL WHERE id = ? OR name = ?", [agentId, agentId]);
+      console.log(chalk.dim("Focus cleared."));
+    }
+  });
+
 // agents
 program
   .command("agents")
