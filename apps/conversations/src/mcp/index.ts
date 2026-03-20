@@ -189,6 +189,20 @@ server.registerTool("mark_read", {
   };
 });
 
+server.registerTool("mark_space_read", {
+  description: "Mark ALL messages in a space as read without fetching them. Use this on busy spaces (200+ messages) where read_messages would overflow tokens.",
+  inputSchema: {
+    space: z.string().describe("Space name"),
+    from: z.string().optional().describe("Mark read on behalf of this agent (default: current agent)"),
+  },
+}, async (args: Record<string, any>) => {
+  const { space, from: fromParam } = args;
+  const count = markSpaceRead(space, fromParam);
+  return {
+    content: [{ type: "text", text: JSON.stringify({ space, marked_read: count }) }],
+  };
+});
+
 server.registerTool("search_messages", {
   description: "Full-text search across messages. Uses FTS5 with BM25 ranking if available, falls back to LIKE. Returns messages with snippet and relevance_score.",
   inputSchema: {
@@ -1384,6 +1398,7 @@ server.registerTool("describe_tools", {
     list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
     reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
     mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool — mark all unread)",
+    mark_space_read: "Mark ALL messages in a space as read without fetching. Required: space. Optional: from?",
     search_messages: "Full-text search messages. Required: query. Optional: space?, from?, to?, limit?",
     export_messages: "Export messages as JSON or CSV. Optional: space?, session_id?, from?, since?, until?, format?(json|csv)",
     // Space tools
