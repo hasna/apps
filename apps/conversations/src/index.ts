@@ -105,6 +105,7 @@ export {
   releaseLock,
   checkLock,
   cleanExpiredLocks,
+  releaseStaleAgentLocks,
   listLocks,
 } from "./lib/locks.js";
 

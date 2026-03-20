@@ -11,14 +11,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, markRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
+import { sendMessage, readMessages, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
 import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { addReaction, removeReaction, getReactions, getReactionSummary } from "../lib/reactions.js";
-import { acquireLock, releaseLock, checkLock, listLocks } from "../lib/locks.js";
+import { acquireLock, releaseLock, checkLock, listLocks, cleanExpiredLocks, releaseStaleAgentLocks } from "../lib/locks.js";
 import { listHotSessions } from "../lib/hot.js";
 import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../lib/topics.js";
 import { getConversationSummary } from "../lib/summary.js";
@@ -89,6 +89,7 @@ server.registerTool("read_messages", {
     since: z.string().optional(),
     limit: z.coerce.number().optional(),
     unread_only: z.coerce.boolean().optional(),
+    mark_read: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
   const agent = resolveIdentity(args.from);
@@ -96,6 +97,10 @@ server.registerTool("read_messages", {
     ...args,
     project_id: args.project_id ?? resolveProjectId(undefined, agent),
   });
+
+  if (args.mark_read !== false && messages.length > 0) {
+    markReadByIds(messages.map((m) => m.id));
+  }
 
   return {
     content: [{ type: "text", text: JSON.stringify(messages) }],
@@ -318,10 +323,15 @@ server.registerTool("read_space", {
     space: z.string(),
     since: z.string().optional(),
     limit: z.coerce.number().optional(),
+    mark_read: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const { space, since, limit } = args;
+  const { space, since, limit, mark_read } = args;
   const messages = readMessages({ space, since, limit });
+
+  if (mark_read !== false && messages.length > 0) {
+    markReadByIds(messages.map((m) => m.id));
+  }
 
   return {
     content: [{ type: "text", text: JSON.stringify(messages) }],
@@ -975,6 +985,15 @@ server.registerTool("list_locks", {
   return { content: [{ type: "text", text: JSON.stringify(locks) }] };
 });
 
+server.registerTool("clean_expired_locks", {
+  description: "Clean up expired locks and auto-release locks held by agents whose heartbeat has been stale for >30 minutes. Returns counts of removed locks.",
+  inputSchema: {},
+}, async () => {
+  const stale = releaseStaleAgentLocks();
+  const expired = cleanExpiredLocks();
+  return { content: [{ type: "text", text: JSON.stringify({ released_stale_agent: stale, released_expired: expired, total: stale + expired }) }] };
+});
+
 // ---- Thread Tools ----
 
 server.registerTool("get_thread_replies", {
@@ -1202,7 +1221,7 @@ server.registerTool("search_tools", {
     "get_topics", "trending_topics",
     "get_session_activity", "hot_sessions",
     "add_reaction", "remove_reaction", "get_reactions", "get_reaction_summary",
-    "acquire_lock", "release_lock", "check_lock", "list_locks",
+    "acquire_lock", "release_lock", "check_lock", "list_locks", "clean_expired_locks",
     "get_thread_replies",
     "set_focus", "get_focus", "unfocus",
     "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
@@ -1222,7 +1241,7 @@ server.registerTool("describe_tools", {
   const descriptions: Record<string, string> = {
     // DM tools
     send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-    read_messages: "Read messages with filters. Optional: session_id?, from?, to?, space?, since?(ISO), limit?, unread_only?",
+    read_messages: "Read messages with filters. Optional: session_id?, from?, to?, space?, since?(ISO), limit?, unread_only?, mark_read?(default true — auto-marks returned messages as read, pass false to peek without consuming)",
     list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
     reply: "Reply to a message in same session. Required: message_id, content. Optional: from?",
     mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool — mark all unread)",
@@ -1232,7 +1251,7 @@ server.registerTool("describe_tools", {
     create_space: "Create space and auto-join. Required: name. Optional: from?, description?, parent_id?(max 3 levels), project_id?",
     list_spaces: "List spaces with member/message counts. Optional: project_id?, parent_id?(use 'null' for top-level), include_archived?",
     send_to_space: "Post message to space. Required: space, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-    read_space: "Read messages in a space. Required: space. Optional: since?(ISO), limit?",
+    read_space: "Read messages in a space. Required: space. Optional: since?(ISO), limit?, mark_read?(default true — auto-marks returned messages as read)",
     join_space: "Join a space. Required: space. Optional: from?",
     leave_space: "Leave a space. Required: space. Optional: from?",
     update_space: "Update space fields. Required: name. Optional: description?, parent_id?(use 'null' to remove), project_id?(use 'null' to remove)",
@@ -1274,6 +1293,7 @@ server.registerTool("describe_tools", {
     release_lock: "Release lock held by agent. Required: resource_type, resource_id. Optional: from?",
     check_lock: "Check if resource is locked and who holds it. Required: resource_type, resource_id",
     list_locks: "List active locks. Optional: resource_type?, agent_id?",
+    clean_expired_locks: "Release expired locks + locks held by agents with stale heartbeat (>30 min). Returns {released_stale_agent, released_expired, total}",
     // Thread tools
     get_thread_replies: "Get all replies in a thread. Required: message_id. Optional: limit?",
     // Focus mode tools

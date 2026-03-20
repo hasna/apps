@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { acquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks } from "./locks";
+import { acquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, releaseStaleAgentLocks } from "./locks";
 import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -144,6 +144,71 @@ describe("cleanExpiredLocks", () => {
     const cleaned = cleanExpiredLocks();
     expect(cleaned).toBe(2);
     expect(listLocks()).toHaveLength(1);
+  });
+});
+
+describe("releaseStaleAgentLocks", () => {
+  test("releases locks for agents with stale heartbeat (>30 min)", () => {
+    const db = getDb();
+    // Insert a stale agent presence (>30 min ago)
+    db.prepare(`
+      INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
+      VALUES ('aa', 'stale-agent', 'sess1', 'agent', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'))
+    `).run();
+    // Insert a lock held by that stale agent
+    db.prepare(`
+      INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
+      VALUES ('space', 'stale-room', 'stale-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1900 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+    `).run();
+
+    const released = releaseStaleAgentLocks();
+    expect(released).toBe(1);
+    expect(checkLock("space", "stale-room")).toBeNull();
+  });
+
+  test("does not release locks for agents with fresh heartbeat", () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
+      VALUES ('bb', 'fresh-agent', 'sess2', 'agent', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-60 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-60 seconds'))
+    `).run();
+    db.prepare(`
+      INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
+      VALUES ('space', 'fresh-room', 'fresh-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+    `).run();
+
+    const released = releaseStaleAgentLocks();
+    expect(released).toBe(0);
+    expect(checkLock("space", "fresh-room")).toBeTruthy();
+  });
+
+  test("does not release locks for agents with no presence record", () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
+      VALUES ('space', 'unknown-room', 'unknown-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+    `).run();
+
+    const released = releaseStaleAgentLocks();
+    expect(released).toBe(0);
+    expect(checkLock("space", "unknown-room")).toBeTruthy();
+  });
+
+  test("auto-releases stale agent locks via acquireLock cleanup", () => {
+    const db = getDb();
+    // Insert stale agent + their lock
+    db.prepare(`
+      INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
+      VALUES ('cc', 'zombie-agent', 'sess3', 'agent', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds'))
+    `).run();
+    db.prepare(`
+      INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
+      VALUES ('space', 'zombie-room', 'zombie-agent', 'advisory', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2000 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+3600 seconds'))
+    `).run();
+
+    // A new agent tries to acquire the same lock — cleanup runs internally and succeeds
+    const result = acquireLock("space", "zombie-room", "new-agent");
+    expect(result.acquired).toBe(true);
   });
 });
 

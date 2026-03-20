@@ -10,6 +10,7 @@ export interface ResourceLock {
 }
 
 const DEFAULT_LOCK_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const STALE_HEARTBEAT_SECONDS = 30 * 60; // 30 minutes — matches presence conflict threshold
 
 export function acquireLock(
   resourceType: string,
@@ -21,8 +22,9 @@ export function acquireLock(
   const db = getDb();
 
   return db.transaction(() => {
-    // Clean expired locks first
+    // Clean expired locks and stale agent locks first
     cleanExpiredLocks();
+    releaseStaleAgentLocks();
 
     const existing = db.prepare(`
       SELECT * FROM resource_locks
@@ -75,12 +77,25 @@ export function checkLock(
 ): ResourceLock | null {
   const db = getDb();
   cleanExpiredLocks();
+  releaseStaleAgentLocks();
   return db.prepare(`
     SELECT * FROM resource_locks
     WHERE resource_type = ? AND resource_id = ?
     ORDER BY locked_at ASC
     LIMIT 1
   `).get(resourceType, resourceId) as ResourceLock | null;
+}
+
+export function releaseStaleAgentLocks(): number {
+  const db = getDb();
+  const result = db.prepare(`
+    DELETE FROM resource_locks
+    WHERE LOWER(agent_id) IN (
+      SELECT LOWER(agent) FROM agent_presence
+      WHERE last_seen_at < strftime('%Y-%m-%dT%H:%M:%f', 'now', '-${STALE_HEARTBEAT_SECONDS} seconds')
+    )
+  `).run();
+  return result.changes;
 }
 
 export function cleanExpiredLocks(): number {
@@ -94,6 +109,7 @@ export function cleanExpiredLocks(): number {
 export function listLocks(opts?: { resource_type?: string; agent_id?: string }): ResourceLock[] {
   const db = getDb();
   cleanExpiredLocks();
+  releaseStaleAgentLocks();
 
   let query = "SELECT * FROM resource_locks WHERE 1=1";
   const params: string[] = [];
