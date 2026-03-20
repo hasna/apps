@@ -1690,44 +1690,28 @@ program
   .action(async () => {
     const { getNetworkStats } = await import('../lib/stats.js');
     const db = getDatabase();
-    const stats = getNetworkStats(db) as unknown as Record<string, unknown>;
+    const s = getNetworkStats(db);
     console.log(chalk.bold.blue('\n━━━ Network Health Dashboard ━━━\n'));
 
-    const size = stats['network_size'] as Record<string, number> | undefined;
-    if (size) {
-      console.log(chalk.bold('  Network Size:'));
-      console.log(`    ${chalk.cyan(String(size['contacts'] ?? 0))} contacts   ${chalk.cyan(String(size['companies'] ?? 0))} companies   ${chalk.cyan(String(size['tags'] ?? 0))} tags`);
-    }
+    console.log(chalk.bold('  Network Size:'));
+    console.log(`    ${chalk.cyan(String(s.total_contacts))} contacts   ${chalk.cyan(String(s.total_companies))} companies   ${chalk.cyan(String(s.total_tags))} tags   ${chalk.cyan(String(s.total_groups))} groups`);
 
-    const cold = stats['cold_contacts'] as Record<string, number> | undefined;
-    if (cold) {
-      console.log(chalk.bold('\n  Cold Contacts:'));
-      const c30 = cold['30d'] ?? 0;
-      const c60 = cold['60d'] ?? 0;
-      const cnever = cold['never'] ?? 0;
-      console.log(`    ${c30 > 5 ? chalk.red(String(c30)) : c30 > 0 ? chalk.yellow(String(c30)) : chalk.green(String(c30))} not contacted in 30d`);
-      console.log(`    ${c60 > 5 ? chalk.red(String(c60)) : c60 > 0 ? chalk.yellow(String(c60)) : chalk.green(String(c60))} not contacted in 60d`);
-      console.log(`    ${cnever > 5 ? chalk.red(String(cnever)) : cnever > 0 ? chalk.yellow(String(cnever)) : chalk.green(String(cnever))} never contacted`);
-    }
+    console.log(chalk.bold('\n  Cold Contacts:'));
+    const c30 = s.cold_30d;
+    const c60 = s.cold_60d;
+    const cnever = s.cold_never;
+    console.log(`    ${c30 > 5 ? chalk.red(String(c30)) : c30 > 0 ? chalk.yellow(String(c30)) : chalk.green(String(c30))} not contacted in 30d`);
+    console.log(`    ${c60 > 5 ? chalk.red(String(c60)) : c60 > 0 ? chalk.yellow(String(c60)) : chalk.green(String(c60))} not contacted in 60d`);
+    console.log(`    ${cnever > 5 ? chalk.red(String(cnever)) : cnever > 0 ? chalk.yellow(String(cnever)) : chalk.green(String(cnever))} never contacted`);
 
-    const action = stats['action_required'] as Record<string, number> | undefined;
-    if (action) {
-      console.log(chalk.bold('\n  Action Required:'));
-      const overdue = action['overdue_tasks'] ?? 0;
-      const pending = action['pending_applications'] ?? 0;
-      const missing = action['missing_invoices'] ?? 0;
-      const upcoming = action['upcoming_7d'] ?? 0;
-      console.log(`    ${overdue > 0 ? chalk.red(String(overdue)) : chalk.green('0')} overdue tasks`);
-      console.log(`    ${pending > 0 ? chalk.yellow(String(pending)) : chalk.green('0')} pending applications`);
-      console.log(`    ${missing > 0 ? chalk.yellow(String(missing)) : chalk.green('0')} missing invoices`);
-      console.log(`    ${upcoming > 0 ? chalk.yellow(String(upcoming)) : chalk.green('0')} upcoming in 7d`);
-    }
+    console.log(chalk.bold('\n  Action Required:'));
+    console.log(`    ${s.overdue_tasks > 0 ? chalk.red(String(s.overdue_tasks)) : chalk.green('0')} overdue tasks`);
+    console.log(`    ${s.pending_applications > 0 ? chalk.yellow(String(s.pending_applications)) : chalk.green('0')} pending applications`);
+    console.log(`    ${s.missing_invoices > 0 ? chalk.yellow(String(s.missing_invoices)) : chalk.green('0')} missing invoices`);
+    console.log(`    ${s.upcoming_7d > 0 ? chalk.yellow(String(s.upcoming_7d)) : chalk.green('0')} upcoming in 7d`);
 
-    const pipeline = stats['pipeline_value_usd'] as number | undefined;
-    if (pipeline !== undefined) {
-      console.log(chalk.bold('\n  Deal Pipeline:'));
-      console.log(`    ${chalk.cyan('$' + pipeline.toLocaleString())} active pipeline`);
-    }
+    console.log(chalk.bold('\n  Deal Pipeline:'));
+    console.log(`    ${chalk.cyan('$' + s.active_deals_value.toLocaleString())} active pipeline   ${chalk.cyan(String(s.total_deals))} active deal(s)`);
     console.log();
   });
 
