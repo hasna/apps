@@ -172,6 +172,25 @@ function runMigrations(db: Database): void {
       `,
     },
     {
+      name: "008_schedules",
+      sql: `
+        CREATE TABLE IF NOT EXISTS prompt_schedules (
+          id TEXT PRIMARY KEY,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          prompt_slug TEXT NOT NULL,
+          cron TEXT NOT NULL,
+          vars TEXT NOT NULL DEFAULT '{}',
+          agent_id TEXT,
+          last_run_at TEXT,
+          next_run_at TEXT NOT NULL,
+          run_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_prompt_schedules_next_run ON prompt_schedules(next_run_at);
+        CREATE INDEX IF NOT EXISTS idx_prompt_schedules_prompt_id ON prompt_schedules(prompt_id);
+      `,
+    },
+    {
       name: "002_fts5",
       sql: `
         CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(

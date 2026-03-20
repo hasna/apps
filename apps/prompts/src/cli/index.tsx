@@ -11,6 +11,8 @@ import { searchPrompts, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
 import { lintAll } from "../lib/lint.js"
+import { createSchedule, listSchedules, deleteSchedule, getDueSchedules } from "../db/schedules.js"
+import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { runAudit } from "../lib/audit.js"
 import { generateZshCompletion, generateBashCompletion } from "../lib/completion.js"
 import { diffTexts } from "../lib/diff.js"
@@ -996,6 +998,128 @@ program
       if (imported.errors.length > 0) {
         for (const e of imported.errors) console.error(chalk.red(`  ✗ ${e.item}: ${e.error}`))
       }
+    } catch (e) { handleError(e) }
+  })
+
+// ── remove (alias for delete) ─────────────────────────────────────────────────
+program
+  .command("remove <id>")
+  .alias("rm")
+  .alias("uninstall")
+  .description("Remove a prompt (alias for delete)")
+  .option("-y, --yes", "Skip confirmation")
+  .action(async (id: string, opts: { yes?: boolean }) => {
+    try {
+      const prompt = getPrompt(id)
+      if (!prompt) handleError(`Prompt not found: ${id}`)
+      if (!opts.yes && !isJson()) {
+        const { createInterface } = await import("readline")
+        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        await new Promise<void>((resolve) => {
+          rl.question(chalk.yellow(`Remove "${prompt!.slug}"? [y/N] `), (ans) => {
+            rl.close()
+            if (ans.toLowerCase() !== "y") {
+              console.log("Cancelled.")
+              process.exit(0)
+            }
+            resolve()
+          })
+        })
+      }
+      deletePrompt(id)
+      if (isJson()) output({ deleted: true, id: prompt!.id })
+      else console.log(chalk.red(`Removed ${prompt!.slug}`))
+    } catch (e) {
+      handleError(e)
+    }
+  })
+
+// ── schedule ──────────────────────────────────────────────────────────────────
+const scheduleCmd = program.command("schedule").description("Manage prompt schedules")
+
+scheduleCmd
+  .command("add <id> <cron>")
+  .description("Schedule a prompt to run on a cron (5-field: min hour dom mon dow)")
+  .option("--vars <json>", "JSON object of template variables, e.g. '{\"name\":\"Alice\"}'")
+  .option("--agent <id>", "Agent ID to associate")
+  .action((id: string, cron: string, opts: { vars?: string; agent?: string }) => {
+    try {
+      const cronError = validateCron(cron)
+      if (cronError) handleError(`Invalid cron: ${cronError}`)
+      const prompt = getPrompt(id)
+      if (!prompt) handleError(`Prompt not found: ${id}`)
+      const vars = opts.vars ? JSON.parse(opts.vars) as Record<string, string> : undefined
+      const schedule = createSchedule({ prompt_id: prompt!.id, prompt_slug: prompt!.slug, cron, vars, agent_id: opts.agent })
+      if (isJson()) { output(schedule); return }
+      console.log(chalk.green(`Scheduled "${prompt!.slug}" [${schedule.id}]`))
+      console.log(`  Cron:     ${cron}`)
+      console.log(`  Next run: ${schedule.next_run_at}`)
+    } catch (e) { handleError(e) }
+  })
+
+scheduleCmd
+  .command("list [id]")
+  .description("List schedules, optionally filtered by prompt ID")
+  .action((id?: string) => {
+    try {
+      const schedules = listSchedules(id)
+      if (isJson()) { output(schedules); return }
+      if (!schedules.length) { console.log(chalk.gray("No schedules.")); return }
+      for (const s of schedules) {
+        console.log(`${chalk.bold(s.id)}  ${chalk.cyan(s.prompt_slug)}  cron:${s.cron}  next:${s.next_run_at}  runs:${s.run_count}`)
+      }
+    } catch (e) { handleError(e) }
+  })
+
+scheduleCmd
+  .command("remove <scheduleId>")
+  .alias("delete")
+  .description("Remove a prompt schedule")
+  .action((scheduleId: string) => {
+    try {
+      deleteSchedule(scheduleId)
+      if (isJson()) output({ deleted: true, id: scheduleId })
+      else console.log(chalk.red(`Removed schedule ${scheduleId}`))
+    } catch (e) { handleError(e) }
+  })
+
+scheduleCmd
+  .command("due")
+  .description("Show and execute all due schedules")
+  .option("--dry-run", "Show due prompts without marking them as ran")
+  .action((opts: { dryRun?: boolean }) => {
+    try {
+      const due = getDueSchedules()
+      if (!due.length) { console.log(chalk.gray("No prompts due.")); return }
+      if (isJson()) { output(due); return }
+      for (const d of due) {
+        console.log(chalk.bold(`\n[${d.id}] ${d.prompt_slug}`))
+        console.log(chalk.gray(`Next run: ${d.next_run_at}  |  Runs: ${d.run_count}`))
+        console.log(chalk.white(d.rendered))
+      }
+      if (!opts.dryRun) console.log(chalk.green(`\n✓ Marked ${due.length} schedule(s) as ran.`))
+    } catch (e) { handleError(e) }
+  })
+
+scheduleCmd
+  .command("next <cron>")
+  .description("Preview when a cron expression will fire")
+  .option("-n, --count <n>", "Number of runs to show", "5")
+  .action((cron: string, opts: { count?: string }) => {
+    try {
+      const cronError = validateCron(cron)
+      if (cronError) handleError(`Invalid cron: ${cronError}`)
+      const count = parseInt(opts.count ?? "5", 10)
+      const runs: string[] = []
+      let from = new Date()
+      for (let i = 0; i < count; i++) {
+        const next = getNextRunTime(cron, from)
+        runs.push(next.toISOString())
+        from = next
+      }
+      if (isJson()) { output({ cron, next_runs: runs }); return }
+      console.log(chalk.bold(`Next ${count} runs for "${cron}":`))
+      for (const r of runs) console.log(`  ${r}`)
     } catch (e) { handleError(e) }
   })
 

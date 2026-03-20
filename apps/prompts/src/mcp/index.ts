@@ -13,6 +13,8 @@ import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
 import { maybeSaveMemento } from "../lib/mementos.js"
+import { createSchedule, listSchedules, getSchedule, deleteSchedule, getDueSchedules } from "../db/schedules.js"
+import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { diffTexts, formatDiff } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
 import { runAudit } from "../lib/audit.js"
@@ -203,7 +205,7 @@ server.registerTool(
       const mergedVars = { ...autoFilled, ...vars }
       const result = renderTemplate(prompt.body, mergedVars)
       if (Object.keys(autoFilled).length > 0) {
-        (result as Record<string, unknown>).auto_filled = autoFilled
+        (result as unknown as Record<string, unknown>).auto_filled = autoFilled
       }
       await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, rendered: result.rendered, agentId: agent })
       return ok(result)
@@ -877,6 +879,145 @@ server.registerTool(
     try {
       deleteProject(id)
       return ok({ deleted: true, id })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_schedule ──────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_schedule",
+  {
+    description: "Schedule a prompt to run on a cron. Stores the schedule in the DB. Call prompts_get_due periodically (e.g. via /loop) to retrieve and execute due prompts.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      cron: z.string().describe("Cron expression (5 fields: min hour dom mon dow). Example: '*/5 * * * *' for every 5 minutes"),
+      vars: z.record(z.string()).optional().describe("Template variable overrides (key→value)"),
+      agent_id: z.string().optional().describe("Agent ID to associate with this schedule"),
+    },
+  },
+  async ({ id, cron, vars, agent_id }) => {
+    try {
+      const cronError = validateCron(cron)
+      if (cronError) return err(`Invalid cron expression: ${cronError}`)
+
+      const prompt = getPrompt(id)
+      if (!prompt) return err(`Prompt not found: ${id}`)
+
+      const schedule = createSchedule({
+        prompt_id: prompt.id,
+        prompt_slug: prompt.slug,
+        cron,
+        vars: vars as Record<string, string> | undefined,
+        agent_id,
+      })
+
+      return ok({
+        schedule,
+        message: `Prompt "${prompt.title}" scheduled with cron "${cron}". Next run: ${schedule.next_run_at}. Call prompts_get_due to execute due prompts.`,
+      })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_list_schedules ────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_list_schedules",
+  {
+    description: "List all prompt schedules, optionally filtered by prompt.",
+    inputSchema: {
+      prompt_id: z.string().optional().describe("Filter by prompt ID or slug"),
+    },
+  },
+  async ({ prompt_id }) => {
+    try {
+      let resolvedId: string | undefined
+      if (prompt_id) {
+        const prompt = getPrompt(prompt_id)
+        if (!prompt) return err(`Prompt not found: ${prompt_id}`)
+        resolvedId = prompt.id
+      }
+      const schedules = listSchedules(resolvedId)
+      return ok({ schedules, count: schedules.length })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_unschedule ────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_unschedule",
+  {
+    description: "Delete a prompt schedule by ID.",
+    inputSchema: { id: z.string().describe("Schedule ID (e.g. SCH-ABC123)") },
+  },
+  async ({ id }) => {
+    try {
+      const schedule = getSchedule(id)
+      if (!schedule) return err(`Schedule not found: ${id}`)
+      deleteSchedule(id)
+      return ok({ deleted: true, id })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_get_due ───────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_get_due",
+  {
+    description: "Get all prompts that are due to run now. Returns the rendered prompt text for each. Automatically advances next_run_at after retrieval. Call this on a loop (e.g. every minute) to drive scheduled prompt execution.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const due = getDueSchedules()
+      if (!due.length) return ok({ due: [], count: 0, message: "No prompts due right now." })
+      return ok({
+        due: due.map(d => ({
+          schedule_id: d.id,
+          prompt_id: d.prompt_id,
+          prompt_slug: d.prompt_slug,
+          cron: d.cron,
+          rendered: d.rendered,
+          next_run_at: d.next_run_at,
+          run_count: d.run_count,
+        })),
+        count: due.length,
+      })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_next_run ──────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_next_run",
+  {
+    description: "Preview when a cron expression will next fire, without creating a schedule.",
+    inputSchema: {
+      cron: z.string().describe("Cron expression (5 fields)"),
+      count: z.number().optional().describe("Number of next runs to preview (default: 5)"),
+    },
+  },
+  async ({ cron, count = 5 }) => {
+    try {
+      const cronError = validateCron(cron)
+      if (cronError) return err(`Invalid cron expression: ${cronError}`)
+      const runs: string[] = []
+      let from = new Date()
+      for (let i = 0; i < count; i++) {
+        const next = getNextRunTime(cron, from)
+        runs.push(next.toISOString())
+        from = next
+      }
+      return ok({ cron, next_runs: runs })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }
