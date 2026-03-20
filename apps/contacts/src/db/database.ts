@@ -219,6 +219,22 @@ const MIGRATIONS = [
   `,
 
   `
+  ALTER TABLE groups ADD COLUMN project_id TEXT;
+
+  CREATE TABLE IF NOT EXISTS contact_projects (
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    PRIMARY KEY (contact_id, project_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contact_projects_project ON contact_projects(project_id);
+  CREATE INDEX IF NOT EXISTS idx_contact_projects_contact ON contact_projects(contact_id);
+
+  INSERT OR IGNORE INTO contact_projects (contact_id, project_id)
+  SELECT id, project_id FROM contacts WHERE project_id IS NOT NULL;
+  `,
+
+  `
   CREATE TABLE IF NOT EXISTS contact_notes (
     id TEXT PRIMARY KEY,
     contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,

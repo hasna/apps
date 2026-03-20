@@ -596,3 +596,35 @@ export function autoLinkContactToCompany(contactId: string, db?: Database): Cont
   const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow;
   return loadContactDetails(d, rowToContact(updated));
 }
+
+// ── Contact-Project Linking ────────────────────────────────────────────────────
+
+export function linkContactToProject(contactId: string, projectId: string, db?: Database): void {
+  const d = db || getDatabase();
+  d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, projectId]);
+}
+
+export function unlinkContactFromProject(contactId: string, projectId: string, db?: Database): void {
+  const d = db || getDatabase();
+  d.run(`DELETE FROM contact_projects WHERE contact_id = ? AND project_id = ?`, [contactId, projectId]);
+}
+
+export function getContactProjectIds(contactId: string, db?: Database): string[] {
+  const d = db || getDatabase();
+  const rows = d.query(`SELECT project_id FROM contact_projects WHERE contact_id = ?`).all(contactId) as { project_id: string }[];
+  return rows.map(r => r.project_id);
+}
+
+export function listContactIdsByProject(projectId: string, db?: Database): string[] {
+  const d = db || getDatabase();
+  const rows = d.query(`SELECT contact_id FROM contact_projects WHERE project_id = ?`).all(projectId) as { contact_id: string }[];
+  return rows.map(r => r.contact_id);
+}
+
+export function setContactProjects(contactId: string, projectIds: string[], db?: Database): void {
+  const d = db || getDatabase();
+  d.run(`DELETE FROM contact_projects WHERE contact_id = ?`, [contactId]);
+  for (const pid of projectIds) {
+    d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, pid]);
+  }
+}

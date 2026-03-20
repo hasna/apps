@@ -864,6 +864,7 @@ export interface Group {
   id: string;
   name: string;
   description: string | null;
+  project_id: string | null;
   member_count?: number;
   company_count?: number;
   created_at: string;
@@ -873,6 +874,7 @@ export interface Group {
 export interface CreateGroupInput {
   name: string;
   description?: string;
+  project_id?: string;
 }
 
 // ─── Dedup ────────────────────────────────────────────────────────────────────

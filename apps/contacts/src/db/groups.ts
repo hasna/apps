@@ -4,8 +4,8 @@ import type { Group, CreateGroupInput } from "../types/index.js";
 
 export function createGroup(db: Database, input: CreateGroupInput): Group {
   const id = uuid();
-  db.query(`INSERT INTO groups(id, name, description, created_at, updated_at) VALUES(?,?,?,?,?)`)
-    .run(id, input.name, input.description ?? null, now(), now());
+  db.query(`INSERT INTO groups(id, name, description, project_id, created_at, updated_at) VALUES(?,?,?,?,?,?)`)
+    .run(id, input.name, input.description ?? null, input.project_id ?? null, now(), now());
   return getGroup(db, id)!;
 }
 
@@ -13,13 +13,15 @@ export function getGroup(db: Database, id: string): Group | null {
   return db.query(`SELECT * FROM groups WHERE id = ?`).get(id) as Group | null;
 }
 
-export function listGroups(db: Database): Group[] {
+export function listGroups(db: Database, projectId?: string): Group[] {
+  const where = projectId ? "WHERE g.project_id = ?" : "";
+  const params = projectId ? [projectId] : [];
   return db.query(
     `SELECT g.*,
        (SELECT COUNT(*) FROM contact_groups cg WHERE cg.group_id = g.id) as member_count,
        (SELECT COUNT(*) FROM company_groups cog WHERE cog.group_id = g.id) as company_count
-     FROM groups g ORDER BY g.name`
-  ).all() as Group[];
+     FROM groups g ${where} ORDER BY g.name`
+  ).all(...params) as Group[];
 }
 
 export function updateGroup(db: Database, id: string, input: Partial<CreateGroupInput>): Group {
@@ -27,6 +29,7 @@ export function updateGroup(db: Database, id: string, input: Partial<CreateGroup
   const vals: (string | null)[] = [];
   if (input.name !== undefined) { fields.push("name = ?"); vals.push(input.name); }
   if (input.description !== undefined) { fields.push("description = ?"); vals.push(input.description ?? null); }
+  if (input.project_id !== undefined) { fields.push("project_id = ?"); vals.push(input.project_id ?? null); }
   fields.push("updated_at = ?"); vals.push(now());
   vals.push(id);
   db.query(`UPDATE groups SET ${fields.join(", ")} WHERE id = ?`).run(...vals);

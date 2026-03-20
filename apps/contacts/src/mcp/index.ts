@@ -29,6 +29,11 @@ import {
   archiveContact,
   unarchiveContact,
   autoLinkContactToCompany,
+  linkContactToProject,
+  unlinkContactFromProject,
+  getContactProjectIds,
+  setContactProjects,
+  listContactIdsByProject,
 } from "../db/contacts.js";
 import {
   createGroup,
@@ -170,7 +175,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           preferred_contact_method: { type: "string", enum: ["email", "phone", "telegram", "whatsapp", "linkedin", "twitter", "other"] },
           status: { type: "string", enum: ["active", "pending_reply", "converted", "closed", "other"], description: "Contact lifecycle status (default: active)" },
           follow_up_at: { type: "string", description: "ISO 8601 datetime to follow up with this contact" },
-          project_id: { type: "string", description: "Associate contact with a project ID" },
+          project_id: { type: "string", description: "Primary project ID (single). Use project_ids for multiple." },
+          project_ids: { type: "array", items: { type: "string" }, description: "Associate contact with multiple todos project IDs" },
           emails: {
             type: "array",
             items: {
@@ -257,7 +263,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           preferred_contact_method: { type: "string", enum: ["email", "phone", "telegram", "whatsapp", "linkedin", "twitter", "other"] },
           status: { type: "string", enum: ["active", "pending_reply", "converted", "closed", "other"] },
           follow_up_at: { type: "string", description: "ISO 8601 datetime for follow-up reminder (null to clear)" },
-          project_id: { type: "string", description: "Project ID to associate this contact with (null to clear)" },
+          project_id: { type: "string", description: "Primary project ID (single, null to clear)" },
+          project_ids: { type: "array", items: { type: "string" }, description: "Replace all project links with this array of todos project IDs" },
           source: { type: "string", enum: ["manual", "import", "linkedin", "github", "twitter", "email", "calendar", "crm", "other"] },
           emails_add: { type: "array", items: { type: "object", properties: { address: { type: "string" }, type: { type: "string" }, is_primary: { type: "boolean" } }, required: ["address"] }, description: "New email addresses to append (duplicates are skipped)" },
           phones_add: { type: "array", items: { type: "object", properties: { number: { type: "string" }, type: { type: "string" }, country_code: { type: "string" }, is_primary: { type: "boolean" } }, required: ["number"] }, description: "New phone numbers to append (duplicates are skipped)" },
@@ -618,6 +625,43 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "link_contact_to_project",
+      description: "Associate a contact with a todos project ID. Contacts can belong to multiple projects.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          project_id: { type: "string", description: "Todos project ID" },
+        },
+        required: ["contact_id", "project_id"],
+      },
+    },
+    {
+      name: "unlink_contact_from_project",
+      description: "Remove the association between a contact and a todos project.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          project_id: { type: "string" },
+        },
+        required: ["contact_id", "project_id"],
+      },
+    },
+    {
+      name: "list_contacts_by_project",
+      description: "List all contacts linked to a specific todos project ID.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          limit: { type: "number", description: "Max results (default 100)" },
+          offset: { type: "number" },
+        },
+        required: ["project_id"],
+      },
+    },
+    {
       name: "list_contacts_by_company",
       description: "List all contacts belonging to a specific company. Equivalent to list_contacts with company_id filter but more ergonomic.",
       inputSchema: {
@@ -651,6 +695,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           name: { type: "string" },
           description: { type: "string" },
+          project_id: { type: "string", description: "Associate this group with a todos project ID" },
         },
         required: ["name"],
       },
@@ -658,7 +703,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "list_groups",
       description: "List all groups with their member counts.",
-      inputSchema: { type: "object", properties: {} },
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string", description: "Filter groups by todos project ID" },
+        },
+      },
     },
     {
       name: "get_group",
@@ -671,13 +721,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_group",
-      description: "Update a group's name or description.",
+      description: "Update a group's name, description, or project association.",
       inputSchema: {
         type: "object",
         properties: {
           id: { type: "string" },
           name: { type: "string" },
           description: { type: "string" },
+          project_id: { type: "string", description: "Associate with a todos project ID (null to clear)" },
         },
         required: ["id"],
       },
@@ -1554,11 +1605,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           source: a.source as CreateContactInput["source"],
         };
         const contact = createContact(input);
-        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+        // Link to multiple projects if project_ids array was provided
+        if (Array.isArray(a.project_ids) && (a.project_ids as string[]).length > 0) {
+          setContactProjects(contact.id, a.project_ids as string[]);
+        }
+        const projectIds = getContactProjectIds(contact.id);
+        return { content: [{ type: "text", text: JSON.stringify({ ...contact, project_ids: projectIds }, null, 2) }] };
       }
 
       case "get_contact": {
         const contact = getContact(a.id as string);
+        if (contact) {
+          const projectIds = getContactProjectIds(contact.id);
+          return { content: [{ type: "text", text: JSON.stringify({ ...contact, project_ids: projectIds }, null, 2) }] };
+        }
         return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
       }
 
@@ -1584,7 +1644,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           phones_add: rest.phones_add as UpdateContactInput["phones_add"],
         };
         const contact = updateContact(id as string, input);
-        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+        // Update project links if project_ids provided
+        if (Array.isArray(rest.project_ids)) {
+          setContactProjects(id as string, rest.project_ids as string[]);
+        }
+        const projectIds = getContactProjectIds(id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ ...contact, project_ids: projectIds }, null, 2) }] };
       }
 
       case "delete_contact": {
@@ -1923,6 +1988,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
       }
 
+      case "link_contact_to_project": {
+        linkContactToProject(a.contact_id as string, a.project_id as string);
+        const projectIds = getContactProjectIds(a.contact_id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ contact_id: a.contact_id, project_ids: projectIds }) }] };
+      }
+
+      case "unlink_contact_from_project": {
+        unlinkContactFromProject(a.contact_id as string, a.project_id as string);
+        const projectIds = getContactProjectIds(a.contact_id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ contact_id: a.contact_id, project_ids: projectIds }) }] };
+      }
+
+      case "list_contacts_by_project": {
+        const db = getDatabase();
+        const contactIds = listContactIdsByProject(a.project_id as string);
+        const limit = (a.limit as number) ?? 100;
+        const offset = (a.offset as number) ?? 0;
+        const paged = contactIds.slice(offset, offset + limit);
+        const contacts = paged.map(id => getContact(id, db)).filter(Boolean);
+        return { content: [{ type: "text", text: JSON.stringify({ contacts, total: contactIds.length, project_id: a.project_id }, null, 2) }] };
+      }
+
       case "list_contacts_by_company": {
         const result = listContacts({
           company_id: a.company_id as string,
@@ -1953,13 +2040,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "create_group": {
         const db = getDatabase();
-        const group = createGroup(db, { name: a.name as string, description: a.description as string | undefined });
+        const group = createGroup(db, { name: a.name as string, description: a.description as string | undefined, project_id: a.project_id as string | undefined });
         return { content: [{ type: "text", text: JSON.stringify(group, null, 2) }] };
       }
 
       case "list_groups": {
         const db = getDatabase();
-        const groups = listGroups(db);
+        const groups = listGroups(db, a.project_id as string | undefined);
         return { content: [{ type: "text", text: JSON.stringify(groups, null, 2) }] };
       }
 
@@ -1973,7 +2060,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "update_group": {
         const db = getDatabase();
         const { id: groupId, ...groupRest } = a;
-        const group = updateGroup(db, groupId as string, { name: groupRest.name as string | undefined, description: groupRest.description as string | undefined });
+        const group = updateGroup(db, groupId as string, {
+          name: groupRest.name as string | undefined,
+          description: groupRest.description as string | undefined,
+          project_id: groupRest.project_id as string | undefined,
+        });
         return { content: [{ type: "text", text: JSON.stringify(group, null, 2) }] };
       }
 
