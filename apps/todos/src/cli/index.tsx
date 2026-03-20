@@ -1094,6 +1094,68 @@ program
     }
   });
 
+// extract
+program
+  .command("extract <path>")
+  .description("Extract TODO/FIXME/HACK/BUG/XXX/NOTE comments from source files and create tasks")
+  .option("--dry-run", "Show extracted comments without creating tasks")
+  .option("--pattern <tags>", "Comma-separated tags to look for (default: TODO,FIXME,HACK,XXX,BUG,NOTE)")
+  .option("-t, --tags <tags>", "Extra comma-separated tags to add to created tasks")
+  .option("--assign <agent>", "Assign extracted tasks to an agent")
+  .option("--list <id>", "Task list ID")
+  .option("--ext <extensions>", "Comma-separated file extensions to scan (e.g. ts,py,go)")
+  .action((scanPath: string, opts) => {
+    try {
+      const globalOpts = program.opts();
+      const projectId = autoProject(globalOpts);
+      const { extractTodos, EXTRACT_TAGS } = require("../lib/extract.js") as typeof import("../lib/extract.js");
+      const patterns = opts.pattern
+        ? opts.pattern.split(",").map((t: string) => t.trim().toUpperCase()) as typeof EXTRACT_TAGS[number][]
+        : undefined;
+      const taskListId = opts.list ? (() => {
+        const db = getDatabase();
+        const id = resolvePartialId(db, "task_lists", opts.list);
+        if (!id) {
+          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+          process.exit(1);
+        }
+        return id;
+      })() : undefined;
+      const result = extractTodos({
+        path: resolve(scanPath),
+        patterns,
+        project_id: projectId,
+        task_list_id: taskListId,
+        tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+        assigned_to: opts.assign,
+        agent_id: globalOpts.agent,
+        dry_run: opts.dryRun,
+        extensions: opts.ext ? opts.ext.split(",").map((e: string) => e.trim()) : undefined,
+      });
+
+      if (globalOpts.json) {
+        console.log(JSON.stringify(opts.dryRun ? { comments: result.comments } : { tasks_created: result.tasks.length, skipped: result.skipped, comments: result.comments.length }, null, 2));
+      } else if (opts.dryRun) {
+        console.log(chalk.cyan(`Found ${result.comments.length} comment(s):\n`));
+        for (const c of result.comments) {
+          console.log(`  ${chalk.yellow(`[${c.tag}]`)} ${c.message}`);
+          console.log(`    ${chalk.gray(`${c.file}:${c.line}`)}`);
+        }
+      } else {
+        console.log(chalk.green(`Created ${result.tasks.length} task(s)`));
+        if (result.skipped > 0) {
+          console.log(chalk.gray(`Skipped ${result.skipped} duplicate(s)`));
+        }
+        console.log(chalk.gray(`Total comments found: ${result.comments.length}`));
+        for (const t of result.tasks) {
+          console.log(formatTaskLine(t));
+        }
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
+
 // export
 program
   .command("export")
