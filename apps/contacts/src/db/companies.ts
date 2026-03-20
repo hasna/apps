@@ -13,6 +13,7 @@ import type {
   CreatePhoneInput,
   CreateSocialProfileInput,
   EmailRow,
+  EntityType,
   PhoneRow,
   SocialProfileRow,
   Tag,
@@ -31,6 +32,8 @@ function rowToCompany(row: CompanyRow): Company {
     custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
     archived: !!row.archived,
     project_id: row.project_id ?? null,
+    is_owned_entity: !!row.is_owned_entity,
+    entity_type: (row.entity_type ?? null) as EntityType | null,
   };
 }
 
@@ -126,8 +129,8 @@ export function createCompany(input: CreateCompanyInput, db?: Database): Company
   const timestamp = now();
 
   d.run(
-    `INSERT INTO companies (id, name, domain, logo_url, description, industry, size, founded_year, notes, custom_fields, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO companies (id, name, domain, logo_url, description, industry, size, founded_year, notes, custom_fields, is_owned_entity, entity_type, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.name,
@@ -139,6 +142,8 @@ export function createCompany(input: CreateCompanyInput, db?: Database): Company
       input.founded_year ?? null,
       input.notes ?? null,
       JSON.stringify(input.custom_fields ?? {}),
+      input.is_owned_entity ? 1 : 0,
+      input.entity_type ?? null,
       timestamp,
       timestamp,
     ]
@@ -177,6 +182,7 @@ export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { c
     tag_id,
     project_id,
     archived = false,
+    is_owned_entity,
     order_by = "name",
     order_dir = "asc",
   } = opts;
@@ -200,6 +206,11 @@ export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { c
   if (tag_id) {
     conditions.push("EXISTS (SELECT 1 FROM company_tags ct WHERE ct.company_id = co.id AND ct.tag_id = ?)");
     params.push(tag_id);
+  }
+
+  if (is_owned_entity !== undefined) {
+    conditions.push("co.is_owned_entity = ?");
+    params.push(is_owned_entity ? 1 : 0);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -231,6 +242,8 @@ export function updateCompany(id: string, input: UpdateCompanyInput, db?: Databa
   if (input.notes !== undefined) { setClauses.push("notes = ?"); params.push(input.notes); }
   if (input.custom_fields !== undefined) { setClauses.push("custom_fields = ?"); params.push(JSON.stringify(input.custom_fields)); }
   if ("project_id" in input && input.project_id !== undefined) { setClauses.push("project_id = ?"); params.push(input.project_id as string | null); }
+  if (input.is_owned_entity !== undefined) { setClauses.push("is_owned_entity = ?"); params.push(input.is_owned_entity ? 1 : 0); }
+  if ("entity_type" in input && input.entity_type !== undefined) { setClauses.push("entity_type = ?"); params.push(input.entity_type as string | null); }
 
   params.push(id);
   d.run(`UPDATE companies SET ${setClauses.join(", ")} WHERE id = ?`, params);
@@ -299,4 +312,8 @@ export function unarchiveCompany(id: string, db?: Database): CompanyWithDetails 
   logActivity(d, { company_id: id, action: "company.unarchived", details: `Unarchived company: ${row.name}` });
   const updated = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow;
   return loadCompanyDetails(d, rowToCompany(updated));
+}
+
+export function listOwnedEntities(db?: Database): { companies: CompanyWithDetails[]; total: number } {
+  return listCompanies({ is_owned_entity: true } as CompanyListOptions & { is_owned_entity?: boolean }, db);
 }

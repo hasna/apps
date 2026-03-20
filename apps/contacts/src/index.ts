@@ -30,6 +30,7 @@ export {
   listCompanyEmployees,
   archiveCompany,
   unarchiveCompany,
+  listOwnedEntities,
 } from "./db/companies.js";
 
 // Tags
@@ -53,7 +54,60 @@ export {
   listRelationships,
   getRelationship,
   deleteRelationship,
+  createCompanyRelationship,
+  listCompanyRelationships,
+  deleteCompanyRelationship,
+  getEntityTeam,
 } from "./db/relationships.js";
+export type { ListRelationshipsOptions, ListCompanyRelationshipsOptions, EntityTeamMember } from "./db/relationships.js";
+
+// Org Members
+export {
+  addOrgMember,
+  getOrgMember,
+  listOrgMembers,
+  listOrgMembersForContact,
+  updateOrgMember,
+  removeOrgMember,
+} from "./db/org-members.js";
+
+// Vendor Communications
+export {
+  logVendorCommunication,
+  listVendorCommunications,
+  updateVendorCommunication,
+  deleteVendorCommunication,
+  listPendingFollowUps,
+  listMissingInvoices,
+  markFollowUpDone,
+} from "./db/vendor-comms.js";
+export type { ListVendorCommsOptions } from "./db/vendor-comms.js";
+
+// Contact Tasks
+export {
+  createContactTask,
+  getContactTask,
+  listContactTasks,
+  updateContactTask,
+  deleteContactTask,
+  listOverdueTasks,
+  checkEscalations,
+} from "./db/contact-tasks.js";
+export type { ListContactTasksOptions } from "./db/contact-tasks.js";
+
+// Applications
+export {
+  createApplication,
+  getApplication,
+  listApplications,
+  updateApplication,
+  deleteApplication,
+  listFollowUpDue,
+  listPendingApplications,
+} from "./db/applications.js";
+
+// Notes
+export { addNote, listNotes, deleteNote, getNote, listNotesForContactAtCompany } from "./db/notes.js";
 
 // Groups
 export {
@@ -105,6 +159,14 @@ export type {
   ContactSource,
   PreferredContactMethod,
   ContactStatus,
+  EntityType,
+  CompanyRelationshipType,
+  VendorCommType,
+  VendorCommDirection,
+  VendorCommStatus,
+  ApplicationType,
+  ApplicationStatus,
+  ApplicationMethod,
   // Sub-entities
   Email,
   Phone,
@@ -117,10 +179,17 @@ export type {
   Company,
   CompanyWithDetails,
   ContactRelationship,
+  CompanyRelationship,
   ActivityLog,
   Webhook,
   Group,
   CreateGroupInput,
+  ContactNote,
+  OrgMember,
+  VendorCommunication,
+  EscalationRule,
+  ContactTask,
+  Application,
   // Inputs
   CreateEmailInput,
   CreatePhoneInput,
@@ -135,11 +204,21 @@ export type {
   UpdateCompanyInput,
   CompanyListOptions,
   CreateRelationshipInput,
+  CreateCompanyRelationshipInput,
   CreateActivityInput,
   CreateWebhookInput,
   UpdateWebhookInput,
   DuplicateByEmail,
   DuplicateByName,
+  CreateOrgMemberInput,
+  UpdateOrgMemberInput,
+  CreateVendorCommunicationInput,
+  UpdateVendorCommunicationInput,
+  CreateContactTaskInput,
+  UpdateContactTaskInput,
+  CreateApplicationInput,
+  UpdateApplicationInput,
+  ListApplicationsOptions,
   // Raw rows
   ContactRow,
   CompanyRow,

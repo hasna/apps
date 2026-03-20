@@ -227,6 +227,8 @@ export interface ContactListOptions {
 
 // ─── Company ──────────────────────────────────────────────────────────────────
 
+export type EntityType = 'operating' | 'holding' | 'dissolved' | 'nonprofit' | 'trust' | 'branch' | 'other';
+
 export interface Company {
   id: string;
   name: string;
@@ -240,6 +242,8 @@ export interface Company {
   custom_fields: Record<string, unknown>;
   archived: boolean;
   project_id: string | null;
+  is_owned_entity: boolean;
+  entity_type?: EntityType | null;
   created_at: string;
   updated_at: string;
 }
@@ -263,6 +267,8 @@ export interface CreateCompanyInput {
   founded_year?: number;
   notes?: string;
   custom_fields?: Record<string, unknown>;
+  is_owned_entity?: boolean;
+  entity_type?: EntityType;
   emails?: CreateEmailInput[];
   phones?: CreatePhoneInput[];
   addresses?: CreateAddressInput[];
@@ -281,6 +287,8 @@ export interface UpdateCompanyInput {
   notes?: string | null;
   custom_fields?: Record<string, unknown>;
   project_id?: string | null;
+  is_owned_entity?: boolean;
+  entity_type?: EntityType | null;
 }
 
 export interface CompanyListOptions {
@@ -290,6 +298,7 @@ export interface CompanyListOptions {
   tag_id?: string;
   project_id?: string;
   archived?: boolean;
+  is_owned_entity?: boolean;
   order_by?: "name" | "created_at" | "updated_at";
   order_dir?: "asc" | "desc";
 }
@@ -351,12 +360,18 @@ export interface ContactNote {
   contact_id: string;
   body: string;
   created_by: string | null;
+  company_id?: string | null;
   created_at: string;
 }
 
 // ─── Company Relationships ────────────────────────────────────────────────────
 
-export type CompanyRelationshipType = "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "other";
+export type CompanyRelationshipType =
+  | "client" | "vendor" | "partner" | "employee" | "contractor"
+  | "investor" | "advisor" | "other"
+  | "tax_preparer" | "registered_agent" | "bank_manager" | "attorney"
+  | "paralegal" | "accountant" | "payroll_specialist" | "compliance_officer"
+  | "primary_contact" | "backup_contact" | "recruiter" | "insurance_broker";
 
 export interface CompanyRelationship {
   id: string;
@@ -364,6 +379,10 @@ export interface CompanyRelationship {
   company_id: string;
   relationship_type: CompanyRelationshipType;
   notes: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  is_primary: boolean;
+  status: 'active' | 'inactive' | 'ended';
   created_at: string;
 }
 
@@ -372,6 +391,10 @@ export interface CreateCompanyRelationshipInput {
   company_id: string;
   relationship_type: CompanyRelationshipType;
   notes?: string;
+  start_date?: string;
+  end_date?: string;
+  is_primary?: boolean;
+  status?: 'active' | 'inactive' | 'ended';
 }
 
 export interface CompanyRelationshipRow {
@@ -380,7 +403,215 @@ export interface CompanyRelationshipRow {
   company_id: string;
   relationship_type: string;
   notes: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  is_primary: number;
+  status: string;
   created_at: string;
+}
+
+// ─── Org Members ──────────────────────────────────────────────────────────────
+
+export interface OrgMember {
+  id: string;
+  company_id: string;
+  contact_id: string;
+  title?: string | null;
+  specialization?: string | null;
+  office_phone?: string | null;
+  response_sla_hours?: number | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateOrgMemberInput {
+  company_id: string;
+  contact_id: string;
+  title?: string;
+  specialization?: string;
+  office_phone?: string;
+  response_sla_hours?: number;
+  notes?: string;
+}
+
+export interface UpdateOrgMemberInput {
+  title?: string | null;
+  specialization?: string | null;
+  office_phone?: string | null;
+  response_sla_hours?: number | null;
+  notes?: string | null;
+}
+
+// ─── Vendor Communications ────────────────────────────────────────────────────
+
+export type VendorCommType = 'email' | 'call' | 'meeting' | 'invoice_request' | 'invoice_received' | 'payment' | 'dispute' | 'other';
+export type VendorCommDirection = 'inbound' | 'outbound';
+export type VendorCommStatus = 'sent' | 'awaiting_response' | 'responded' | 'no_response' | 'resolved';
+
+export interface VendorCommunication {
+  id: string;
+  company_id: string;
+  contact_id?: string | null;
+  comm_date: string;
+  type: VendorCommType;
+  direction: VendorCommDirection;
+  subject?: string | null;
+  body?: string | null;
+  status: VendorCommStatus;
+  invoice_amount?: number | null;
+  invoice_currency?: string | null;
+  invoice_ref?: string | null;
+  follow_up_date?: string | null;
+  follow_up_done: boolean;
+  created_at: string;
+}
+
+export interface CreateVendorCommunicationInput {
+  company_id: string;
+  contact_id?: string;
+  comm_date: string;
+  type?: VendorCommType;
+  direction?: VendorCommDirection;
+  subject?: string;
+  body?: string;
+  status?: VendorCommStatus;
+  invoice_amount?: number;
+  invoice_currency?: string;
+  invoice_ref?: string;
+  follow_up_date?: string;
+  follow_up_done?: boolean;
+}
+
+export interface UpdateVendorCommunicationInput {
+  contact_id?: string | null;
+  comm_date?: string;
+  type?: VendorCommType;
+  direction?: VendorCommDirection;
+  subject?: string | null;
+  body?: string | null;
+  status?: VendorCommStatus;
+  invoice_amount?: number | null;
+  invoice_currency?: string | null;
+  invoice_ref?: string | null;
+  follow_up_date?: string | null;
+  follow_up_done?: boolean;
+}
+
+// ─── Contact Tasks ────────────────────────────────────────────────────────────
+
+export interface EscalationRule {
+  after_days: number;
+  escalate_to_contact_id: string;
+  method: 'email' | 'note' | 'both';
+}
+
+export interface ContactTask {
+  id: string;
+  title: string;
+  description?: string | null;
+  contact_id: string;
+  assigned_by?: string | null;
+  deadline?: string | null;
+  status: 'pending' | 'awaiting_response' | 'in_progress' | 'completed' | 'cancelled' | 'escalated';
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  entity_id?: string | null;
+  linked_todos_task_id?: string | null;
+  escalation_rules: EscalationRule[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateContactTaskInput {
+  title: string;
+  description?: string;
+  contact_id: string;
+  assigned_by?: string;
+  deadline?: string;
+  status?: ContactTask['status'];
+  priority?: ContactTask['priority'];
+  entity_id?: string;
+  linked_todos_task_id?: string;
+  escalation_rules?: EscalationRule[];
+}
+
+export interface UpdateContactTaskInput {
+  title?: string;
+  description?: string | null;
+  assigned_by?: string | null;
+  deadline?: string | null;
+  status?: ContactTask['status'];
+  priority?: ContactTask['priority'];
+  entity_id?: string | null;
+  linked_todos_task_id?: string | null;
+  escalation_rules?: EscalationRule[];
+}
+
+// ─── Applications ─────────────────────────────────────────────────────────────
+
+export type ApplicationType = 'ai_credits' | 'grant' | 'startup_program' | 'visa' | 'trademark' | 'tax_filing' | 'loan' | 'other';
+export type ApplicationStatus = 'draft' | 'submitted' | 'pending' | 'approved' | 'rejected' | 'follow_up_needed' | 'expired' | 'cancelled';
+export type ApplicationMethod = 'email' | 'form' | 'typeform' | 'hubspot' | 'manual' | 'browser' | 'feathery' | 'other';
+
+export interface Application {
+  id: string;
+  program_name: string;
+  provider_company_id?: string | null;
+  type: ApplicationType;
+  value_usd?: number | null;
+  applicant_contact_id?: string | null;
+  primary_contact_id?: string | null;
+  status: ApplicationStatus;
+  submitted_date?: string | null;
+  decision_date?: string | null;
+  follow_up_date?: string | null;
+  notes?: string | null;
+  method?: ApplicationMethod | null;
+  form_url?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateApplicationInput {
+  program_name: string;
+  provider_company_id?: string;
+  type?: ApplicationType;
+  value_usd?: number;
+  applicant_contact_id?: string;
+  primary_contact_id?: string;
+  status?: ApplicationStatus;
+  submitted_date?: string;
+  decision_date?: string;
+  follow_up_date?: string;
+  notes?: string;
+  method?: ApplicationMethod;
+  form_url?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateApplicationInput {
+  program_name?: string;
+  provider_company_id?: string | null;
+  type?: ApplicationType;
+  value_usd?: number | null;
+  applicant_contact_id?: string | null;
+  primary_contact_id?: string | null;
+  status?: ApplicationStatus;
+  submitted_date?: string | null;
+  decision_date?: string | null;
+  follow_up_date?: string | null;
+  notes?: string | null;
+  method?: ApplicationMethod | null;
+  form_url?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ListApplicationsOptions {
+  type?: ApplicationType;
+  status?: ApplicationStatus;
+  provider_company_id?: string;
+  applicant_contact_id?: string;
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
@@ -464,6 +695,8 @@ export interface CompanyRow {
   custom_fields: string;
   archived: number;
   project_id: string | null;
+  is_owned_entity: number;
+  entity_type: string | null;
   created_at: string;
   updated_at: string;
 }

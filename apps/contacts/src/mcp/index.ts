@@ -74,7 +74,7 @@ import {
   deleteCompanyRelationship,
 } from "../db/relationships.js";
 import { listActivity } from "../db/activity.js";
-import { addNote, listNotes, deleteNote, getNote } from "../db/notes.js";
+import { addNote, listNotes, deleteNote, getNote, listNotesForContactAtCompany } from "../db/notes.js";
 import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
@@ -86,6 +86,44 @@ import {
   googlePersonToContactInput,
 } from "../lib/google-contacts.js";
 import { ConnectorNotInstalledError, ConnectorAuthError } from "../lib/connector.js";
+import type {
+  CreateOrgMemberInput,
+  UpdateOrgMemberInput,
+  CreateVendorCommunicationInput,
+  CreateContactTaskInput,
+  UpdateContactTaskInput,
+  CreateApplicationInput,
+  UpdateApplicationInput,
+} from "../types/index.js";
+// DB layer functions — implemented in parallel by db agent
+import {
+  addOrgMember,
+  listOrgMembers,
+  updateOrgMember,
+  removeOrgMember,
+  listOrgMembersForContact,
+} from "../db/org-members.js";
+import {
+  logVendorCommunication,
+  listVendorCommunications,
+  listMissingInvoices,
+  listPendingFollowUps,
+  markFollowUpDone,
+} from "../db/vendor-comms.js";
+import {
+  createContactTask,
+  listContactTasks,
+  updateContactTask,
+  deleteContactTask,
+  listOverdueTasks,
+  checkEscalations,
+} from "../db/contact-tasks.js";
+import {
+  createApplication,
+  listApplications,
+  updateApplication,
+  listFollowUpDue as getFollowUpDueApplications,
+} from "../db/applications.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -526,23 +564,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "add_note",
-      description: "Add a structured timestamped note to a contact. Returns the note object with id, body, created_at.",
+      description: "Add a structured timestamped note to a contact. Returns the note object with id, body, created_at. Optionally scope the note to a specific company context.",
       inputSchema: {
         type: "object",
         properties: {
           contact_id: { type: "string" },
           note: { type: "string", description: "Note text/body" },
           created_by: { type: "string", description: "Agent or user who created the note (optional)" },
+          company_id: { type: "string", description: "Optional company context — scope this note to a specific contact-company pair" },
         },
         required: ["contact_id", "note"],
       },
     },
     {
       name: "list_notes",
-      description: "List all structured notes for a contact, ordered by date ascending.",
+      description: "List all structured notes for a contact, ordered by date ascending. Optionally filter by company_id to show only notes scoped to that contact-company pair.",
       inputSchema: {
         type: "object",
-        properties: { contact_id: { type: "string" } },
+        properties: {
+          contact_id: { type: "string" },
+          company_id: { type: "string", description: "Optional company ID — if provided, only returns notes scoped to this contact-company pair" },
+        },
         required: ["contact_id"],
       },
     },
@@ -856,14 +898,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "add_company_relationship",
-      description: "Declare a typed relationship between a contact and a company (client, vendor, partner, employee, contractor, investor, advisor, other).",
+      description: "Declare a typed relationship between a contact and a company. relationship_type: client|vendor|partner|employee|contractor|investor|advisor|tax_preparer|bank_manager|attorney|registered_agent|accountant|payroll_specialist|insurance_broker|other. Supports optional start_date, end_date, is_primary, and status fields.",
       inputSchema: {
         type: "object",
         properties: {
           contact_id: { type: "string" },
           company_id: { type: "string" },
-          relationship_type: { type: "string", enum: ["client", "vendor", "partner", "employee", "contractor", "investor", "advisor", "other"] },
+          relationship_type: { type: "string", enum: ["client", "vendor", "partner", "employee", "contractor", "investor", "advisor", "tax_preparer", "bank_manager", "attorney", "registered_agent", "accountant", "payroll_specialist", "insurance_broker", "other"] },
           notes: { type: "string" },
+          start_date: { type: "string", description: "ISO date when the relationship began (YYYY-MM-DD)" },
+          end_date: { type: "string", description: "ISO date when the relationship ended (YYYY-MM-DD)" },
+          is_primary: { type: "boolean", description: "Whether this is the primary contact for this relationship type at this company" },
+          status: { type: "string", enum: ["active", "inactive", "ended"], description: "Relationship status (default: active)" },
         },
         required: ["contact_id", "company_id", "relationship_type"],
       },
@@ -943,6 +989,293 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           google_profile: { type: "string", description: "connect-googlecontacts profile (default: 'default')" },
         },
         required: ["query"],
+      },
+    },
+    {
+      name: "get_contact_workload",
+      description: "Get a comprehensive workload summary for a contact: entities/companies they manage, active tasks assigned to them, overdue tasks, pending applications they're linked to, days since last contact, org memberships with specializations. Essential for checking if a key contact is overloaded or responsive.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+        },
+        required: ["contact_id"],
+      },
+    },
+    {
+      name: "list_overdue_contact_tasks",
+      description: "List all contact tasks that are past their deadline and not yet completed/cancelled. Includes escalation rules so agents know who to escalate to.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "check_escalations",
+      description: "Check all contact tasks with escalation rules to see which ones should be escalated now based on days overdue vs escalation thresholds. Returns tasks with the contact to escalate to.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "add_org_member",
+      description: "Add a contact as an org member of a company (employee, team member) with optional title, specialization, office phone, SLA hours, and notes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          contact_id: { type: "string" },
+          title: { type: "string" },
+          specialization: { type: "string" },
+          office_phone: { type: "string" },
+          response_sla_hours: { type: "number" },
+          notes: { type: "string" },
+        },
+        required: ["company_id", "contact_id"],
+      },
+    },
+    {
+      name: "list_org_members",
+      description: "List all org members (contacts) of a company.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+        },
+        required: ["company_id"],
+      },
+    },
+    {
+      name: "update_org_member",
+      description: "Update an org member's title, specialization, office phone, SLA hours, or notes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          specialization: { type: "string" },
+          office_phone: { type: "string" },
+          response_sla_hours: { type: "number" },
+          notes: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "remove_org_member",
+      description: "Remove a contact from a company's org members by org member record ID.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "log_vendor_communication",
+      description: "Log a vendor communication (email, invoice request, call, payment, etc.) for a company. Track invoice amounts, references, follow-up dates, and status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          contact_id: { type: "string" },
+          comm_date: { type: "string", description: "ISO date (defaults to today)" },
+          type: { type: "string", enum: ["email", "call", "meeting", "invoice_request", "invoice_received", "payment", "dispute", "other"] },
+          direction: { type: "string", enum: ["inbound", "outbound"] },
+          subject: { type: "string" },
+          body: { type: "string" },
+          status: { type: "string", enum: ["sent", "awaiting_response", "responded", "no_response", "resolved"] },
+          invoice_amount: { type: "number" },
+          invoice_currency: { type: "string" },
+          invoice_ref: { type: "string" },
+          follow_up_date: { type: "string", description: "ISO date for follow-up (YYYY-MM-DD)" },
+        },
+        required: ["company_id", "type"],
+      },
+    },
+    {
+      name: "list_vendor_communications",
+      description: "List vendor communications for a company, optionally filtered by type or status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          type: { type: "string", enum: ["email", "call", "meeting", "invoice_request", "invoice_received", "payment", "dispute", "other"] },
+          status: { type: "string", enum: ["sent", "awaiting_response", "responded", "no_response", "resolved"] },
+        },
+        required: ["company_id"],
+      },
+    },
+    {
+      name: "list_missing_invoices",
+      description: "List all invoice_request communications with no_response or awaiting_response status — vendors who haven't sent invoices yet.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "list_pending_followups",
+      description: "List all vendor communications with follow_up_date on or before today that haven't been marked done.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "mark_followup_done",
+      description: "Mark a vendor communication follow-up as done.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "create_contact_task",
+      description: "Create a task assigned to a contact, with optional deadline, priority, entity link, escalation rules, and todos task link.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          contact_id: { type: "string" },
+          description: { type: "string" },
+          assigned_by: { type: "string" },
+          deadline: { type: "string", description: "ISO date (YYYY-MM-DD)" },
+          priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          entity_id: { type: "string", description: "Company/entity ID this task is for" },
+          escalation_rules: { type: "array", items: { type: "object", properties: { after_days: { type: "number" }, escalate_to_contact_id: { type: "string" }, method: { type: "string", enum: ["email", "note", "both"] } }, required: ["after_days", "escalate_to_contact_id", "method"] } },
+          linked_todos_task_id: { type: "string" },
+        },
+        required: ["title", "contact_id"],
+      },
+    },
+    {
+      name: "list_contact_tasks",
+      description: "List contact tasks, optionally filtered by contact, entity, status, or priority.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          entity_id: { type: "string" },
+          status: { type: "string", enum: ["pending", "awaiting_response", "in_progress", "completed", "cancelled", "escalated"] },
+          priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+        },
+      },
+    },
+    {
+      name: "update_contact_task",
+      description: "Update a contact task's title, status, deadline, priority, description, or escalation rules.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          status: { type: "string", enum: ["pending", "awaiting_response", "in_progress", "completed", "cancelled", "escalated"] },
+          deadline: { type: "string" },
+          priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          description: { type: "string" },
+          escalation_rules: { type: "array", items: { type: "object" } },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "delete_contact_task",
+      description: "Delete a contact task by ID.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "create_application",
+      description: "Create an application record (grant, AI credits, startup program, visa, trademark, tax filing, etc.).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          program_name: { type: "string" },
+          type: { type: "string", enum: ["ai_credits", "grant", "startup_program", "visa", "trademark", "tax_filing", "loan", "other"] },
+          value_usd: { type: "number" },
+          provider_company_id: { type: "string" },
+          primary_contact_id: { type: "string" },
+          status: { type: "string", enum: ["draft", "submitted", "pending", "approved", "rejected", "follow_up_needed", "expired", "cancelled"] },
+          submitted_date: { type: "string" },
+          follow_up_date: { type: "string" },
+          notes: { type: "string" },
+          method: { type: "string", enum: ["email", "form", "typeform", "hubspot", "manual", "browser", "feathery", "other"] },
+          form_url: { type: "string" },
+        },
+        required: ["program_name"],
+      },
+    },
+    {
+      name: "list_applications",
+      description: "List applications, optionally filtered by type, status, or provider company.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["ai_credits", "grant", "startup_program", "visa", "trademark", "tax_filing", "loan", "other"] },
+          status: { type: "string", enum: ["draft", "submitted", "pending", "approved", "rejected", "follow_up_needed", "expired", "cancelled"] },
+          provider_company_id: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "update_application",
+      description: "Update an application's program name, status, dates, value, notes, or other fields.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          program_name: { type: "string" },
+          type: { type: "string", enum: ["ai_credits", "grant", "startup_program", "visa", "trademark", "tax_filing", "loan", "other"] },
+          value_usd: { type: "number" },
+          provider_company_id: { type: "string" },
+          primary_contact_id: { type: "string" },
+          status: { type: "string", enum: ["draft", "submitted", "pending", "approved", "rejected", "follow_up_needed", "expired", "cancelled"] },
+          submitted_date: { type: "string" },
+          decision_date: { type: "string" },
+          follow_up_date: { type: "string" },
+          notes: { type: "string" },
+          method: { type: "string" },
+          form_url: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "get_followup_due_applications",
+      description: "List applications with follow_up_date on or before today that haven't been completed or cancelled.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "list_owned_entities",
+      description: "List all companies marked as owned entities (is_owned_entity=true) — your legal entities, subsidiaries, and operating companies.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "get_entity_team",
+      description: "Get the full team for an owned entity — all contacts linked via company_relationships, with their roles and primary status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+        },
+        required: ["company_id"],
       },
     },
   ],
@@ -1339,13 +1672,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const noteObj = addNote(
           a.contact_id as string,
           a.note as string,
-          a.created_by as string | undefined
+          a.created_by as string | undefined,
+          undefined,
+          a.company_id as string | undefined
         );
         return { content: [{ type: "text", text: JSON.stringify(noteObj, null, 2) }] };
       }
 
       case "list_notes": {
-        const notes = listNotes(a.contact_id as string);
+        const db = getDatabase();
+        const companyId = a.company_id as string | undefined;
+        const notes = companyId
+          ? listNotesForContactAtCompany(a.contact_id as string, companyId, db)
+          : listNotes(a.contact_id as string);
         return { content: [{ type: "text", text: JSON.stringify(notes, null, 2) }] };
       }
 
@@ -1572,8 +1911,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const rel = createCompanyRelationship({
           contact_id: a.contact_id as string,
           company_id: a.company_id as string,
-          relationship_type: a.relationship_type as "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "other",
+          relationship_type: a.relationship_type as "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "tax_preparer" | "bank_manager" | "attorney" | "registered_agent" | "accountant" | "payroll_specialist" | "insurance_broker" | "other",
           notes: a.notes as string | undefined,
+          start_date: a.start_date as string | undefined,
+          end_date: a.end_date as string | undefined,
+          is_primary: a.is_primary as boolean | undefined,
+          status: a.status as "active" | "inactive" | "ended" | undefined,
         });
         return { content: [{ type: "text", text: JSON.stringify(rel, null, 2) }] };
       }
@@ -1732,6 +2075,260 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           as_contact_input: googlePersonToContactInput(p),
         }));
         return { content: [{ type: "text", text: JSON.stringify(mapped, null, 2) }] };
+      }
+
+      // ─── get_contact_workload ─────────────────────────────────────────────────
+      case "get_contact_workload": {
+        const db = getDatabase();
+        const { contact_id } = a as { contact_id: string };
+        const contact = getContact(contact_id);
+        const companyRels = listCompanyRelationships({ contact_id }, db);
+        const activeTasks = listContactTasks({ contact_id, status: 'pending' }, db);
+        const overdueTasks = listOverdueTasks(db).filter((t: { contact_id: string }) => t.contact_id === contact_id);
+        const orgMemberships = listOrgMembersForContact(contact_id, db);
+        const daysSince = contact.last_contacted_at
+          ? Math.floor((Date.now() - new Date(contact.last_contacted_at).getTime()) / 86400000)
+          : null;
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              contact,
+              company_relationships: companyRels,
+              active_tasks: activeTasks,
+              overdue_tasks: overdueTasks,
+              org_memberships: orgMemberships,
+              days_since_last_contact: daysSince,
+              total_entities_managed: companyRels.length,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "list_overdue_contact_tasks": {
+        const db = getDatabase();
+        const overdue = listOverdueTasks(db);
+        return { content: [{ type: "text", text: JSON.stringify(overdue, null, 2) }] };
+      }
+
+      case "check_escalations": {
+        const db = getDatabase();
+        const escalations = checkEscalations(db);
+        return { content: [{ type: "text", text: JSON.stringify(escalations, null, 2) }] };
+      }
+
+      // ─── org_members ─────────────────────────────────────────────────────────
+      case "add_org_member": {
+        const db = getDatabase();
+        const input: CreateOrgMemberInput = {
+          company_id: a.company_id as string,
+          contact_id: a.contact_id as string,
+          title: a.title as string | undefined,
+          specialization: a.specialization as string | undefined,
+          office_phone: a.office_phone as string | undefined,
+          response_sla_hours: a.response_sla_hours as number | undefined,
+          notes: a.notes as string | undefined,
+        };
+        const member = addOrgMember(input, db);
+        return { content: [{ type: "text", text: JSON.stringify(member, null, 2) }] };
+      }
+
+      case "list_org_members": {
+        const db = getDatabase();
+        const members = listOrgMembers(a.company_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify(members, null, 2) }] };
+      }
+
+      case "update_org_member": {
+        const db = getDatabase();
+        const { id: memberId, ...memberRest } = a;
+        const input: UpdateOrgMemberInput = {
+          title: memberRest.title as string | null | undefined,
+          specialization: memberRest.specialization as string | null | undefined,
+          office_phone: memberRest.office_phone as string | null | undefined,
+          response_sla_hours: memberRest.response_sla_hours as number | null | undefined,
+          notes: memberRest.notes as string | null | undefined,
+        };
+        const updated = updateOrgMember(memberId as string, input, db);
+        return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+      }
+
+      case "remove_org_member": {
+        const db = getDatabase();
+        removeOrgMember(a.id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
+      }
+
+      // ─── vendor_communications ────────────────────────────────────────────────
+      case "log_vendor_communication": {
+        const db = getDatabase();
+        const input: CreateVendorCommunicationInput = {
+          company_id: a.company_id as string,
+          contact_id: a.contact_id as string | undefined,
+          comm_date: (a.comm_date as string | undefined) ?? new Date().toISOString().slice(0, 10),
+          type: a.type as CreateVendorCommunicationInput["type"],
+          direction: a.direction as CreateVendorCommunicationInput["direction"],
+          subject: a.subject as string | undefined,
+          body: a.body as string | undefined,
+          status: a.status as CreateVendorCommunicationInput["status"],
+          invoice_amount: a.invoice_amount as number | undefined,
+          invoice_currency: a.invoice_currency as string | undefined,
+          invoice_ref: a.invoice_ref as string | undefined,
+          follow_up_date: a.follow_up_date as string | undefined,
+        };
+        const comm = logVendorCommunication(input, db);
+        return { content: [{ type: "text", text: JSON.stringify(comm, null, 2) }] };
+      }
+
+      case "list_vendor_communications": {
+        const db = getDatabase();
+        const comms = listVendorCommunications(
+          a.company_id as string,
+          {
+            type: a.type as CreateVendorCommunicationInput["type"],
+            status: a.status as CreateVendorCommunicationInput["status"],
+          },
+          db
+        );
+        return { content: [{ type: "text", text: JSON.stringify(comms, null, 2) }] };
+      }
+
+      case "list_missing_invoices": {
+        const db = getDatabase();
+        const missing = listMissingInvoices(db);
+        return { content: [{ type: "text", text: JSON.stringify(missing, null, 2) }] };
+      }
+
+      case "list_pending_followups": {
+        const db = getDatabase();
+        const pending = listPendingFollowUps(db);
+        return { content: [{ type: "text", text: JSON.stringify(pending, null, 2) }] };
+      }
+
+      case "mark_followup_done": {
+        const db = getDatabase();
+        const updated = markFollowUpDone(a.id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+      }
+
+      // ─── contact_tasks ────────────────────────────────────────────────────────
+      case "create_contact_task": {
+        const db = getDatabase();
+        const input: CreateContactTaskInput = {
+          title: a.title as string,
+          contact_id: a.contact_id as string,
+          description: a.description as string | undefined,
+          assigned_by: a.assigned_by as string | undefined,
+          deadline: a.deadline as string | undefined,
+          priority: a.priority as CreateContactTaskInput["priority"],
+          entity_id: a.entity_id as string | undefined,
+          escalation_rules: a.escalation_rules as CreateContactTaskInput["escalation_rules"],
+          linked_todos_task_id: a.linked_todos_task_id as string | undefined,
+        };
+        const task = createContactTask(input, db);
+        return { content: [{ type: "text", text: JSON.stringify(task, null, 2) }] };
+      }
+
+      case "list_contact_tasks": {
+        const db = getDatabase();
+        const tasks = listContactTasks({
+          contact_id: a.contact_id as string | undefined,
+          entity_id: a.entity_id as string | undefined,
+          status: a.status as UpdateContactTaskInput["status"],
+          priority: a.priority as UpdateContactTaskInput["priority"],
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(tasks, null, 2) }] };
+      }
+
+      case "update_contact_task": {
+        const db = getDatabase();
+        const { id: taskId, ...taskRest } = a;
+        const input: UpdateContactTaskInput = {
+          title: taskRest.title as string | undefined,
+          status: taskRest.status as UpdateContactTaskInput["status"],
+          deadline: taskRest.deadline as string | null | undefined,
+          priority: taskRest.priority as UpdateContactTaskInput["priority"],
+          description: taskRest.description as string | null | undefined,
+          escalation_rules: taskRest.escalation_rules as UpdateContactTaskInput["escalation_rules"],
+        };
+        const updated = updateContactTask(taskId as string, input, db);
+        return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+      }
+
+      case "delete_contact_task": {
+        const db = getDatabase();
+        deleteContactTask(a.id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
+      }
+
+      // ─── applications ─────────────────────────────────────────────────────────
+      case "create_application": {
+        const db = getDatabase();
+        const input: CreateApplicationInput = {
+          program_name: a.program_name as string,
+          type: a.type as CreateApplicationInput["type"],
+          value_usd: a.value_usd as number | undefined,
+          provider_company_id: a.provider_company_id as string | undefined,
+          primary_contact_id: a.primary_contact_id as string | undefined,
+          status: a.status as CreateApplicationInput["status"],
+          submitted_date: a.submitted_date as string | undefined,
+          follow_up_date: a.follow_up_date as string | undefined,
+          notes: a.notes as string | undefined,
+          method: a.method as CreateApplicationInput["method"],
+          form_url: a.form_url as string | undefined,
+        };
+        const app = createApplication(input, db);
+        return { content: [{ type: "text", text: JSON.stringify(app, null, 2) }] };
+      }
+
+      case "list_applications": {
+        const db = getDatabase();
+        const apps = listApplications({
+          type: a.type as CreateApplicationInput["type"],
+          status: a.status as CreateApplicationInput["status"],
+          provider_company_id: a.provider_company_id as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(apps, null, 2) }] };
+      }
+
+      case "update_application": {
+        const db = getDatabase();
+        const { id: appId, ...appRest } = a;
+        const input: UpdateApplicationInput = {
+          program_name: appRest.program_name as string | undefined,
+          type: appRest.type as UpdateApplicationInput["type"],
+          value_usd: appRest.value_usd as number | null | undefined,
+          provider_company_id: appRest.provider_company_id as string | null | undefined,
+          primary_contact_id: appRest.primary_contact_id as string | null | undefined,
+          status: appRest.status as UpdateApplicationInput["status"],
+          submitted_date: appRest.submitted_date as string | null | undefined,
+          decision_date: appRest.decision_date as string | null | undefined,
+          follow_up_date: appRest.follow_up_date as string | null | undefined,
+          notes: appRest.notes as string | null | undefined,
+          method: appRest.method as UpdateApplicationInput["method"],
+          form_url: appRest.form_url as string | null | undefined,
+        };
+        const updated = updateApplication(appId as string, input, db);
+        return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+      }
+
+      case "get_followup_due_applications": {
+        const db = getDatabase();
+        const apps = getFollowUpDueApplications(db);
+        return { content: [{ type: "text", text: JSON.stringify(apps, null, 2) }] };
+      }
+
+      case "list_owned_entities": {
+        const result = listCompanies({ limit: 200 });
+        const owned = result.companies.filter((c: { is_owned_entity: boolean }) => c.is_owned_entity);
+        return { content: [{ type: "text", text: JSON.stringify(owned, null, 2) }] };
+      }
+
+      case "get_entity_team": {
+        const db = getDatabase();
+        const company = getCompany(a.company_id as string);
+        const team = listCompanyRelationships({ company_id: a.company_id as string }, db);
+        return { content: [{ type: "text", text: JSON.stringify({ company, team }, null, 2) }] };
       }
 
       default:

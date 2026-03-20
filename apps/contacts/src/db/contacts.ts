@@ -85,6 +85,8 @@ function rowToCompany(row: CompanyRow): Company {
     custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
     archived: !!row.archived,
     project_id: row.project_id ?? null,
+    is_owned_entity: !!row.is_owned_entity,
+    entity_type: (row.entity_type ?? null) as import("../types/index.js").EntityType | null,
   };
 }
 

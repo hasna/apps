@@ -80,6 +80,10 @@ function rowToCompanyRelationship(row: CompanyRelationshipRow): CompanyRelations
   return {
     ...row,
     relationship_type: row.relationship_type as CompanyRelationship["relationship_type"],
+    start_date: row.start_date ?? null,
+    end_date: row.end_date ?? null,
+    is_primary: !!row.is_primary,
+    status: (row.status ?? 'active') as CompanyRelationship["status"],
   };
 }
 
@@ -94,8 +98,18 @@ export function createCompanyRelationship(input: CreateCompanyRelationshipInput,
 
   const id = uuid();
   d.run(
-    `INSERT INTO company_relationships (id, contact_id, company_id, relationship_type, notes) VALUES (?, ?, ?, ?, ?)`,
-    [id, input.contact_id, input.company_id, input.relationship_type, input.notes ?? null]
+    `INSERT INTO company_relationships (id, contact_id, company_id, relationship_type, notes, start_date, end_date, is_primary, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      input.contact_id,
+      input.company_id,
+      input.relationship_type,
+      input.notes ?? null,
+      input.start_date ?? null,
+      input.end_date ?? null,
+      input.is_primary ? 1 : 0,
+      input.status ?? 'active',
+    ]
   );
 
   return rowToCompanyRelationship(
@@ -126,4 +140,43 @@ export function listCompanyRelationships(opts: ListCompanyRelationshipsOptions =
 export function deleteCompanyRelationship(id: string, db?: Database): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM company_relationships WHERE id = ?`, [id]);
+}
+
+export interface EntityTeamMember {
+  contact_id: string;
+  relationship_id: string;
+  relationship_type: CompanyRelationship["relationship_type"];
+  is_primary: boolean;
+  status: CompanyRelationship["status"];
+  start_date: string | null;
+  end_date: string | null;
+  notes: string | null;
+}
+
+export function getEntityTeam(companyId: string, db?: Database): EntityTeamMember[] {
+  const d = db || getDatabase();
+  const rows = d.query(
+    `SELECT id, contact_id, relationship_type, is_primary, status, start_date, end_date, notes
+     FROM company_relationships WHERE company_id = ? ORDER BY is_primary DESC, created_at ASC`
+  ).all(companyId) as Array<{
+    id: string;
+    contact_id: string;
+    relationship_type: string;
+    is_primary: number;
+    status: string;
+    start_date: string | null;
+    end_date: string | null;
+    notes: string | null;
+  }>;
+
+  return rows.map(r => ({
+    contact_id: r.contact_id,
+    relationship_id: r.id,
+    relationship_type: r.relationship_type as CompanyRelationship["relationship_type"],
+    is_primary: !!r.is_primary,
+    status: r.status as CompanyRelationship["status"],
+    start_date: r.start_date,
+    end_date: r.end_date,
+    notes: r.notes,
+  }));
 }

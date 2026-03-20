@@ -156,6 +156,7 @@ describe("contactToGoogleArgs", () => {
         id: "c1", name: "Acme", domain: null, logo_url: null, description: null,
         industry: null, size: null, founded_year: null, notes: null,
         custom_fields: {}, archived: false, project_id: null,
+        is_owned_entity: false, entity_type: null,
         created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z",
       },
     };
