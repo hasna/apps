@@ -75,6 +75,25 @@ export {
 // Activity
 export { logActivity, listActivity, getActivity } from "./db/activity.js";
 
+// Connector layer
+export { runConnector, readConnectorTokens, getConnectorTokenPath, ConnectorNotInstalledError, ConnectorAuthError } from "./lib/connector.js";
+export type { ConnectorRunOptions } from "./lib/connector.js";
+
+// Gmail import
+export { extractContactsFromGmail, parseAddressHeader, domainToCompany, parseName } from "./lib/gmail-import.js";
+export type { GmailImportOptions, ExtractedContact } from "./lib/gmail-import.js";
+
+// Google Contacts sync
+export {
+  listGoogleContacts,
+  searchGoogleContacts,
+  pullGoogleContactsAsInputs,
+  pushContactToGoogle,
+  googlePersonToContactInput,
+  contactToGoogleArgs,
+} from "./lib/google-contacts.js";
+export type { GooglePerson, GoogleContactsSyncOptions, GoogleContactsPushOptions, SyncResult } from "./lib/google-contacts.js";
+
 // Types
 export type {
   // Enums

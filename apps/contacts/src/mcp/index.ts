@@ -79,6 +79,13 @@ import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
 import { extractContactsFromGmail } from "../lib/gmail-import.js";
+import {
+  pullGoogleContactsAsInputs,
+  pushContactToGoogle,
+  searchGoogleContacts,
+  googlePersonToContactInput,
+} from "../lib/google-contacts.js";
+import { ConnectorNotInstalledError, ConnectorAuthError } from "../lib/connector.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -898,6 +905,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["query"],
       },
     },
+    {
+      name: "sync_from_google_contacts",
+      description: "Pull contacts from Google Contacts (People API) and upsert them into the local database. Skips contacts that already exist by email. Requires connect-googlecontacts auth login. Returns { imported, skipped, errors }.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Optional search query to filter which Google Contacts to import" },
+          page_size: { type: "number", description: "Contacts per page (default: connector default)" },
+          google_profile: { type: "string", description: "connect-googlecontacts profile (default: 'default')" },
+          tag_ids: { type: "array", items: { type: "string" }, description: "Tag IDs to apply to all imported contacts" },
+          project_id: { type: "string", description: "Project ID to assign to all imported contacts" },
+          dry_run: { type: "boolean", description: "Preview what would be imported without saving" },
+        },
+      },
+    },
+    {
+      name: "push_contact_to_google",
+      description: "Push a local contact to Google Contacts — creates a new Google contact (or updates if google_resource_name is stored in custom_fields). Requires connect-googlecontacts auth login.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string", description: "Local contact ID to push" },
+          google_profile: { type: "string", description: "connect-googlecontacts profile (default: 'default')" },
+          update_existing: { type: "boolean", description: "If true, update existing Google contact when google_resource_name is present in custom_fields" },
+        },
+        required: ["contact_id"],
+      },
+    },
+    {
+      name: "search_google_contacts",
+      description: "Search Google Contacts by name or email (read-only, does not import). Returns raw Google People API objects. Useful for lookup or preview before a push/sync.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          google_profile: { type: "string", description: "connect-googlecontacts profile (default: 'default')" },
+        },
+        required: ["query"],
+      },
+    },
   ],
 }));
 
@@ -1612,14 +1659,89 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "sync_from_google_contacts": {
+        const db = getDatabase();
+        const googleProfile = a.google_profile as string | undefined;
+        const inputs = await pullGoogleContactsAsInputs({
+          query: a.query as string | undefined,
+          page_size: a.page_size as number | undefined,
+          profile: googleProfile ?? "default",
+        });
+
+        // Apply extra fields to each input
+        const enriched = inputs.map((inp) => ({
+          ...inp,
+          ...(a.tag_ids ? { tag_ids: a.tag_ids as string[] } : {}),
+          ...(a.project_id ? { project_id: a.project_id as string } : {}),
+        }));
+
+        if (a.dry_run) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ dry_run: true, would_import: enriched.length, contacts: enriched }, null, 2),
+            }],
+          };
+        }
+
+        let imported = 0;
+        let skipped = 0;
+        const syncErrors: string[] = [];
+
+        for (const input of enriched) {
+          const primaryEmail = input.emails?.[0]?.address;
+          if (!primaryEmail) { skipped++; continue; }
+
+          try {
+            const existing = db.prepare(
+              `SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`
+            ).get(primaryEmail) as { contact_id: string } | null;
+
+            if (existing) { skipped++; continue; }
+
+            createContact(input);
+            imported++;
+          } catch (err) {
+            syncErrors.push(`${primaryEmail}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ imported, skipped, errors: syncErrors.length, error_details: syncErrors }, null, 2),
+          }],
+        };
+      }
+
+      case "push_contact_to_google": {
+        const contact = getContact(a.contact_id as string);
+        const result = await pushContactToGoogle(contact, {
+          profile: (a.google_profile as string | undefined) ?? "default",
+          update_existing: a.update_existing as boolean | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify({ ...result, contact_id: contact.id }, null, 2) }] };
+      }
+
+      case "search_google_contacts": {
+        const people = await searchGoogleContacts(a.query as string, {
+          profile: (a.google_profile as string | undefined) ?? "default",
+        });
+        const mapped = people.map((p) => ({
+          google: p,
+          as_contact_input: googlePersonToContactInput(p),
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(mapped, null, 2) }] };
+      }
+
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
   } catch (err) {
-    return {
-      content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
-      isError: true,
-    };
+    const msg = err instanceof ConnectorNotInstalledError || err instanceof ConnectorAuthError
+      ? err.message
+      : `Error: ${err instanceof Error ? err.message : String(err)}`;
+    return { content: [{ type: "text", text: msg }], isError: true };
   }
 });
 
