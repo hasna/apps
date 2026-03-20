@@ -346,8 +346,10 @@ describe("read-only tools work without from", () => {
       name: "read_messages",
       arguments: { limit: 5 },
     });
-    const msgs = parseResult(result as any) as any[];
-    expect(msgs.length).toBeGreaterThan(0);
+    const parsed = parseResult(result as any) as any;
+    // Response is now {messages, count, offset}
+    const msgs = Array.isArray(parsed) ? parsed : parsed?.messages ?? parsed;
+    expect(Array.isArray(msgs) ? msgs.length : (parsed?.count ?? 0)).toBeGreaterThan(0);
   });
 
   test("list_sessions returns sessions", async () => {
