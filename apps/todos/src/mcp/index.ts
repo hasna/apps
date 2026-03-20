@@ -468,7 +468,10 @@ server.tool(
   async ({ id, ...rest }) => {
     try {
       const resolvedId = resolveId(id);
-      const task = updateTask(resolvedId, rest);
+      const resolved = { ...rest } as Record<string, unknown>;
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id as string, "task_lists");
+      if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id as string, "plans");
+      const task = updateTask(resolvedId, resolved as unknown as Parameters<typeof updateTask>[1]);
       return { content: [{ type: "text" as const, text: `updated: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

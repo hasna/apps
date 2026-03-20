@@ -941,5 +941,17 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     }
   }
 
+  // For task_lists table, also try matching on slug (e.g. "todos-open-mementos")
+  if (table === "task_lists") {
+    const slugRow = db.query("SELECT id FROM task_lists WHERE slug = ?").get(partialId) as { id: string } | null;
+    if (slugRow) return slugRow.id;
+  }
+
+  // For projects table, also try matching on name (case-insensitive)
+  if (table === "projects") {
+    const nameRow = db.query("SELECT id FROM projects WHERE lower(name) = ?").get(partialId.toLowerCase()) as { id: string } | null;
+    if (nameRow) return nameRow.id;
+  }
+
   return null;
 }
