@@ -205,6 +205,58 @@ export function listActiveFiles(db?: Database): ActiveFileInfo[] {
   `).all() as ActiveFileInfo[];
 }
 
+export interface FileHeatMapEntry {
+  path: string;
+  edit_count: number;
+  unique_agents: number;
+  agent_ids: string[];
+  last_edited_at: string;
+  active_task_count: number;
+}
+
+export function getFileHeatMap(
+  opts?: { limit?: number; project_id?: string; min_edits?: number },
+  db?: Database
+): FileHeatMapEntry[] {
+  const d = db || getDatabase();
+  const limit = opts?.limit ?? 20;
+  const minEdits = opts?.min_edits ?? 1;
+
+  const rows = d.query(`
+    SELECT
+      tf.path,
+      COUNT(*) AS edit_count,
+      COUNT(DISTINCT COALESCE(tf.agent_id, t.assigned_to)) AS unique_agents,
+      GROUP_CONCAT(DISTINCT COALESCE(tf.agent_id, t.assigned_to)) AS agent_ids,
+      MAX(tf.updated_at) AS last_edited_at,
+      SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) AS active_task_count
+    FROM task_files tf
+    JOIN tasks t ON tf.task_id = t.id
+    WHERE tf.status != 'removed'
+    ${opts?.project_id ? `AND t.project_id = '${opts.project_id}'` : ''}
+    GROUP BY tf.path
+    HAVING edit_count >= ${minEdits}
+    ORDER BY edit_count DESC, last_edited_at DESC
+    LIMIT ${limit}
+  `).all() as Array<{
+    path: string;
+    edit_count: number;
+    unique_agents: number;
+    agent_ids: string | null;
+    last_edited_at: string;
+    active_task_count: number;
+  }>;
+
+  return rows.map((r) => ({
+    path: r.path,
+    edit_count: r.edit_count,
+    unique_agents: r.unique_agents,
+    agent_ids: r.agent_ids ? r.agent_ids.split(',').filter(Boolean) : [],
+    last_edited_at: r.last_edited_at,
+    active_task_count: r.active_task_count,
+  }));
+}
+
 export function bulkAddTaskFiles(
   taskId: string,
   paths: string[],

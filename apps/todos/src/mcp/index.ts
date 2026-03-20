@@ -3551,6 +3551,26 @@ server.tool(
 );
 }
 
+if (shouldRegisterTool("get_file_heat_map")) {
+server.tool(
+  "get_file_heat_map",
+  "Aggregate file edit frequency across all tasks and agents. Returns hottest files with edit count, unique agents, and last edit. Hot files = high coordination risk, good candidates for extra test coverage.",
+  {
+    limit: z.number().optional().describe("Max files to return (default: 20)"),
+    project_id: z.string().optional().describe("Filter to a specific project"),
+    min_edits: z.number().optional().describe("Minimum edit count to include (default: 1)"),
+  },
+  async ({ limit, project_id, min_edits }) => {
+    try {
+      const { getFileHeatMap } = require("../db/task-files.js") as any;
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const results = getFileHeatMap({ limit, project_id: resolvedProjectId, min_edits });
+      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 if (shouldRegisterTool("bulk_find_tasks_by_files")) {
 server.tool(
   "bulk_find_tasks_by_files",
