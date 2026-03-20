@@ -119,6 +119,7 @@ export interface ReadMessagesOptions {
   max_content_length?: number;
   threads_only?: boolean;
   include_reply_counts?: boolean;
+  mentions_only?: string;
 }
 
 export interface SearchMessagesOptions {

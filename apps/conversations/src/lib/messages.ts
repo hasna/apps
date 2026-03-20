@@ -126,6 +126,14 @@ export function sendMessage(opts: SendMessageOptions): Message {
     message.attachments = attachmentInfos;
   }
 
+  // Parse @mentions and create notification DMs (non-blocking)
+  if (opts.space) {
+    const mentions = parseMentions(opts.content);
+    if (mentions.length > 0) {
+      void processMentions(message.id, opts.from, opts.space, mentions, db);
+    }
+  }
+
   // Fire webhooks async (never blocks)
   fireWebhooks(message);
 
@@ -170,6 +178,10 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   }
   if (opts.threads_only) {
     conditions.push("reply_to IS NULL");
+  }
+  if (opts.mentions_only) {
+    conditions.push(`id IN (SELECT message_id FROM message_mentions WHERE mentioned_agent = ?)`);
+    params.push(opts.mentions_only.toLowerCase());
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -612,4 +624,100 @@ export function listUnreadCounts(agent?: string): UnreadCount[] {
     ORDER BY unread_count DESC, latest_message_at DESC
   `).all() as Array<{ space: string; unread_count: number; latest_message_at: string | null }>;
   return rows;
+}
+
+// ── @mention support ──────────────────────────────────────────────────────────
+
+/** Extract @agentname mentions from message content. Returns unique agent names (lowercase). */
+export function parseMentions(content: string): string[] {
+  const matches = content.match(/@([a-zA-Z0-9_-]+)/g) ?? [];
+  return [...new Set(matches.map((m) => m.slice(1).toLowerCase()))];
+}
+
+/** Store mention records and send DM notifications to each mentioned agent. */
+async function processMentions(
+  messageId: number,
+  fromAgent: string,
+  space: string,
+  mentionedAgents: string[],
+  db: ReturnType<typeof getDb>
+): Promise<void> {
+  const stmt = db.prepare(
+    "INSERT INTO message_mentions (message_id, mentioned_agent, from_agent, space) VALUES (?, ?, ?, ?)"
+  );
+  for (const agent of mentionedAgents) {
+    try {
+      stmt.run(messageId, agent, fromAgent, space);
+      // Send DM notification
+      if (agent !== fromAgent.toLowerCase()) {
+        sendMessage({
+          from: fromAgent,
+          to: agent,
+          content: `You were mentioned in #${space} by ${fromAgent} (message #${messageId})`,
+          metadata: { type: "mention_notification", source_message_id: messageId, space },
+        });
+      }
+    } catch { /* ignore duplicate/error */ }
+  }
+}
+
+export interface MentionCount {
+  space: string;
+  unread_count: number;
+  mention_count: number;
+  latest_message_at: string | null;
+}
+
+/** Get unread counts AND mention counts per space for an agent. */
+export function listUnreadCountsWithMentions(agent: string): MentionCount[] {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT
+      space,
+      COUNT(CASE WHEN read_at IS NULL AND (to_agent = ? OR to_agent IS NULL OR to_agent = '') THEN 1 END) AS unread_count,
+      (SELECT COUNT(*) FROM message_mentions mm WHERE mm.space = m.space AND mm.mentioned_agent = ? AND mm.notified_at IS NULL) AS mention_count,
+      MAX(created_at) AS latest_message_at
+    FROM messages m
+    WHERE space IN (
+      SELECT DISTINCT space FROM space_members WHERE agent = ?
+      UNION
+      SELECT DISTINCT space FROM messages WHERE to_agent = ? AND space IS NOT NULL
+    )
+    GROUP BY space
+    HAVING COUNT(*) > 0
+    ORDER BY mention_count DESC, unread_count DESC, latest_message_at DESC
+  `).all(agent, agent, agent, agent) as MentionCount[];
+  return rows;
+}
+
+/** Get messages that mention a specific agent. */
+export function getMessagesForAgent(agent: string, opts?: { space?: string; unread_only?: boolean; limit?: number }): Array<{ message: Message; mention_id: number }> {
+  const db = getDb();
+  const conditions = ["mm.mentioned_agent = ?"];
+  const params: (string | number)[] = [agent.toLowerCase()];
+  if (opts?.space) { conditions.push("m.space = ?"); params.push(opts.space); }
+  if (opts?.unread_only) { conditions.push("mm.notified_at IS NULL"); }
+  const limit = opts?.limit ?? 50;
+  const rows = db.prepare(
+    `SELECT m.*, mm.id AS mention_id FROM messages m
+     JOIN message_mentions mm ON mm.message_id = m.id
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY m.created_at DESC LIMIT ${limit}`
+  ).all(...params) as Array<Record<string, unknown> & { mention_id: number }>;
+  return rows.map(({ mention_id, ...row }) => ({ message: parseMessage(row), mention_id }));
+}
+
+/** Mark mentions as notified (agent has seen them). */
+export function markMentionsRead(agent: string, space?: string): number {
+  const db = getDb();
+  if (space) {
+    const result = db.prepare(
+      "UPDATE message_mentions SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE mentioned_agent = ? AND space = ? AND notified_at IS NULL"
+    ).run(agent, space);
+    return result.changes;
+  }
+  const result = db.prepare(
+    "UPDATE message_mentions SET notified_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE mentioned_agent = ? AND notified_at IS NULL"
+  ).run(agent);
+  return result.changes;
 }

@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts } from "../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead } from "../lib/messages.js";
 import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -93,6 +93,7 @@ server.registerTool("read_messages", {
     max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
     threads_only: z.coerce.boolean().optional().describe("Only return root messages (reply_to IS NULL) — hides thread replies"),
     include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message (adds one extra query)"),
+    mentions_only: z.string().optional().describe("Only return messages that @mention this agent"),
   },
 }, async (args: Record<string, any>) => {
   const agent = resolveIdentity(args.from);
@@ -286,12 +287,43 @@ server.registerTool("list_unread_counts", {
   description: "Get unread message counts per space without fetching message content. Use this at session start to triage which spaces need attention before calling read_messages.",
   inputSchema: {
     agent: z.string().optional().describe("Filter to spaces the agent is a member of or has received messages in. Omit for global unread counts."),
+    include_mentions: z.coerce.boolean().optional().describe("Include mention_count per space (requires agent)"),
   },
 }, async (args: Record<string, any>) => {
+  if (args.agent && args.include_mentions) {
+    const counts = listUnreadCountsWithMentions(args.agent as string);
+    return { content: [{ type: "text", text: JSON.stringify(counts) }] };
+  }
   const counts = listUnreadCounts(args.agent as string | undefined);
-  return {
-    content: [{ type: "text", text: JSON.stringify(counts) }],
-  };
+  return { content: [{ type: "text", text: JSON.stringify(counts) }] };
+});
+
+server.registerTool("get_mentions", {
+  description: "Get messages that @mention a specific agent. Useful for catching up on missed pings.",
+  inputSchema: {
+    agent: z.string().describe("Agent name to find mentions for"),
+    space: z.string().optional().describe("Filter to a specific space"),
+    unread_only: z.coerce.boolean().optional().describe("Only unread (not yet notified) mentions (default: true)"),
+    limit: z.coerce.number().optional().describe("Max results (default: 50)"),
+  },
+}, async (args: Record<string, any>) => {
+  const results = getMessagesForAgent(args.agent as string, {
+    space: args.space,
+    unread_only: args.unread_only ?? true,
+    limit: args.limit,
+  });
+  return { content: [{ type: "text", text: JSON.stringify({ mentions: results, count: results.length }) }] };
+});
+
+server.registerTool("mark_mentions_read", {
+  description: "Mark @mentions as seen for an agent. Clears unread mention counts.",
+  inputSchema: {
+    agent: z.string().describe("Agent name"),
+    space: z.string().optional().describe("Clear only mentions in this space"),
+  },
+}, async (args: Record<string, any>) => {
+  const cleared = markMentionsRead(args.agent as string, args.space);
+  return { content: [{ type: "text", text: JSON.stringify({ cleared }) }] };
 });
 
 server.registerTool("send_to_space", {

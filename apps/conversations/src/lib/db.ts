@@ -247,6 +247,22 @@ export function getDb(): Database {
     db.exec("ALTER TABLE agent_presence ADD COLUMN project_id TEXT");
   }
 
+  // Message mentions table — @agent notifications
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_mentions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      mentioned_agent TEXT NOT NULL,
+      from_agent TEXT NOT NULL,
+      space TEXT,
+      notified_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_mentions_agent ON message_mentions(mentioned_agent)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_mentions_message ON message_mentions(message_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_mentions_notified ON message_mentions(notified_at)");
+
   // FTS5 virtual table for full-text search
   const ftsExists = db.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
