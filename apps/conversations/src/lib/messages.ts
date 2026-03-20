@@ -168,6 +168,9 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   if (opts.unread_only) {
     conditions.push("read_at IS NULL");
   }
+  if (opts.threads_only) {
+    conditions.push("reply_to IS NULL");
+  }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const resolvedLimit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
@@ -180,6 +183,16 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   ).all(...params) as Record<string, unknown>[];
 
   let messages = rows.map(parseMessage);
+
+  // Attach reply_count if requested
+  if (opts.include_reply_counts && messages.length > 0) {
+    const db2 = getDb();
+    const counts = db2.prepare(
+      `SELECT reply_to, COUNT(*) as c FROM messages WHERE reply_to IN (${messages.map(() => "?").join(",")}) GROUP BY reply_to`
+    ).all(...messages.map((m) => m.id)) as Array<{ reply_to: number; c: number }>;
+    const countMap = new Map(counts.map((r) => [r.reply_to, r.c]));
+    messages = messages.map((m) => ({ ...m, reply_count: countMap.get(m.id) ?? 0 }));
+  }
 
   // Truncate content if max_content_length is set
   if (opts.max_content_length && opts.max_content_length > 0) {

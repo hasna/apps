@@ -91,6 +91,8 @@ server.registerTool("read_messages", {
     unread_only: z.coerce.boolean().optional(),
     mark_read: z.coerce.boolean().optional(),
     max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
+    threads_only: z.coerce.boolean().optional().describe("Only return root messages (reply_to IS NULL) — hides thread replies"),
+    include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message (adds one extra query)"),
   },
 }, async (args: Record<string, any>) => {
   const agent = resolveIdentity(args.from);
@@ -123,7 +125,7 @@ server.registerTool("list_sessions", {
 });
 
 server.registerTool("reply", {
-  description: "Reply to a message by ID.",
+  description: "Reply to a specific message, creating a thread. Sets reply_to so it can be retrieved with get_thread_replies.",
   inputSchema: {
     message_id: z.coerce.number(),
     content: z.string(),
@@ -143,15 +145,13 @@ server.registerTool("reply", {
   const space =
     original.space ||
     (original.session_id?.startsWith("space:") ? original.session_id.slice(6) : undefined);
-  const to = space
-    ? space
-    : (original.from_agent === from ? original.to_agent : original.from_agent);
   const msg = sendMessage({
     from,
-    to,
+    to: space ?? (original.from_agent === from ? original.to_agent : original.from_agent),
     content,
     session_id: original.session_id,
     space,
+    reply_to: message_id,  // ← thread linkage
   });
 
   return {
@@ -338,10 +338,12 @@ server.registerTool("read_space", {
     limit: z.coerce.number().optional(),
     mark_read: z.coerce.boolean().optional(),
     max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
+    threads_only: z.coerce.boolean().optional().describe("Only return root messages (hides thread replies)"),
+    include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message"),
   },
 }, async (args: Record<string, any>) => {
-  const { space, since, limit, mark_read, max_content_length } = args;
-  const messages = readMessages({ space, since, limit, max_content_length });
+  const { space, since, limit, mark_read, max_content_length, threads_only, include_reply_counts } = args;
+  const messages = readMessages({ space, since, limit, max_content_length, threads_only, include_reply_counts });
 
   if (mark_read !== false && messages.length > 0) {
     markReadByIds(messages.map((m) => m.id));
@@ -1076,13 +1078,29 @@ server.registerTool("clean_expired_locks", {
 // ---- Thread Tools ----
 
 server.registerTool("get_thread_replies", {
-  description: "Get all replies in a thread for a given parent message ID.",
+  description: "Get all replies in a thread for a given parent message ID. Also accessible as read_thread.",
   inputSchema: {
     message_id: z.coerce.number(),
+    limit: z.coerce.number().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const replies = getThreadReplies(args.message_id);
-  return { content: [{ type: "text", text: JSON.stringify(replies) }] };
+  let replies = getThreadReplies(args.message_id);
+  if (args.limit) replies = replies.slice(0, args.limit);
+  const parent = getMessageById(args.message_id);
+  return { content: [{ type: "text", text: JSON.stringify({ parent, replies, reply_count: replies.length }) }] };
+});
+
+server.registerTool("read_thread", {
+  description: "Alias for get_thread_replies. Read all replies to a specific message, forming a thread view.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+    limit: z.coerce.number().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  let replies = getThreadReplies(args.message_id);
+  if (args.limit) replies = replies.slice(0, args.limit);
+  const parent = getMessageById(args.message_id);
+  return { content: [{ type: "text", text: JSON.stringify({ parent, replies, reply_count: replies.length }) }] };
 });
 
 // ---- Focus Mode Tools ----
@@ -1323,7 +1341,7 @@ server.registerTool("describe_tools", {
     read_messages: "Read messages with filters. Optional: session_id?, from?, to?, space?, since?(ISO), limit?, unread_only?, mark_read?(default true — auto-marks returned messages as read, pass false to peek without consuming)",
     read_digest: "Lightweight unread digest — preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: space?, session_id?, to?, since?(ISO), limit?, project_id?",
     list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
-    reply: "Reply to a message in same session. Required: message_id, content. Optional: from?",
+    reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
     mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool — mark all unread)",
     search_messages: "Full-text search messages. Required: query. Optional: space?, from?, to?, limit?",
     export_messages: "Export messages as JSON or CSV. Optional: space?, session_id?, from?, since?, until?, format?(json|csv)",
@@ -1378,6 +1396,7 @@ server.registerTool("describe_tools", {
     clean_expired_locks: "Release expired locks + locks held by agents with stale heartbeat (>30 min). Returns {released_stale_agent, released_expired, total}",
     // Thread tools
     get_thread_replies: "Get all replies in a thread. Required: message_id. Optional: limit?",
+    read_thread: "Alias for get_thread_replies. Required: message_id. Optional: limit?",
     // Focus mode tools
     set_focus: "Set agent focus to a project. All read tools default to this scope. Required: project_id. Optional: from?",
     get_focus: "Get current focus: session focus, DB project_id, effective project_id. Optional: from?",
