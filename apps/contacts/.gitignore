@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dashboard/node_modules/
+dashboard/dist/
+.contacts/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local

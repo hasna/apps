@@ -1,0 +1,111 @@
+// Database
+export { getDatabase, resetDatabase } from "./db/database.js";
+
+// Contacts
+export {
+  createContact,
+  getContact,
+  listContacts,
+  updateContact,
+  deleteContact,
+  searchContacts,
+  mergeContacts,
+} from "./db/contacts.js";
+
+// Companies
+export {
+  createCompany,
+  getCompany,
+  listCompanies,
+  updateCompany,
+  deleteCompany,
+  searchCompanies,
+  listCompanyEmployees,
+} from "./db/companies.js";
+
+// Tags
+export {
+  createTag,
+  getTag,
+  getTagByName,
+  listTags,
+  updateTag,
+  deleteTag,
+  addTagToContact,
+  removeTagFromContact,
+  listContactsByTag,
+  addTagToCompany,
+  removeTagFromCompany,
+} from "./db/tags.js";
+
+// Relationships
+export {
+  createRelationship,
+  listRelationships,
+  getRelationship,
+  deleteRelationship,
+} from "./db/relationships.js";
+
+// Activity
+export { logActivity, listActivity, getActivity } from "./db/activity.js";
+
+// Types
+export type {
+  // Enums
+  EmailType,
+  PhoneType,
+  AddressType,
+  SocialPlatform,
+  RelationshipType,
+  ContactSource,
+  // Sub-entities
+  Email,
+  Phone,
+  Address,
+  SocialProfile,
+  // Core entities
+  Tag,
+  Contact,
+  ContactWithDetails,
+  Company,
+  CompanyWithDetails,
+  ContactRelationship,
+  ActivityLog,
+  Webhook,
+  // Inputs
+  CreateEmailInput,
+  CreatePhoneInput,
+  CreateAddressInput,
+  CreateSocialProfileInput,
+  CreateTagInput,
+  UpdateTagInput,
+  CreateContactInput,
+  UpdateContactInput,
+  ContactListOptions,
+  CreateCompanyInput,
+  UpdateCompanyInput,
+  CompanyListOptions,
+  CreateRelationshipInput,
+  CreateActivityInput,
+  CreateWebhookInput,
+  UpdateWebhookInput,
+  // Raw rows
+  ContactRow,
+  CompanyRow,
+  EmailRow,
+  PhoneRow,
+  AddressRow,
+  SocialProfileRow,
+  TagRow,
+  RelationshipRow,
+  ActivityRow,
+  WebhookRow,
+} from "./types/index.js";
+
+// Errors
+export {
+  ContactNotFoundError,
+  CompanyNotFoundError,
+  TagNotFoundError,
+  DuplicateTagNameError,
+} from "./types/index.js";

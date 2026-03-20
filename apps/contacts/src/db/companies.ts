@@ -1,0 +1,264 @@
+import type { Database } from "bun:sqlite";
+import type {
+  AddressRow,
+  Company,
+  CompanyListOptions,
+  CompanyRow,
+  CompanyWithDetails,
+  Contact,
+  ContactRow,
+  CreateAddressInput,
+  CreateCompanyInput,
+  CreateEmailInput,
+  CreatePhoneInput,
+  CreateSocialProfileInput,
+  EmailRow,
+  PhoneRow,
+  SocialProfileRow,
+  Tag,
+  TagRow,
+  UpdateCompanyInput,
+} from "../types/index.js";
+import { CompanyNotFoundError } from "../types/index.js";
+import { getDatabase, now, uuid } from "./database.js";
+import { logActivity } from "./activity.js";
+
+// ─── Row mappers ──────────────────────────────────────────────────────────────
+
+function rowToCompany(row: CompanyRow): Company {
+  return {
+    ...row,
+    custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
+  };
+}
+
+// ─── Sub-entity inserters ─────────────────────────────────────────────────────
+
+function insertEmails(db: Database, companyId: string, emails: CreateEmailInput[]): void {
+  for (const e of emails) {
+    db.run(
+      `INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, ?, ?, ?, ?)`,
+      [uuid(), null, companyId, e.address, e.type ?? "work", e.is_primary ? 1 : 0]
+    );
+  }
+}
+
+function insertPhones(db: Database, companyId: string, phones: CreatePhoneInput[]): void {
+  for (const p of phones) {
+    db.run(
+      `INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [uuid(), null, companyId, p.number, p.country_code ?? null, p.type ?? "work", p.is_primary ? 1 : 0]
+    );
+  }
+}
+
+function insertAddresses(db: Database, companyId: string, addresses: CreateAddressInput[]): void {
+  for (const a of addresses) {
+    db.run(
+      `INSERT INTO addresses (id, contact_id, company_id, type, street, city, state, zip, country, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uuid(), null, companyId, a.type ?? "physical", a.street ?? null, a.city ?? null, a.state ?? null, a.zip ?? null, a.country ?? null, a.is_primary ? 1 : 0]
+    );
+  }
+}
+
+function insertSocialProfiles(db: Database, companyId: string, profiles: CreateSocialProfileInput[]): void {
+  for (const s of profiles) {
+    db.run(
+      `INSERT INTO social_profiles (id, contact_id, company_id, platform, handle, url, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [uuid(), null, companyId, s.platform, s.handle ?? null, s.url ?? null, s.is_primary ? 1 : 0]
+    );
+  }
+}
+
+// ─── Detail loader ────────────────────────────────────────────────────────────
+
+function loadCompanyDetails(db: Database, company: Company): CompanyWithDetails {
+  const emails = (db.query(`SELECT * FROM emails WHERE company_id = ?`).all(company.id) as EmailRow[]).map(row => ({
+    ...row,
+    type: row.type as "work" | "personal" | "other",
+    is_primary: !!row.is_primary,
+  }));
+
+  const phones = (db.query(`SELECT * FROM phones WHERE company_id = ?`).all(company.id) as PhoneRow[]).map(row => ({
+    ...row,
+    type: row.type as "mobile" | "work" | "home" | "fax" | "whatsapp" | "other",
+    is_primary: !!row.is_primary,
+  }));
+
+  const addresses = (db.query(`SELECT * FROM addresses WHERE company_id = ?`).all(company.id) as AddressRow[]).map(row => ({
+    ...row,
+    type: row.type as "physical" | "mailing" | "billing" | "virtual" | "other",
+    is_primary: !!row.is_primary,
+  }));
+
+  const social_profiles = (db.query(`SELECT * FROM social_profiles WHERE company_id = ?`).all(company.id) as SocialProfileRow[]).map(row => ({
+    ...row,
+    platform: row.platform as "twitter" | "linkedin" | "github" | "instagram" | "telegram" | "discord" | "youtube" | "tiktok" | "bluesky" | "facebook" | "whatsapp" | "snapchat" | "reddit" | "other",
+    is_primary: !!row.is_primary,
+  }));
+
+  const tags: Tag[] = (db.query(`
+    SELECT t.* FROM tags t
+    JOIN company_tags ct ON ct.tag_id = t.id
+    WHERE ct.company_id = ?
+  `).all(company.id) as TagRow[]);
+
+  const empCount = db.query(`SELECT COUNT(*) as count FROM contacts WHERE company_id = ?`).get(company.id) as { count: number };
+
+  return {
+    ...company,
+    emails,
+    phones,
+    addresses,
+    social_profiles,
+    tags,
+    employee_count: empCount.count,
+  };
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export function createCompany(input: CreateCompanyInput, db?: Database): CompanyWithDetails {
+  const d = db || getDatabase();
+  const id = uuid();
+  const timestamp = now();
+
+  d.run(
+    `INSERT INTO companies (id, name, domain, logo_url, description, industry, size, founded_year, notes, custom_fields, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      input.name,
+      input.domain ?? null,
+      input.logo_url ?? null,
+      input.description ?? null,
+      input.industry ?? null,
+      input.size ?? null,
+      input.founded_year ?? null,
+      input.notes ?? null,
+      JSON.stringify(input.custom_fields ?? {}),
+      timestamp,
+      timestamp,
+    ]
+  );
+
+  if (input.emails?.length) insertEmails(d, id, input.emails);
+  if (input.phones?.length) insertPhones(d, id, input.phones);
+  if (input.addresses?.length) insertAddresses(d, id, input.addresses);
+  if (input.social_profiles?.length) insertSocialProfiles(d, id, input.social_profiles);
+
+  if (input.tag_ids?.length) {
+    for (const tagId of input.tag_ids) {
+      d.run(`INSERT OR IGNORE INTO company_tags (company_id, tag_id) VALUES (?, ?)`, [id, tagId]);
+    }
+  }
+
+  logActivity(d, { company_id: id, action: "company.created", details: `Created company: ${input.name}` });
+
+  const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow;
+  return loadCompanyDetails(d, rowToCompany(row));
+}
+
+export function getCompany(id: string, db?: Database): CompanyWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
+  if (!row) throw new CompanyNotFoundError(id);
+  return loadCompanyDetails(d, rowToCompany(row));
+}
+
+export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { companies: CompanyWithDetails[]; total: number } {
+  const d = db || getDatabase();
+  const {
+    limit = 50,
+    offset = 0,
+    industry,
+    tag_id,
+    order_by = "name",
+    order_dir = "asc",
+  } = opts;
+
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (industry) {
+    conditions.push("co.industry = ?");
+    params.push(industry);
+  }
+
+  if (tag_id) {
+    conditions.push("EXISTS (SELECT 1 FROM company_tags ct WHERE ct.company_id = co.id AND ct.tag_id = ?)");
+    params.push(tag_id);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const validOrderBy = ["name", "created_at", "updated_at"].includes(order_by) ? order_by : "name";
+  const validOrderDir = order_dir === "desc" ? "DESC" : "ASC";
+
+  const totalRow = d.query(`SELECT COUNT(*) as total FROM companies co ${where}`).get(...params) as { total: number };
+  const rows = d.query(`SELECT co.* FROM companies co ${where} ORDER BY co.${validOrderBy} ${validOrderDir} LIMIT ? OFFSET ?`).all(...params, limit, offset) as CompanyRow[];
+
+  const companies = rows.map(row => loadCompanyDetails(d, rowToCompany(row)));
+  return { companies, total: totalRow.total };
+}
+
+export function updateCompany(id: string, input: UpdateCompanyInput, db?: Database): CompanyWithDetails {
+  const d = db || getDatabase();
+  const existing = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
+  if (!existing) throw new CompanyNotFoundError(id);
+
+  const setClauses: string[] = ["updated_at = ?"];
+  const params: (string | number | null)[] = [now()];
+
+  if (input.name !== undefined) { setClauses.push("name = ?"); params.push(input.name); }
+  if (input.domain !== undefined) { setClauses.push("domain = ?"); params.push(input.domain); }
+  if (input.logo_url !== undefined) { setClauses.push("logo_url = ?"); params.push(input.logo_url); }
+  if (input.description !== undefined) { setClauses.push("description = ?"); params.push(input.description); }
+  if (input.industry !== undefined) { setClauses.push("industry = ?"); params.push(input.industry); }
+  if (input.size !== undefined) { setClauses.push("size = ?"); params.push(input.size); }
+  if (input.founded_year !== undefined) { setClauses.push("founded_year = ?"); params.push(input.founded_year); }
+  if (input.notes !== undefined) { setClauses.push("notes = ?"); params.push(input.notes); }
+  if (input.custom_fields !== undefined) { setClauses.push("custom_fields = ?"); params.push(JSON.stringify(input.custom_fields)); }
+
+  params.push(id);
+  d.run(`UPDATE companies SET ${setClauses.join(", ")} WHERE id = ?`, params);
+
+  logActivity(d, { company_id: id, action: "company.updated", details: `Updated company: ${existing.name}` });
+
+  const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow;
+  return loadCompanyDetails(d, rowToCompany(row));
+}
+
+export function deleteCompany(id: string, db?: Database): void {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
+  if (!row) throw new CompanyNotFoundError(id);
+
+  logActivity(d, { company_id: id, action: "company.deleted", details: `Deleted company: ${row.name}` });
+
+  d.run(`DELETE FROM companies WHERE id = ?`, [id]);
+}
+
+export function searchCompanies(query: string, db?: Database): CompanyWithDetails[] {
+  const d = db || getDatabase();
+
+  const rows = d.query(`
+    SELECT * FROM companies
+    WHERE name LIKE ? OR domain LIKE ? OR description LIKE ? OR industry LIKE ?
+    LIMIT 50
+  `).all(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`) as CompanyRow[];
+
+  return rows.map(row => loadCompanyDetails(d, rowToCompany(row)));
+}
+
+export function listCompanyEmployees(companyId: string, db?: Database): Contact[] {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT id FROM companies WHERE id = ?`).get(companyId) as { id: string } | null;
+  if (!row) throw new CompanyNotFoundError(companyId);
+
+  const rows = d.query(`SELECT * FROM contacts WHERE company_id = ? ORDER BY display_name ASC`).all(companyId) as ContactRow[];
+  return rows.map(r => ({
+    ...r,
+    source: r.source as Contact["source"],
+    custom_fields: JSON.parse(r.custom_fields || "{}") as Record<string, unknown>,
+  }));
+}
