@@ -179,7 +179,18 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
     `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${resolvedLimit}`
   ).all(...params) as Record<string, unknown>[];
 
-  const messages = rows.map(parseMessage);
+  let messages = rows.map(parseMessage);
+
+  // Truncate content if max_content_length is set
+  if (opts.max_content_length && opts.max_content_length > 0) {
+    messages = messages.map((m) => {
+      if (m.content.length > opts.max_content_length!) {
+        return { ...m, content: m.content.slice(0, opts.max_content_length) + "…", truncated: true };
+      }
+      return m;
+    });
+  }
+
   if (opts.compact) return messages.map(compactMessage) as Message[];
   return messages;
 }

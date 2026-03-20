@@ -20,6 +20,7 @@ export interface Message {
   blocking: boolean;
   attachments: Attachment[] | null;
   reply_to: number | null;
+  truncated?: boolean;
 }
 
 export interface Reaction {
@@ -114,6 +115,7 @@ export interface ReadMessagesOptions {
   unread_only?: boolean;
   order?: "asc" | "desc";
   compact?: boolean;
+  max_content_length?: number;
 }
 
 export interface SearchMessagesOptions {

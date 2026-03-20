@@ -90,6 +90,7 @@ server.registerTool("read_messages", {
     limit: z.coerce.number().optional(),
     unread_only: z.coerce.boolean().optional(),
     mark_read: z.coerce.boolean().optional(),
+    max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
   },
 }, async (args: Record<string, any>) => {
   const agent = resolveIdentity(args.from);
@@ -336,10 +337,11 @@ server.registerTool("read_space", {
     since: z.string().optional(),
     limit: z.coerce.number().optional(),
     mark_read: z.coerce.boolean().optional(),
+    max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
   },
 }, async (args: Record<string, any>) => {
-  const { space, since, limit, mark_read } = args;
-  const messages = readMessages({ space, since, limit });
+  const { space, since, limit, mark_read, max_content_length } = args;
+  const messages = readMessages({ space, since, limit, max_content_length });
 
   if (mark_read !== false && messages.length > 0) {
     markReadByIds(messages.map((m) => m.id));
