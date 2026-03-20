@@ -692,6 +692,24 @@ program
     }
   });
 
+// remove — alias for delete (consistent with open-* CLI conventions)
+program
+  .command("remove <id>")
+  .description("Remove/delete a task (alias for delete)")
+  .action((id: string) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const deleted = deleteTask(resolvedId);
+    if (globalOpts.json) {
+      output({ deleted }, true);
+    } else if (deleted) {
+      console.log(chalk.green("Task removed."));
+    } else {
+      console.error(chalk.red("Task not found."));
+      process.exit(1);
+    }
+  });
+
 // bulk
 program
   .command("bulk <action> <ids...>")
