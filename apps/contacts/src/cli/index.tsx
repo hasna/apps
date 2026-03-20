@@ -1592,15 +1592,15 @@ program
     const donna = createContact({ display_name: 'Donna Yang', first_name: 'Donna', last_name: 'Yang', job_title: 'Relationship Manager', emails: [{ address: 'DYang@svb.com', type: 'work', is_primary: true }], source: 'manual' });
 
     // Link contacts to companies
-    createCompanyRelationship({ contact_id: alina.id, company_id: kpmg.id, relationship_type: 'accountant', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: lucia.id, company_id: kpmg.id, relationship_type: 'accountant' }, db);
-    createCompanyRelationship({ contact_id: elizabeth.id, company_id: escalon.id, relationship_type: 'tax_preparer', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: drew.id, company_id: revisionLegal.id, relationship_type: 'attorney', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: donna.id, company_id: svb.id, relationship_type: 'bank_manager', is_primary: true }, db);
+    createCompanyRelationship({ contact_id: alina.id, company_id: kpmg.id, relationship_type: 'vendor', is_primary: true }, db);
+    createCompanyRelationship({ contact_id: lucia.id, company_id: kpmg.id, relationship_type: 'vendor' }, db);
+    createCompanyRelationship({ contact_id: elizabeth.id, company_id: escalon.id, relationship_type: 'vendor', is_primary: true }, db);
+    createCompanyRelationship({ contact_id: drew.id, company_id: revisionLegal.id, relationship_type: 'vendor', is_primary: true }, db);
+    createCompanyRelationship({ contact_id: donna.id, company_id: svb.id, relationship_type: 'vendor', is_primary: true }, db);
 
-    // Link KPMG to owned entities
-    createCompanyRelationship({ contact_id: alina.id, company_id: hasnaInc.id, relationship_type: 'tax_preparer', is_primary: true }, db);
-    createCompanyRelationship({ contact_id: alina.id, company_id: beepMedia.id, relationship_type: 'tax_preparer', is_primary: true }, db);
+    // Link contacts to owned entities
+    createCompanyRelationship({ contact_id: alina.id, company_id: hasnaInc.id, relationship_type: 'vendor', is_primary: true }, db);
+    createCompanyRelationship({ contact_id: alina.id, company_id: beepMedia.id, relationship_type: 'vendor', is_primary: true }, db);
 
     // Use the contacts (avoid unused variable warnings)
     void [lucia, elizabeth, drew, donna];
