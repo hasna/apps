@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { Agent, AgentConflictError, AgentRow, RegisterAgentInput } from "../types/index.js";
+import type { Agent, AgentConflictError, AgentRow, AgentStatus, RegisterAgentInput } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
 
 /** How long (ms) before an agent is considered stale and its name can be taken over */
@@ -12,7 +12,7 @@ const AGENT_ACTIVE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 export function getAvailableNamesFromPool(pool: string[], db: Database): string[] {
   const cutoff = new Date(Date.now() - AGENT_ACTIVE_WINDOW_MS).toISOString();
   const activeNames = new Set(
-    (db.query("SELECT name FROM agents WHERE last_seen_at > ?").all(cutoff) as { name: string }[])
+    (db.query("SELECT name FROM agents WHERE status = 'active' AND last_seen_at > ?").all(cutoff) as { name: string }[])
       .map((r) => r.name.toLowerCase()),
   );
   return pool.filter((name) => !activeNames.has(name.toLowerCase()));
@@ -27,6 +27,7 @@ function rowToAgent(row: AgentRow): Agent {
     ...row,
     permissions: JSON.parse(row.permissions || '["*"]') as string[],
     capabilities: JSON.parse(row.capabilities || "[]") as string[],
+    status: (row.status || "active") as AgentStatus,
     metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
   };
 }
@@ -45,25 +46,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const d = db || getDatabase();
   const normalizedName = input.name.trim().toLowerCase();
 
-  // Pool validation: if a pool is provided, the name must be in it
-  if (input.pool && input.pool.length > 0) {
-    const poolLower = input.pool.map((n) => n.toLowerCase());
-    if (!poolLower.includes(normalizedName)) {
-      const available = getAvailableNamesFromPool(input.pool, d);
-      const suggestion = available.length > 0 ? available[0]! : null;
-      return {
-        conflict: true,
-        pool_violation: true,
-        existing_id: "",
-        existing_name: normalizedName,
-        last_seen_at: "",
-        session_hint: null,
-        working_dir: input.working_dir || null,
-        suggestions: available.slice(0, 5),
-        message: `"${normalizedName}" is not in this project's agent pool [${input.pool.join(", ")}]. ${available.length > 0 ? `Try: ${available.slice(0, 3).join(", ")}` : "No names are currently available — wait for an active agent to go stale."}${suggestion ? ` Suggested: ${suggestion}` : ""}`,
-      };
-    }
-  }
+  // Pool is advisory — any name is allowed, pool just provides suggestions on conflict
 
   const existing = getAgentByName(normalizedName, d);
   if (existing) {
@@ -89,7 +72,8 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
     }
 
     // Takeover: stale agent with a different session — allowed, but update binding
-    const updates: string[] = ["last_seen_at = ?"];
+    // Also reactivate archived agents on re-register
+    const updates: string[] = ["last_seen_at = ?", "status = 'active'"];
     const params: (string | null)[] = [now()];
     if (input.session_id && !sameSession) {
       updates.push("session_id = ?");
@@ -142,9 +126,20 @@ export function getAgentByName(name: string, db?: Database): Agent | null {
   return row ? rowToAgent(row) : null;
 }
 
-export function listAgents(db?: Database): Agent[] {
-  const d = db || getDatabase();
-  return (d.query("SELECT * FROM agents ORDER BY name").all() as AgentRow[]).map(rowToAgent);
+export function listAgents(opts?: { include_archived?: boolean } | Database, db?: Database): Agent[] {
+  // Backward compat: if first arg is a Database, treat it as db
+  let d: Database;
+  let includeArchived = false;
+  if (opts && typeof opts === "object" && "query" in opts) {
+    d = opts;
+  } else {
+    includeArchived = (opts as { include_archived?: boolean } | undefined)?.include_archived ?? false;
+    d = db || getDatabase();
+  }
+  if (includeArchived) {
+    return (d.query("SELECT * FROM agents ORDER BY name").all() as AgentRow[]).map(rowToAgent);
+  }
+  return (d.query("SELECT * FROM agents WHERE status = 'active' ORDER BY name").all() as AgentRow[]).map(rowToAgent);
 }
 
 export function updateAgentActivity(id: string, db?: Database): void {
@@ -210,9 +205,24 @@ export function updateAgent(
   return getAgent(id, d)!;
 }
 
+/** Soft-delete: archives the agent instead of removing it. Tasks referencing this agent are preserved. */
 export function deleteAgent(id: string, db?: Database): boolean {
   const d = db || getDatabase();
-  return d.run("DELETE FROM agents WHERE id = ?", [id]).changes > 0;
+  return d.run("UPDATE agents SET status = 'archived', last_seen_at = ? WHERE id = ?", [now(), id]).changes > 0;
+}
+
+/** Archive an agent (soft delete). */
+export function archiveAgent(id: string, db?: Database): Agent | null {
+  const d = db || getDatabase();
+  d.run("UPDATE agents SET status = 'archived', last_seen_at = ? WHERE id = ?", [now(), id]);
+  return getAgent(id, d);
+}
+
+/** Restore an archived agent. */
+export function unarchiveAgent(id: string, db?: Database): Agent | null {
+  const d = db || getDatabase();
+  d.run("UPDATE agents SET status = 'active', last_seen_at = ? WHERE id = ?", [now(), id]);
+  return getAgent(id, d);
 }
 
 /** Get direct reports of an agent. */

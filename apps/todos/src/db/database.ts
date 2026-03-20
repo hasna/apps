@@ -518,6 +518,12 @@ const MIGRATIONS = [
   ALTER TABLE agents ADD COLUMN capabilities TEXT DEFAULT '[]';
   INSERT OR IGNORE INTO _migrations (id) VALUES (29);
   `,
+  // Migration 30: Agent soft delete — status column (active/archived)
+  `
+  ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived'));
+  CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (30);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -607,6 +613,7 @@ function ensureSchema(db: Database): void {
     CREATE TABLE agents (
       id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT,
       role TEXT DEFAULT 'agent', permissions TEXT DEFAULT '["*"]',
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
       metadata TEXT DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))

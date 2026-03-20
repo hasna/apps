@@ -124,6 +124,8 @@ export interface UpdatePlanInput {
 }
 
 // Agent
+export type AgentStatus = "active" | "archived";
+
 export interface Agent {
   id: string; // 8-char short UUID
   name: string;
@@ -135,6 +137,7 @@ export interface Agent {
   reports_to: string | null; // agent ID of manager
   org_id: string | null;
   capabilities: string[]; // agent skills/capabilities for task routing
+  status: AgentStatus;
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
@@ -153,6 +156,7 @@ export interface AgentRow {
   capabilities: string | null;
   reports_to: string | null;
   org_id: string | null;
+  status: string;
   metadata: string | null;
   created_at: string;
   last_seen_at: string;
@@ -166,7 +170,7 @@ export interface RegisterAgentInput {
   role?: string;
   title?: string;
   level?: string;
-  pool?: string[]; // allowed names for this project — if provided, name must be in this list
+  pool?: string[]; // advisory pool — used for suggestions on conflict, not enforced
   permissions?: string[];
   capabilities?: string[];
   reports_to?: string;
@@ -186,7 +190,6 @@ export interface AgentConflictError {
   working_dir: string | null;
   message: string;
   suggestions?: string[]; // available names from the project pool to try instead
-  pool_violation?: true;  // the requested name is not in this project's allowed pool
 }
 
 // Task List
