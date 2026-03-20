@@ -268,6 +268,58 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_scan_issues_type ON scan_issues(type);
   CREATE INDEX IF NOT EXISTS idx_scan_issues_project ON scan_issues(project_id);
   `,
+
+  // Migration 13: API checks and results tables
+  `
+CREATE TABLE IF NOT EXISTS api_checks (
+  id TEXT PRIMARY KEY,
+  short_id TEXT NOT NULL UNIQUE,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL DEFAULT 'GET' CHECK(method IN ('GET','POST','PUT','PATCH','DELETE','HEAD')),
+  url TEXT NOT NULL,
+  headers TEXT NOT NULL DEFAULT '{}',
+  body TEXT,
+  expected_status INTEGER NOT NULL DEFAULT 200,
+  expected_body_contains TEXT,
+  expected_response_time_ms INTEGER,
+  timeout_ms INTEGER NOT NULL DEFAULT 10000,
+  tags TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS api_check_results (
+  id TEXT PRIMARY KEY,
+  check_id TEXT NOT NULL REFERENCES api_checks(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK(status IN ('passed','failed','error')),
+  status_code INTEGER,
+  response_time_ms INTEGER,
+  response_body TEXT,
+  response_headers TEXT NOT NULL DEFAULT '{}',
+  error TEXT,
+  assertions_passed TEXT NOT NULL DEFAULT '[]',
+  assertions_failed TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_checks_project ON api_checks(project_id);
+CREATE INDEX IF NOT EXISTS idx_api_checks_enabled ON api_checks(enabled);
+CREATE INDEX IF NOT EXISTS idx_api_check_results_check ON api_check_results(check_id);
+CREATE INDEX IF NOT EXISTS idx_api_check_results_run ON api_check_results(run_id);
+CREATE INDEX IF NOT EXISTS idx_api_check_results_status ON api_check_results(status);
+  `,
+
+  // Migration 14: Project base_url, port, and settings fields
+  `
+ALTER TABLE projects ADD COLUMN base_url TEXT;
+ALTER TABLE projects ADD COLUMN port INTEGER;
+ALTER TABLE projects ADD COLUMN settings TEXT DEFAULT '{}';
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -332,6 +384,8 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM auth_presets");
   database.exec("DELETE FROM environments");
   database.exec("DELETE FROM schedules");
+  database.exec("DELETE FROM api_check_results");
+  database.exec("DELETE FROM api_checks");
   database.exec("DELETE FROM runs");
   database.exec("DELETE FROM scenarios");
   database.exec("DELETE FROM agents");

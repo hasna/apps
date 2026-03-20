@@ -19,6 +19,8 @@ import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from ".
 import { getNextRunTime } from "../lib/scheduler.js";
 import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
+import { createApiCheck, getApiCheck, listApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
+import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 
 // ─── Response Helpers ────────────────────────────────────────────────────────
 
@@ -1043,6 +1045,210 @@ server.tool(
       if (!ok) return errorResponse(notFoundErr(id, "ScanIssue"));
       return json({ resolved: true, id });
     } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── API Check Tools ─────────────────────────────────────────────────────────
+
+// ─── 34. create_api_check ────────────────────────────────────────────────────
+
+server.tool(
+  "create_api_check",
+  "Create a new API health check",
+  {
+    name: z.string().describe("Check name"),
+    url: z.string().describe("URL to check (absolute or relative path)"),
+    method: z.enum(["GET","POST","PUT","PATCH","DELETE","HEAD"]).optional().describe("HTTP method (default GET)"),
+    headers: z.record(z.string()).optional().describe("Request headers"),
+    body: z.string().optional().describe("Request body (for POST/PUT/PATCH)"),
+    expectedStatus: z.number().optional().describe("Expected HTTP status code (default 200)"),
+    expectedBodyContains: z.string().optional().describe("String that must appear in the response body"),
+    expectedResponseTimeMs: z.number().optional().describe("Max acceptable response time in ms"),
+    timeoutMs: z.number().optional().describe("Request timeout in ms (default 10000)"),
+    tags: z.array(z.string()).optional().describe("Tags for filtering"),
+    description: z.string().optional().describe("Check description"),
+    projectId: z.string().optional().describe("Project ID"),
+    enabled: z.boolean().optional().describe("Whether the check is enabled (default true)"),
+  },
+  async (params) => {
+    try {
+      const check = createApiCheck({
+        name: params.name,
+        url: params.url,
+        method: params.method,
+        headers: params.headers,
+        body: params.body,
+        expectedStatus: params.expectedStatus,
+        expectedBodyContains: params.expectedBodyContains,
+        expectedResponseTimeMs: params.expectedResponseTimeMs,
+        timeoutMs: params.timeoutMs,
+        tags: params.tags,
+        description: params.description,
+        projectId: params.projectId,
+        enabled: params.enabled,
+      });
+      return json(check);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 35. list_api_checks ─────────────────────────────────────────────────────
+
+server.tool(
+  "list_api_checks",
+  "List API checks with optional filters",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+    enabled: z.boolean().optional().describe("Filter by enabled status"),
+    tags: z.array(z.string()).optional().describe("Filter by tags"),
+    limit: z.number().optional().describe("Max results to return (default 20)"),
+  },
+  async ({ projectId, enabled, tags, limit = 20 }) => {
+    try {
+      const checks = listApiChecks({ projectId, enabled, tags, limit });
+      return json({ items: checks, total: checks.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 36. get_api_check ───────────────────────────────────────────────────────
+
+server.tool(
+  "get_api_check",
+  `Get an API check by ID or short ID. ${ID_DESC}`,
+  {
+    id: z.string().describe(`API check ID or short ID. ${ID_DESC}`),
+  },
+  async ({ id }) => {
+    try {
+      const check = getApiCheck(id);
+      if (!check) return errorResponse(notFoundErr(id, "ApiCheck"));
+      const lastResult = getLatestApiCheckResult(check.id);
+      return json({ ...check, lastResult });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 37. update_api_check ────────────────────────────────────────────────────
+
+server.tool(
+  "update_api_check",
+  `Update an existing API check (requires version for optimistic locking). ${ID_DESC}`,
+  {
+    id: z.string().describe(`API check ID or short ID. ${ID_DESC}`),
+    version: z.number().describe("Current version (for optimistic locking)"),
+    name: z.string().optional().describe("New name"),
+    description: z.string().optional().describe("New description"),
+    method: z.enum(["GET","POST","PUT","PATCH","DELETE","HEAD"]).optional().describe("New HTTP method"),
+    url: z.string().optional().describe("New URL"),
+    headers: z.record(z.string()).optional().describe("New request headers"),
+    body: z.string().optional().describe("New request body"),
+    expectedStatus: z.number().optional().describe("New expected status code"),
+    expectedBodyContains: z.string().optional().describe("New expected body string"),
+    expectedResponseTimeMs: z.number().optional().describe("New max response time in ms"),
+    timeoutMs: z.number().optional().describe("New timeout in ms"),
+    tags: z.array(z.string()).optional().describe("New tags"),
+    enabled: z.boolean().optional().describe("Enable or disable the check"),
+  },
+  async ({ id, version, ...updates }) => {
+    try {
+      const check = updateApiCheck(id, updates, version);
+      return json(check);
+    } catch (error) {
+      return errorResponse(error, {
+        fetchCurrent: () => getApiCheck(id),
+      });
+    }
+  },
+);
+
+// ─── 38. delete_api_check ────────────────────────────────────────────────────
+
+server.tool(
+  "delete_api_check",
+  `Delete an API check by ID. ${ID_DESC}`,
+  {
+    id: z.string().describe(`API check ID or short ID. ${ID_DESC}`),
+  },
+  async ({ id }) => {
+    try {
+      const deleted = deleteApiCheck(id);
+      if (!deleted) return errorResponse(notFoundErr(id, "ApiCheck"));
+      return json({ deleted: true, id });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 39. run_api_check ───────────────────────────────────────────────────────
+
+server.tool(
+  "run_api_check",
+  `Run a single API check immediately and return the result. ${ID_DESC}`,
+  {
+    id: z.string().describe(`API check ID or short ID. ${ID_DESC}`),
+    baseUrl: z.string().optional().describe("Base URL to prepend to relative check URLs"),
+  },
+  async ({ id, baseUrl }) => {
+    try {
+      const check = getApiCheck(id);
+      if (!check) return errorResponse(notFoundErr(id, "ApiCheck"));
+      const result = await runApiCheck(check, { baseUrl });
+      return json(result);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 40. run_api_checks ──────────────────────────────────────────────────────
+
+server.tool(
+  "run_api_checks",
+  "Run multiple API checks filtered by project/tags and return aggregated results",
+  {
+    baseUrl: z.string().describe("Base URL to prepend to relative check URLs"),
+    projectId: z.string().optional().describe("Filter checks by project ID"),
+    tags: z.array(z.string()).optional().describe("Filter checks by tags"),
+    parallel: z.number().optional().describe("Number of parallel requests (default 5)"),
+  },
+  async ({ baseUrl, projectId, tags, parallel = 5 }) => {
+    try {
+      const startTime = Date.now();
+      const { results, passed, failed, errors } = await runApiChecksByFilter({ baseUrl, projectId, tags, parallel });
+      const durationMs = Date.now() - startTime;
+      return json({ results, passed, failed, errors, durationMs });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 41. get_api_check_results ───────────────────────────────────────────────
+
+server.tool(
+  "get_api_check_results",
+  `Get recent results for an API check. ${ID_DESC}`,
+  {
+    checkId: z.string().describe(`API check ID or short ID. ${ID_DESC}`),
+    limit: z.number().optional().describe("Max results to return (default 10)"),
+  },
+  async ({ checkId, limit = 10 }) => {
+    try {
+      const check = getApiCheck(checkId);
+      if (!check) return errorResponse(notFoundErr(checkId, "ApiCheck"));
+      const results = listApiCheckResults(check.id, { limit });
+      return json({ items: results, total: results.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
   },
 );
 

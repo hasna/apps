@@ -5,13 +5,19 @@ import { ScenariosPage } from "./components/ScenariosPage";
 import { RunsPage } from "./components/RunsPage";
 import { RunDetailPage } from "./components/RunDetailPage";
 import { ResultDetailPage } from "./components/ResultDetailPage";
+import { SchedulesPage } from "./components/SchedulesPage";
+import { ApiChecksPage } from "./components/ApiChecksPage";
+import { ProjectsPage } from "./components/ProjectsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 type Page =
   | { type: "scenarios" }
   | { type: "runs" }
   | { type: "run-detail"; runId: string }
-  | { type: "result-detail"; resultId: string };
+  | { type: "result-detail"; resultId: string }
+  | { type: "schedules" }
+  | { type: "api-checks" }
+  | { type: "projects" };
 
 // Context for sharing selected scenario + search ref across pages
 export const AppContext = createContext<{
@@ -150,6 +156,15 @@ export function App() {
             <NavButton active={page.type === "runs" || page.type === "run-detail"} onClick={() => setPage({ type: "runs" })}>
               Runs {status ? `(${status.runCount})` : ""}
             </NavButton>
+            <NavButton active={page.type === "schedules"} onClick={() => setPage({ type: "schedules" })}>
+              Schedules
+            </NavButton>
+            <NavButton active={page.type === "api-checks"} onClick={() => setPage({ type: "api-checks" })}>
+              API Checks
+            </NavButton>
+            <NavButton active={page.type === "projects"} onClick={() => setPage({ type: "projects" })}>
+              Projects
+            </NavButton>
           </nav>
           <button
             onClick={() => setIsDark((d) => !d)}
@@ -195,6 +210,15 @@ export function App() {
                 resultId={page.resultId}
                 onBack={() => setPage({ type: "runs" })}
               />
+            )}
+            {page.type === "schedules" && (
+              <SchedulesPage />
+            )}
+            {page.type === "api-checks" && (
+              <ApiChecksPage />
+            )}
+            {page.type === "projects" && (
+              <ProjectsPage />
             )}
           </ErrorBoundary>
         </div>

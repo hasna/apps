@@ -63,3 +63,85 @@ export interface Screenshot {
   height: number;
   timestamp: string;
 }
+
+export interface Schedule {
+  id: string;
+  projectId: string | null;
+  name: string;
+  cronExpression: string;
+  url: string;
+  scenarioFilter: {
+    tags?: string[];
+    priority?: string;
+    scenarioIds?: string[];
+  };
+  model: string | null;
+  headed: boolean;
+  parallel: number;
+  timeoutMs: number | null;
+  enabled: boolean;
+  lastRunId: string | null;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApiCheck {
+  id: string;
+  shortId: string;
+  projectId: string | null;
+  name: string;
+  description: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
+  expectedStatus: number;
+  expectedBodyContains: string | null;
+  expectedResponseTimeMs: number | null;
+  timeoutMs: number;
+  tags: string[];
+  enabled: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApiCheckResult {
+  id: string;
+  checkId: string;
+  runId: string | null;
+  status: "passed" | "failed" | "error";
+  statusCode: number | null;
+  responseTimeMs: number | null;
+  responseBody: string | null;
+  responseHeaders: Record<string, string>;
+  error: string | null;
+  assertionsPassed: string[];
+  assertionsFailed: string[];
+  createdAt: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string | null;
+  description: string | null;
+  baseUrl: string | null;
+  port: number | null;
+  settings: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  url: string;
+  authPresetName: string | null;
+  projectId: string | null;
+  isDefault: boolean;
+  variables: Record<string, string>;
+  createdAt: string;
+}

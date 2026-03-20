@@ -197,6 +197,33 @@ export class BrowserPool {
 }
 
 /**
+ * A simple factory that launches the appropriate browser engine.
+ * Use this as the single entry-point when you want engine-agnostic launch logic.
+ */
+export interface BrowserConfig {
+  headless: boolean;
+  viewport?: ViewportSize;
+}
+
+export async function launchBrowserEngine(
+  engine: BrowserEngine,
+  config: BrowserConfig,
+): Promise<Browser> {
+  if (engine === "lightpanda") {
+    const { launchLightpanda, isLightpandaAvailable } = await import("./browser-lightpanda.js");
+    if (!isLightpandaAvailable()) {
+      throw new BrowserError("Lightpanda not installed. Run: testers install-browser --engine lightpanda");
+    }
+    return launchLightpanda({ viewport: config.viewport });
+  }
+  // Default: playwright chromium
+  return chromium.launch({
+    headless: config.headless,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+}
+
+/**
  * Installs Chromium for Playwright using bunx.
  */
 export async function installBrowser(engine?: BrowserEngine): Promise<void> {

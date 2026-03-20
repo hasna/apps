@@ -25,6 +25,8 @@ import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
 import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
+import { createApiCheck, getApiCheck, listApiChecks, deleteApiCheck } from "../db/api-checks.js";
+import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
 import { getTemplate, listTemplateNames } from "../lib/templates.js";
 import { createAuthPreset, listAuthPresets, deleteAuthPreset } from "../db/auth-presets.js";
@@ -2749,6 +2751,11 @@ program
       allPassed = false;
     }
 
+    // 4. Check Lightpanda (optional)
+    const { isLightpandaAvailable } = await import("../lib/browser-lightpanda.js");
+    const lightpandaAvailable = isLightpandaAvailable();
+    log((lightpandaAvailable ? chalk.green("✓") : chalk.dim("○")) + ` Lightpanda: ${lightpandaAvailable ? "installed" : "not installed (optional)"}`);
+
     if (!allPassed) {
       process.exit(1);
     }
@@ -2790,6 +2797,176 @@ program
 
       // Keep process alive until child exits
       await proc.exited;
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers api ────────────────────────────────────────────────────────────
+
+const apiCmd = program.command("api").description("Manage and run API health checks");
+
+apiCmd
+  .command("list")
+  .description("List API checks")
+  .option("--project <id>", "Filter by project ID")
+  .option("--enabled", "Show only enabled checks")
+  .option("--json", "Output as JSON", false)
+  .action((opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      const checks = listApiChecks({ projectId, enabled: opts.enabled ? true : undefined });
+      if (opts.json) { log(JSON.stringify(checks, null, 2)); return; }
+      if (checks.length === 0) { log(chalk.dim("No API checks found.")); return; }
+      log("");
+      log(chalk.bold("  API Checks"));
+      log("");
+      log(`  ${"ID".padEnd(10)} ${"Method".padEnd(8)} ${"Name".padEnd(25)} ${"URL".padEnd(35)} ${"Status".padEnd(8)} Tags`);
+      log(`  ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(25)} ${"─".repeat(35)} ${"─".repeat(8)} ${"─".repeat(20)}`);
+      for (const c of checks) {
+        const enabled = c.enabled ? chalk.green("on") : chalk.red("off");
+        const method = c.method.padEnd(6);
+        log(`  ${c.shortId.padEnd(10)} ${method.padEnd(8)} ${c.name.slice(0, 24).padEnd(25)} ${c.url.slice(0, 34).padEnd(35)} ${enabled.toString().padEnd(8)} ${c.tags.join(", ")}`);
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
+  .command("add")
+  .description("Add a new API check interactively")
+  .option("--project <id>", "Project ID")
+  .action(async (opts) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
+    try {
+      const name = await ask("Name: ");
+      if (!name.trim()) { logError(chalk.red("Name is required")); process.exit(1); }
+      const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
+      log(`Method [${methods.join("/")}] (default: GET): `);
+      const methodInput = (await ask("")).trim().toUpperCase() || "GET";
+      const method = methods.includes(methodInput) ? methodInput : "GET";
+      const url = await ask("URL (full or path like /api/health): ");
+      if (!url.trim()) { logError(chalk.red("URL is required")); process.exit(1); }
+      const statusInput = await ask("Expected status (default 200): ");
+      const expectedStatus = statusInput.trim() ? parseInt(statusInput.trim(), 10) : 200;
+      const bodyContains = await ask("Body must contain (optional, press enter to skip): ");
+      const tagsInput = await ask("Tags (comma-separated, optional): ");
+      rl.close();
+      const projectId = resolveProject(opts.project);
+      const check = createApiCheck({
+        name: name.trim(),
+        method: method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD",
+        url: url.trim(),
+        expectedStatus,
+        expectedBodyContains: bodyContains.trim() || undefined,
+        tags: tagsInput.trim() ? tagsInput.split(",").map((t) => t.trim()).filter(Boolean) : [],
+        projectId,
+      });
+      log("");
+      log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
+      log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
+    } catch (error) {
+      rl.close();
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
+  .command("show <id>")
+  .description("Show API check details and last result")
+  .action((id: string) => {
+    try {
+      const check = getApiCheck(id);
+      if (!check) { logError(chalk.red(`API check not found: ${id}`)); process.exit(1); }
+      log("");
+      log(chalk.bold(`  API Check: ${check.name}`));
+      log(`  ID:            ${check.id}`);
+      log(`  Short ID:      ${check.shortId}`);
+      log(`  Method:        ${check.method}`);
+      log(`  URL:           ${check.url}`);
+      log(`  Expected:      ${check.expectedStatus}${check.expectedBodyContains ? ` + body contains "${check.expectedBodyContains}"` : ""}`);
+      log(`  Timeout:       ${check.timeoutMs}ms`);
+      log(`  Enabled:       ${check.enabled ? chalk.green("yes") : chalk.red("no")}`);
+      log(`  Tags:          ${check.tags.length > 0 ? check.tags.join(", ") : chalk.dim("none")}`);
+      log(`  Created:       ${check.createdAt}`);
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
+  .command("run <base-url>")
+  .description("Run API checks against a base URL")
+  .option("--check <id>", "Run a specific check by ID")
+  .option("--project <id>", "Filter by project ID")
+  .option("--parallel <n>", "Parallel requests", "5")
+  .option("--json", "Output as JSON", false)
+  .action(async (baseUrl: string, opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      if (opts.check) {
+        const check = getApiCheck(opts.check);
+        if (!check) { logError(chalk.red(`API check not found: ${opts.check}`)); process.exit(1); }
+        log(chalk.dim(`Running ${check.method} ${check.url}...`));
+        const result = await runApiCheck(check, { baseUrl });
+        if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+        const icon = result.status === "passed" ? chalk.green("✓") : result.status === "failed" ? chalk.red("✗") : chalk.yellow("!");
+        log(`${icon} ${check.name} — ${result.status} (${result.responseTimeMs ?? "?"}ms, HTTP ${result.statusCode ?? "?"})`);
+        if (result.assertionsFailed.length > 0) {
+          for (const f of result.assertionsFailed) log(chalk.red(`  ✗ ${f}`));
+        }
+        if (result.error) log(chalk.red(`  Error: ${result.error}`));
+      } else {
+        const parallel = parseInt(opts.parallel, 10);
+        log(chalk.dim(`Running all enabled API checks against ${baseUrl}...`));
+        const { results, passed, failed, errors } = await runApiChecksByFilter({ baseUrl, projectId, parallel });
+        if (opts.json) { log(JSON.stringify({ results, passed, failed, errors }, null, 2)); return; }
+        log("");
+        for (const r of results) {
+          const check = getApiCheck(r.checkId);
+          const name = check?.name ?? r.checkId;
+          const icon = r.status === "passed" ? chalk.green("✓") : r.status === "failed" ? chalk.red("✗") : chalk.yellow("!");
+          log(`  ${icon} ${name} (${r.responseTimeMs ?? "?"}ms, HTTP ${r.statusCode ?? "?"})`);
+          if (r.assertionsFailed.length > 0) for (const f of r.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
+          if (r.error) log(chalk.red(`      Error: ${r.error}`));
+        }
+        log("");
+        const passColor = passed > 0 ? chalk.green : chalk.dim;
+        const failColor = failed + errors > 0 ? chalk.red : chalk.dim;
+        log(`  ${passColor(`${passed} passed`)}  ${failColor(`${failed + errors} failed`)}  ${results.length} total`);
+        log("");
+        if (failed + errors > 0) process.exit(1);
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
+  .command("delete <id>")
+  .description("Delete an API check")
+  .option("-y, --yes", "Skip confirmation", false)
+  .action(async (id: string, opts) => {
+    try {
+      const check = getApiCheck(id);
+      if (!check) { logError(chalk.red(`API check not found: ${id}`)); process.exit(1); }
+      if (!opts.yes) {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((res) => rl.question(`Delete "${check.name}" (${check.shortId})? [y/N] `, res));
+        rl.close();
+        if (answer.toLowerCase() !== "y") { log(chalk.dim("Cancelled.")); return; }
+      }
+      deleteApiCheck(id);
+      log(chalk.green(`✓ Deleted API check ${chalk.bold(check.name)}`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

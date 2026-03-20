@@ -13,6 +13,10 @@ import { VersionConflictError } from "../types/index.js";
 import { getDatabase } from "../db/database.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
 import { getNextRunTime } from "../lib/scheduler.js";
+import { createApiCheck, getApiCheck, listApiChecks, updateApiCheck, deleteApiCheck, countApiChecks, listApiCheckResults, countApiCheckResults } from "../db/api-checks.js";
+import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
+import { listProjects, createProject, getProject, updateProject } from "../db/projects.js";
+import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironmentById } from "../db/environments.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -97,6 +101,38 @@ const UpdateScenarioSchema = z.object({
   assertions: z.array(z.record(z.unknown())).optional(),
 });
 
+const CreateApiCheckSchema = z.object({
+  name: z.string().min(1, "name is required"),
+  description: z.string().default(""),
+  method: z.enum(["GET","POST","PUT","PATCH","DELETE","HEAD"]).default("GET"),
+  url: z.string().min(1, "url is required"),
+  headers: z.record(z.string()).optional(),
+  body: z.string().optional(),
+  expectedStatus: z.number().int().min(100).max(599).default(200),
+  expectedBodyContains: z.string().optional(),
+  expectedResponseTimeMs: z.number().int().positive().optional(),
+  timeoutMs: z.number().int().positive().default(10000),
+  tags: z.array(z.string()).default([]),
+  enabled: z.boolean().default(true),
+  projectId: z.string().optional(),
+});
+
+const UpdateApiCheckSchema = z.object({
+  version: z.number().int().nonnegative("version is required"),
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  method: z.enum(["GET","POST","PUT","PATCH","DELETE","HEAD"]).optional(),
+  url: z.string().optional(),
+  headers: z.record(z.string()).optional(),
+  body: z.string().optional(),
+  expectedStatus: z.number().int().min(100).max(599).optional(),
+  expectedBodyContains: z.string().optional(),
+  expectedResponseTimeMs: z.number().int().positive().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  tags: z.array(z.string()).optional(),
+  enabled: z.boolean().optional(),
+});
+
 const CreateRunSchema = z.object({
   url: z.string().url("url must be a valid URL"),
   scenarioIds: z.array(z.string()).optional(),
@@ -156,6 +192,7 @@ async function handleRequest(req: Request): Promise<Response> {
       apiKeySet: !!config.anthropicApiKey,
       scenarioCount: scenarios.length,
       runCount: runs.length,
+      apiCheckCount: countApiChecks(),
       version: "0.0.1",
     });
   }
@@ -455,6 +492,237 @@ async function handleRequest(req: Request): Promise<Response> {
   if (scheduleMatch && method === "DELETE") {
     const deleted = deleteSchedule(scheduleMatch[1]!);
     if (!deleted) return errorResponse("Schedule not found", 404);
+    return jsonResponse({ deleted: true });
+  }
+
+  // ── Projects ──────────────────────────────────────────────────────────────
+
+  // GET /api/projects
+  if (pathname === "/api/projects" && method === "GET") {
+    return jsonResponse(listProjects());
+  }
+
+  // POST /api/projects
+  if (pathname === "/api/projects" && method === "POST") {
+    try {
+      const body = await req.json();
+      if (!body.name || typeof body.name !== "string") return errorResponse("name is required", 400);
+      const project = createProject({
+        name: body.name.trim(),
+        description: body.description ?? undefined,
+        baseUrl: body.baseUrl ?? undefined,
+        port: body.port ?? undefined,
+      });
+      return jsonResponse(project, 201);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  // GET /api/projects/:id
+  const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
+  if (projectMatch && method === "GET") {
+    const project = getProject(projectMatch[1]!);
+    if (!project) return errorResponse("Project not found", 404);
+    const environments = listEnvironments(project.id);
+    return jsonResponse({ ...project, environments });
+  }
+
+  // PUT /api/projects/:id
+  if (projectMatch && method === "PUT") {
+    try {
+      const body = await req.json();
+      const project = updateProject(projectMatch[1]!, {
+        name: body.name ?? undefined,
+        description: body.description ?? undefined,
+        baseUrl: body.baseUrl ?? undefined,
+        port: body.port ?? undefined,
+        settings: body.settings ?? undefined,
+      });
+      return jsonResponse(project);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  // GET /api/projects/:id/environments
+  const projectEnvsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/environments$/);
+  if (projectEnvsMatch && method === "GET") {
+    const project = getProject(projectEnvsMatch[1]!);
+    if (!project) return errorResponse("Project not found", 404);
+    return jsonResponse(listEnvironments(project.id));
+  }
+
+  // POST /api/projects/:id/environments
+  if (projectEnvsMatch && method === "POST") {
+    try {
+      const project = getProject(projectEnvsMatch[1]!);
+      if (!project) return errorResponse("Project not found", 404);
+      const body = await req.json();
+      if (!body.name || !body.url) return errorResponse("name and url are required", 400);
+      const env = createEnvironment({
+        name: body.name.trim(),
+        url: body.url.trim(),
+        projectId: project.id,
+        isDefault: body.isDefault ?? false,
+        variables: body.variables ?? {},
+      });
+      return jsonResponse(env, 201);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  // PUT /api/environments/:id
+  const envUpdateMatch = pathname.match(/^\/api\/environments\/([^/]+)$/);
+  if (envUpdateMatch && method === "PUT") {
+    try {
+      const body = await req.json();
+      const env = updateEnvironment(envUpdateMatch[1]!, {
+        name: body.name ?? undefined,
+        url: body.url ?? undefined,
+        isDefault: body.isDefault ?? undefined,
+        variables: body.variables ?? undefined,
+      });
+      return jsonResponse(env);
+    } catch (err) {
+      return errorResponse(err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
+  // DELETE /api/environments/:id
+  if (envUpdateMatch && method === "DELETE") {
+    const deleted = deleteEnvironmentById(envUpdateMatch[1]!);
+    if (!deleted) return errorResponse("Environment not found", 404);
+    return jsonResponse({ deleted: true });
+  }
+
+  // ── API Checks ────────────────────────────────────────────────────────────
+
+  // POST /api/api-checks/run-all — must be before /:id pattern
+  if (pathname === "/api/api-checks/run-all" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { baseUrl, projectId, tags, parallel } = body as {
+        baseUrl: string;
+        projectId?: string;
+        tags?: string[];
+        parallel?: number;
+      };
+      if (!baseUrl) return errorResponse("baseUrl is required", 400);
+      const result = await runApiChecksByFilter({ baseUrl, projectId, tags, parallel });
+      return jsonResponse(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
+  }
+
+  // GET /api/api-checks
+  if (pathname === "/api/api-checks" && method === "GET") {
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const enabledParam = searchParams.get("enabled");
+    const tagsParam = searchParams.get("tags");
+    const limit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
+
+    const filter = {
+      projectId,
+      enabled: enabledParam !== null ? enabledParam === "true" : undefined,
+      tags: tagsParam ? tagsParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    };
+    const checks = listApiChecks(filter);
+    const total = countApiChecks(filter);
+    return jsonResponse(checks, 200, { "X-Total-Count": String(total) });
+  }
+
+  // POST /api/api-checks
+  if (pathname === "/api/api-checks" && method === "POST") {
+    try {
+      const body = await req.json();
+      const parsed = CreateApiCheckSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const check = createApiCheck(parsed.data as Parameters<typeof createApiCheck>[0]);
+      return jsonResponse(check, 201);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
+  }
+
+  // POST /api/api-checks/:id/run
+  const apiCheckRunMatch = pathname.match(/^\/api\/api-checks\/([^/]+)\/run$/);
+  if (apiCheckRunMatch && method === "POST") {
+    const id = apiCheckRunMatch[1]!;
+    try {
+      const check = getApiCheck(id);
+      if (!check) return errorResponse("API check not found", 404);
+      const body = await req.json().catch(() => ({})) as { baseUrl?: string };
+      const result = await runApiCheck(check, { baseUrl: body.baseUrl });
+      return jsonResponse(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
+  }
+
+  // GET /api/api-checks/:id/results
+  const apiCheckResultsMatch = pathname.match(/^\/api\/api-checks\/([^/]+)\/results$/);
+  if (apiCheckResultsMatch && method === "GET") {
+    const id = apiCheckResultsMatch[1]!;
+    const check = getApiCheck(id);
+    if (!check) return errorResponse("API check not found", 404);
+    const limit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
+    const results = listApiCheckResults(check.id, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+    const total = countApiCheckResults(check.id);
+    return jsonResponse(results, 200, { "X-Total-Count": String(total) });
+  }
+
+  // GET /api/api-checks/:id
+  const apiCheckGetMatch = pathname.match(/^\/api\/api-checks\/([^/]+)$/);
+  if (apiCheckGetMatch && method === "GET") {
+    const id = apiCheckGetMatch[1]!;
+    const check = getApiCheck(id);
+    if (!check) return errorResponse("API check not found", 404);
+    return jsonResponse(check);
+  }
+
+  // PUT /api/api-checks/:id
+  const apiCheckUpdateMatch = pathname.match(/^\/api\/api-checks\/([^/]+)$/);
+  if (apiCheckUpdateMatch && method === "PUT") {
+    const id = apiCheckUpdateMatch[1]!;
+    try {
+      const body = await req.json();
+      const parsed = UpdateApiCheckSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const { version, ...updates } = parsed.data;
+      const check = updateApiCheck(id, updates as Parameters<typeof updateApiCheck>[1], version);
+      return jsonResponse(check);
+    } catch (err) {
+      if (err instanceof VersionConflictError) {
+        return errorResponse(err.message, 409);
+      }
+      const e = err as { name?: string };
+      if (e.name === "ApiCheckNotFoundError" || (err instanceof Error && err.message.includes("not found"))) {
+        return errorResponse(err instanceof Error ? err.message : String(err), 404);
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
+  }
+
+  // DELETE /api/api-checks/:id
+  const apiCheckDeleteMatch = pathname.match(/^\/api\/api-checks\/([^/]+)$/);
+  if (apiCheckDeleteMatch && method === "DELETE") {
+    const id = apiCheckDeleteMatch[1]!;
+    const deleted = deleteApiCheck(id);
+    if (!deleted) return errorResponse("API check not found", 404);
     return jsonResponse({ deleted: true });
   }
 

@@ -167,25 +167,32 @@ export async function runSingleScenario(
       },
     }), scenarioTimeout, scenario.name);
 
-    // Save screenshots to DB
-    for (const ss of agentResult.screenshots) {
-      createScreenshot({
-        resultId: result.id,
-        stepNumber: ss.stepNumber,
-        action: ss.action,
-        filePath: ss.filePath,
-        width: ss.width,
-        height: ss.height,
-        description: ss.description,
-        pageUrl: ss.pageUrl,
-        thumbnailPath: ss.thumbnailPath,
-      });
-      emit({ type: "screenshot:captured", screenshotPath: ss.filePath, scenarioId: scenario.id, runId });
+    // Save screenshots to DB (Lightpanda has no rendering — skip silently)
+    if (options.engine !== "lightpanda") {
+      for (const ss of agentResult.screenshots) {
+        try {
+          createScreenshot({
+            resultId: result.id,
+            stepNumber: ss.stepNumber,
+            action: ss.action,
+            filePath: ss.filePath,
+            width: ss.width,
+            height: ss.height,
+            description: ss.description,
+            pageUrl: ss.pageUrl,
+            thumbnailPath: ss.thumbnailPath,
+          });
+          emit({ type: "screenshot:captured", screenshotPath: ss.filePath, scenarioId: scenario.id, runId });
+        } catch {
+          // Screenshot save failed — continue without blocking the run
+        }
+      }
     }
 
+    const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : "";
     const updatedResult = updateResult(result.id, {
       status: agentResult.status,
-      reasoning: agentResult.reasoning,
+      reasoning: agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || undefined,
       stepsCompleted: agentResult.stepsCompleted,
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
       tokensUsed: agentResult.tokensUsed,

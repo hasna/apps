@@ -1,30 +1,58 @@
 import {
   type Project,
   type ProjectRow,
+  type CreateProjectInput,
+  type UpdateProjectInput,
   projectFromRow,
 } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 
-export function createProject(input: {
-  name: string;
-  path?: string;
-  description?: string;
-}): Project {
+export function createProject(input: CreateProjectInput): Project {
   const db = getDatabase();
   const id = uuid();
   const timestamp = now();
 
   db.query(`
-    INSERT INTO projects (id, name, path, description, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO projects (id, name, path, description, base_url, port, settings, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     input.name,
     input.path ?? null,
     input.description ?? null,
+    input.baseUrl ?? null,
+    input.port ?? null,
+    input.settings ? JSON.stringify(input.settings) : "{}",
     timestamp,
     timestamp,
   );
+
+  return getProject(id)!;
+}
+
+export function updateProject(id: string, input: UpdateProjectInput): Project {
+  const db = getDatabase();
+  const existing = getProject(id);
+  if (!existing) throw new Error(`Project not found: ${id}`);
+
+  const timestamp = now();
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
+  if (input.description !== undefined) { fields.push("description = ?"); values.push(input.description); }
+  if (input.baseUrl !== undefined) { fields.push("base_url = ?"); values.push(input.baseUrl); }
+  if (input.port !== undefined) { fields.push("port = ?"); values.push(input.port); }
+  if (input.settings !== undefined) { fields.push("settings = ?"); values.push(JSON.stringify(input.settings)); }
+
+  if (fields.length === 0) return existing;
+
+  fields.push("updated_at = ?");
+  values.push(timestamp);
+  values.push(id);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (db.query(`UPDATE projects SET ${fields.join(", ")} WHERE id = ?`) as any).run(...values);
 
   return getProject(id)!;
 }

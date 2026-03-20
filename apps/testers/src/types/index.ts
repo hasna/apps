@@ -28,6 +28,9 @@ export interface ProjectRow {
   name: string;
   path: string | null;
   description: string | null;
+  base_url: string | null;
+  port: number | null;
+  settings: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -137,8 +140,28 @@ export interface Project {
   name: string;
   path: string | null;
   description: string | null;
+  baseUrl: string | null;
+  port: number | null;
+  settings: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreateProjectInput {
+  name: string;
+  path?: string;
+  description?: string;
+  baseUrl?: string;
+  port?: number;
+  settings?: Record<string, unknown>;
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string;
+  baseUrl?: string;
+  port?: number;
+  settings?: Record<string, unknown>;
 }
 
 export interface Agent {
@@ -379,6 +402,9 @@ export function projectFromRow(row: ProjectRow): Project {
     name: row.name,
     path: row.path,
     description: row.description,
+    baseUrl: row.base_url ?? null,
+    port: row.port ?? null,
+    settings: row.settings ? JSON.parse(row.settings) : {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -645,6 +671,13 @@ export function scanIssueFromRow(row: ScanIssueRow): PersistedScanIssue {
   };
 }
 
+export class ApiCheckNotFoundError extends Error {
+  constructor(id: string) {
+    super(`API check not found: ${id}`);
+    this.name = "ApiCheckNotFoundError";
+  }
+}
+
 export class FlowNotFoundError extends Error {
   constructor(id: string) {
     super(`Flow not found: ${id}`);
@@ -698,4 +731,160 @@ export interface CreateFlowInput {
   description?: string;
   scenarioIds: string[];
   projectId?: string;
+}
+
+// ─── API Check Types ──────────────────────────────────────────────────────────
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+export type ApiCheckStatus = 'passed' | 'failed' | 'error';
+
+export interface ApiCheckRow {
+  id: string;
+  short_id: string;
+  project_id: string | null;
+  name: string;
+  description: string;
+  method: HttpMethod;
+  url: string;
+  headers: string; // JSON
+  body: string | null;
+  expected_status: number;
+  expected_body_contains: string | null;
+  expected_response_time_ms: number | null;
+  timeout_ms: number;
+  tags: string; // JSON
+  enabled: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiCheckResultRow {
+  id: string;
+  check_id: string;
+  run_id: string | null;
+  status: ApiCheckStatus;
+  status_code: number | null;
+  response_time_ms: number | null;
+  response_body: string | null;
+  response_headers: string; // JSON
+  error: string | null;
+  assertions_passed: string; // JSON
+  assertions_failed: string; // JSON
+  created_at: string;
+}
+
+export interface ApiCheck {
+  id: string;
+  shortId: string;
+  projectId: string | null;
+  name: string;
+  description: string;
+  method: HttpMethod;
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
+  expectedStatus: number;
+  expectedBodyContains: string | null;
+  expectedResponseTimeMs: number | null;
+  timeoutMs: number;
+  tags: string[];
+  enabled: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApiCheckResult {
+  id: string;
+  checkId: string;
+  runId: string | null;
+  status: ApiCheckStatus;
+  statusCode: number | null;
+  responseTimeMs: number | null;
+  responseBody: string | null;
+  responseHeaders: Record<string, string>;
+  error: string | null;
+  assertionsPassed: string[];
+  assertionsFailed: string[];
+  createdAt: string;
+}
+
+export interface CreateApiCheckInput {
+  name: string;
+  method?: HttpMethod;
+  url: string;
+  headers?: Record<string, string>;
+  body?: string;
+  expectedStatus?: number;
+  expectedBodyContains?: string;
+  expectedResponseTimeMs?: number;
+  timeoutMs?: number;
+  tags?: string[];
+  description?: string;
+  projectId?: string;
+  enabled?: boolean;
+}
+
+export interface UpdateApiCheckInput {
+  name?: string;
+  method?: HttpMethod;
+  url?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  expectedStatus?: number;
+  expectedBodyContains?: string;
+  expectedResponseTimeMs?: number;
+  timeoutMs?: number;
+  tags?: string[];
+  description?: string;
+  enabled?: boolean;
+}
+
+export interface ApiCheckFilter {
+  projectId?: string;
+  enabled?: boolean;
+  tags?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export function apiCheckFromRow(row: ApiCheckRow): ApiCheck {
+  return {
+    id: row.id,
+    shortId: row.short_id,
+    projectId: row.project_id,
+    name: row.name,
+    description: row.description,
+    method: row.method,
+    url: row.url,
+    headers: JSON.parse(row.headers),
+    body: row.body,
+    expectedStatus: row.expected_status,
+    expectedBodyContains: row.expected_body_contains,
+    expectedResponseTimeMs: row.expected_response_time_ms,
+    timeoutMs: row.timeout_ms,
+    tags: JSON.parse(row.tags),
+    enabled: row.enabled === 1,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function apiCheckResultFromRow(row: ApiCheckResultRow): ApiCheckResult {
+  return {
+    id: row.id,
+    checkId: row.check_id,
+    runId: row.run_id,
+    status: row.status,
+    statusCode: row.status_code,
+    responseTimeMs: row.response_time_ms,
+    responseBody: row.response_body,
+    responseHeaders: JSON.parse(row.response_headers),
+    error: row.error,
+    assertionsPassed: JSON.parse(row.assertions_passed),
+    assertionsFailed: JSON.parse(row.assertions_failed),
+    createdAt: row.created_at,
+  };
 }
