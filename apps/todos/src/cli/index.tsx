@@ -692,6 +692,24 @@ program
     }
   });
 
+// remove — alias for delete (consistent with open-* CLI conventions)
+program
+  .command("remove <id>")
+  .description("Remove/delete a task (alias for delete)")
+  .action((id: string) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(id);
+    const deleted = deleteTask(resolvedId);
+    if (globalOpts.json) {
+      output({ deleted }, true);
+    } else if (deleted) {
+      console.log(chalk.green("Task removed."));
+    } else {
+      console.error(chalk.red("Task not found."));
+      process.exit(1);
+    }
+  });
+
 // bulk
 program
   .command("bulk <action> <ids...>")
@@ -1583,6 +1601,43 @@ program
       }
     } catch (e) {
       handleError(e);
+    }
+  });
+
+// heartbeat
+program
+  .command("heartbeat [agent]")
+  .description("Update last_seen_at to signal you're still active")
+  .action((agent?: string) => {
+    const globalOpts = program.opts();
+    const agentId = agent || globalOpts.agent;
+    if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent or pass as argument.")); process.exit(1); }
+    const { updateAgentActivity, getAgent } = require("../db/agents.js") as any;
+    const a = getAgent(agentId) || require("../db/agents.js").getAgentByName(agentId);
+    if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+    updateAgentActivity(a.id);
+    if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
+    else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+  });
+
+// focus
+program
+  .command("focus [project]")
+  .description("Focus on a project (or clear focus if no project given)")
+  .action((project?: string) => {
+    const globalOpts = program.opts();
+    const agentId = globalOpts.agent;
+    if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent.")); process.exit(1); }
+    const db = getDatabase();
+    if (project) {
+      const { getProjectByPath, getProjectByName } = require("../db/projects.js") as any;
+      const p = getProjectByPath(process.cwd(), db) || getProjectByName(project, db);
+      const projectId = p?.id || project;
+      db.run("UPDATE agents SET active_project_id = ? WHERE id = ? OR name = ?", [projectId, agentId, agentId]);
+      console.log(chalk.green(`Focused on: ${p?.name || projectId}`));
+    } else {
+      db.run("UPDATE agents SET active_project_id = NULL WHERE id = ? OR name = ?", [agentId, agentId]);
+      console.log(chalk.dim("Focus cleared."));
     }
   });
 
@@ -3189,6 +3244,58 @@ program
     }
 
     console.log(chalk.dim(`\n  as_of: ${new Date().toISOString()}`));
+  });
+
+// report-failure — create a task from a test/build failure
+program
+  .command("report-failure")
+  .description("Create a task from a test/build/typecheck failure and auto-assign it")
+  .requiredOption("--error <message>", "Error message or summary")
+  .option("--type <type>", "Failure type: test, build, typecheck, runtime, other", "test")
+  .option("--file <path>", "File where failure occurred")
+  .option("--stack <trace>", "Stack trace or detailed output")
+  .option("--title <title>", "Custom task title (auto-generated if omitted)")
+  .option("--priority <p>", "Priority: low, medium, high, critical")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const { createTask } = require("../db/tasks.js") as any;
+    const { autoAssignTask } = await import("../lib/auto-assign.js");
+    const projectId = autoProject(globalOpts);
+
+    const failureType = opts.type || "test";
+    const defaultPriority = (failureType === "build" || failureType === "typecheck") ? "high" : "medium";
+    const taskPriority = opts.priority || defaultPriority;
+
+    const autoTitle = opts.title || `${failureType.toUpperCase()} failure${opts.file ? ` in ${(opts.file as string).split("/").pop()}` : ""}: ${(opts.error as string).slice(0, 60)}`;
+    const descParts = [
+      `**Failure type:** ${failureType}`,
+      opts.file ? `**File:** ${opts.file}` : null,
+      `**Error:**\n\`\`\`\n${(opts.error as string).slice(0, 500)}\n\`\`\``,
+      opts.stack ? `**Stack trace:**\n\`\`\`\n${(opts.stack as string).slice(0, 1500)}\n\`\`\`` : null,
+    ].filter(Boolean).join("\n\n");
+
+    const task = createTask({
+      title: autoTitle,
+      description: descParts,
+      priority: taskPriority,
+      project_id: projectId || undefined,
+      tags: ["failure", failureType, "auto-created"],
+      status: "pending",
+    });
+
+    const assignResult = await autoAssignTask(task.id);
+
+    if (opts.json || globalOpts.json) {
+      console.log(JSON.stringify({ task_id: task.id, short_id: task.short_id, title: task.title, assigned_to: assignResult.agent_name, method: assignResult.method }));
+      return;
+    }
+
+    console.log(chalk.green(`✓ Created task ${task.short_id || task.id.slice(0, 8)}: ${task.title}`));
+    if (assignResult.agent_name) {
+      console.log(chalk.cyan(`  Assigned to: ${assignResult.agent_name} (via ${assignResult.method})`));
+      if (assignResult.reason) console.log(chalk.dim(`  Reason: ${assignResult.reason}`));
+    }
   });
 
 // Default action: help or TUI

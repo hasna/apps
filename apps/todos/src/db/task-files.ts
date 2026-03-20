@@ -93,6 +93,118 @@ export function removeTaskFile(taskId: string, path: string, db?: Database): boo
   return result.changes > 0;
 }
 
+export interface FileConflict {
+  path: string;
+  conflicting_task_id: string;
+  conflicting_agent_id: string | null;
+  conflicting_task_title: string;
+  conflicting_task_status: string;
+}
+
+/**
+ * Check if adding a file to a task would conflict with another in-progress task.
+ * Returns conflicts (not a hard block — caller decides what to do).
+ */
+export function detectFileConflicts(taskId: string, paths: string[], db?: Database): FileConflict[] {
+  const d = db || getDatabase();
+  if (paths.length === 0) return [];
+
+  const placeholders = paths.map(() => "?").join(", ");
+  const rows = d.query(`
+    SELECT tf.path, tf.agent_id AS conflicting_agent_id, t.id AS conflicting_task_id,
+           t.title AS conflicting_task_title, t.status AS conflicting_task_status
+    FROM task_files tf
+    JOIN tasks t ON tf.task_id = t.id
+    WHERE tf.path IN (${placeholders})
+      AND tf.task_id != ?
+      AND tf.status != 'removed'
+      AND t.status = 'in_progress'
+    ORDER BY tf.updated_at DESC
+  `).all(...paths, taskId) as FileConflict[];
+
+  return rows;
+}
+
+export interface BulkFileResult {
+  path: string;
+  tasks: TaskFile[];
+  has_conflict: boolean;
+  in_progress_count: number;
+}
+
+export function bulkFindTasksByFiles(paths: string[], db?: Database): BulkFileResult[] {
+  const d = db || getDatabase();
+  if (paths.length === 0) return [];
+
+  const placeholders = paths.map(() => "?").join(", ");
+  const rows = d.query(
+    `SELECT tf.*, t.status AS task_status FROM task_files tf
+     JOIN tasks t ON tf.task_id = t.id
+     WHERE tf.path IN (${placeholders}) AND tf.status != 'removed'
+     ORDER BY tf.updated_at DESC`,
+  ).all(...paths) as (TaskFile & { task_status: string })[];
+
+  // Group by path
+  const byPath = new Map<string, (TaskFile & { task_status: string })[]>();
+  for (const path of paths) byPath.set(path, []);
+  for (const row of rows) {
+    byPath.get(row.path)?.push(row);
+  }
+
+  return paths.map((path) => {
+    const tasks = byPath.get(path) ?? [];
+    const inProgressCount = tasks.filter((t) => t.task_status === "in_progress").length;
+    return {
+      path,
+      tasks,
+      has_conflict: inProgressCount > 1,
+      in_progress_count: inProgressCount,
+    };
+  });
+}
+
+export interface ActiveFileInfo {
+  path: string;
+  file_status: TaskFile["status"];
+  file_agent_id: string | null;
+  note: string | null;
+  updated_at: string;
+  task_id: string;
+  task_short_id: string | null;
+  task_title: string;
+  task_status: string;
+  task_locked_by: string | null;
+  task_locked_at: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+}
+
+export function listActiveFiles(db?: Database): ActiveFileInfo[] {
+  const d = db || getDatabase();
+  return d.query(`
+    SELECT
+      tf.path,
+      tf.status AS file_status,
+      tf.agent_id AS file_agent_id,
+      tf.note,
+      tf.updated_at,
+      t.id AS task_id,
+      t.short_id AS task_short_id,
+      t.title AS task_title,
+      t.status AS task_status,
+      t.locked_by AS task_locked_by,
+      t.locked_at AS task_locked_at,
+      a.id AS agent_id,
+      a.name AS agent_name
+    FROM task_files tf
+    JOIN tasks t ON tf.task_id = t.id
+    LEFT JOIN agents a ON (tf.agent_id = a.id OR (tf.agent_id IS NULL AND t.assigned_to = a.id))
+    WHERE t.status = 'in_progress'
+      AND tf.status != 'removed'
+    ORDER BY tf.updated_at DESC
+  `).all() as ActiveFileInfo[];
+}
+
 export function bulkAddTaskFiles(
   taskId: string,
   paths: string[],

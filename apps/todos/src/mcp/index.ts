@@ -103,7 +103,7 @@ const MINIMAL_TOOLS = new Set([
 ]);
 
 const STANDARD_EXCLUDED = new Set([
-  "get_org_chart", "set_reports_to", "rename_agent", "delete_agent", "unarchive_agent",
+  "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
   "create_template", "list_templates", "create_task_from_template", "delete_template",
   "approve_task",
@@ -546,6 +546,13 @@ server.tool(
         ? { files_changed, test_results, commit_hash, notes, attachment_ids }
         : undefined;
       const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence, confidence, ...evidence });
+      // Auto-link commit SHA if provided
+      if (commit_hash) {
+        try {
+          const { linkTaskToCommit } = require("../db/task-commits.js") as any;
+          linkTaskToCommit({ task_id: resolvedId, sha: commit_hash, files_changed });
+        } catch { /* non-fatal */ }
+      }
       let text = `completed: ${formatTask(task)}`;
       if (task.metadata._next_recurrence) {
         const next = task.metadata._next_recurrence as { id: string; short_id?: string; due_at?: string };
@@ -1999,18 +2006,48 @@ server.tool(
 if (shouldRegisterTool("get_org_chart")) {
 server.tool(
   "get_org_chart",
-  "Get agent org chart showing reporting hierarchy.",
-  {},
-  async () => {
+  "Get agent org chart showing reporting hierarchy with roles, titles, capabilities, and activity status.",
+  {
+    format: z.enum(["text", "json"]).optional().describe("Output format (default: text)"),
+    role: z.string().optional().describe("Filter by agent role (e.g. 'lead', 'developer')"),
+    active_only: z.coerce.boolean().optional().describe("Only show agents active in last 30 min"),
+  },
+  async ({ format, role, active_only }) => {
     try {
       const { getOrgChart } = await import("../db/agents.js");
-      const tree = getOrgChart();
+      let tree: any[] = getOrgChart();
+
+      // Filter helpers
+      const now = Date.now();
+      const ACTIVE_MS = 30 * 60 * 1000;
+
+      function filterTree(nodes: any[]): any[] {
+        return nodes
+          .map(n => ({ ...n, reports: filterTree(n.reports) }))
+          .filter(n => {
+            if (role && n.agent.role !== role) return false;
+            if (active_only) {
+              const lastSeen = new Date(n.agent.last_seen_at).getTime();
+              if (now - lastSeen > ACTIVE_MS) return false;
+            }
+            return true;
+          });
+      }
+      if (role || active_only) tree = filterTree(tree);
+
+      if (format === "json") {
+        return { content: [{ type: "text" as const, text: JSON.stringify(tree, null, 2) }] };
+      }
+
       function render(nodes: any[], indent = 0): string {
         return nodes.map(n => {
           const prefix = "  ".repeat(indent);
           const title = n.agent.title ? ` — ${n.agent.title}` : "";
-          const level = n.agent.level ? ` (${n.agent.level})` : "";
-          const line = `${prefix}${n.agent.name}${title}${level}`;
+          const level = n.agent.level ? ` [${n.agent.level}]` : "";
+          const caps = n.agent.capabilities?.length > 0 ? ` {${n.agent.capabilities.join(", ")}}` : "";
+          const lastSeen = new Date(n.agent.last_seen_at).getTime();
+          const active = now - lastSeen < ACTIVE_MS ? " ●" : " ○";
+          const line = `${prefix}${active} ${n.agent.name}${title}${level}${caps}`;
           const children = n.reports.length > 0 ? "\n" + render(n.reports, indent + 1) : "";
           return line + children;
         }).join("\n");
@@ -2791,6 +2828,124 @@ server.tool(
 );
 }
 
+// === FAILURE TASKS ===
+
+if (shouldRegisterTool("create_failure_task")) {
+server.tool(
+  "create_failure_task",
+  "Create a task from a test/build/typecheck failure. Auto-assigns to the most likely agent based on file ownership and org chart.",
+  {
+    failure_type: z.enum(["test", "build", "typecheck", "runtime", "other"]).describe("Type of failure"),
+    title: z.string().optional().describe("Task title (auto-generated from error if omitted)"),
+    error_message: z.string().describe("The error message or summary"),
+    file_path: z.string().optional().describe("File where the failure occurred"),
+    stack_trace: z.string().optional().describe("Stack trace or detailed output (truncated to 2000 chars)"),
+    project_id: z.string().optional().describe("Project to associate the task with"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Default: high for build/typecheck, medium for test"),
+  },
+  async ({ failure_type, title, error_message, file_path, stack_trace, project_id, priority }) => {
+    try {
+      const { createTask } = require("../db/tasks.js") as any;
+      const { autoAssignTask } = await import("../lib/auto-assign.js");
+
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const defaultPriority = (failure_type === "build" || failure_type === "typecheck") ? "high" : "medium";
+      const taskPriority = priority ?? defaultPriority;
+
+      const autoTitle = title || `${failure_type.toUpperCase()} failure${file_path ? ` in ${file_path.split("/").pop()}` : ""}: ${error_message.slice(0, 60)}`;
+      const description = [
+        `**Failure type:** ${failure_type}`,
+        file_path ? `**File:** ${file_path}` : null,
+        `**Error:**\n\`\`\`\n${error_message.slice(0, 500)}\n\`\`\``,
+        stack_trace ? `**Stack trace:**\n\`\`\`\n${stack_trace.slice(0, 1500)}\n\`\`\`` : null,
+      ].filter(Boolean).join("\n\n");
+
+      const task = createTask({
+        title: autoTitle,
+        description,
+        priority: taskPriority,
+        project_id: resolvedProjectId,
+        tags: ["failure", failure_type, "auto-created"],
+        status: "pending",
+      });
+
+      // Auto-assign using Cerebras/capability routing
+      const assignResult = await autoAssignTask(task.id);
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ task_id: task.id, short_id: task.short_id, title: task.title, assigned_to: assignResult.agent_name, assign_method: assignResult.method }, null, 2),
+        }],
+      };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// === AUTO-ASSIGN ===
+
+if (shouldRegisterTool("auto_assign_task")) {
+server.tool(
+  "auto_assign_task",
+  "Auto-assign a task to the best available agent. Uses Cerebras LLM (llama-3.3-70b) if CEREBRAS_API_KEY is set, otherwise falls back to capability-based matching.",
+  {
+    task_id: z.string().describe("Task to auto-assign"),
+  },
+  async ({ task_id }) => {
+    try {
+      const { autoAssignTask } = await import("../lib/auto-assign.js");
+      const resolvedId = resolveId(task_id);
+      const result = await autoAssignTask(resolvedId);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("auto_assign_unassigned")) {
+server.tool(
+  "auto_assign_unassigned",
+  "Auto-assign all unassigned pending tasks in a project using Cerebras LLM routing. Returns summary of assignments made.",
+  {
+    project_id: z.string().optional().describe("Filter to a specific project"),
+    limit: z.number().optional().describe("Max tasks to assign (default: 20)"),
+  },
+  async ({ project_id, limit }) => {
+    try {
+      const { autoAssignTask } = await import("../lib/auto-assign.js");
+      const { listTasks } = require("../db/tasks.js") as any;
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const tasks = listTasks({
+        status: "pending",
+        project_id: resolvedProjectId,
+      }).tasks.filter((t: any) => !t.assigned_to).slice(0, limit ?? 20);
+
+      const results = [];
+      for (const task of tasks) {
+        try {
+          const r = await autoAssignTask(task.id);
+          results.push(r);
+        } catch { /* continue */ }
+      }
+
+      const assigned = results.filter(r => r.assigned_to);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            total_checked: tasks.length,
+            assigned: assigned.length,
+            skipped: tasks.length - assigned.length,
+            results,
+          }, null, 2),
+        }],
+      };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
@@ -2999,7 +3154,7 @@ server.resource(
 if (shouldRegisterTool("add_task_file")) {
 server.tool(
   "add_task_file",
-  "Link a file path to a task. Tracks which files an agent is working on. Upserts if same task+path exists.",
+  "Link a file path to a task. Tracks which files an agent is working on. Upserts if same task+path exists. Auto-detects conflicts with other in-progress tasks.",
   {
     task_id: z.string().describe("Task ID"),
     path: z.string().describe("File path (relative or absolute)"),
@@ -3010,14 +3165,43 @@ server.tool(
   },
   async ({ task_id, path, paths: multiplePaths, status, agent_id, note }) => {
     try {
-      const { addTaskFile, bulkAddTaskFiles } = require("../db/task-files.js") as any;
+      const { addTaskFile, bulkAddTaskFiles, detectFileConflicts } = require("../db/task-files.js") as any;
       const resolvedId = resolveId(task_id);
+
+      let addedFiles: any[];
       if (multiplePaths && multiplePaths.length > 0) {
         const allPaths = path ? [path, ...multiplePaths] : multiplePaths;
-        const files = bulkAddTaskFiles(resolvedId, allPaths, agent_id);
-        return { content: [{ type: "text" as const, text: `${files.length} file(s) linked to task ${resolvedId.slice(0, 8)}` }] };
+        addedFiles = bulkAddTaskFiles(resolvedId, allPaths, agent_id);
+        const conflicts = detectFileConflicts(resolvedId, allPaths);
+        if (conflicts.length > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                added: addedFiles.length,
+                conflicts,
+                warning: `${conflicts.length} file(s) already claimed by other in-progress tasks`,
+              }, null, 2),
+            }],
+          };
+        }
+        return { content: [{ type: "text" as const, text: `${addedFiles.length} file(s) linked to task ${resolvedId.slice(0, 8)}` }] };
       }
+
       const file = addTaskFile({ task_id: resolvedId, path, status, agent_id, note });
+      const conflicts = detectFileConflicts(resolvedId, [path]);
+      if (conflicts.length > 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              file,
+              conflicts,
+              warning: `${path} is already claimed by another in-progress task`,
+            }, null, 2),
+          }],
+        };
+      }
       return { content: [{ type: "text" as const, text: `${file.status} ${file.path} → task ${resolvedId.slice(0, 8)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -3058,6 +3242,214 @@ server.tool(
       if (files.length === 0) return { content: [{ type: "text" as const, text: `No tasks linked to ${path}` }] };
       const lines = files.map((f: any) => `${f.task_id.slice(0, 8)} [${f.status}]${f.agent_id ? ` (${f.agent_id})` : ""}`);
       return { content: [{ type: "text" as const, text: `${files.length} task(s) linked to ${path}:\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("bulk_find_tasks_by_files")) {
+server.tool(
+  "bulk_find_tasks_by_files",
+  "Check multiple file paths at once for task/agent collisions. Returns per-path task list, in-progress count, and conflict flag.",
+  {
+    paths: z.array(z.string()).describe("Array of file paths to check"),
+  },
+  async ({ paths }) => {
+    try {
+      const { bulkFindTasksByFiles } = require("../db/task-files.js") as any;
+      const results = bulkFindTasksByFiles(paths);
+      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("list_active_files")) {
+server.tool(
+  "list_active_files",
+  "Return all files linked to in-progress tasks across all agents — the bird's-eye view of what's being worked on right now.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+  },
+  async ({ project_id }) => {
+    try {
+      const { listActiveFiles } = require("../db/task-files.js") as any;
+      let files: any[] = listActiveFiles();
+      if (project_id) {
+        const pid = resolveId(project_id, "projects");
+        // We need tasks with that project_id — re-query with filter
+        const db = require("../db/database.js").getDatabase();
+        files = db.query(`
+          SELECT
+            tf.path,
+            tf.status AS file_status,
+            tf.agent_id AS file_agent_id,
+            tf.note,
+            tf.updated_at,
+            t.id AS task_id,
+            t.short_id AS task_short_id,
+            t.title AS task_title,
+            t.status AS task_status,
+            t.locked_by AS task_locked_by,
+            t.locked_at AS task_locked_at,
+            a.id AS agent_id,
+            a.name AS agent_name
+          FROM task_files tf
+          JOIN tasks t ON tf.task_id = t.id
+          LEFT JOIN agents a ON (tf.agent_id = a.id OR (tf.agent_id IS NULL AND t.assigned_to = a.id))
+          WHERE t.status = 'in_progress'
+            AND tf.status != 'removed'
+            AND t.project_id = ?
+          ORDER BY tf.updated_at DESC
+        `).all(pid);
+      }
+      if (files.length === 0) {
+        return { content: [{ type: "text" as const, text: "No active files — no in-progress tasks have linked files." }] };
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify(files, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === TASK COMMITS ===
+
+if (shouldRegisterTool("link_task_to_commit")) {
+server.tool(
+  "link_task_to_commit",
+  "Link a git commit SHA to a task. Creates an audit trail: task → commits. Upserts on same task+sha.",
+  {
+    task_id: z.string().describe("Task ID"),
+    sha: z.string().describe("Git commit SHA (full or short)"),
+    message: z.string().optional().describe("Commit message"),
+    author: z.string().optional().describe("Commit author"),
+    files_changed: z.array(z.string()).optional().describe("Files changed in this commit"),
+    committed_at: z.string().optional().describe("ISO timestamp of commit"),
+  },
+  async ({ task_id, sha, message, author, files_changed, committed_at }) => {
+    try {
+      const { linkTaskToCommit } = require("../db/task-commits.js") as any;
+      const resolvedId = resolveId(task_id);
+      const commit = linkTaskToCommit({ task_id: resolvedId, sha, message, author, files_changed, committed_at });
+      return { content: [{ type: "text" as const, text: JSON.stringify(commit, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("get_task_commits")) {
+server.tool(
+  "get_task_commits",
+  "Get all git commits linked to a task.",
+  { task_id: z.string().describe("Task ID") },
+  async ({ task_id }) => {
+    try {
+      const { getTaskCommits } = require("../db/task-commits.js") as any;
+      const commits = getTaskCommits(resolveId(task_id));
+      return { content: [{ type: "text" as const, text: JSON.stringify(commits, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("find_task_by_commit")) {
+server.tool(
+  "find_task_by_commit",
+  "Find which task a git commit SHA is linked to. Supports prefix matching.",
+  { sha: z.string().describe("Git commit SHA (full or short prefix)") },
+  async ({ sha }) => {
+    try {
+      const { findTaskByCommit } = require("../db/task-commits.js") as any;
+      const result = findTaskByCommit(sha);
+      if (!result) return { content: [{ type: "text" as const, text: `No task linked to commit ${sha}` }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// === FILE LOCKS ===
+
+if (shouldRegisterTool("lock_file")) {
+server.tool(
+  "lock_file",
+  "Acquire an exclusive lock on a file path. Throws if another agent holds an active lock. Same agent re-locks refreshes the TTL.",
+  {
+    path: z.string().describe("File path to lock"),
+    agent_id: z.string().describe("Agent acquiring the lock"),
+    task_id: z.string().optional().describe("Task this lock is associated with"),
+    ttl_seconds: z.number().optional().describe("Lock TTL in seconds (default: 1800 = 30 min)"),
+  },
+  async ({ path, agent_id, task_id, ttl_seconds }) => {
+    try {
+      const { lockFile } = require("../db/file-locks.js") as any;
+      const lock = lockFile({ path, agent_id, task_id, ttl_seconds });
+      return { content: [{ type: "text" as const, text: JSON.stringify(lock, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("unlock_file")) {
+server.tool(
+  "unlock_file",
+  "Release a file lock. Only the lock holder can release it. Returns true if released.",
+  {
+    path: z.string().describe("File path to unlock"),
+    agent_id: z.string().describe("Agent releasing the lock (must be the lock holder)"),
+  },
+  async ({ path, agent_id }) => {
+    try {
+      const { unlockFile } = require("../db/file-locks.js") as any;
+      const released = unlockFile(path, agent_id);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ released, path }) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("check_file_lock")) {
+server.tool(
+  "check_file_lock",
+  "Check who holds a lock on a file path. Returns null if unlocked or expired.",
+  {
+    path: z.string().describe("File path to check"),
+  },
+  async ({ path }) => {
+    try {
+      const { checkFileLock } = require("../db/file-locks.js") as any;
+      const lock = checkFileLock(path);
+      if (!lock) return { content: [{ type: "text" as const, text: JSON.stringify({ path, locked: false }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ path, locked: true, ...lock }) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("list_file_locks")) {
+server.tool(
+  "list_file_locks",
+  "List all active file locks. Optionally filter by agent_id.",
+  {
+    agent_id: z.string().optional().describe("Filter locks by agent"),
+  },
+  async ({ agent_id }) => {
+    try {
+      const { listFileLocks } = require("../db/file-locks.js") as any;
+      const locks = listFileLocks(agent_id);
+      return { content: [{ type: "text" as const, text: JSON.stringify(locks, null, 2) }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -3346,6 +3738,91 @@ server.tool(
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
+  },
+);
+}
+
+// === PER-PROJECT ORG CHART ===
+
+if (shouldRegisterTool("set_project_agent_role")) {
+server.tool(
+  "set_project_agent_role",
+  "Assign an agent a role on a specific project (client, lead, developer, qa, reviewer, etc.). Per-project roles extend the global org chart.",
+  {
+    project_id: z.string().describe("Project ID"),
+    agent_name: z.string().describe("Agent name"),
+    role: z.string().describe("Role on this project (e.g. 'lead', 'developer', 'qa')"),
+    is_lead: z.coerce.boolean().optional().describe("Whether this agent is the project lead for this role"),
+  },
+  async ({ project_id, agent_name, role, is_lead }) => {
+    try {
+      const { setProjectAgentRole } = require("../db/project-agent-roles.js") as any;
+      const agent = getAgentByName(agent_name);
+      if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_name}` }], isError: true };
+      const pid = resolveId(project_id, "projects");
+      const result = setProjectAgentRole(pid, agent.id, role, is_lead ?? false);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("get_project_org_chart")) {
+server.tool(
+  "get_project_org_chart",
+  "Get org chart scoped to a project — global hierarchy with per-project role overrides merged in.",
+  {
+    project_id: z.string().describe("Project ID"),
+    format: z.enum(["text", "json"]).optional().describe("Output format (default: text)"),
+    filter_to_project: z.coerce.boolean().optional().describe("Only show agents with a role on this project"),
+  },
+  async ({ project_id, format, filter_to_project }) => {
+    try {
+      const { getProjectOrgChart } = require("../db/project-agent-roles.js") as any;
+      const pid = resolveId(project_id, "projects");
+      const tree = getProjectOrgChart(pid, { filter_to_project });
+
+      if (format === "json") {
+        return { content: [{ type: "text" as const, text: JSON.stringify(tree, null, 2) }] };
+      }
+
+      const now = Date.now();
+      const ACTIVE_MS = 30 * 60 * 1000;
+      function render(nodes: any[], indent = 0): string {
+        return nodes.map(n => {
+          const prefix = "  ".repeat(indent);
+          const title = n.agent.title ? ` — ${n.agent.title}` : "";
+          const globalRole = n.agent.role ? ` [${n.agent.role}]` : "";
+          const projectRoles = n.project_roles.length > 0 ? ` <${n.project_roles.join(", ")}>` : "";
+          const lead = n.is_project_lead ? " ★" : "";
+          const lastSeen = new Date(n.agent.last_seen_at).getTime();
+          const active = now - lastSeen < ACTIVE_MS ? " ●" : " ○";
+          const line = `${prefix}${active} ${n.agent.name}${title}${globalRole}${projectRoles}${lead}`;
+          const children = n.reports.length > 0 ? "\n" + render(n.reports, indent + 1) : "";
+          return line + children;
+        }).join("\n");
+      }
+      const text = tree.length > 0 ? render(tree) : "No agents in this project's org chart.";
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("list_project_agent_roles")) {
+server.tool(
+  "list_project_agent_roles",
+  "List all agent role assignments for a project.",
+  {
+    project_id: z.string().describe("Project ID"),
+  },
+  async ({ project_id }) => {
+    try {
+      const { listProjectAgentRoles } = require("../db/project-agent-roles.js") as any;
+      const pid = resolveId(project_id, "projects");
+      const roles = listProjectAgentRoles(pid);
+      return { content: [{ type: "text" as const, text: JSON.stringify(roles, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
 }
