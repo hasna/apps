@@ -204,7 +204,7 @@ async function confirm(question: string): Promise<boolean> {
 program
   .name("contacts")
   .description("Open Contacts — contact management for AI coding agents")
-  .version("0.2.2");
+  .version("0.3.0");
 
 // ─── contacts add ─────────────────────────────────────────────────────────────
 
