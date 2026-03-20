@@ -48,6 +48,9 @@ const TOOLS = [
   { name: 'get_goals',    description: 'All spending goals with current progress. No params.', inputSchema: { type: 'object', properties: {} } },
   { name: 'set_goal',     description: 'Create/update a spending goal. period(day|week|month|year), limit_usd, project_path?, agent?', inputSchema: { type: 'object', properties: { period: { type: 'string' }, limit_usd: { type: 'number' }, project_path: { type: 'string' }, agent: { type: 'string' } }, required: ['period', 'limit_usd'] } },
   { name: 'remove_goal',  description: 'Delete a goal by id.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'register_agent', description: 'Register agent session.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, session_id: { type: 'string' } }, required: ['name'] } },
+  { name: 'heartbeat', description: 'Update last_seen_at.', inputSchema: { type: 'object', properties: { agent_id: { type: 'string' } }, required: ['agent_id'] } },
+  { name: 'set_focus', description: 'Set active project context.', inputSchema: { type: 'object', properties: { agent_id: { type: 'string' }, project_id: { type: 'string' } }, required: ['agent_id'] } },
 ]
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -242,6 +245,27 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: 'text', text: 'Goal removed.' }] }
       }
 
+      case 'register_agent': {
+        const n = String(args['name'] ?? '');
+        const ex = [..._econAgents.values()].find(x => x.name === n);
+        if (ex) { ex.last_seen_at = new Date().toISOString(); return { content: [{ type: 'text', text: JSON.stringify(ex) }] }; }
+        const id = Math.random().toString(36).slice(2, 10);
+        const ag = { id, name: n, last_seen_at: new Date().toISOString() };
+        _econAgents.set(id, ag);
+        return { content: [{ type: 'text', text: JSON.stringify(ag) }] };
+      }
+      case 'heartbeat': {
+        const ag = _econAgents.get(String(args['agent_id'] ?? ''));
+        if (!ag) return { content: [{ type: 'text', text: `Agent not found` }], isError: true };
+        ag.last_seen_at = new Date().toISOString();
+        return { content: [{ type: 'text', text: `♥ ${ag.name}` }] };
+      }
+      case 'set_focus': {
+        const ag = _econAgents.get(String(args['agent_id'] ?? ''));
+        if (!ag) return { content: [{ type: 'text', text: `Agent not found` }], isError: true };
+        (ag as Record<string, unknown>)['project_id'] = args['project_id'];
+        return { content: [{ type: 'text', text: String(args['project_id'] ? `Focus: ${args['project_id']}` : 'Focus cleared') }] };
+      }
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true }
     }
@@ -251,45 +275,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 })
 
 
-const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string }>();
-
-server.tool(
-  "register_agent",
-  "Register this agent session. Returns agent_id for use in heartbeat/set_focus.",
-  { name: z.string(), session_id: z.string().optional() },
-  async (a: { name: string; session_id?: string }) => {
-    const existing = [..._agentReg.values()].find(x => x.name === a.name);
-    if (existing) { existing.last_seen_at = new Date().toISOString(); return { content: [{ type: "text" as const, text: JSON.stringify(existing) }] }; }
-    const id = Math.random().toString(36).slice(2, 10);
-    const ag = { id, name: a.name, last_seen_at: new Date().toISOString() };
-    _agentReg.set(id, ag);
-    return { content: [{ type: "text" as const, text: JSON.stringify(ag) }] };
-  }
-);
-
-server.tool(
-  "heartbeat",
-  "Update last_seen_at to signal agent is active.",
-  { agent_id: z.string() },
-  async (a: { agent_id: string }) => {
-    const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
-    ag.last_seen_at = new Date().toISOString();
-    return { content: [{ type: "text" as const, text: `♥ ${ag.name} — active` }] };
-  }
-);
-
-server.tool(
-  "set_focus",
-  "Set active project context for this agent session.",
-  { agent_id: z.string(), project_id: z.string().optional() },
-  async (a: { agent_id: string; project_id?: string }) => {
-    const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
-    (ag as any).project_id = a.project_id;
-    return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
-  }
-);
+const _econAgents = new Map<string, { id: string; name: string; last_seen_at: string }>();
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
