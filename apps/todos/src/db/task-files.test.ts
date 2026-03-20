@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { addTaskFile, listTaskFiles, findTasksByFile, listActiveFiles, removeTaskFile } from "./task-files.js";
+import { addTaskFile, listTaskFiles, findTasksByFile, listActiveFiles, removeTaskFile, bulkFindTasksByFiles } from "./task-files.js";
 import { createTask, updateTask, getTask } from "./tasks.js";
 import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
@@ -113,5 +113,39 @@ describe("removeTaskFile", () => {
   it("returns false for nonexistent file", () => {
     const task = createTask({ title: "T1" });
     expect(removeTaskFile(task.id, "nonexistent.ts")).toBe(false);
+  });
+});
+
+describe("bulkFindTasksByFiles", () => {
+  it("returns results for all paths including empty ones", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/a.ts" });
+    const results = bulkFindTasksByFiles(["src/a.ts", "src/b.ts"]);
+    expect(results).toHaveLength(2);
+    expect(results.find(r => r.path === "src/a.ts")!.tasks).toHaveLength(1);
+    expect(results.find(r => r.path === "src/b.ts")!.tasks).toHaveLength(0);
+  });
+
+  it("detects conflicts for paths claimed by multiple in-progress tasks", () => {
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    updateTask(t1.id, { status: "in_progress", version: getTask(t1.id)!.version });
+    updateTask(t2.id, { status: "in_progress", version: getTask(t2.id)!.version });
+    addTaskFile({ task_id: t1.id, path: "src/shared.ts" });
+    addTaskFile({ task_id: t2.id, path: "src/shared.ts" });
+    const results = bulkFindTasksByFiles(["src/shared.ts"]);
+    expect(results[0]!.has_conflict).toBe(true);
+    expect(results[0]!.in_progress_count).toBe(2);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(bulkFindTasksByFiles([])).toHaveLength(0);
+  });
+
+  it("excludes removed files", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/a.ts", status: "removed" });
+    const results = bulkFindTasksByFiles(["src/a.ts"]);
+    expect(results[0]!.tasks).toHaveLength(0);
   });
 });

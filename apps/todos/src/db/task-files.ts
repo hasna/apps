@@ -93,6 +93,44 @@ export function removeTaskFile(taskId: string, path: string, db?: Database): boo
   return result.changes > 0;
 }
 
+export interface BulkFileResult {
+  path: string;
+  tasks: TaskFile[];
+  has_conflict: boolean;
+  in_progress_count: number;
+}
+
+export function bulkFindTasksByFiles(paths: string[], db?: Database): BulkFileResult[] {
+  const d = db || getDatabase();
+  if (paths.length === 0) return [];
+
+  const placeholders = paths.map(() => "?").join(", ");
+  const rows = d.query(
+    `SELECT tf.*, t.status AS task_status FROM task_files tf
+     JOIN tasks t ON tf.task_id = t.id
+     WHERE tf.path IN (${placeholders}) AND tf.status != 'removed'
+     ORDER BY tf.updated_at DESC`,
+  ).all(...paths) as (TaskFile & { task_status: string })[];
+
+  // Group by path
+  const byPath = new Map<string, (TaskFile & { task_status: string })[]>();
+  for (const path of paths) byPath.set(path, []);
+  for (const row of rows) {
+    byPath.get(row.path)?.push(row);
+  }
+
+  return paths.map((path) => {
+    const tasks = byPath.get(path) ?? [];
+    const inProgressCount = tasks.filter((t) => t.task_status === "in_progress").length;
+    return {
+      path,
+      tasks,
+      has_conflict: inProgressCount > 1,
+      in_progress_count: inProgressCount,
+    };
+  });
+}
+
 export interface ActiveFileInfo {
   path: string;
   file_status: TaskFile["status"];

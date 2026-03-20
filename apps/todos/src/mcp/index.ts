@@ -3065,6 +3065,25 @@ server.tool(
 );
 }
 
+if (shouldRegisterTool("bulk_find_tasks_by_files")) {
+server.tool(
+  "bulk_find_tasks_by_files",
+  "Check multiple file paths at once for task/agent collisions. Returns per-path task list, in-progress count, and conflict flag.",
+  {
+    paths: z.array(z.string()).describe("Array of file paths to check"),
+  },
+  async ({ paths }) => {
+    try {
+      const { bulkFindTasksByFiles } = require("../db/task-files.js") as any;
+      const results = bulkFindTasksByFiles(paths);
+      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 if (shouldRegisterTool("list_active_files")) {
 server.tool(
   "list_active_files",
