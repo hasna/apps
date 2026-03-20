@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies } from "./messages";
+import { sendMessage, readMessages, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies } from "./messages";
 import { createSpace, joinSpace } from "./spaces";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -198,6 +198,35 @@ describe("markRead", () => {
     const msg = sendMessage({ from: "a", to: "bob", content: "hi" });
     markRead([msg.id], "bob");
     const count = markRead([msg.id], "bob");
+    expect(count).toBe(0);
+  });
+});
+
+describe("markReadByIds", () => {
+  test("marks messages by id regardless of to_agent", () => {
+    const msg = sendMessage({ from: "a", to: "bob", content: "hi" });
+    const count = markReadByIds([msg.id]);
+    expect(count).toBe(1);
+    const updated = getMessageById(msg.id);
+    expect(updated?.read_at).toBeTruthy();
+  });
+
+  test("returns 0 for empty array", () => {
+    expect(markReadByIds([])).toBe(0);
+  });
+
+  test("marks space messages", () => {
+    const msg = sendMessage({ from: "a", to: "myspace", space: "myspace", content: "hi" });
+    const count = markReadByIds([msg.id]);
+    expect(count).toBe(1);
+    const updated = getMessageById(msg.id);
+    expect(updated?.read_at).toBeTruthy();
+  });
+
+  test("does not double-mark", () => {
+    const msg = sendMessage({ from: "a", to: "bob", content: "hi" });
+    markReadByIds([msg.id]);
+    const count = markReadByIds([msg.id]);
     expect(count).toBe(0);
   });
 });

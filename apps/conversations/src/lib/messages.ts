@@ -220,6 +220,17 @@ export function getMessageById(id: number): Message | null {
   return row ? parseMessage(row) : null;
 }
 
+export function markReadByIds(ids: number[]): number {
+  const db = getDb();
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(", ");
+  const stmt = db.prepare(
+    `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE id IN (${placeholders}) AND read_at IS NULL`
+  );
+  const result = stmt.run(...ids);
+  return result.changes;
+}
+
 export function markAllRead(agent: string): number {
   const db = getDb();
   const stmt = db.prepare(
