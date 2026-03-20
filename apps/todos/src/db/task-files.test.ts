@@ -149,3 +149,38 @@ describe("bulkFindTasksByFiles", () => {
     expect(results[0]!.tasks).toHaveLength(0);
   });
 });
+
+describe("detectFileConflicts", () => {
+  it("returns conflicts for files claimed by other in-progress tasks", () => {
+    const { detectFileConflicts } = require("./task-files.js");
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    updateTask(t1.id, { status: "in_progress", version: getTask(t1.id)!.version });
+    updateTask(t2.id, { status: "in_progress", version: getTask(t2.id)!.version });
+    addTaskFile({ task_id: t1.id, path: "src/shared.ts" });
+    // t2 adding the same file
+    const conflicts = detectFileConflicts(t2.id, ["src/shared.ts"]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].conflicting_task_id).toBe(t1.id);
+  });
+
+  it("does not conflict with itself", () => {
+    const { detectFileConflicts } = require("./task-files.js");
+    const task = createTask({ title: "T1" });
+    updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts" });
+    const conflicts = detectFileConflicts(task.id, ["src/foo.ts"]);
+    expect(conflicts).toHaveLength(0);
+  });
+
+  it("does not flag files from completed tasks", () => {
+    const { detectFileConflicts } = require("./task-files.js");
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    // t1 is completed, not in_progress
+    addTaskFile({ task_id: t1.id, path: "src/foo.ts" });
+    updateTask(t2.id, { status: "in_progress", version: getTask(t2.id)!.version });
+    const conflicts = detectFileConflicts(t2.id, ["src/foo.ts"]);
+    expect(conflicts).toHaveLength(0);
+  });
+});

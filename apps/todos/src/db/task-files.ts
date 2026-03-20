@@ -93,6 +93,38 @@ export function removeTaskFile(taskId: string, path: string, db?: Database): boo
   return result.changes > 0;
 }
 
+export interface FileConflict {
+  path: string;
+  conflicting_task_id: string;
+  conflicting_agent_id: string | null;
+  conflicting_task_title: string;
+  conflicting_task_status: string;
+}
+
+/**
+ * Check if adding a file to a task would conflict with another in-progress task.
+ * Returns conflicts (not a hard block — caller decides what to do).
+ */
+export function detectFileConflicts(taskId: string, paths: string[], db?: Database): FileConflict[] {
+  const d = db || getDatabase();
+  if (paths.length === 0) return [];
+
+  const placeholders = paths.map(() => "?").join(", ");
+  const rows = d.query(`
+    SELECT tf.path, tf.agent_id AS conflicting_agent_id, t.id AS conflicting_task_id,
+           t.title AS conflicting_task_title, t.status AS conflicting_task_status
+    FROM task_files tf
+    JOIN tasks t ON tf.task_id = t.id
+    WHERE tf.path IN (${placeholders})
+      AND tf.task_id != ?
+      AND tf.status != 'removed'
+      AND t.status = 'in_progress'
+    ORDER BY tf.updated_at DESC
+  `).all(...paths, taskId) as FileConflict[];
+
+  return rows;
+}
+
 export interface BulkFileResult {
   path: string;
   tasks: TaskFile[];

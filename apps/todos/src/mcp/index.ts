@@ -2999,7 +2999,7 @@ server.resource(
 if (shouldRegisterTool("add_task_file")) {
 server.tool(
   "add_task_file",
-  "Link a file path to a task. Tracks which files an agent is working on. Upserts if same task+path exists.",
+  "Link a file path to a task. Tracks which files an agent is working on. Upserts if same task+path exists. Auto-detects conflicts with other in-progress tasks.",
   {
     task_id: z.string().describe("Task ID"),
     path: z.string().describe("File path (relative or absolute)"),
@@ -3010,14 +3010,43 @@ server.tool(
   },
   async ({ task_id, path, paths: multiplePaths, status, agent_id, note }) => {
     try {
-      const { addTaskFile, bulkAddTaskFiles } = require("../db/task-files.js") as any;
+      const { addTaskFile, bulkAddTaskFiles, detectFileConflicts } = require("../db/task-files.js") as any;
       const resolvedId = resolveId(task_id);
+
+      let addedFiles: any[];
       if (multiplePaths && multiplePaths.length > 0) {
         const allPaths = path ? [path, ...multiplePaths] : multiplePaths;
-        const files = bulkAddTaskFiles(resolvedId, allPaths, agent_id);
-        return { content: [{ type: "text" as const, text: `${files.length} file(s) linked to task ${resolvedId.slice(0, 8)}` }] };
+        addedFiles = bulkAddTaskFiles(resolvedId, allPaths, agent_id);
+        const conflicts = detectFileConflicts(resolvedId, allPaths);
+        if (conflicts.length > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                added: addedFiles.length,
+                conflicts,
+                warning: `${conflicts.length} file(s) already claimed by other in-progress tasks`,
+              }, null, 2),
+            }],
+          };
+        }
+        return { content: [{ type: "text" as const, text: `${addedFiles.length} file(s) linked to task ${resolvedId.slice(0, 8)}` }] };
       }
+
       const file = addTaskFile({ task_id: resolvedId, path, status, agent_id, note });
+      const conflicts = detectFileConflicts(resolvedId, [path]);
+      if (conflicts.length > 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              file,
+              conflicts,
+              warning: `${path} is already claimed by another in-progress task`,
+            }, null, 2),
+          }],
+        };
+      }
       return { content: [{ type: "text" as const, text: `${file.status} ${file.path} → task ${resolvedId.slice(0, 8)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
