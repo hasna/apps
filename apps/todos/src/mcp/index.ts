@@ -546,6 +546,13 @@ server.tool(
         ? { files_changed, test_results, commit_hash, notes, attachment_ids }
         : undefined;
       const task = completeTask(resolvedId, agent_id, undefined, { skip_recurrence, confidence, ...evidence });
+      // Auto-link commit SHA if provided
+      if (commit_hash) {
+        try {
+          const { linkTaskToCommit } = require("../db/task-commits.js") as any;
+          linkTaskToCommit({ task_id: resolvedId, sha: commit_hash, files_changed });
+        } catch { /* non-fatal */ }
+      }
       let text = `completed: ${formatTask(task)}`;
       if (task.metadata._next_recurrence) {
         const next = task.metadata._next_recurrence as { id: string; short_id?: string; due_at?: string };
@@ -3307,6 +3314,62 @@ server.tool(
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
+  },
+);
+}
+
+// === TASK COMMITS ===
+
+if (shouldRegisterTool("link_task_to_commit")) {
+server.tool(
+  "link_task_to_commit",
+  "Link a git commit SHA to a task. Creates an audit trail: task → commits. Upserts on same task+sha.",
+  {
+    task_id: z.string().describe("Task ID"),
+    sha: z.string().describe("Git commit SHA (full or short)"),
+    message: z.string().optional().describe("Commit message"),
+    author: z.string().optional().describe("Commit author"),
+    files_changed: z.array(z.string()).optional().describe("Files changed in this commit"),
+    committed_at: z.string().optional().describe("ISO timestamp of commit"),
+  },
+  async ({ task_id, sha, message, author, files_changed, committed_at }) => {
+    try {
+      const { linkTaskToCommit } = require("../db/task-commits.js") as any;
+      const resolvedId = resolveId(task_id);
+      const commit = linkTaskToCommit({ task_id: resolvedId, sha, message, author, files_changed, committed_at });
+      return { content: [{ type: "text" as const, text: JSON.stringify(commit, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("get_task_commits")) {
+server.tool(
+  "get_task_commits",
+  "Get all git commits linked to a task.",
+  { task_id: z.string().describe("Task ID") },
+  async ({ task_id }) => {
+    try {
+      const { getTaskCommits } = require("../db/task-commits.js") as any;
+      const commits = getTaskCommits(resolveId(task_id));
+      return { content: [{ type: "text" as const, text: JSON.stringify(commits, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("find_task_by_commit")) {
+server.tool(
+  "find_task_by_commit",
+  "Find which task a git commit SHA is linked to. Supports prefix matching.",
+  { sha: z.string().describe("Git commit SHA (full or short prefix)") },
+  async ({ sha }) => {
+    try {
+      const { findTaskByCommit } = require("../db/task-commits.js") as any;
+      const result = findTaskByCommit(sha);
+      if (!result) return { content: [{ type: "text" as const, text: `No task linked to commit ${sha}` }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
 }
