@@ -6,6 +6,7 @@ import { closeDb } from "../lib/db.js";
 import { sendMessage, readMessages } from "../lib/messages.js";
 import { createSpace } from "../lib/spaces.js";
 import { resolveIdentity } from "../lib/identity.js";
+import { heartbeat } from "../lib/presence.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -467,5 +468,44 @@ describe("rename_agent", () => {
       arguments: { from: "rename-src", new_name: "rename-dst" },
     });
     expect((result as any).isError).toBe(true);
+  });
+});
+
+// ---- acquire_lock auto-DM ----
+
+describe("acquire_lock auto-DM", () => {
+  test("auto-DMs holding agent on lock conflict", async () => {
+    await client.callTool({
+      name: "acquire_lock",
+      arguments: { resource_type: "space", resource_id: "dm-test-room", from: "agent-lock-holder" },
+    });
+
+    const result = parseResult(await client.callTool({
+      name: "acquire_lock",
+      arguments: { resource_type: "space", resource_id: "dm-test-room", from: "agent-lock-requester" },
+    }) as { content: unknown[] });
+
+    expect((result as any).acquired).toBe(false);
+    expect((result as any).held_by).toBe("agent-lock-holder");
+
+    const dms = readMessages({ to: "agent-lock-holder", unread_only: false });
+    const conflictDm = dms.find(m => m.content.toLowerCase().includes("lock conflict"));
+    expect(conflictDm).toBeTruthy();
+    expect(conflictDm!.from_agent).toBe("agent-lock-requester");
+  });
+
+  test("no DM sent when auto_dm is false", async () => {
+    await client.callTool({
+      name: "acquire_lock",
+      arguments: { resource_type: "space", resource_id: "dm-test-room-2", from: "agent-nodm-holder" },
+    });
+
+    await client.callTool({
+      name: "acquire_lock",
+      arguments: { resource_type: "space", resource_id: "dm-test-room-2", from: "agent-nodm-requester", auto_dm: false },
+    });
+
+    const dms = readMessages({ to: "agent-nodm-holder", unread_only: false });
+    expect(dms).toHaveLength(0);
   });
 });

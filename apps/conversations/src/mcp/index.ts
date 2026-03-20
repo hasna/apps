@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
 import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -335,6 +335,24 @@ server.registerTool("read_space", {
 
   return {
     content: [{ type: "text", text: JSON.stringify(messages) }],
+  };
+});
+
+server.registerTool("read_digest", {
+  description: "Lightweight unread message digest — returns preview-only summaries, auto-marks as read. Use instead of read_messages on busy spaces to avoid token overflow.",
+  inputSchema: {
+    space: z.string().optional(),
+    session_id: z.string().optional(),
+    to: z.string().optional(),
+    since: z.string().optional(),
+    limit: z.coerce.number().optional(),
+    project_id: z.string().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { space, session_id, to, since, limit, project_id } = args;
+  const result = readDigest({ space, session_id, to, since, limit, project_id });
+  return {
+    content: [{ type: "text", text: JSON.stringify(result) }],
   };
 });
 
@@ -934,18 +952,33 @@ server.registerTool("get_reaction_summary", {
 // ---- Lock Tools ----
 
 server.registerTool("acquire_lock", {
-  description: "Acquire an advisory or exclusive lock on a resource. Returns conflict info if another agent holds the lock.",
+  description: "Acquire an advisory or exclusive lock on a resource. Returns conflict info if another agent holds the lock. On conflict, auto-DMs the holding agent.",
   inputSchema: {
     resource_type: z.string(),
     resource_id: z.string(),
     lock_type: z.enum(["advisory", "exclusive"]).optional(),
     expiry_ms: z.coerce.number().optional(),
     from: z.string().optional(),
+    auto_dm: z.coerce.boolean().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const { resource_type, resource_id, lock_type, expiry_ms, from: fromParam } = args;
+  const { resource_type, resource_id, lock_type, expiry_ms, from: fromParam, auto_dm } = args;
   const agent = resolveIdentity(fromParam);
   const result = acquireLock(resource_type, resource_id, agent, lock_type ?? "advisory", expiry_ms);
+
+  if (!result.acquired && result.held_by && auto_dm !== false) {
+    try {
+      sendMessage({
+        from: agent,
+        to: result.held_by,
+        content: `Lock conflict: I (@${agent}) tried to acquire ${lock_type ?? "advisory"} lock on \`${resource_type}/${resource_id}\` but you hold it. If you no longer need it, release it with \`release_lock\`.`,
+        priority: "high",
+      });
+    } catch {
+      // DM failure must not break the lock response
+    }
+  }
+
   return { content: [{ type: "text", text: JSON.stringify(result) }] };
 });
 
@@ -1289,7 +1322,7 @@ server.registerTool("describe_tools", {
     get_reactions: "Get all reactions for a message. Required: message_id",
     get_reaction_summary: "Get emoji counts + agent lists for a message. Required: message_id",
     // Lock tools
-    acquire_lock: "Acquire advisory/exclusive lock on a resource. Required: resource_type, resource_id. Optional: lock_type?(advisory|exclusive), expiry_ms?, from?",
+    acquire_lock: "Acquire advisory/exclusive lock on a resource. On conflict, auto-DMs the holding agent. Required: resource_type, resource_id. Optional: lock_type?(advisory|exclusive), expiry_ms?, from?, auto_dm?(default true)",
     release_lock: "Release lock held by agent. Required: resource_type, resource_id. Optional: from?",
     check_lock: "Check if resource is locked and who holds it. Required: resource_type, resource_id",
     list_locks: "List active locks. Optional: resource_type?, agent_id?",
