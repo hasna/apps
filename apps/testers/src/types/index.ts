@@ -566,6 +566,85 @@ export class ScheduleNotFoundError extends Error {
   }
 }
 
+// ─── Scanner Types ────────────────────────────────────────────────────────────
+
+export type ScanIssueType = "console_error" | "network_error" | "broken_link" | "performance";
+export type ScanIssueSeverity = "critical" | "high" | "medium" | "low";
+export type ScanIssueStatus = "open" | "resolved" | "regressed";
+
+/** A single issue found during a page scan. */
+export interface ScanIssue {
+  type: ScanIssueType;
+  severity: ScanIssueSeverity;
+  pageUrl: string;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
+/** Result from running one scanner against one or more pages. */
+export interface ScanResult {
+  url: string;
+  pages: string[];
+  scannedAt: string;
+  durationMs: number;
+  issues: ScanIssue[];
+}
+
+/** Persisted scan issue record (with deduplication fields). */
+export interface PersistedScanIssue {
+  id: string;
+  fingerprint: string;
+  type: ScanIssueType;
+  severity: ScanIssueSeverity;
+  pageUrl: string;
+  message: string;
+  detail: Record<string, unknown> | null;
+  status: ScanIssueStatus;
+  occurrenceCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  resolvedAt: string | null;
+  todoTaskId: string | null;
+  projectId: string | null;
+}
+
+/** DB row for scan_issues table. */
+export interface ScanIssueRow {
+  id: string;
+  fingerprint: string;
+  type: string;
+  severity: string;
+  page_url: string;
+  message: string;
+  detail: string | null;
+  status: string;
+  occurrence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolved_at: string | null;
+  todo_task_id: string | null;
+  project_id: string | null;
+}
+
+export function scanIssueFromRow(row: ScanIssueRow): PersistedScanIssue {
+  return {
+    id: row.id,
+    fingerprint: row.fingerprint,
+    type: row.type as ScanIssueType,
+    severity: row.severity as ScanIssueSeverity,
+    pageUrl: row.page_url,
+    message: row.message,
+    detail: row.detail ? JSON.parse(row.detail) : null,
+    status: row.status as ScanIssueStatus,
+    occurrenceCount: row.occurrence_count,
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+    resolvedAt: row.resolved_at,
+    todoTaskId: row.todo_task_id,
+    projectId: row.project_id,
+  };
+}
+
 export class FlowNotFoundError extends Error {
   constructor(id: string) {
     super(`Flow not found: ${id}`);

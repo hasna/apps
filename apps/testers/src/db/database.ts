@@ -243,6 +243,31 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE runs ADD COLUMN is_baseline INTEGER NOT NULL DEFAULT 0;
   `,
+
+  // Migration 12: Scan issues table for page health monitoring
+  `
+  CREATE TABLE IF NOT EXISTS scan_issues (
+    id TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'medium',
+    page_url TEXT NOT NULL,
+    message TEXT NOT NULL,
+    detail TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    todo_task_id TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_scan_issues_fingerprint ON scan_issues(fingerprint);
+  CREATE INDEX IF NOT EXISTS idx_scan_issues_status ON scan_issues(status);
+  CREATE INDEX IF NOT EXISTS idx_scan_issues_type ON scan_issues(type);
+  CREATE INDEX IF NOT EXISTS idx_scan_issues_project ON scan_issues(project_id);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -310,6 +335,7 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM runs");
   database.exec("DELETE FROM scenarios");
   database.exec("DELETE FROM agents");
+  database.exec("DELETE FROM scan_issues");
   database.exec("DELETE FROM projects");
 }
 

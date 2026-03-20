@@ -2542,6 +2542,168 @@ agentCmd
     }
   });
 
+// ─── testers scan ───────────────────────────────────────────────────────────
+
+const scanCmd = program.command("scan").description("Scan a running app for runtime issues");
+
+const SCAN_COMMON_OPTIONS = (cmd: ReturnType<typeof scanCmd.command>) =>
+  cmd
+    .option("--project <id>", "Project ID for issue tracking")
+    .option("--headed", "Run browser in headed mode", false)
+    .option("--timeout <ms>", "Navigation timeout per page in ms", "15000")
+    .option("--json", "Output results as JSON", false);
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("console <url>")
+    .description("Collect JS/React console errors and uncaught exceptions")
+    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+).action(async (url: string, opts) => {
+  try {
+    const { scanConsoleErrors } = await import("../lib/scanners/console.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const result = await scanConsoleErrors({ url, pages: opts.page, headed: opts.headed, timeoutMs: parseInt(opts.timeout) });
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    printScanResult(result, opts.json);
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("network <url>")
+    .description("Detect failed API calls, 5xx, 404s, CORS errors")
+    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+).action(async (url: string, opts) => {
+  try {
+    const { scanNetworkErrors } = await import("../lib/scanners/network.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const result = await scanNetworkErrors({ url, pages: opts.page, headed: opts.headed, timeoutMs: parseInt(opts.timeout) });
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    printScanResult(result, opts.json);
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("links <url>")
+    .description("Crawl app and find broken links / 404s")
+    .option("--max-pages <n>", "Max pages to crawl", "30")
+).action(async (url: string, opts) => {
+  try {
+    const { scanBrokenLinks } = await import("../lib/scanners/links.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const result = await scanBrokenLinks({ url, maxPages: parseInt(opts.maxPages), headed: opts.headed, timeoutMs: parseInt(opts.timeout) });
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    printScanResult(result, opts.json);
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("perf <url>")
+    .description("Measure page load time, LCP, DOMContentLoaded")
+    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option("--lcp-threshold <ms>", "LCP threshold in ms (default 2500)", "2500")
+    .option("--load-threshold <ms>", "Load time threshold in ms (default 5000)", "5000")
+).action(async (url: string, opts) => {
+  try {
+    const { scanPerformance } = await import("../lib/scanners/performance.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const result = await scanPerformance({
+      url, pages: opts.page, headed: opts.headed, timeoutMs: parseInt(opts.timeout),
+      thresholds: { lcpMs: parseInt(opts.lcpThreshold), loadTimeMs: parseInt(opts.loadThreshold) },
+    });
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    printScanResult(result, opts.json);
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("all <url>")
+    .description("Run all scanners: console, network, links, performance")
+    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option("--max-pages <n>", "Max pages for link crawl", "20")
+    .option("--skip <scanner>", "Skip a scanner: console|network|links|perf (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+).action(async (url: string, opts) => {
+  try {
+    const { runHealthScan } = await import("../lib/health-scan.js");
+    const skip = new Set(opts.skip as string[]);
+    const scanners = (["console", "network", "links", "performance"] as const).filter(
+      (s) => !skip.has(s) && !skip.has(s === "performance" ? "perf" : s)
+    );
+    log(chalk.bold(`  Health scan: ${url}`));
+    log(chalk.dim(`  Scanners: ${scanners.join(", ")}`));
+    log("");
+    const summary = await runHealthScan({
+      url, pages: opts.page, projectId: opts.project,
+      scanners, maxPages: parseInt(opts.maxPages),
+      headed: opts.headed, timeoutMs: parseInt(opts.timeout),
+    });
+    if (opts.json) { log(JSON.stringify(summary, null, 2)); return; }
+    log(chalk.bold("  Results"));
+    log(chalk.dim(`  ${"─".repeat(50)}`));
+    log(`  Total issues:    ${chalk.bold(String(summary.totalIssues))}`);
+    log(`  New issues:      ${summary.newIssues > 0 ? chalk.red(String(summary.newIssues)) : chalk.green("0")}`);
+    log(`  Regressed:       ${summary.regressedIssues > 0 ? chalk.yellow(String(summary.regressedIssues)) : chalk.green("0")}`);
+    log(`  Known (skipped): ${chalk.dim(String(summary.existingIssues))}`);
+    log(`  Duration:        ${(summary.durationMs / 1000).toFixed(1)}s`);
+    log("");
+    for (const result of summary.results) {
+      if (result.issues.length > 0) printScanResult(result, false);
+    }
+    if (summary.newIssues + summary.regressedIssues > 0) process.exit(1);
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+scanCmd
+  .command("issues")
+  .description("List tracked scan issues")
+  .option("--status <status>", "Filter by status: open|resolved|regressed")
+  .option("--type <type>", "Filter by type: console_error|network_error|broken_link|performance")
+  .option("--project <id>", "Filter by project ID")
+  .option("--limit <n>", "Max results", "50")
+  .action((opts) => {
+    try {
+      const { listScanIssues } = require("../db/scan-issues.js");
+      const issues = listScanIssues({ status: opts.status, type: opts.type, projectId: opts.project, limit: parseInt(opts.limit) });
+      if (issues.length === 0) { log(chalk.dim("No scan issues found.")); return; }
+      for (const i of issues) {
+        const statusColor = i.status === "open" ? chalk.red : i.status === "regressed" ? chalk.yellow : chalk.green;
+        log(`  ${statusColor(i.status.padEnd(10))} ${chalk.cyan(i.type.padEnd(16))} ${chalk.bold(i.severity.padEnd(8))} ${i.message.slice(0, 60)} ${chalk.dim(i.pageUrl)}`);
+      }
+    } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  });
+
+scanCmd
+  .command("resolve <id>")
+  .description("Mark a scan issue as resolved")
+  .action((id: string) => {
+    try {
+      const { resolveScanIssue } = require("../db/scan-issues.js");
+      const ok = resolveScanIssue(id);
+      if (!ok) { logError(chalk.red(`Scan issue not found: ${id}`)); process.exit(1); }
+      log(chalk.green(`Resolved scan issue: ${id}`));
+    } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+  });
+
+function printScanResult(result: { url: string; pages: string[]; issues: { type: string; severity: string; pageUrl: string; message: string }[]; durationMs: number }, asJson: boolean) {
+  if (asJson) { log(JSON.stringify(result, null, 2)); return; }
+  log(chalk.bold(`  ${result.url}`) + chalk.dim(` — ${result.pages.length} page(s) scanned in ${(result.durationMs / 1000).toFixed(1)}s`));
+  if (result.issues.length === 0) {
+    log(chalk.green("  ✓ No issues found"));
+  } else {
+    for (const issue of result.issues) {
+      const sev = issue.severity === "critical" ? chalk.bgRed.white(` ${issue.severity} `) :
+                  issue.severity === "high"     ? chalk.red(issue.severity) :
+                  issue.severity === "medium"   ? chalk.yellow(issue.severity) : chalk.dim(issue.severity);
+      log(`  ${sev}  ${issue.message.slice(0, 80)}`);
+      log(chalk.dim(`          ${issue.pageUrl}`));
+    }
+  }
+  log("");
+}
+
 // ─── testers doctor ─────────────────────────────────────────────────────────
 
 program

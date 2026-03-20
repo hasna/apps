@@ -12,6 +12,7 @@ import { createProject, ensureProject, listProjects } from "../db/projects.js";
 import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
 import { startRunAsync } from "../lib/runner.js";
 import { matchFilesToScenarios } from "../lib/affected.js";
+import { listScanIssues, getScanIssue, resolveScanIssue } from "../db/scan-issues.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
@@ -876,6 +877,172 @@ server.tool(
     } catch (error) {
       return errorResponse(error);
     }
+  },
+);
+
+// ─── 27. scan_console_errors ─────────────────────────────────────────────────
+
+server.tool(
+  "scan_console_errors",
+  "Visit pages headlessly and collect JS/React console errors, uncaught exceptions, and unhandled promise rejections.",
+  {
+    url: z.string().describe("Root URL to scan"),
+    pages: z.array(z.string()).optional().describe("Specific paths to visit (e.g. ['/login', '/dashboard']). Defaults to root URL only."),
+    projectId: z.string().optional().describe("Project ID for deduplication tracking"),
+    headed: z.boolean().optional().describe("Run browser in headed mode"),
+    timeoutMs: z.number().optional().describe("Navigation timeout per page (default 15000)"),
+  },
+  async ({ url, pages, projectId, headed, timeoutMs }) => {
+    try {
+      const { scanConsoleErrors } = await import("../lib/scanners/console.js");
+      const { upsertScanIssue } = await import("../db/scan-issues.js");
+      const result = await scanConsoleErrors({ url, pages, headed, timeoutMs });
+      const deduped = result.issues.map((issue) => {
+        const { outcome } = upsertScanIssue(issue, projectId);
+        return { ...issue, outcome };
+      });
+      return json({ ...result, issues: deduped });
+    } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── 28. scan_network_errors ──────────────────────────────────────────────────
+
+server.tool(
+  "scan_network_errors",
+  "Visit pages and intercept network requests, flagging 5xx errors, 4xx on API routes, CORS failures, and request timeouts.",
+  {
+    url: z.string().describe("Root URL to scan"),
+    pages: z.array(z.string()).optional().describe("Specific paths to visit"),
+    projectId: z.string().optional().describe("Project ID for deduplication tracking"),
+    headed: z.boolean().optional(),
+    timeoutMs: z.number().optional(),
+  },
+  async ({ url, pages, projectId, headed, timeoutMs }) => {
+    try {
+      const { scanNetworkErrors } = await import("../lib/scanners/network.js");
+      const { upsertScanIssue } = await import("../db/scan-issues.js");
+      const result = await scanNetworkErrors({ url, pages, headed, timeoutMs });
+      const deduped = result.issues.map((issue) => {
+        const { outcome } = upsertScanIssue(issue, projectId);
+        return { ...issue, outcome };
+      });
+      return json({ ...result, issues: deduped });
+    } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── 29. scan_broken_links ────────────────────────────────────────────────────
+
+server.tool(
+  "scan_broken_links",
+  "Crawl app from root URL and flag any links that return 404 or fail to load.",
+  {
+    url: z.string().describe("Root URL to crawl from"),
+    maxPages: z.number().optional().describe("Max pages to crawl (default 30)"),
+    projectId: z.string().optional().describe("Project ID for deduplication tracking"),
+    headed: z.boolean().optional(),
+    timeoutMs: z.number().optional(),
+  },
+  async ({ url, maxPages, projectId, headed, timeoutMs }) => {
+    try {
+      const { scanBrokenLinks } = await import("../lib/scanners/links.js");
+      const { upsertScanIssue } = await import("../db/scan-issues.js");
+      const result = await scanBrokenLinks({ url, maxPages, headed, timeoutMs });
+      const deduped = result.issues.map((issue) => {
+        const { outcome } = upsertScanIssue(issue, projectId);
+        return { ...issue, outcome };
+      });
+      return json({ ...result, issues: deduped });
+    } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── 30. scan_performance ────────────────────────────────────────────────────
+
+server.tool(
+  "scan_performance",
+  "Visit pages and measure load time, DOMContentLoaded, and LCP using the Web Performance API. Flags slow pages.",
+  {
+    url: z.string().describe("Root URL to scan"),
+    pages: z.array(z.string()).optional().describe("Specific paths to visit"),
+    projectId: z.string().optional().describe("Project ID for deduplication tracking"),
+    headed: z.boolean().optional(),
+    timeoutMs: z.number().optional(),
+    thresholds: z.object({
+      loadTimeMs: z.number().optional(),
+      domContentLoadedMs: z.number().optional(),
+      lcpMs: z.number().optional(),
+    }).optional().describe("Override default thresholds"),
+  },
+  async ({ url, pages, projectId, headed, timeoutMs, thresholds }) => {
+    try {
+      const { scanPerformance } = await import("../lib/scanners/performance.js");
+      const { upsertScanIssue } = await import("../db/scan-issues.js");
+      const result = await scanPerformance({ url, pages, headed, timeoutMs, thresholds });
+      const deduped = result.issues.map((issue) => {
+        const { outcome } = upsertScanIssue(issue, projectId);
+        return { ...issue, outcome };
+      });
+      return json({ ...result, issues: deduped });
+    } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── 31. run_health_scan ─────────────────────────────────────────────────────
+
+server.tool(
+  "run_health_scan",
+  "Run all scanners (console, network, links, performance) against a URL. Deduplicates issues, creates todo tasks for new/regressed issues, and posts to conversations space.",
+  {
+    url: z.string().describe("URL to scan"),
+    pages: z.array(z.string()).optional().describe("Specific paths to include"),
+    projectId: z.string().optional().describe("Project ID"),
+    scanners: z.array(z.enum(["console", "network", "links", "performance"])).optional().describe("Which scanners to run (default: console, network, links)"),
+    maxPages: z.number().optional().describe("Max pages for link crawl (default 20)"),
+    headed: z.boolean().optional(),
+    timeoutMs: z.number().optional(),
+  },
+  async ({ url, pages, projectId, scanners, maxPages, headed, timeoutMs }) => {
+    try {
+      const { runHealthScan } = await import("../lib/health-scan.js");
+      const summary = await runHealthScan({ url, pages, projectId, scanners, maxPages, headed, timeoutMs });
+      return json(summary);
+    } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── 32. list_scan_issues ────────────────────────────────────────────────────
+
+server.tool(
+  "list_scan_issues",
+  "List persisted scan issues with optional filters.",
+  {
+    status: z.enum(["open", "resolved", "regressed"]).optional(),
+    type: z.enum(["console_error", "network_error", "broken_link", "performance"]).optional(),
+    projectId: z.string().optional(),
+    limit: z.number().optional(),
+  },
+  async ({ status, type, projectId, limit }) => {
+    try {
+      const issues = listScanIssues({ status, type, projectId, limit });
+      return json({ items: issues, total: issues.length });
+    } catch (e) { return errorResponse(e); }
+  },
+);
+
+// ─── 33. resolve_scan_issue ──────────────────────────────────────────────────
+
+server.tool(
+  "resolve_scan_issue",
+  "Mark a scan issue as resolved.",
+  { id: z.string().describe("Scan issue ID") },
+  async ({ id }) => {
+    try {
+      const ok = resolveScanIssue(id);
+      if (!ok) return errorResponse(notFoundErr(id, "ScanIssue"));
+      return json({ resolved: true, id });
+    } catch (e) { return errorResponse(e); }
   },
 );
 
