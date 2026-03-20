@@ -10,6 +10,7 @@ export {
   deleteContact,
   searchContacts,
   mergeContacts,
+  listRecentContacts,
 } from "./db/contacts.js";
 
 // Companies
@@ -46,6 +47,19 @@ export {
   deleteRelationship,
 } from "./db/relationships.js";
 
+// Groups
+export {
+  createGroup,
+  getGroup,
+  listGroups,
+  updateGroup,
+  deleteGroup,
+  addContactToGroup,
+  removeContactFromGroup,
+  listContactsInGroup,
+  listGroupsForContact,
+} from "./db/groups.js";
+
 // Activity
 export { logActivity, listActivity, getActivity } from "./db/activity.js";
 
@@ -58,6 +72,7 @@ export type {
   SocialPlatform,
   RelationshipType,
   ContactSource,
+  PreferredContactMethod,
   // Sub-entities
   Email,
   Phone,
@@ -72,6 +87,8 @@ export type {
   ContactRelationship,
   ActivityLog,
   Webhook,
+  Group,
+  CreateGroupInput,
   // Inputs
   CreateEmailInput,
   CreatePhoneInput,

@@ -1,5 +1,14 @@
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
+export type PreferredContactMethod =
+  | "email"
+  | "phone"
+  | "telegram"
+  | "whatsapp"
+  | "linkedin"
+  | "twitter"
+  | "other";
+
 export type EmailType = "work" | "personal" | "other";
 
 export type PhoneType = "mobile" | "work" | "home" | "fax" | "whatsapp" | "other";
@@ -130,6 +139,9 @@ export interface Contact {
   job_title: string | null;
   source: ContactSource;
   custom_fields: Record<string, unknown>;
+  last_contacted_at: string | null;
+  website: string | null;
+  preferred_contact_method: PreferredContactMethod | null;
   created_at: string;
   updated_at: string;
 }
@@ -155,6 +167,9 @@ export interface CreateContactInput {
   job_title?: string;
   source?: ContactSource;
   custom_fields?: Record<string, unknown>;
+  last_contacted_at?: string;
+  website?: string;
+  preferred_contact_method?: PreferredContactMethod;
   emails?: CreateEmailInput[];
   phones?: CreatePhoneInput[];
   addresses?: CreateAddressInput[];
@@ -174,6 +189,9 @@ export interface UpdateContactInput {
   job_title?: string | null;
   source?: ContactSource;
   custom_fields?: Record<string, unknown>;
+  last_contacted_at?: string | null;
+  website?: string | null;
+  preferred_contact_method?: PreferredContactMethod | null;
 }
 
 export interface ContactListOptions {
@@ -357,6 +375,9 @@ export interface ContactRow {
   job_title: string | null;
   source: string;
   custom_fields: string;
+  last_contacted_at: string | null;
+  website: string | null;
+  preferred_contact_method: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -455,6 +476,22 @@ export interface WebhookRow {
   secret: string | null;
   active: number;
   created_at: string;
+}
+
+// ─── Group ────────────────────────────────────────────────────────────────────
+
+export interface Group {
+  id: string;
+  name: string;
+  description: string | null;
+  member_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateGroupInput {
+  name: string;
+  description?: string;
 }
 
 // ─── Errors ───────────────────────────────────────────────────────────────────

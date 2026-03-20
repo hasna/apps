@@ -1,12 +1,13 @@
-import React from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
+import { ThemeProvider } from "@/components/theme-provider";
+import App from "@/App";
 import "./index.css";
 
-const root = document.getElementById("root");
-if (!root) throw new Error("No root element");
-createRoot(root).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <ThemeProvider defaultTheme="light" storageKey="contacts-dashboard-theme">
+      <App />
+    </ThemeProvider>
+  </StrictMode>
 );

@@ -8,6 +8,7 @@ import {
   deleteContact,
   listContacts,
   searchContacts,
+  listRecentContacts,
 } from "../db/contacts.js";
 import {
   createCompany,
@@ -18,14 +19,26 @@ import {
   createTag,
   listTags,
 } from "../db/tags.js";
+import {
+  createGroup,
+  getGroup,
+  listGroups,
+  addContactToGroup,
+  removeContactFromGroup,
+  listContactsInGroup,
+} from "../db/groups.js";
+import { getDatabase, getDbPath } from "../db/database.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
+import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
+import { readConfig } from "../lib/config.js";
 import type {
   CreateContactInput,
   ContactWithDetails,
+  Group,
 } from "../types/index.js";
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { extname } from "path";
+import { readFileSync, writeFileSync, existsSync, copyFileSync, statSync, mkdirSync, readdirSync } from "fs";
+import { extname, join } from "path";
 
 // ─── Table rendering ─────────────────────────────────────────────────────────
 
@@ -166,10 +179,74 @@ program
 
 // ─── contacts add ─────────────────────────────────────────────────────────────
 
+function collect(val: string, prev: string[]): string[] {
+  return [...prev, val];
+}
+
 program
   .command("add")
-  .description("Add a new contact interactively")
-  .action(async () => {
+  .description("Add a new contact (interactive or via flags)")
+  .option("--first <name>", "First name")
+  .option("--last <name>", "Last name")
+  .option("--display <name>", "Display name")
+  .option("--email <email>", "Email address")
+  .option("--phone <phone>", "Phone number")
+  .option("--title <title>", "Job title")
+  .option("--company <id>", "Company ID")
+  .option("--tag <tag>", "Tag name (can specify multiple times)", collect, [] as string[])
+  .option("--note <text>", "Notes")
+  .option("--website <url>", "Website URL")
+  .action(async (opts: {
+    first?: string;
+    last?: string;
+    display?: string;
+    email?: string;
+    phone?: string;
+    title?: string;
+    company?: string;
+    tag: string[];
+    note?: string;
+    website?: string;
+  }) => {
+    // Non-interactive path: if --first/--last or --display provided, skip prompts
+    if (opts.first || opts.last || opts.display) {
+      const firstName = opts.first ?? "";
+      const lastName = opts.last ?? "";
+      const displayName = opts.display ?? (`${firstName} ${lastName}`.trim() || "Unnamed Contact");
+
+      const input: CreateContactInput = {
+        display_name: displayName,
+        first_name: firstName || undefined,
+        last_name: lastName || undefined,
+        job_title: opts.title || undefined,
+        notes: opts.note || undefined,
+        website: opts.website || undefined,
+        company_id: opts.company || undefined,
+        emails: opts.email ? [{ address: opts.email, type: "work", is_primary: true }] : undefined,
+        phones: opts.phone ? [{ number: opts.phone, type: "mobile", is_primary: true }] : undefined,
+      };
+
+      const contact = createContact(input);
+
+      // Apply tags by name if provided
+      if (opts.tag.length > 0) {
+        const db = getDatabase();
+        const allTags = listTags();
+        for (const tagName of opts.tag) {
+          const tag = allTags.find(t => t.name === tagName);
+          if (tag) {
+            db.run(`INSERT OR IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)`, [contact.id, tag.id]);
+          } else {
+            console.log(chalk.yellow(`  ! Tag not found: ${tagName} (skipped)`));
+          }
+        }
+      }
+
+      console.log(chalk.green(`\n✓ Contact created: ${contact.display_name} (${contact.id})\n`));
+      return;
+    }
+
+    // Interactive path
     console.log(chalk.bold.blue("\nAdd New Contact\n"));
 
     const display_name = await prompt("Display name (required):");
@@ -246,10 +323,60 @@ program
 
 program
   .command("edit <id>")
-  .description("Edit a contact interactively")
-  .action(async (id: string) => {
+  .description("Edit a contact (interactive or via flags)")
+  .option("--first <name>", "First name")
+  .option("--last <name>", "Last name")
+  .option("--display <name>", "Display name")
+  .option("--email <email>", "Email address")
+  .option("--phone <phone>", "Phone number")
+  .option("--title <title>", "Job title")
+  .option("--note <text>", "Notes")
+  .option("--website <url>", "Website URL")
+  .action(async (id: string, opts: {
+    first?: string;
+    last?: string;
+    display?: string;
+    email?: string;
+    phone?: string;
+    title?: string;
+    note?: string;
+    website?: string;
+  }) => {
     const contact = getContact(id);
 
+    // Non-interactive path: flags provided
+    const hasFlags = opts.first || opts.last || opts.display || opts.email ||
+      opts.phone || opts.title || opts.note || opts.website;
+
+    if (hasFlags) {
+      const updates: Record<string, string> = {};
+      if (opts.first !== undefined) updates.first_name = opts.first;
+      if (opts.last !== undefined) updates.last_name = opts.last;
+      if (opts.display !== undefined) updates.display_name = opts.display;
+      if (opts.title !== undefined) updates.job_title = opts.title;
+      if (opts.note !== undefined) updates.notes = opts.note;
+      if (opts.website !== undefined) updates.website = opts.website;
+
+      const updated = updateContact(id, updates);
+
+      // Add new email/phone if provided
+      if (opts.email) {
+        const db = getDatabase();
+        const { uuid } = await import("../db/database.js");
+        db.run(`INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, NULL, ?, 'work', 0)`, [uuid(), id, opts.email]);
+      }
+      if (opts.phone) {
+        const db = getDatabase();
+        const { uuid } = await import("../db/database.js");
+        db.run(`INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, NULL, ?, NULL, 'mobile', 0)`, [uuid(), id, opts.phone]);
+      }
+
+      console.log(chalk.green(`\n✓ Contact updated: ${updated.display_name}\n`));
+      formatContact(getContact(id));
+      return;
+    }
+
+    // Interactive path
     console.log(chalk.bold.blue(`\nEditing: ${contact.display_name}\n`));
     console.log(chalk.gray("Press Enter to keep the current value.\n"));
 
@@ -257,6 +384,7 @@ program
     const first_name = await prompt(`First name [${contact.first_name}]:`);
     const last_name = await prompt(`Last name [${contact.last_name}]:`);
     const job_title = await prompt(`Job title [${contact.job_title ?? ""}]:`);
+    const website = await prompt(`Website [${contact.website ?? ""}]:`);
     const notes = await prompt(`Notes [${contact.notes ? contact.notes.slice(0, 30) + "..." : ""}]:`);
 
     const updates: Record<string, string> = {};
@@ -264,6 +392,7 @@ program
     if (first_name) updates.first_name = first_name;
     if (last_name) updates.last_name = last_name;
     if (job_title) updates.job_title = job_title;
+    if (website) updates.website = website;
     if (notes) updates.notes = notes;
 
     if (Object.keys(updates).length === 0) {
@@ -562,6 +691,345 @@ ${chalk.bold("Available tools (24 total):")}
   ${chalk.gray("Rels:     ")}${chalk.white("add_relationship  list_relationships  delete_relationship")}
   ${chalk.gray("I/O:      ")}${chalk.white("import_contacts  export_contacts  get_stats")}
 `);
+  });
+
+// ─── contacts open ────────────────────────────────────────────────────────────
+
+program
+  .command("open [id]")
+  .description("Open the web dashboard in browser")
+  .action(async (id?: string) => {
+    const port = 19428;
+    const url = id ? `http://localhost:${port}/#/contacts/${id}` : `http://localhost:${port}`;
+    const platform = process.platform;
+    const opener = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
+    const proc = Bun.spawn([opener, url], { stdio: ["ignore", "ignore", "ignore"] });
+    await proc.exited;
+    console.log(chalk.green(`Opening ${url}`));
+  });
+
+// ─── contacts recent ──────────────────────────────────────────────────────────
+
+program
+  .command("recent")
+  .description("Show recently added or modified contacts")
+  .option("--limit <n>", "Number to show", "10")
+  .action((opts: { limit: string }) => {
+    const limit = parseInt(opts.limit, 10);
+    const contacts = listRecentContacts(limit);
+
+    if (contacts.length === 0) {
+      console.log(chalk.gray("\nNo contacts found.\n"));
+      return;
+    }
+
+    console.log();
+    const rows = contacts.map((c) => ({
+      Name: c.display_name,
+      Company: c.company?.name ?? "",
+      Email: c.emails?.[0]?.address ?? "",
+      Phone: c.phones?.[0]?.number ?? "",
+      Updated: c.updated_at.slice(0, 10),
+    }));
+
+    renderTable(["Name", "Company", "Email", "Phone", "Updated"], rows);
+    console.log(chalk.gray(`\n${contacts.length} recent contact(s)\n`));
+  });
+
+// ─── contacts dupe ────────────────────────────────────────────────────────────
+
+program
+  .command("dupe")
+  .description("Find potential duplicate contacts")
+  .action(() => {
+    const db = getDatabase();
+
+    const emailDupes = findEmailDuplicates(db);
+    const nameDupes = findNameDuplicates(db);
+
+    let total = 0;
+
+    if (emailDupes.length > 0) {
+      console.log(chalk.bold.yellow("\nDuplicate Emails:\n"));
+      for (const group of emailDupes) {
+        console.log(`  ${chalk.cyan(group.email)}`);
+        for (const cid of group.contact_ids) {
+          try {
+            const c = getContact(cid);
+            console.log(`    ${chalk.gray(cid)}  ${c.display_name}`);
+          } catch {
+            console.log(`    ${chalk.gray(cid)}  (not found)`);
+          }
+        }
+        console.log();
+        total++;
+      }
+    }
+
+    if (nameDupes.length > 0) {
+      console.log(chalk.bold.yellow("Similar Names:\n"));
+      for (const pair of nameDupes) {
+        try {
+          const a = getContact(pair.contact_ids[0]);
+          const b = getContact(pair.contact_ids[1]);
+          console.log(`  ${chalk.magenta(a.display_name)}  ↔  ${chalk.magenta(b.display_name)}  ${chalk.gray(`(distance: ${pair.similarity})`)}`);
+          console.log(`    ${chalk.gray(pair.contact_ids[0])}  vs  ${chalk.gray(pair.contact_ids[1])}`);
+          console.log();
+          total++;
+        } catch {
+          // skip if either contact not found
+        }
+      }
+    }
+
+    if (total === 0) {
+      console.log(chalk.green("\nNo duplicates found.\n"));
+    } else {
+      console.log(chalk.gray(`Found ${total} duplicate group(s). Use 'contacts show <id>' to inspect and 'contacts delete <id>' to clean up.\n`));
+    }
+  });
+
+// ─── contacts log ─────────────────────────────────────────────────────────────
+
+program
+  .command("log <id>")
+  .description("Log a contact interaction (sets last_contacted_at)")
+  .option("--note <text>", "Note to append")
+  .option("--date <YYYY-MM-DD>", "Date of contact (default: today)")
+  .action((id: string, opts: { note?: string; date?: string }) => {
+    const contact = getContact(id);
+    const date = opts.date ?? new Date().toISOString().slice(0, 10);
+
+    const updates: Record<string, string> = {
+      last_contacted_at: date,
+    };
+
+    if (opts.note) {
+      const existing = contact.notes ?? "";
+      const separator = existing ? "\n" : "";
+      updates.notes = `${existing}${separator}[${date}] ${opts.note}`;
+    }
+
+    const updated = updateContact(id, updates);
+    console.log(chalk.green(`\n✓ Logged contact with ${updated.display_name} on ${date}\n`));
+    if (opts.note) {
+      console.log(chalk.gray(`  Note: ${opts.note}\n`));
+    }
+  });
+
+// ─── contacts groups ──────────────────────────────────────────────────────────
+
+const groupsCmd = program
+  .command("groups")
+  .description("Manage contact groups")
+  .action(() => {
+    const db = getDatabase();
+    const groups = listGroups(db);
+    if (groups.length === 0) {
+      console.log(chalk.gray("\nNo groups found.\n"));
+      return;
+    }
+    console.log();
+    const rows = groups.map((g: Group) => ({
+      ID: g.id,
+      Name: g.name,
+      Description: g.description ?? "",
+      Members: String(g.member_count ?? 0),
+    }));
+    renderTable(["ID", "Name", "Description", "Members"], rows);
+    console.log(chalk.gray(`\n${groups.length} group(s)\n`));
+  });
+
+groupsCmd
+  .command("add")
+  .description("Create a new group")
+  .option("--name <name>", "Group name (required)")
+  .option("--description <desc>", "Description")
+  .action(async (opts: { name?: string; description?: string }) => {
+    const db = getDatabase();
+    let name = opts.name;
+    if (!name) {
+      name = await prompt("Group name (required):");
+      if (!name) {
+        console.error(chalk.red("Group name is required."));
+        process.exit(1);
+      }
+    }
+    const group = createGroup(db, { name, description: opts.description });
+    console.log(chalk.green(`\n✓ Group created: ${group.name} (${group.id})\n`));
+  });
+
+groupsCmd
+  .command("show <id>")
+  .description("Show group details with members")
+  .action((id: string) => {
+    const db = getDatabase();
+    const group = getGroup(db, id);
+    if (!group) {
+      console.error(chalk.red(`\nGroup not found: ${id}\n`));
+      process.exit(1);
+    }
+    console.log("\n" + chalk.bold.blue("━━━ Group: ") + chalk.bold(group.name) + chalk.bold.blue(" ━━━"));
+    if (group.description) console.log(chalk.gray("  Description: ") + group.description);
+    console.log(chalk.gray(`  ID: ${group.id}`));
+    console.log();
+
+    const memberIds = listContactsInGroup(db, id);
+    if (memberIds.length === 0) {
+      console.log(chalk.gray("  No members.\n"));
+      return;
+    }
+
+    console.log(chalk.yellow(`  Members (${memberIds.length}):\n`));
+    for (const cid of memberIds) {
+      try {
+        const c = getContact(cid);
+        console.log(`    ${chalk.bold(c.display_name)}  ${chalk.gray(cid)}`);
+      } catch {
+        console.log(`    ${chalk.gray(cid)}  (not found)`);
+      }
+    }
+    console.log();
+  });
+
+groupsCmd
+  .command("add-member <group-id> <contact-id>")
+  .description("Add a contact to a group")
+  .action((groupId: string, contactId: string) => {
+    const db = getDatabase();
+    const group = getGroup(db, groupId);
+    if (!group) {
+      console.error(chalk.red(`\nGroup not found: ${groupId}\n`));
+      process.exit(1);
+    }
+    const contact = getContact(contactId);
+    addContactToGroup(db, contactId, groupId);
+    console.log(chalk.green(`\n✓ Added ${contact.display_name} to group ${group.name}\n`));
+  });
+
+groupsCmd
+  .command("remove-member <group-id> <contact-id>")
+  .description("Remove a contact from a group")
+  .action((groupId: string, contactId: string) => {
+    const db = getDatabase();
+    const group = getGroup(db, groupId);
+    if (!group) {
+      console.error(chalk.red(`\nGroup not found: ${groupId}\n`));
+      process.exit(1);
+    }
+    const contact = getContact(contactId);
+    removeContactFromGroup(db, contactId, groupId);
+    console.log(chalk.green(`\n✓ Removed ${contact.display_name} from group ${group.name}\n`));
+  });
+
+// ─── contacts init ────────────────────────────────────────────────────────────
+
+program
+  .command("init")
+  .description("Show setup info, stats, and configuration")
+  .action(() => {
+    const dbPath = getDbPath();
+    const config = readConfig();
+
+    console.log(chalk.bold.blue("\n━━━ Open Contacts Setup ━━━\n"));
+    console.log(chalk.gray("  DB path:    ") + (config.db_path ?? dbPath));
+    console.log();
+
+    try {
+      const db = getDatabase();
+      const contactCount = (db.query("SELECT COUNT(*) as n FROM contacts").get() as { n: number }).n;
+      const companyCount = (db.query("SELECT COUNT(*) as n FROM companies").get() as { n: number }).n;
+      const tagCount = (db.query("SELECT COUNT(*) as n FROM tags").get() as { n: number }).n;
+
+      console.log(chalk.bold("  Stats:"));
+      console.log(`    ${chalk.cyan(String(contactCount))} contacts`);
+      console.log(`    ${chalk.cyan(String(companyCount))} companies`);
+      console.log(`    ${chalk.cyan(String(tagCount))} tags`);
+    } catch {
+      console.log(chalk.gray("  (Database not yet initialized)"));
+    }
+
+    console.log();
+    console.log(chalk.bold("  MCP Setup (Claude Code):"));
+    console.log("    " + chalk.cyan("claude mcp add --transport stdio --scope user contacts -- contacts-mcp"));
+    console.log();
+    console.log(chalk.bold("  Shell Completion (zsh):"));
+    console.log("    " + chalk.cyan("contacts completion zsh > ~/.zsh/completions/_contacts"));
+    console.log("    " + chalk.cyan("contacts completion bash >> ~/.bashrc"));
+    console.log("    " + chalk.cyan("contacts completion fish > ~/.config/fish/completions/contacts.fish"));
+    console.log();
+  });
+
+// ─── contacts backup ──────────────────────────────────────────────────────────
+
+program
+  .command("backup")
+  .description("Backup the contacts database")
+  .option("--output <path>", "Output path")
+  .option("--list", "List existing backups")
+  .action((opts: { output?: string; list?: boolean }) => {
+    const backupDir = join(process.env["HOME"] || "~", ".contacts", "backups");
+
+    if (opts.list) {
+      if (!existsSync(backupDir)) {
+        console.log(chalk.gray("\nNo backups found.\n"));
+        return;
+      }
+      const files = readdirSync(backupDir)
+        .filter((f) => f.endsWith(".db"))
+        .sort()
+        .reverse();
+      if (files.length === 0) {
+        console.log(chalk.gray("\nNo backups found.\n"));
+        return;
+      }
+      console.log(chalk.bold.blue("\nExisting Backups:\n"));
+      for (const f of files) {
+        const filePath = join(backupDir, f);
+        const size = statSync(filePath).size;
+        const mtime = statSync(filePath).mtime.toISOString().slice(0, 19).replace("T", " ");
+        console.log(`  ${chalk.cyan(f)}  ${chalk.gray(`${(size / 1024).toFixed(1)} KB  ${mtime}`)}`);
+      }
+      console.log();
+      return;
+    }
+
+    const src = getDbPath();
+    if (!existsSync(src)) {
+      console.error(chalk.red(`\nDatabase not found: ${src}\n`));
+      process.exit(1);
+    }
+
+    mkdirSync(backupDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const dest = opts.output || join(backupDir, `contacts-${ts}.db`);
+    copyFileSync(src, dest);
+    const size = statSync(dest).size;
+    console.log(chalk.green(`\n✓ Backed up to ${dest} (${(size / 1024).toFixed(1)} KB)\n`));
+  });
+
+// ─── contacts completion ──────────────────────────────────────────────────────
+
+program
+  .command("completion <shell>")
+  .description("Generate shell completion script (bash, zsh, fish)")
+  .action((shell: string) => {
+    const commands = [
+      "add", "list", "show", "edit", "delete", "search", "recent", "dupe",
+      "log", "open", "import", "export", "companies", "tags", "groups",
+      "serve", "mcp", "init", "backup", "completion",
+    ];
+    if (shell === "zsh") {
+      console.log(`#compdef contacts\n_contacts() {\n  local commands=(${commands.map(c => `'${c}'`).join(" ")})\n  _describe 'command' commands\n}\n_contacts "$@"`);
+    } else if (shell === "bash") {
+      console.log(`_contacts_completion() {\n  local cur=\${COMP_WORDS[COMP_CWORD]}\n  COMPREPLY=($(compgen -W "${commands.join(" ")}" -- "$cur"))\n}\ncomplete -F _contacts_completion contacts`);
+    } else if (shell === "fish") {
+      for (const c of commands) {
+        console.log(`complete -c contacts -f -a ${c}`);
+      }
+    } else {
+      console.error(chalk.red("Supported shells: bash, zsh, fish"));
+    }
   });
 
 // ─── Parse ────────────────────────────────────────────────────────────────────

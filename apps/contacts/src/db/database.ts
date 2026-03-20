@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-function getDbPath(): string {
+export function getDbPath(): string {
   if (process.env["CONTACTS_DB_PATH"]) return process.env["CONTACTS_DB_PATH"];
   const home = process.env["HOME"] || "~";
   return join(home, ".contacts", "contacts.db");
@@ -169,6 +169,26 @@ const MIGRATIONS = [
   END;
 
   CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY);
+  `,
+
+  `
+  ALTER TABLE contacts ADD COLUMN last_contacted_at TEXT;
+  ALTER TABLE contacts ADD COLUMN website TEXT;
+  ALTER TABLE contacts ADD COLUMN preferred_contact_method TEXT;
+
+  CREATE TABLE IF NOT EXISTS groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS contact_groups (
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (contact_id, group_id)
+  );
   `,
 ];
 

@@ -34,6 +34,7 @@ function rowToContact(row: ContactRow): Contact {
     ...row,
     source: row.source as Contact["source"],
     custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
+    preferred_contact_method: (row.preferred_contact_method ?? null) as Contact["preferred_contact_method"],
   };
 }
 
@@ -151,8 +152,8 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
     ?? (firstName || lastName ? `${firstName} ${lastName}`.trim() : "Unnamed Contact");
 
   d.run(
-    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       firstName,
@@ -166,6 +167,9 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
       input.job_title ?? null,
       input.source ?? "manual",
       JSON.stringify(input.custom_fields ?? {}),
+      input.last_contacted_at ?? null,
+      input.website ?? null,
+      input.preferred_contact_method ?? null,
       timestamp,
       timestamp,
     ]
@@ -255,6 +259,9 @@ export function updateContact(id: string, input: UpdateContactInput, db?: Databa
   if (input.job_title !== undefined) { setClauses.push("job_title = ?"); params.push(input.job_title); }
   if (input.source !== undefined) { setClauses.push("source = ?"); params.push(input.source); }
   if (input.custom_fields !== undefined) { setClauses.push("custom_fields = ?"); params.push(JSON.stringify(input.custom_fields)); }
+  if (input.last_contacted_at !== undefined) { setClauses.push("last_contacted_at = ?"); params.push(input.last_contacted_at); }
+  if (input.website !== undefined) { setClauses.push("website = ?"); params.push(input.website); }
+  if (input.preferred_contact_method !== undefined) { setClauses.push("preferred_contact_method = ?"); params.push(input.preferred_contact_method); }
 
   params.push(id);
   d.run(`UPDATE contacts SET ${setClauses.join(", ")} WHERE id = ?`, params);
@@ -314,6 +321,14 @@ export function searchContacts(query: string, db?: Database): ContactWithDetails
   }
 
   return allRows.map(row => loadContactDetails(d, rowToContact(row)));
+}
+
+export function listRecentContacts(limit: number, db?: Database): ContactWithDetails[] {
+  const d = db || getDatabase();
+  const rows = d.query(
+    `SELECT * FROM contacts ORDER BY updated_at DESC LIMIT ?`
+  ).all(limit) as ContactRow[];
+  return rows.map(row => loadContactDetails(d, rowToContact(row)));
 }
 
 export function mergeContacts(keepId: string, mergeId: string, db?: Database): ContactWithDetails {
