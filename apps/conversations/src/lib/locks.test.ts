@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { acquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, listLocksEnriched, releaseStaleAgentLocks } from "./locks";
+import { acquireLock, tryBulkAcquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, listLocksEnriched, releaseStaleAgentLocks } from "./locks";
 import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -282,5 +282,64 @@ describe("listLocksEnriched", () => {
     acquireLock("space", "offline-room", "offline-agent");
     const locks = listLocksEnriched({ agent_id: "offline-agent" });
     expect(locks[0].agent!.online).toBe(false);
+  });
+});
+
+describe("tryBulkAcquireLock", () => {
+  test("acquires multiple locks atomically", () => {
+    const result = tryBulkAcquireLock([
+      { resource_type: "space", resource_id: "bulk-a" },
+      { resource_type: "space", resource_id: "bulk-b" },
+      { resource_type: "pinned_message", resource_id: "42", lock_type: "exclusive" },
+    ], "bulk-agent");
+
+    expect(result.acquired).toBe(true);
+    expect(result.locks).toHaveLength(3);
+    expect(result.blocked_by).toBeUndefined();
+
+    // Verify all locks exist in DB
+    expect(checkLock("space", "bulk-a")).toBeTruthy();
+    expect(checkLock("space", "bulk-b")).toBeTruthy();
+    expect(checkLock("pinned_message", "42")).toBeTruthy();
+  });
+
+  test("returns failure and no locks when any resource is blocked", () => {
+    // agent-other holds bulk-blocked
+    acquireLock("space", "bulk-blocked", "agent-other");
+
+    const result = tryBulkAcquireLock([
+      { resource_type: "space", resource_id: "bulk-free" },
+      { resource_type: "space", resource_id: "bulk-blocked" },
+    ], "bulk-requester");
+
+    expect(result.acquired).toBe(false);
+    expect(result.locks).toHaveLength(0);
+    expect(result.blocked_by).toEqual({
+      resource_type: "space",
+      resource_id: "bulk-blocked",
+      held_by: "agent-other",
+    });
+
+    // bulk-free must NOT have been acquired (atomicity)
+    expect(checkLock("space", "bulk-free")).toBeNull();
+  });
+
+  test("same agent re-acquiring all owned locks succeeds", () => {
+    acquireLock("space", "bulk-owned-a", "self-agent");
+    acquireLock("space", "bulk-owned-b", "self-agent");
+
+    const result = tryBulkAcquireLock([
+      { resource_type: "space", resource_id: "bulk-owned-a" },
+      { resource_type: "space", resource_id: "bulk-owned-b" },
+    ], "self-agent");
+
+    expect(result.acquired).toBe(true);
+    expect(result.locks).toHaveLength(2);
+  });
+
+  test("empty resources list succeeds with empty locks", () => {
+    const result = tryBulkAcquireLock([], "any-agent");
+    expect(result.acquired).toBe(true);
+    expect(result.locks).toHaveLength(0);
   });
 });

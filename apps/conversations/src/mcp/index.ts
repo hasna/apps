@@ -18,7 +18,7 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { addReaction, removeReaction, getReactions, getReactionSummary } from "../lib/reactions.js";
-import { acquireLock, releaseLock, checkLock, listLocks, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../lib/locks.js";
+import { acquireLock, tryBulkAcquireLock, releaseLock, checkLock, listLocks, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../lib/locks.js";
 import { listHotSessions } from "../lib/hot.js";
 import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../lib/topics.js";
 import { getConversationSummary } from "../lib/summary.js";
@@ -1018,6 +1018,38 @@ server.registerTool("list_locks", {
   return { content: [{ type: "text", text: JSON.stringify(locks) }] };
 });
 
+server.registerTool("bulk_acquire_lock", {
+  description: "Atomically acquire multiple locks at once. All-or-nothing: if any lock is held by another agent, none are acquired. Returns blocked_by info on conflict.",
+  inputSchema: {
+    resources: z.array(z.object({
+      resource_type: z.string(),
+      resource_id: z.string(),
+      lock_type: z.enum(["advisory", "exclusive"]).optional(),
+      expiry_ms: z.coerce.number().optional(),
+    })),
+    from: z.string().optional(),
+    auto_dm: z.coerce.boolean().optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const agent = resolveIdentity(args.from);
+  const result = tryBulkAcquireLock(args.resources, agent);
+
+  if (!result.acquired && result.blocked_by && args.auto_dm !== false) {
+    try {
+      sendMessage({
+        from: agent,
+        to: result.blocked_by.held_by,
+        content: `Bulk lock conflict: I (@${agent}) tried to atomically acquire ${args.resources.length} locks but you hold \`${result.blocked_by.resource_type}/${result.blocked_by.resource_id}\`. Release it when done.`,
+        priority: "high",
+      });
+    } catch {
+      // DM failure must not break the lock response
+    }
+  }
+
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
 server.registerTool("clean_expired_locks", {
   description: "Clean up expired locks and auto-release locks held by agents whose heartbeat has been stale for >30 minutes. Returns counts of removed locks.",
   inputSchema: {},
@@ -1254,7 +1286,7 @@ server.registerTool("search_tools", {
     "get_topics", "trending_topics",
     "get_session_activity", "hot_sessions",
     "add_reaction", "remove_reaction", "get_reactions", "get_reaction_summary",
-    "acquire_lock", "release_lock", "check_lock", "list_locks", "clean_expired_locks",
+    "acquire_lock", "bulk_acquire_lock", "release_lock", "check_lock", "list_locks", "clean_expired_locks",
     "get_thread_replies",
     "set_focus", "get_focus", "unfocus",
     "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
@@ -1324,6 +1356,7 @@ server.registerTool("describe_tools", {
     get_reaction_summary: "Get emoji counts + agent lists for a message. Required: message_id",
     // Lock tools
     acquire_lock: "Acquire advisory/exclusive lock on a resource. On conflict, auto-DMs the holding agent. Required: resource_type, resource_id. Optional: lock_type?(advisory|exclusive), expiry_ms?, from?, auto_dm?(default true)",
+    bulk_acquire_lock: "Atomically acquire multiple locks (all-or-nothing). Required: resources[]{resource_type,resource_id,lock_type?,expiry_ms?}. Optional: from?, auto_dm?(default true). Returns blocked_by on conflict.",
     release_lock: "Release lock held by agent. Required: resource_type, resource_id. Optional: from?",
     check_lock: "Check if resource is locked and who holds it. Required: resource_type, resource_id",
     list_locks: "List active locks enriched with agent presence + time context. Optional: resource_type?, agent_id?",

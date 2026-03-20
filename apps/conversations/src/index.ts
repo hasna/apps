@@ -102,6 +102,7 @@ export {
 
 export {
   acquireLock,
+  tryBulkAcquireLock,
   releaseLock,
   checkLock,
   cleanExpiredLocks,
@@ -110,7 +111,7 @@ export {
   listLocksEnriched,
 } from "./lib/locks.js";
 
-export type { ResourceLock, EnrichedLock } from "./lib/locks.js";
+export type { ResourceLock, EnrichedLock, BulkLockRequest, BulkAcquireResult } from "./lib/locks.js";
 
 export {
   computeHotness,

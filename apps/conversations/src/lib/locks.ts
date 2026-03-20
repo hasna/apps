@@ -9,6 +9,19 @@ export interface ResourceLock {
   expires_at: string;
 }
 
+export interface BulkLockRequest {
+  resource_type: string;
+  resource_id: string;
+  lock_type?: "advisory" | "exclusive";
+  expiry_ms?: number;
+}
+
+export interface BulkAcquireResult {
+  acquired: boolean;
+  locks: ResourceLock[];
+  blocked_by?: { resource_type: string; resource_id: string; held_by: string };
+}
+
 export interface EnrichedLock extends ResourceLock {
   locked_seconds_ago: number;
   expires_in_seconds: number;
@@ -68,6 +81,74 @@ export function acquireLock(
 
     return { acquired: true, lock };
   }).immediate();
+}
+
+export function bulkAcquireLock(
+  resources: BulkLockRequest[],
+  agentId: string
+): BulkAcquireResult {
+  const db = getDb();
+
+  return db.transaction(() => {
+    cleanExpiredLocks();
+    releaseStaleAgentLocks();
+
+    const acquired: ResourceLock[] = [];
+
+    for (const { resource_type, resource_id, lock_type = "advisory", expiry_ms = DEFAULT_LOCK_EXPIRY_MS } of resources) {
+      const existing = db.prepare(`
+        SELECT * FROM resource_locks
+        WHERE resource_type = ? AND resource_id = ? AND lock_type = ?
+      `).get(resource_type, resource_id, lock_type) as ResourceLock | null;
+
+      if (existing && existing.agent_id !== agentId) {
+        // Conflict — abort the entire transaction by throwing (SQLite rolls back)
+        throw { _bulkConflict: true, resource_type, resource_id, held_by: existing.agent_id };
+      }
+
+      const expiresAt = new Date(Date.now() + expiry_ms).toISOString().slice(0, -1);
+
+      if (existing) {
+        // Refresh own lock
+        db.prepare(`
+          UPDATE resource_locks SET expires_at = ?, locked_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+          WHERE resource_type = ? AND resource_id = ? AND lock_type = ?
+        `).run(expiresAt, resource_type, resource_id, lock_type);
+      } else {
+        db.prepare(`
+          INSERT INTO resource_locks (resource_type, resource_id, agent_id, lock_type, locked_at, expires_at)
+          VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?)
+        `).run(resource_type, resource_id, agentId, lock_type, expiresAt);
+      }
+
+      const lock = db.prepare(`
+        SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND lock_type = ?
+      `).get(resource_type, resource_id, lock_type) as ResourceLock;
+      acquired.push(lock);
+    }
+
+    return { acquired: true, locks: acquired };
+  }).immediate() as BulkAcquireResult;
+}
+
+// Wrap bulkAcquireLock to catch conflict throws from the transaction
+export function tryBulkAcquireLock(
+  resources: BulkLockRequest[],
+  agentId: string
+): BulkAcquireResult {
+  try {
+    return bulkAcquireLock(resources, agentId);
+  } catch (err: unknown) {
+    const e = err as Record<string, unknown>;
+    if (e?._bulkConflict) {
+      return {
+        acquired: false,
+        locks: [],
+        blocked_by: { resource_type: e.resource_type as string, resource_id: e.resource_id as string, held_by: e.held_by as string },
+      };
+    }
+    throw err;
+  }
 }
 
 export function releaseLock(
