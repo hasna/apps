@@ -9,6 +9,18 @@ export interface ResourceLock {
   expires_at: string;
 }
 
+export interface EnrichedLock extends ResourceLock {
+  locked_seconds_ago: number;
+  expires_in_seconds: number;
+  agent: {
+    role: string | null;
+    status: string | null;
+    online: boolean;
+    last_seen_at: string | null;
+    project_id: string | null;
+  } | null;
+}
+
 const DEFAULT_LOCK_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const STALE_HEARTBEAT_SECONDS = 30 * 60; // 30 minutes — matches presence conflict threshold
 
@@ -125,4 +137,38 @@ export function listLocks(opts?: { resource_type?: string; agent_id?: string }):
 
   query += " ORDER BY locked_at ASC";
   return db.prepare(query).all(...params) as ResourceLock[];
+}
+
+export function listLocksEnriched(opts?: { resource_type?: string; agent_id?: string }): EnrichedLock[] {
+  const locks = listLocks(opts);
+  const db = getDb();
+  const nowMs = Date.now();
+
+  return locks.map((lock) => {
+    const lockedMs = new Date(lock.locked_at + "Z").getTime();
+    const expiresMs = new Date(lock.expires_at + "Z").getTime();
+
+    const presenceRow = db.prepare(`
+      SELECT role, status, last_seen_at, project_id FROM agent_presence WHERE LOWER(agent) = LOWER(?)
+    `).get(lock.agent_id) as { role: string; status: string; last_seen_at: string; project_id: string | null } | null;
+
+    const agent = presenceRow
+      ? {
+          role: presenceRow.role ?? null,
+          status: presenceRow.status ?? null,
+          online: presenceRow.last_seen_at
+            ? (nowMs - new Date(presenceRow.last_seen_at + "Z").getTime()) < 60_000
+            : false,
+          last_seen_at: presenceRow.last_seen_at ?? null,
+          project_id: presenceRow.project_id ?? null,
+        }
+      : null;
+
+    return {
+      ...lock,
+      locked_seconds_ago: Math.round((nowMs - lockedMs) / 1000),
+      expires_in_seconds: Math.round((expiresMs - nowMs) / 1000),
+      agent,
+    };
+  });
 }

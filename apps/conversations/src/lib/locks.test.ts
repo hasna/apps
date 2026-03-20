@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { acquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, releaseStaleAgentLocks } from "./locks";
+import { acquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, listLocksEnriched, releaseStaleAgentLocks } from "./locks";
 import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -237,5 +237,50 @@ describe("listLocks", () => {
     const agentLocks = listLocks({ agent_id: "agent-1" });
     expect(agentLocks).toHaveLength(1);
     expect(agentLocks[0].agent_id).toBe("agent-1");
+  });
+});
+
+describe("listLocksEnriched", () => {
+  test("includes locked_seconds_ago and expires_in_seconds", () => {
+    acquireLock("space", "enrich-room", "enrich-agent");
+    const locks = listLocksEnriched();
+    expect(locks).toHaveLength(1);
+    expect(typeof locks[0].locked_seconds_ago).toBe("number");
+    expect(locks[0].locked_seconds_ago).toBeGreaterThanOrEqual(0);
+    expect(typeof locks[0].expires_in_seconds).toBe("number");
+    expect(locks[0].expires_in_seconds).toBeGreaterThan(0);
+  });
+
+  test("agent is null when no presence record exists", () => {
+    acquireLock("space", "no-presence-room", "ghost-agent");
+    const locks = listLocksEnriched({ agent_id: "ghost-agent" });
+    expect(locks).toHaveLength(1);
+    expect(locks[0].agent).toBeNull();
+  });
+
+  test("includes agent presence details when available", () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
+      VALUES ('dd', 'known-agent', 'sess', 'engineer', 'busy', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+    `).run();
+    acquireLock("space", "known-room", "known-agent");
+    const locks = listLocksEnriched({ agent_id: "known-agent" });
+    expect(locks).toHaveLength(1);
+    expect(locks[0].agent).not.toBeNull();
+    expect(locks[0].agent!.role).toBe("engineer");
+    expect(locks[0].agent!.status).toBe("busy");
+    expect(locks[0].agent!.online).toBe(true);
+  });
+
+  test("agent.online is false for stale presence", () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT OR REPLACE INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at)
+      VALUES ('ee', 'offline-agent', 'sess', 'agent', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '-120 seconds'))
+    `).run();
+    acquireLock("space", "offline-room", "offline-agent");
+    const locks = listLocksEnriched({ agent_id: "offline-agent" });
+    expect(locks[0].agent!.online).toBe(false);
   });
 });

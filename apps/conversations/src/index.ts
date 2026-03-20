@@ -107,9 +107,10 @@ export {
   cleanExpiredLocks,
   releaseStaleAgentLocks,
   listLocks,
+  listLocksEnriched,
 } from "./lib/locks.js";
 
-export type { ResourceLock } from "./lib/locks.js";
+export type { ResourceLock, EnrichedLock } from "./lib/locks.js";
 
 export {
   computeHotness,
