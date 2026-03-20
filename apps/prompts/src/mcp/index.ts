@@ -177,7 +177,34 @@ server.registerTool(
   async ({ id, vars, agent }) => {
     try {
       const prompt = usePrompt(id)
-      const result = renderTemplate(prompt.body, vars)
+
+      // Auto-fill known agent context variables if agent ID is provided
+      const autoFilled: Record<string, string> = {}
+      if (agent) {
+        // Known variables that can be auto-filled from agent context
+        const CONTEXT_VARS: Record<string, () => string | undefined> = {
+          agent_name: () => agent,
+          agent_id: () => agent,
+          project_id: () => process.env.TODOS_PROJECT_ID || process.env.PROJECT_ID,
+          org_id: () => process.env.ORG_ID,
+          session_id: () => process.env.SESSION_ID,
+          cwd: () => process.cwd(),
+          date: () => new Date().toISOString().split('T')[0],
+          datetime: () => new Date().toISOString(),
+        }
+        for (const [key, getter] of Object.entries(CONTEXT_VARS)) {
+          if (!(key in vars)) {
+            const val = getter()
+            if (val) autoFilled[key] = val
+          }
+        }
+      }
+
+      const mergedVars = { ...autoFilled, ...vars }
+      const result = renderTemplate(prompt.body, mergedVars)
+      if (Object.keys(autoFilled).length > 0) {
+        (result as Record<string, unknown>).auto_filled = autoFilled
+      }
       await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, rendered: result.rendered, agentId: agent })
       return ok(result)
     } catch (e) {
