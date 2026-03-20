@@ -367,6 +367,71 @@ server.registerTool(
   }
 )
 
+// ── prompts_export_as_skills ──────────────────────────────────────────────────
+server.registerTool(
+  "prompts_export_as_skills",
+  {
+    description: "Export prompts as Claude Code SKILL.md files in ~/.claude/skills/ so they become /slug slash commands. Each prompt slug becomes an invocable skill.",
+    inputSchema: {
+      collection: z.string().optional().describe("Only export prompts from this collection"),
+      slugs: z.array(z.string()).optional().describe("Specific prompt slugs to export"),
+      target_dir: z.string().optional().describe("Target skills directory (default: ~/.claude/skills)"),
+      overwrite: z.boolean().optional().describe("Overwrite existing skill files (default: false)"),
+    },
+  },
+  async ({ collection, slugs, target_dir, overwrite }) => {
+    try {
+      const { mkdirSync, writeFileSync, existsSync } = await import("fs")
+      const { join } = await import("path")
+      const { homedir } = await import("os")
+
+      const skillsDir = target_dir ?? join(homedir(), ".claude", "skills")
+      mkdirSync(skillsDir, { recursive: true })
+
+      const filter = collection ? { collection } : {}
+      const allPrompts = listPrompts(filter)
+      const toExport = slugs ? allPrompts.filter(p => slugs.includes(p.slug)) : allPrompts
+
+      const exported: string[] = []
+      const skipped: string[] = []
+
+      for (const prompt of toExport) {
+        const skillDir = join(skillsDir, `skill-${prompt.slug}`)
+        const skillFile = join(skillDir, "SKILL.md")
+
+        if (!overwrite && existsSync(skillFile)) {
+          skipped.push(prompt.slug)
+          continue
+        }
+
+        mkdirSync(skillDir, { recursive: true })
+        const skillContent = [
+          "---",
+          `name: skill-${prompt.slug}`,
+          `description: ${prompt.description || prompt.title}`,
+          "user_invocable: true",
+          "---",
+          "",
+          prompt.body,
+        ].join("\n")
+
+        writeFileSync(skillFile, skillContent, "utf-8")
+        exported.push(prompt.slug)
+      }
+
+      return ok({
+        exported: exported.length,
+        skipped: skipped.length,
+        skills_dir: skillsDir,
+        exported_slugs: exported,
+        message: `Exported ${exported.length} prompt(s) as skills. Use /skill-{slug} to invoke them.`,
+      })
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
 // ── prompts_import_slash_commands ─────────────────────────────────────────────
 server.registerTool(
   "prompts_import_slash_commands",
