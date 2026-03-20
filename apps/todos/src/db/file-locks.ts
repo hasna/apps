@@ -21,10 +21,6 @@ export interface LockFileInput {
   ttl_seconds?: number;
 }
 
-function isExpired(lock: FileLock): boolean {
-  return new Date(lock.expires_at) <= new Date();
-}
-
 function expiresAt(ttlSeconds: number): string {
   return new Date(Date.now() + ttlSeconds * 1000).toISOString();
 }
