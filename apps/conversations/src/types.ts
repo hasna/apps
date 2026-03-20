@@ -121,6 +121,7 @@ export interface ReadMessagesOptions {
   include_reply_counts?: boolean;
   mentions_only?: string;
   latest?: number;
+  offset?: number;
 }
 
 export interface SearchMessagesOptions {

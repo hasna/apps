@@ -95,6 +95,7 @@ server.registerTool("read_messages", {
     include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message (adds one extra query)"),
     mentions_only: z.string().optional().describe("Only return messages that @mention this agent"),
     latest: z.coerce.number().optional().describe("Return the N most recent unread messages, newest first. Shorthand for order:desc + limit:N."),
+    offset: z.coerce.number().optional().describe("Skip first N messages for pagination (use with limit)"),
   },
 }, async (args: Record<string, any>) => {
   const agent = resolveIdentity(args.from);
@@ -108,7 +109,7 @@ server.registerTool("read_messages", {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify(messages) }],
+    content: [{ type: "text", text: JSON.stringify({ messages, count: messages.length, offset: args.offset ?? 0 }) }],
   };
 });
 

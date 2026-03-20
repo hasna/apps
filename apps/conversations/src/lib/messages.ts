@@ -194,8 +194,9 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
       : 20;
   const order = isLatest ? "DESC" : (opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC");
 
+  const resolvedOffset = opts.offset && opts.offset > 0 ? Math.floor(opts.offset) : 0;
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${resolvedLimit}`
+    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${resolvedLimit} OFFSET ${resolvedOffset}`
   ).all(...params) as Record<string, unknown>[];
 
   let messages = rows.map(parseMessage);
