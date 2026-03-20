@@ -1,0 +1,117 @@
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
+import { addTaskFile, listTaskFiles, findTasksByFile, listActiveFiles, removeTaskFile } from "./task-files.js";
+import { createTask, updateTask, getTask } from "./tasks.js";
+import { createProject } from "./projects.js";
+import { registerAgent } from "./agents.js";
+
+beforeEach(() => {
+  process.env["TODOS_DB_PATH"] = ":memory:";
+  resetDatabase();
+  getDatabase();
+});
+
+afterEach(() => {
+  closeDatabase();
+  resetDatabase();
+});
+
+describe("addTaskFile", () => {
+  it("links a file to a task", () => {
+    const task = createTask({ title: "T1" });
+    const file = addTaskFile({ task_id: task.id, path: "src/foo.ts" });
+    expect(file.task_id).toBe(task.id);
+    expect(file.path).toBe("src/foo.ts");
+    expect(file.status).toBe("active");
+  });
+
+  it("upserts on same task+path", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts", status: "planned" });
+    const updated = addTaskFile({ task_id: task.id, path: "src/foo.ts", status: "modified" });
+    expect(updated.status).toBe("modified");
+    expect(listTaskFiles(task.id)).toHaveLength(1);
+  });
+});
+
+describe("findTasksByFile", () => {
+  it("returns tasks linked to a path", () => {
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    addTaskFile({ task_id: t1.id, path: "src/foo.ts" });
+    addTaskFile({ task_id: t2.id, path: "src/foo.ts" });
+    addTaskFile({ task_id: t1.id, path: "src/bar.ts" });
+    const results = findTasksByFile("src/foo.ts");
+    expect(results).toHaveLength(2);
+  });
+
+  it("excludes removed files", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts", status: "removed" });
+    expect(findTasksByFile("src/foo.ts")).toHaveLength(0);
+  });
+});
+
+describe("listActiveFiles", () => {
+  it("returns files for in-progress tasks only", () => {
+    const t1 = createTask({ title: "Active task" });
+    const t2 = createTask({ title: "Pending task" });
+    updateTask(t1.id, { status: "in_progress", version: getTask(t1.id)!.version });
+    addTaskFile({ task_id: t1.id, path: "src/active.ts" });
+    addTaskFile({ task_id: t2.id, path: "src/pending.ts" });
+
+    const files = listActiveFiles();
+    expect(files).toHaveLength(1);
+    expect(files[0]!.path).toBe("src/active.ts");
+    expect(files[0]!.task_status).toBe("in_progress");
+  });
+
+  it("excludes removed files", () => {
+    const task = createTask({ title: "T1" });
+    updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts", status: "removed" });
+    expect(listActiveFiles()).toHaveLength(0);
+  });
+
+  it("includes agent name when agent assigned", () => {
+    const agent = registerAgent({ name: "test-agent" });
+    const task = createTask({ title: "T1", assigned_to: agent.id });
+    updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts" });
+
+    const files = listActiveFiles();
+    expect(files[0]!.agent_name).toBe("test-agent");
+  });
+
+  it("returns empty when no in-progress tasks have files", () => {
+    const task = createTask({ title: "T1" });
+    updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
+    // No files added
+    expect(listActiveFiles()).toHaveLength(0);
+  });
+
+  it("includes task metadata", () => {
+    const task = createTask({ title: "Work on login" });
+    updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
+    addTaskFile({ task_id: task.id, path: "src/auth.ts" });
+
+    const files = listActiveFiles();
+    expect(files[0]!.task_title).toBe("Work on login");
+    expect(files[0]!.task_id).toBe(task.id);
+  });
+});
+
+describe("removeTaskFile", () => {
+  it("removes a file link", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts" });
+    const removed = removeTaskFile(task.id, "src/foo.ts");
+    expect(removed).toBe(true);
+    expect(listTaskFiles(task.id)).toHaveLength(0);
+  });
+
+  it("returns false for nonexistent file", () => {
+    const task = createTask({ title: "T1" });
+    expect(removeTaskFile(task.id, "nonexistent.ts")).toBe(false);
+  });
+});

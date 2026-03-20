@@ -93,6 +93,48 @@ export function removeTaskFile(taskId: string, path: string, db?: Database): boo
   return result.changes > 0;
 }
 
+export interface ActiveFileInfo {
+  path: string;
+  file_status: TaskFile["status"];
+  file_agent_id: string | null;
+  note: string | null;
+  updated_at: string;
+  task_id: string;
+  task_short_id: string | null;
+  task_title: string;
+  task_status: string;
+  task_locked_by: string | null;
+  task_locked_at: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+}
+
+export function listActiveFiles(db?: Database): ActiveFileInfo[] {
+  const d = db || getDatabase();
+  return d.query(`
+    SELECT
+      tf.path,
+      tf.status AS file_status,
+      tf.agent_id AS file_agent_id,
+      tf.note,
+      tf.updated_at,
+      t.id AS task_id,
+      t.short_id AS task_short_id,
+      t.title AS task_title,
+      t.status AS task_status,
+      t.locked_by AS task_locked_by,
+      t.locked_at AS task_locked_at,
+      a.id AS agent_id,
+      a.name AS agent_name
+    FROM task_files tf
+    JOIN tasks t ON tf.task_id = t.id
+    LEFT JOIN agents a ON (tf.agent_id = a.id OR (tf.agent_id IS NULL AND t.assigned_to = a.id))
+    WHERE t.status = 'in_progress'
+      AND tf.status != 'removed'
+    ORDER BY tf.updated_at DESC
+  `).all() as ActiveFileInfo[];
+}
+
 export function bulkAddTaskFiles(
   taskId: string,
   paths: string[],

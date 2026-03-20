@@ -3065,6 +3065,56 @@ server.tool(
 );
 }
 
+if (shouldRegisterTool("list_active_files")) {
+server.tool(
+  "list_active_files",
+  "Return all files linked to in-progress tasks across all agents — the bird's-eye view of what's being worked on right now.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+  },
+  async ({ project_id }) => {
+    try {
+      const { listActiveFiles } = require("../db/task-files.js") as any;
+      let files: any[] = listActiveFiles();
+      if (project_id) {
+        const pid = resolveId(project_id, "projects");
+        // We need tasks with that project_id — re-query with filter
+        const db = require("../db/database.js").getDatabase();
+        files = db.query(`
+          SELECT
+            tf.path,
+            tf.status AS file_status,
+            tf.agent_id AS file_agent_id,
+            tf.note,
+            tf.updated_at,
+            t.id AS task_id,
+            t.short_id AS task_short_id,
+            t.title AS task_title,
+            t.status AS task_status,
+            t.locked_by AS task_locked_by,
+            t.locked_at AS task_locked_at,
+            a.id AS agent_id,
+            a.name AS agent_name
+          FROM task_files tf
+          JOIN tasks t ON tf.task_id = t.id
+          LEFT JOIN agents a ON (tf.agent_id = a.id OR (tf.agent_id IS NULL AND t.assigned_to = a.id))
+          WHERE t.status = 'in_progress'
+            AND tf.status != 'removed'
+            AND t.project_id = ?
+          ORDER BY tf.updated_at DESC
+        `).all(pid);
+      }
+      if (files.length === 0) {
+        return { content: [{ type: "text" as const, text: "No active files — no in-progress tasks have linked files." }] };
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify(files, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === HANDOFFS ===
 
 if (shouldRegisterTool("create_handoff")) {
