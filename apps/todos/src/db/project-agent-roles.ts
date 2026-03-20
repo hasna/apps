@@ -1,7 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "./database.js";
-import type { Agent } from "../types/index.js";
-import { listAgents, getOrgChart } from "./agents.js";
+import { getOrgChart } from "./agents.js";
 import type { OrgNode } from "./agents.js";
 
 export interface ProjectAgentRole {
