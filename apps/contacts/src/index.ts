@@ -17,6 +17,7 @@ export {
   archiveContact,
   unarchiveContact,
   autoLinkContactToCompany,
+  listColdContacts,
 } from "./db/contacts.js";
 
 // Companies
@@ -106,6 +107,26 @@ export {
   listPendingApplications,
 } from "./db/applications.js";
 
+// Deals
+export {
+  createDeal,
+  getDeal,
+  listDeals,
+  updateDeal,
+  deleteDeal,
+  getDealsByStage,
+} from "./db/deals.js";
+export type { ListDealsOptions } from "./db/deals.js";
+
+// Events
+export {
+  logEvent,
+  getEvent,
+  listEvents,
+  deleteEvent,
+} from "./db/events.js";
+export type { ListEventsOptions } from "./db/events.js";
+
 // Notes
 export { addNote, listNotes, deleteNote, getNote, listNotesForContactAtCompany } from "./db/notes.js";
 
@@ -129,9 +150,35 @@ export {
 // Activity
 export { logActivity, listActivity, getActivity } from "./db/activity.js";
 
+// Upcoming items
+export { getUpcomingItems } from "./lib/upcoming.js";
+export type { UpcomingItem, UpcomingItemType } from "./lib/upcoming.js";
+
+// Network stats
+export { getNetworkStats } from "./lib/stats.js";
+export type { NetworkStats } from "./lib/stats.js";
+
+// Contact audit
+export { auditContact, listContactAudit } from "./lib/audit.js";
+export type { AuditResult } from "./lib/audit.js";
+
+// Timeline
+export { getContactTimeline } from "./lib/timeline.js";
+export type { TimelineItem, TimelineItemType } from "./lib/timeline.js";
+
+// Brief
+export { generateBrief } from "./lib/brief.js";
+
+// Apple Contacts
+export { exportFromApple, importToApple } from "./lib/apple-contacts.js";
+
 // Connector layer
 export { runConnector, readConnectorTokens, getConnectorTokenPath, ConnectorNotInstalledError, ConnectorAuthError } from "./lib/connector.js";
 export type { ConnectorRunOptions } from "./lib/connector.js";
+
+// Import / Export
+export { importContacts, importFromCsv, parseLinkedIn } from "./lib/import.js";
+export { exportContacts } from "./lib/export.js";
 
 // Gmail import
 export { extractContactsFromGmail, parseAddressHeader, domainToCompany, parseName } from "./lib/gmail-import.js";
@@ -167,6 +214,8 @@ export type {
   ApplicationType,
   ApplicationStatus,
   ApplicationMethod,
+  DealStage,
+  EventType,
   // Sub-entities
   Email,
   Phone,
@@ -190,6 +239,8 @@ export type {
   EscalationRule,
   ContactTask,
   Application,
+  Deal,
+  ContactEvent,
   // Inputs
   CreateEmailInput,
   CreatePhoneInput,
@@ -219,6 +270,9 @@ export type {
   CreateApplicationInput,
   UpdateApplicationInput,
   ListApplicationsOptions,
+  CreateDealInput,
+  UpdateDealInput,
+  CreateEventInput,
   // Raw rows
   ContactRow,
   CompanyRow,

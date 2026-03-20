@@ -309,6 +309,40 @@ const MIGRATIONS = [
 
   ALTER TABLE contact_notes ADD COLUMN company_id TEXT REFERENCES companies(id) ON DELETE SET NULL;
   `,
+
+  `
+  ALTER TABLE contacts ADD COLUMN do_not_contact INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE contacts ADD COLUMN priority INTEGER NOT NULL DEFAULT 3 CHECK(priority BETWEEN 1 AND 5);
+  ALTER TABLE contacts ADD COLUMN timezone TEXT;
+
+  CREATE TABLE IF NOT EXISTS deals (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    contact_id TEXT REFERENCES contacts(id) ON DELETE SET NULL,
+    company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    stage TEXT NOT NULL DEFAULT 'lead' CHECK(stage IN ('lead','qualified','proposal','negotiation','won','lost','cancelled')),
+    value_usd REAL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    close_date TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'meeting' CHECK(type IN ('meeting','call','lunch','email','demo','conference','intro','other')),
+    event_date TEXT NOT NULL,
+    duration_min INTEGER,
+    contact_ids TEXT NOT NULL DEFAULT '[]',
+    company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    notes TEXT,
+    outcome TEXT,
+    deal_id TEXT REFERENCES deals(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
 ];
 
 let _db: Database | null = null;

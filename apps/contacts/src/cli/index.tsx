@@ -1610,6 +1610,498 @@ program
     console.log(chalk.gray('  Try: contacts workload ' + alina.id));
   });
 
+// ─── contacts brief ───────────────────────────────────────────────────────────
+
+program
+  .command('brief <id>')
+  .description('Generate pre-meeting briefing for a contact')
+  .action(async (id: string) => {
+    const { generateBrief } = await import('../lib/brief.js');
+    const db = getDatabase();
+    const brief = generateBrief(id, db);
+    console.log(brief);
+  });
+
+// ─── contacts cold ────────────────────────────────────────────────────────────
+
+program
+  .command('cold')
+  .description("Show contacts you haven't reached out to recently")
+  .option('--days <n>', 'Days threshold', '30')
+  .action(async (opts: { days: string }) => {
+    const { listColdContacts } = await import('../db/contacts.js');
+    const db = getDatabase();
+    const contacts = listColdContacts(parseInt(opts.days, 10), db);
+    if (!contacts.length) {
+      console.log(chalk.green('\nNo cold contacts!\n'));
+      return;
+    }
+    console.log();
+    const rows = contacts.map((c: { display_name: string; company?: { name: string } | null; last_contacted_at?: string | null; days_cold?: number | null }) => {
+      const daysCold = c.days_cold ?? null;
+      const lastContact = c.last_contacted_at ? c.last_contacted_at.slice(0, 10) : 'never';
+      const dayStr = daysCold === null ? chalk.red('never') : daysCold > 60 ? chalk.red(String(daysCold) + 'd') : chalk.yellow(String(daysCold) + 'd');
+      return {
+        Name: c.display_name,
+        Company: c.company?.name ?? '',
+        'Last Contact': lastContact,
+        'Days Cold': dayStr,
+      };
+    });
+    renderTable(['Name', 'Company', 'Last Contact', 'Days Cold'], rows);
+    console.log(chalk.gray(`\n${contacts.length} cold contact(s) (${opts.days}+ days)\n`));
+  });
+
+// ─── contacts upcoming ────────────────────────────────────────────────────────
+
+program
+  .command('upcoming')
+  .option('--days <n>', 'Days ahead to show', '7')
+  .description('Show upcoming follow-ups, birthdays, and deadlines')
+  .action(async (opts: { days: string }) => {
+    const { getUpcomingItems } = await import('../lib/upcoming.js');
+    const db = getDatabase();
+    const items = getUpcomingItems(parseInt(opts.days, 10), db);
+    if (!items.length) {
+      console.log(chalk.green('\nNothing upcoming!\n'));
+      return;
+    }
+    console.log();
+    const iconMap: Record<string, string> = {
+      follow_up: '📅',
+      birthday: '🎂',
+      task_deadline: '⚠️',
+      application_followup: '📋',
+      vendor_followup: '💼',
+    };
+    for (const item of items) {
+      const icon = iconMap[item.type as string] ?? '•';
+      const urgencyColor = item.urgency === 'overdue' ? chalk.red : item.urgency === 'today' ? chalk.yellow : chalk.white;
+      console.log(`  ${icon}  ${urgencyColor(item.date?.slice(0, 10) ?? '')}  ${chalk.bold(item.title ?? '')}  ${chalk.gray(item.type ?? '')}`);
+    }
+    console.log(chalk.gray(`\n${items.length} upcoming item(s) in next ${opts.days} days\n`));
+  });
+
+// ─── contacts stats ───────────────────────────────────────────────────────────
+
+program
+  .command('stats')
+  .description('Network health dashboard')
+  .action(async () => {
+    const { getNetworkStats } = await import('../lib/stats.js');
+    const db = getDatabase();
+    const stats = getNetworkStats(db) as unknown as Record<string, unknown>;
+    console.log(chalk.bold.blue('\n━━━ Network Health Dashboard ━━━\n'));
+
+    const size = stats['network_size'] as Record<string, number> | undefined;
+    if (size) {
+      console.log(chalk.bold('  Network Size:'));
+      console.log(`    ${chalk.cyan(String(size['contacts'] ?? 0))} contacts   ${chalk.cyan(String(size['companies'] ?? 0))} companies   ${chalk.cyan(String(size['tags'] ?? 0))} tags`);
+    }
+
+    const cold = stats['cold_contacts'] as Record<string, number> | undefined;
+    if (cold) {
+      console.log(chalk.bold('\n  Cold Contacts:'));
+      const c30 = cold['30d'] ?? 0;
+      const c60 = cold['60d'] ?? 0;
+      const cnever = cold['never'] ?? 0;
+      console.log(`    ${c30 > 5 ? chalk.red(String(c30)) : c30 > 0 ? chalk.yellow(String(c30)) : chalk.green(String(c30))} not contacted in 30d`);
+      console.log(`    ${c60 > 5 ? chalk.red(String(c60)) : c60 > 0 ? chalk.yellow(String(c60)) : chalk.green(String(c60))} not contacted in 60d`);
+      console.log(`    ${cnever > 5 ? chalk.red(String(cnever)) : cnever > 0 ? chalk.yellow(String(cnever)) : chalk.green(String(cnever))} never contacted`);
+    }
+
+    const action = stats['action_required'] as Record<string, number> | undefined;
+    if (action) {
+      console.log(chalk.bold('\n  Action Required:'));
+      const overdue = action['overdue_tasks'] ?? 0;
+      const pending = action['pending_applications'] ?? 0;
+      const missing = action['missing_invoices'] ?? 0;
+      const upcoming = action['upcoming_7d'] ?? 0;
+      console.log(`    ${overdue > 0 ? chalk.red(String(overdue)) : chalk.green('0')} overdue tasks`);
+      console.log(`    ${pending > 0 ? chalk.yellow(String(pending)) : chalk.green('0')} pending applications`);
+      console.log(`    ${missing > 0 ? chalk.yellow(String(missing)) : chalk.green('0')} missing invoices`);
+      console.log(`    ${upcoming > 0 ? chalk.yellow(String(upcoming)) : chalk.green('0')} upcoming in 7d`);
+    }
+
+    const pipeline = stats['pipeline_value_usd'] as number | undefined;
+    if (pipeline !== undefined) {
+      console.log(chalk.bold('\n  Deal Pipeline:'));
+      console.log(`    ${chalk.cyan('$' + pipeline.toLocaleString())} active pipeline`);
+    }
+    console.log();
+  });
+
+// ─── contacts audit ───────────────────────────────────────────────────────────
+
+program
+  .command('audit')
+  .description('Score contacts for data completeness')
+  .option('--limit <n>', 'Number to show', '20')
+  .action(async (opts: { limit: string }) => {
+    const { listContactAudit } = await import('../lib/audit.js');
+    const db = getDatabase();
+    const results = (await listContactAudit(db)).slice(0, parseInt(opts.limit, 10));
+    if (!results.length) {
+      console.log(chalk.gray('\nNo contacts found.\n'));
+      return;
+    }
+    console.log();
+    for (const r of results) {
+      const score = (r as { score: number }).score;
+      const name = (r as { display_name: string }).display_name;
+      const missing = (r as { missing_fields?: string[] }).missing_fields ?? [];
+      const filled = Math.round(score / 10);
+      const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(10 - filled));
+      const scoreColor = score < 40 ? chalk.red : score < 70 ? chalk.yellow : chalk.green;
+      console.log(`  ${bar} ${scoreColor(String(score).padStart(3) + '%')}  ${chalk.bold(name)}  ${chalk.gray(missing.join(', '))}`);
+    }
+    console.log(chalk.gray(`\n${results.length} contact(s) shown (sorted by completeness ascending)\n`));
+  });
+
+// ─── contacts deals ───────────────────────────────────────────────────────────
+
+const dealsCmd = program.command('deals').description('Manage deals and opportunities');
+
+dealsCmd
+  .command('list')
+  .description('List deals')
+  .option('--stage <s>', 'Filter by stage')
+  .action(async (opts: { stage?: string }) => {
+    const { listDeals } = await import('../db/deals.js');
+    const db = getDatabase();
+    const deals = listDeals({ stage: opts.stage as import('../types/index.js').DealStage | undefined }, db);
+    if (!(deals as unknown[]).length) {
+      console.log(chalk.gray('\nNo deals found.\n'));
+      return;
+    }
+    console.log();
+    renderTable(
+      ['Title', 'Stage', 'Value', 'Close Date', 'Contact'],
+      (deals as Array<{ title: string; stage: string; value_usd?: number | null; close_date?: string | null; contact_id?: string | null }>).map(d => ({
+        Title: d.title,
+        Stage: d.stage,
+        Value: d.value_usd ? '$' + d.value_usd.toLocaleString() : '',
+        'Close Date': d.close_date ? d.close_date.slice(0, 10) : '',
+        Contact: d.contact_id ?? '',
+      }))
+    );
+    console.log(chalk.gray(`\n${(deals as unknown[]).length} deal(s)\n`));
+  });
+
+dealsCmd
+  .command('add')
+  .description('Add a new deal')
+  .option('--title <title>', 'Deal title (required)')
+  .option('--stage <stage>', 'Stage: prospecting|qualified|proposal|negotiation|won|lost', 'prospecting')
+  .option('--value <usd>', 'Value in USD')
+  .option('--contact <id>', 'Contact ID')
+  .option('--company <id>', 'Company ID')
+  .option('--close-date <date>', 'Expected close date (YYYY-MM-DD)')
+  .option('--notes <text>', 'Notes')
+  .action(async (opts: { title?: string; stage?: string; value?: string; contact?: string; company?: string; closeDate?: string; notes?: string }) => {
+    const { createDeal } = await import('../db/deals.js');
+    const db = getDatabase();
+    let title = opts.title;
+    if (!title) {
+      title = await prompt('Deal title (required):');
+      if (!title) { console.error(chalk.red('Title is required.')); process.exit(1); }
+    }
+    const deal = createDeal({
+      title,
+      stage: opts.stage as import('../types/index.js').DealStage | undefined,
+      value_usd: opts.value ? parseFloat(opts.value) : undefined,
+      contact_id: opts.contact,
+      company_id: opts.company,
+      close_date: opts.closeDate,
+      notes: opts.notes,
+    }, db);
+    console.log(chalk.green(`\n✓ Deal created: ${(deal as { title: string }).title} (${(deal as { id: string }).id})\n`));
+  });
+
+dealsCmd
+  .command('show <id>')
+  .description('Show deal details')
+  .action(async (id: string) => {
+    const { getDeal } = await import('../db/deals.js');
+    const db = getDatabase();
+    const deal = getDeal(id, db) as unknown as Record<string, unknown>;
+    console.log();
+    for (const [k, v] of Object.entries(deal)) {
+      if (v !== null && v !== undefined) console.log(`  ${chalk.gray(k.padEnd(15))} ${v}`);
+    }
+    console.log();
+  });
+
+dealsCmd
+  .command('won <id>')
+  .description('Mark a deal as won')
+  .action(async (id: string) => {
+    const { updateDeal } = await import('../db/deals.js');
+    const db = getDatabase();
+    const deal = updateDeal(id, { stage: 'won' }, db) as { title: string };
+    console.log(chalk.green(`\n✓ Deal won: ${deal.title}\n`));
+  });
+
+dealsCmd
+  .command('lost <id>')
+  .description('Mark a deal as lost')
+  .action(async (id: string) => {
+    const { updateDeal } = await import('../db/deals.js');
+    const db = getDatabase();
+    const deal = updateDeal(id, { stage: 'lost' }, db) as { title: string };
+    console.log(chalk.yellow(`\nDeal lost: ${deal.title}\n`));
+  });
+
+// ─── contacts events ──────────────────────────────────────────────────────────
+
+const eventsCmd = program.command('events').description('Log meetings and interactions');
+
+eventsCmd
+  .command('log')
+  .description('Log an event/meeting')
+  .option('--title <title>', 'Event title (required)')
+  .option('--type <type>', 'Type: meeting|call|email|lunch|conference|demo|other', 'meeting')
+  .option('--date <date>', 'Date (YYYY-MM-DD, default today)')
+  .option('--contact <id>', 'Contact ID (can repeat)', collect, [] as string[])
+  .option('--duration <min>', 'Duration in minutes')
+  .option('--notes <text>', 'Notes')
+  .option('--outcome <text>', 'Outcome')
+  .action(async (opts: { title?: string; type?: string; date?: string; contact: string[]; duration?: string; notes?: string; outcome?: string }) => {
+    const { logEvent } = await import('../db/events.js');
+    const db = getDatabase();
+    let title = opts.title;
+    if (!title) {
+      title = await prompt('Event title (required):');
+      if (!title) { console.error(chalk.red('Title is required.')); process.exit(1); }
+    }
+    const eventDate = opts.date ?? new Date().toISOString().slice(0, 10);
+    const event = logEvent({
+      title,
+      type: opts.type as import('../types/index.js').EventType | undefined,
+      event_date: eventDate,
+      duration_min: opts.duration ? parseInt(opts.duration, 10) : undefined,
+      contact_ids: opts.contact.length ? opts.contact : undefined,
+      notes: opts.notes,
+      outcome: opts.outcome,
+    }, db);
+    console.log(chalk.green(`\n✓ Event logged: ${(event as { title: string }).title} on ${eventDate}\n`));
+  });
+
+eventsCmd
+  .command('list [contact-id]')
+  .description('List events, optionally for a specific contact')
+  .action(async (contactId: string | undefined) => {
+    const { listEvents } = await import('../db/events.js');
+    const db = getDatabase();
+    const events = listEvents({ contact_id: contactId }, db) as Array<{ title: string; type: string; event_date: string; duration_min?: number | null; notes?: string | null }>;
+    if (!events.length) {
+      console.log(chalk.gray('\nNo events found.\n'));
+      return;
+    }
+    console.log();
+    renderTable(
+      ['Title', 'Type', 'Date', 'Duration'],
+      events.map(e => ({
+        Title: e.title,
+        Type: e.type,
+        Date: e.event_date.slice(0, 10),
+        Duration: e.duration_min ? `${e.duration_min}m` : '',
+      }))
+    );
+    console.log(chalk.gray(`\n${events.length} event(s)\n`));
+  });
+
+// ─── contacts timeline ────────────────────────────────────────────────────────
+
+program
+  .command('timeline <id>')
+  .description('Full chronological activity history for a contact')
+  .option('--limit <n>', 'Items to show', '20')
+  .action(async (id: string, opts: { limit: string }) => {
+    const { getContactTimeline } = await import('../lib/timeline.js');
+    const db = getDatabase();
+    const items = getContactTimeline(id, parseInt(opts.limit, 10), db);
+    if (!items.length) {
+      console.log(chalk.gray('\nNo timeline items found.\n'));
+      return;
+    }
+    const contact = getContact(id);
+    console.log(chalk.bold(`\nTimeline: ${contact.display_name}\n`));
+    const iconMap: Record<string, string> = {
+      note: '📝',
+      event: '📅',
+      task: '✅',
+      vendor_comm: '📧',
+      interaction: '💬',
+      deal: '💰',
+    };
+    for (const item of items) {
+      const icon = iconMap[item.type] ?? '•';
+      console.log(`  ${icon}  ${chalk.gray(item.date?.slice(0, 10) ?? '')}  ${chalk.bold(item.title)}  ${chalk.gray(item.body ? item.body.slice(0, 60) : '')}`);
+    }
+    console.log();
+  });
+
+// ─── contacts enrich ──────────────────────────────────────────────────────────
+
+program
+  .command('enrich <id>')
+  .description('Auto-fill missing contact data via web search (requires EXA_API_KEY)')
+  .action(async (id: string) => {
+    const contact = getContact(id);
+    const exaKey = process.env['EXA_API_KEY'];
+    if (!exaKey) {
+      console.error(chalk.red('\nSet EXA_API_KEY environment variable to use enrichment.\n'));
+      process.exit(1);
+    }
+    console.log(chalk.blue(`\nSearching for: ${contact.display_name}...\n`));
+    const primaryEmail = contact.emails?.[0]?.address ?? '';
+    const query = `${contact.display_name} ${primaryEmail} site:linkedin.com OR site:twitter.com OR site:github.com`;
+    const res = await fetch('https://api.exa.ai/search', {
+      method: 'POST',
+      headers: { 'x-api-key': exaKey, 'content-type': 'application/json' },
+      body: JSON.stringify({ query, num_results: 5 }),
+    });
+    const data = await res.json() as { results?: Array<{ url?: string; title?: string }> };
+    const results = data.results ?? [];
+    if (!results.length) {
+      console.log(chalk.gray('No results found.\n'));
+      return;
+    }
+    const socialProfiles = contact.social_profiles;
+    const suggestions: Array<{ field: string; value: string }> = [];
+    for (const r of results) {
+      if (r.url?.includes('linkedin.com') && !socialProfiles?.find(s => s.platform === 'linkedin')) suggestions.push({ field: 'linkedin', value: r.url! });
+      if (r.url?.includes('twitter.com') && !socialProfiles?.find(s => s.platform === 'twitter')) suggestions.push({ field: 'twitter', value: r.url! });
+      if (r.url?.includes('github.com') && !socialProfiles?.find(s => s.platform === 'github')) suggestions.push({ field: 'github', value: r.url! });
+    }
+    if (!suggestions.length) {
+      console.log(chalk.green('No new data found to enrich.\n'));
+      return;
+    }
+    console.log(chalk.yellow('Suggestions (review before applying):\n'));
+    for (const s of suggestions) {
+      console.log(`  ${chalk.cyan(s.field.padEnd(10))} ${s.value}`);
+    }
+    console.log(chalk.gray('\nUse `contacts edit <id>` to apply these manually.\n'));
+  });
+
+// ─── contacts remind ──────────────────────────────────────────────────────────
+
+program
+  .command('remind <id>')
+  .option('--in <duration>', 'Duration (e.g. 7d, 2w, 1m)')
+  .option('--on <date>', 'Specific date YYYY-MM-DD')
+  .option('--note <text>', 'Reminder note')
+  .description('Schedule a follow-up reminder')
+  .action(async (id: string, opts: { in?: string; on?: string; note?: string }) => {
+    let date: string;
+    if (opts.on) {
+      date = opts.on;
+    } else if (opts.in) {
+      const raw = opts.in;
+      const n = parseInt(raw, 10);
+      const unit = raw.slice(-1);
+      const ms = unit === 'w' ? n * 7 * 86400000 : unit === 'm' ? n * 30 * 86400000 : n * 86400000;
+      date = new Date(Date.now() + ms).toISOString().slice(0, 10);
+    } else {
+      console.error(chalk.red('Provide --in (e.g. 7d) or --on (YYYY-MM-DD)'));
+      process.exit(1);
+    }
+    const db = getDatabase();
+    updateContact(id, { follow_up_at: date });
+    if (opts.note) {
+      const { addNote } = await import('../db/notes.js');
+      addNote(id, `Reminder (${date}): ${opts.note}`, undefined, db);
+    }
+    const contact = getContact(id);
+    console.log(chalk.green(`\n✓ Reminder set for ${contact.display_name} on ${date}\n`));
+  });
+
+// ─── contacts timeline (update list with status dots) ─────────────────────────
+// (The list command already exists above; we now update it with color status dots)
+
+// ─── contacts tag bulk ────────────────────────────────────────────────────────
+
+const bulkTag = tagsCmd.command('bulk').description('Bulk tag operations');
+
+bulkTag
+  .command('add <tag>')
+  .description('Apply a tag to multiple contacts')
+  .option('--query <q>', 'Apply to all contacts matching search query')
+  .option('--all', 'Apply to all contacts')
+  .option('--contact-ids <ids>', 'Comma-separated contact IDs')
+  .action(async (tag: string, opts: { query?: string; all?: boolean; contactIds?: string }) => {
+    const { addTagToContact: addTag } = await import('../db/tags.js');
+    const { getTagByName: getTagByNameFn } = await import('../db/tags.js');
+    const db = getDatabase();
+    const tagRecord = getTagByNameFn(tag, db);
+    if (!tagRecord) { console.error(chalk.red(`Tag not found: ${tag}`)); process.exit(1); }
+    let contactIds: string[] = [];
+    if (opts.contactIds) contactIds = opts.contactIds.split(',').map(s => s.trim());
+    if (opts.query) {
+      const found = searchContacts(opts.query);
+      contactIds = [...contactIds, ...found.map((c: { id: string }) => c.id)];
+    }
+    if (opts.all) {
+      const all = listContacts({ limit: 10000 });
+      contactIds = [...contactIds, ...all.contacts.map((c: { id: string }) => c.id)];
+    }
+    contactIds = [...new Set(contactIds)];
+    let count = 0;
+    for (const cid of contactIds) {
+      try { addTag(cid, tagRecord.id); count++; } catch { /* skip */ }
+    }
+    console.log(chalk.green(`\n✓ Tagged ${count} contact(s) with #${tagRecord.name}\n`));
+  });
+
+bulkTag
+  .command('remove <tag>')
+  .description('Remove a tag from matching contacts')
+  .option('--query <q>', 'Remove from all contacts matching search query')
+  .option('--contact-ids <ids>', 'Comma-separated contact IDs')
+  .action(async (tag: string, opts: { query?: string; contactIds?: string }) => {
+    const { removeTagFromContact: removeTag } = await import('../db/tags.js');
+    const { getTagByName: getTagByNameFn } = await import('../db/tags.js');
+    const db = getDatabase();
+    const tagRecord = getTagByNameFn(tag, db);
+    if (!tagRecord) { console.error(chalk.red(`Tag not found: ${tag}`)); process.exit(1); }
+    let contactIds: string[] = [];
+    if (opts.contactIds) contactIds = opts.contactIds.split(',').map(s => s.trim());
+    if (opts.query) {
+      const found = searchContacts(opts.query);
+      contactIds = [...contactIds, ...found.map((c: { id: string }) => c.id)];
+    }
+    contactIds = [...new Set(contactIds)];
+    let count = 0;
+    for (const cid of contactIds) {
+      try { removeTag(cid, tagRecord.id); count++; } catch { /* skip */ }
+    }
+    console.log(chalk.green(`\n✓ Removed #${tagRecord.name} from ${count} contact(s)\n`));
+  });
+
+// ─── contacts dnc ─────────────────────────────────────────────────────────────
+
+program
+  .command('dnc <id>')
+  .description('Mark contact as do-not-contact')
+  .option('--remove', 'Remove DNC flag')
+  .option('--reason <text>', 'Reason for DNC')
+  .action(async (id: string, opts: { remove?: boolean; reason?: string }) => {
+    const contact = getContact(id);
+    const db = getDatabase();
+    updateContact(id, { do_not_contact: !opts.remove });
+    if (opts.reason && !opts.remove) {
+      const { addNote } = await import('../db/notes.js');
+      addNote(id, `DNC: ${opts.reason}`, undefined, db);
+    }
+    if (opts.remove) {
+      console.log(chalk.green(`\n✓ DNC flag removed for ${contact.display_name}\n`));
+    } else {
+      console.log(chalk.yellow(`\n⚠ ${contact.display_name} marked as do-not-contact\n`));
+    }
+  });
+
 // ─── Parse ────────────────────────────────────────────────────────────────────
 
 program.parse(process.argv);

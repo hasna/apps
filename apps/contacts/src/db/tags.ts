@@ -119,6 +119,9 @@ export function listContactsByTag(tagId: string, db?: Database): Contact[] {
     follow_up_at: r.follow_up_at ?? null,
     archived: !!r.archived,
     project_id: r.project_id ?? null,
+    do_not_contact: !!r.do_not_contact,
+    priority: r.priority ?? 3,
+    timezone: r.timezone ?? null,
   }));
 }
 

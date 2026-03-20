@@ -124,6 +124,25 @@ import {
   updateApplication,
   listFollowUpDue as getFollowUpDueApplications,
 } from "../db/applications.js";
+// New imports for v0.4.0 features — parallel agent creates these files
+import { generateBrief } from "../lib/brief.js";
+import { listColdContacts } from "../db/contacts.js";
+import { getUpcomingItems } from "../lib/upcoming.js";
+import { getNetworkStats } from "../lib/stats.js";
+import { listContactAudit } from "../lib/audit.js";
+import {
+  createDeal,
+  getDeal,
+  listDeals,
+  updateDeal,
+  deleteDeal,
+} from "../db/deals.js";
+import {
+  logEvent,
+  listEvents,
+  deleteEvent,
+} from "../db/events.js";
+import { getContactTimeline } from "../lib/timeline.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -481,12 +500,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "export_contacts",
-      description: "Export contacts to CSV, vCard (.vcf), or JSON format. Optionally specify contact_ids to export a subset; omit to export all contacts.",
+      description: "Export contacts to CSV, vCard (.vcf), or JSON format. Optionally specify contact_ids to export a subset; omit to export all contacts. Use updated_since to export only contacts updated after a date.",
       inputSchema: {
         type: "object",
         properties: {
           format: { type: "string", enum: ["json", "csv", "vcf"] },
           contact_ids: { type: "array", items: { type: "string" }, description: "Specific contact IDs to export (omit for all)" },
+          updated_since: { type: "string", description: "ISO 8601 date — only export contacts updated/contacted after this date" },
         },
         required: ["format"],
       },
@@ -1278,6 +1298,229 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["company_id"],
       },
     },
+    // ─── v0.4.0 tools ──────────────────────────────────────────────────────────
+    {
+      name: "get_contact_brief",
+      description: "Generate a comprehensive pre-meeting briefing for a contact. Returns structured markdown covering: role/company, contact details, status, last contacted, open tasks, overdue items, entity relationships, recent notes, recent activity. Feed this to an AI before a meeting or call.",
+      inputSchema: {
+        type: "object",
+        properties: { contact_id: { type: "string" } },
+        required: ["contact_id"],
+      },
+    },
+    {
+      name: "list_cold_contacts",
+      description: "List contacts you haven't been in touch with for N days (default 30). Sorted by most neglected first. Use to identify who needs re-engagement. 'never' means last_contacted_at was never set.",
+      inputSchema: {
+        type: "object",
+        properties: { days: { type: "number", description: "Days threshold (default 30)" } },
+      },
+    },
+    {
+      name: "get_upcoming",
+      description: "Get a unified calendar of upcoming items: follow-ups due, birthdays, task deadlines, application follow-ups, vendor follow-ups. Default 7-day window. Returns items sorted by date with urgency (overdue/today/upcoming).",
+      inputSchema: {
+        type: "object",
+        properties: { days: { type: "number", description: "Days ahead to show (default 7)" } },
+      },
+    },
+    {
+      name: "get_network_stats",
+      description: "Get comprehensive network health stats: contact counts, cold contacts (30d/60d/never), data completeness, overdue tasks, pending applications, missing invoices, active deal pipeline value. The health dashboard for your network.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "audit_contacts",
+      description: "Score all contacts for data completeness (0-100). Points: email +20, phone +15, company +15, last_contacted_at +20, tags +10, notes +10, job_title +10. Returns contacts sorted by score ascending (worst first) so you know who to enrich.",
+      inputSchema: {
+        type: "object",
+        properties: { limit: { type: "number", description: "Number to show (default 20)" } },
+      },
+    },
+    {
+      name: "create_deal",
+      description: "Create a new deal or opportunity, optionally linked to a contact and/or company.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          contact_id: { type: "string" },
+          company_id: { type: "string" },
+          stage: { type: "string", enum: ["prospecting", "qualified", "proposal", "negotiation", "won", "lost"], description: "Deal stage (default: prospecting)" },
+          value_usd: { type: "number" },
+          currency: { type: "string" },
+          close_date: { type: "string", description: "Expected close date (YYYY-MM-DD)" },
+          notes: { type: "string" },
+        },
+        required: ["title"],
+      },
+    },
+    {
+      name: "get_deal",
+      description: "Get a deal by ID.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "list_deals",
+      description: "List deals, optionally filtered by stage, contact, or company.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          stage: { type: "string", enum: ["prospecting", "qualified", "proposal", "negotiation", "won", "lost"] },
+          contact_id: { type: "string" },
+          company_id: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "update_deal",
+      description: "Update a deal's title, stage, value, close date, or notes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          stage: { type: "string", enum: ["prospecting", "qualified", "proposal", "negotiation", "won", "lost"] },
+          value_usd: { type: "number" },
+          close_date: { type: "string" },
+          notes: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "delete_deal",
+      description: "Delete a deal by ID.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "log_event",
+      description: "Log a meeting, call, or interaction event with one or more contacts.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          type: { type: "string", enum: ["meeting", "call", "email", "lunch", "conference", "demo", "other"] },
+          event_date: { type: "string", description: "ISO date or datetime of the event" },
+          duration_min: { type: "number", description: "Duration in minutes" },
+          contact_ids: { type: "array", items: { type: "string" }, description: "Contact IDs who attended" },
+          company_id: { type: "string" },
+          notes: { type: "string" },
+          outcome: { type: "string" },
+          deal_id: { type: "string" },
+        },
+        required: ["title", "event_date"],
+      },
+    },
+    {
+      name: "list_events",
+      description: "List events, optionally filtered by contact, company, type, or date range.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          company_id: { type: "string" },
+          type: { type: "string" },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "delete_event",
+      description: "Delete an event by ID.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "get_contact_timeline",
+      description: "Get full chronological activity history for a contact: notes, events, tasks, vendor communications, interactions — all unified in reverse date order. The account history view.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          limit: { type: "number", description: "Max items (default 50)" },
+        },
+        required: ["contact_id"],
+      },
+    },
+    {
+      name: "enrich_contact",
+      description: "Search the web for missing contact data (LinkedIn, Twitter, GitHub, phone, company website) using the contact's name, email, and company. Returns SUGGESTIONS only — does not auto-apply. Review and apply with update_contact.",
+      inputSchema: {
+        type: "object",
+        properties: { contact_id: { type: "string" } },
+        required: ["contact_id"],
+      },
+    },
+    {
+      name: "get_contacts_for_context",
+      description: "Find contacts relevant to a topic or domain. Searches job titles, notes, specializations, company names, relationship types, tags, and org memberships. Returns ranked results with relevance reason. Essential for agents: 'who do I contact about trademark law?' → returns attorneys at Revision Legal.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          topic: { type: "string", description: "Topic or domain to search for (e.g. 'trademark law', 'payroll', 'banking')" },
+          limit: { type: "number", description: "Max results (default 10)" },
+        },
+        required: ["topic"],
+      },
+    },
+    {
+      name: "set_reminder",
+      description: "Schedule a follow-up reminder for a contact. Sets follow_up_at to the specified date and adds a note with the reminder text. Will appear in get_upcoming results. Use: set_reminder({contact_id, remind_at: '2026-04-01', note: 'Check on invoice status'})",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          remind_at: { type: "string", description: "Reminder date (YYYY-MM-DD)" },
+          note: { type: "string", description: "Optional reminder note" },
+        },
+        required: ["contact_id", "remind_at"],
+      },
+    },
+    {
+      name: "check_and_fire_webhooks",
+      description: "Check all registered webhooks and fire any that match current conditions: contact.stale (last_contacted_at > 30 days), task.overdue (deadline passed), followup.due (follow_up_at <= today). Returns list of fired webhooks.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "bulk_tag_contacts",
+      description: "Apply or remove a tag from multiple contacts at once. Either pass contact_ids array directly, or pass a search query and all matching contacts will be tagged. Returns count of contacts tagged.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          tag_id_or_name: { type: "string", description: "Tag ID (UUID) or tag name to apply/remove" },
+          action: { type: "string", enum: ["add", "remove"] },
+          contact_ids: { type: "array", items: { type: "string" }, description: "Specific contact IDs (alternative to query)" },
+          query: { type: "string", description: "Search query — all matching contacts will be tagged" },
+        },
+        required: ["tag_id_or_name", "action"],
+      },
+    },
+    {
+      name: "set_do_not_contact",
+      description: "Mark a contact as do-not-contact (DNC). They will be excluded from list_contacts, cold, and upcoming results unless explicitly requested. Use for GDPR compliance or unsubscribes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          do_not_contact: { type: "boolean" },
+          reason: { type: "string", description: "Reason for DNC flag (optional)" },
+        },
+        required: ["contact_id", "do_not_contact"],
+      },
+    },
   ],
 }));
 
@@ -1518,19 +1761,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify({ imported: importedCount, errors: errors.length, error_details: errors }, null, 2),
           }],
         };
-      }
-
-      case "export_contacts": {
-        const format = a.format as "json" | "csv" | "vcf";
-        const contactIds = a.contact_ids as string[] | undefined;
-        let contactList;
-        if (contactIds && contactIds.length > 0) {
-          contactList = contactIds.map((id) => getContact(id));
-        } else {
-          contactList = listContacts({ limit: 10000 }).contacts;
-        }
-        const output = await exportContacts(format, contactList);
-        return { content: [{ type: "text", text: output }] };
       }
 
       case "get_stats": {
@@ -2329,6 +2559,279 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const company = getCompany(a.company_id as string);
         const team = listCompanyRelationships({ company_id: a.company_id as string }, db);
         return { content: [{ type: "text", text: JSON.stringify({ company, team }, null, 2) }] };
+      }
+
+      // ─── v0.4.0 handlers ──────────────────────────────────────────────────────
+
+      case "get_contact_brief": {
+        const db = getDatabase();
+        const brief = generateBrief(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ brief }, null, 2) }] };
+      }
+
+      case "list_cold_contacts": {
+        const db = getDatabase();
+        const contacts = listColdContacts((a.days as number | undefined) ?? 30, db);
+        return { content: [{ type: "text", text: JSON.stringify({ contacts }, null, 2) }] };
+      }
+
+      case "get_upcoming": {
+        const db = getDatabase();
+        const items = getUpcomingItems((a.days as number | undefined) ?? 7, db);
+        return { content: [{ type: "text", text: JSON.stringify({ items }, null, 2) }] };
+      }
+
+      case "get_network_stats": {
+        const db = getDatabase();
+        const stats = getNetworkStats(db);
+        return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+      }
+
+      case "audit_contacts": {
+        const db = getDatabase();
+        const results = (await listContactAudit(db)).slice(0, (a.limit as number | undefined) ?? 20);
+        return { content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }] };
+      }
+
+      case "create_deal": {
+        const db = getDatabase();
+        const deal = createDeal({
+          title: a.title as string,
+          contact_id: a.contact_id as string | undefined,
+          company_id: a.company_id as string | undefined,
+          stage: a.stage as import("../types/index.js").DealStage | undefined,
+          value_usd: a.value_usd as number | undefined,
+          currency: a.currency as string | undefined,
+          close_date: a.close_date as string | undefined,
+          notes: a.notes as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(deal, null, 2) }] };
+      }
+
+      case "get_deal": {
+        const db = getDatabase();
+        const deal = getDeal(a.id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify(deal, null, 2) }] };
+      }
+
+      case "list_deals": {
+        const db = getDatabase();
+        const deals = listDeals({
+          stage: a.stage as import("../types/index.js").DealStage | undefined,
+          contact_id: a.contact_id as string | undefined,
+          company_id: a.company_id as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify({ deals }, null, 2) }] };
+      }
+
+      case "update_deal": {
+        const db = getDatabase();
+        const { id: dealId, ...dealRest } = a;
+        const deal = updateDeal(dealId as string, {
+          title: dealRest.title as string | undefined,
+          stage: dealRest.stage as import("../types/index.js").DealStage | undefined,
+          value_usd: dealRest.value_usd as number | undefined,
+          close_date: dealRest.close_date as string | undefined,
+          notes: dealRest.notes as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(deal, null, 2) }] };
+      }
+
+      case "delete_deal": {
+        const db = getDatabase();
+        deleteDeal(a.id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
+      }
+
+      case "log_event": {
+        const db = getDatabase();
+        const event = logEvent({
+          title: a.title as string,
+          type: a.type as import("../types/index.js").EventType | undefined,
+          event_date: a.event_date as string,
+          duration_min: a.duration_min as number | undefined,
+          contact_ids: a.contact_ids as string[] | undefined,
+          company_id: a.company_id as string | undefined,
+          notes: a.notes as string | undefined,
+          outcome: a.outcome as string | undefined,
+          deal_id: a.deal_id as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(event, null, 2) }] };
+      }
+
+      case "list_events": {
+        const db = getDatabase();
+        const events = listEvents({
+          contact_id: a.contact_id as string | undefined,
+          company_id: a.company_id as string | undefined,
+          type: a.type as import("../types/index.js").EventType | undefined,
+          date_from: a.date_from as string | undefined,
+          date_to: a.date_to as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify({ events }, null, 2) }] };
+      }
+
+      case "delete_event": {
+        const db = getDatabase();
+        deleteEvent(a.id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
+      }
+
+      case "get_contact_timeline": {
+        const db = getDatabase();
+        const items = getContactTimeline(a.contact_id as string, (a.limit as number | undefined) ?? 50, db);
+        return { content: [{ type: "text", text: JSON.stringify({ items }, null, 2) }] };
+      }
+
+      case "enrich_contact": {
+        const db = getDatabase();
+        const contact = getContact(a.contact_id as string);
+        const exaKey = process.env['EXA_API_KEY'];
+        if (!exaKey) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: 'Set EXA_API_KEY to use enrichment', contact_id: a.contact_id, suggestions: [] }, null, 2) }] };
+        }
+        const query = `${contact.display_name} ${(contact.emails as Array<{ address: string }> | undefined)?.[0]?.address ?? ''} site:linkedin.com OR site:twitter.com OR site:github.com`;
+        const res = await fetch('https://api.exa.ai/search', {
+          method: 'POST',
+          headers: { 'x-api-key': exaKey, 'content-type': 'application/json' },
+          body: JSON.stringify({ query, num_results: 5 }),
+        });
+        const data = await res.json() as { results?: Array<{ url?: string }> };
+        const suggestions: Record<string, string> = {};
+        const socialProfiles = (contact as unknown as Record<string, unknown>).social_profiles as Array<{ platform: string }> | undefined;
+        for (const r of (data.results ?? [])) {
+          if (r.url?.includes('linkedin.com') && !socialProfiles?.find(s => s.platform === 'linkedin')) suggestions['linkedin'] = r.url;
+          if (r.url?.includes('twitter.com') && !socialProfiles?.find(s => s.platform === 'twitter')) suggestions['twitter'] = r.url;
+          if (r.url?.includes('github.com') && !socialProfiles?.find(s => s.platform === 'github')) suggestions['github'] = r.url;
+        }
+        void db; // db used for getContact above
+        return { content: [{ type: "text", text: JSON.stringify({ contact_id: a.contact_id, contact_name: contact.display_name, suggestions, raw_results: data.results?.slice(0, 3) }, null, 2) }] };
+      }
+
+      case "get_contacts_for_context": {
+        const db = getDatabase();
+        const { topic, limit = 10 } = a as { topic: string; limit?: number };
+        const byTitle = db.query(`SELECT c.id, c.display_name, c.job_title, 'job_title' as reason FROM contacts c WHERE c.job_title LIKE ? AND c.archived=0 LIMIT 20`).all(`%${topic}%`) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
+        const byNotes = db.query(`SELECT c.id, c.display_name, c.job_title, 'notes' as reason FROM contacts c WHERE c.notes LIKE ? AND c.archived=0 LIMIT 10`).all(`%${topic}%`) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
+        const byCompany = db.query(`SELECT c.id, c.display_name, c.job_title, 'company' as reason FROM contacts c JOIN companies co ON c.company_id = co.id WHERE (co.name LIKE ? OR co.industry LIKE ?) AND c.archived=0 LIMIT 10`).all(`%${topic}%`, `%${topic}%`) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
+        const bySpec = db.query(`SELECT c.id, c.display_name, c.job_title, om.specialization as reason FROM contacts c JOIN org_members om ON c.id = om.contact_id WHERE om.specialization LIKE ? LIMIT 10`).all(`%${topic}%`) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
+        const seen = new Set<string>();
+        const results = [...byTitle, ...bySpec, ...byCompany, ...byNotes].filter(r => {
+          if (seen.has(r.id)) return false;
+          seen.add(r.id);
+          return true;
+        }).slice(0, limit);
+        return { content: [{ type: "text", text: JSON.stringify({ topic, results }, null, 2) }] };
+      }
+
+      case "set_reminder": {
+        const db = getDatabase();
+        updateContact(a.contact_id as string, { follow_up_at: a.remind_at as string });
+        if (a.note) {
+          addNote(a.contact_id as string, `Reminder (${a.remind_at}): ${a.note}`, undefined, db);
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ set: true, contact_id: a.contact_id, remind_at: a.remind_at }, null, 2) }] };
+      }
+
+      case "check_and_fire_webhooks": {
+        const db = getDatabase();
+        let webhooks: Array<{ id: string; event_type: string; url: string; secret?: string | null }> = [];
+        try {
+          webhooks = db.query(`SELECT id, event_type, url, secret FROM webhooks WHERE active=1`).all() as typeof webhooks;
+        } catch {
+          return { content: [{ type: "text", text: JSON.stringify({ fired: [], message: 'webhooks table not available' }, null, 2) }] };
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        const fired: Array<{ webhook_id: string; event_type: string; status: number }> = [];
+        for (const wh of webhooks) {
+          let payload: Record<string, unknown> | null = null;
+          if (wh.event_type === 'contact.stale') {
+            const stale = db.query(`SELECT id, display_name, last_contacted_at FROM contacts WHERE (last_contacted_at IS NULL OR last_contacted_at < date('now', '-30 days')) AND archived=0 LIMIT 50`).all() as Array<{ id: string; display_name: string; last_contacted_at: string | null }>;
+            if (stale.length > 0) payload = { event: 'contact.stale', contacts: stale, fired_at: new Date().toISOString() };
+          } else if (wh.event_type === 'task.overdue') {
+            const overdue = listOverdueTasks(db);
+            if (overdue.length > 0) payload = { event: 'task.overdue', tasks: overdue, fired_at: new Date().toISOString() };
+          } else if (wh.event_type === 'followup.due') {
+            const due = db.query(`SELECT id, display_name, follow_up_at FROM contacts WHERE follow_up_at IS NOT NULL AND follow_up_at <= ? AND archived=0`).all(today) as Array<{ id: string; display_name: string; follow_up_at: string }>;
+            if (due.length > 0) payload = { event: 'followup.due', contacts: due, fired_at: new Date().toISOString() };
+          }
+          if (payload) {
+            const headers: Record<string, string> = { 'content-type': 'application/json' };
+            if (wh.secret) {
+              const crypto = await import('node:crypto');
+              const sig = crypto.createHmac('sha256', wh.secret).update(JSON.stringify(payload)).digest('hex');
+              headers['x-contacts-signature'] = `sha256=${sig}`;
+            }
+            try {
+              const resp = await fetch(wh.url, { method: 'POST', headers, body: JSON.stringify(payload) });
+              fired.push({ webhook_id: wh.id, event_type: wh.event_type, status: resp.status });
+            } catch {
+              fired.push({ webhook_id: wh.id, event_type: wh.event_type, status: 0 });
+            }
+          }
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ fired }, null, 2) }] };
+      }
+
+      case "bulk_tag_contacts": {
+        const db = getDatabase();
+        const tagInput = a.tag_id_or_name as string;
+        const action = a.action as 'add' | 'remove';
+        // Resolve tag ID
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tagInput);
+        let tagId = isUuid ? tagInput : null;
+        let tagName = tagInput;
+        if (!tagId) {
+          const tag = getTagByName(tagInput, db);
+          if (!tag) return { content: [{ type: "text", text: `Tag not found: ${tagInput}` }], isError: true };
+          tagId = tag.id;
+          tagName = tag.name;
+        }
+        // Get contact IDs
+        let contactIds: string[] = (a.contact_ids as string[] | undefined) ?? [];
+        if (a.query && typeof a.query === 'string') {
+          const found = searchContacts(a.query as string);
+          contactIds = [...contactIds, ...found.map((c: { id: string }) => c.id)];
+        }
+        // De-duplicate
+        contactIds = [...new Set(contactIds)];
+        let taggedCount = 0;
+        for (const cid of contactIds) {
+          try {
+            if (action === 'add') {
+              addTagToContact(cid, tagId);
+            } else {
+              removeTagFromContact(cid, tagId);
+            }
+            taggedCount++;
+          } catch {
+            // skip individual errors
+          }
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ tagged_count: taggedCount, tag_name: tagName, action }, null, 2) }] };
+      }
+
+      case "set_do_not_contact": {
+        const db = getDatabase();
+        updateContact(a.contact_id as string, { do_not_contact: a.do_not_contact as boolean });
+        if (a.reason && !!(a.do_not_contact)) {
+          addNote(a.contact_id as string, `DNC: ${a.reason}`, undefined, db);
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ set: true, contact_id: a.contact_id, do_not_contact: a.do_not_contact }, null, 2) }] };
+      }
+
+      case "export_contacts": {
+        const format = a.format as "json" | "csv" | "vcf";
+        const contactIds = a.contact_ids as string[] | undefined;
+        const updatedSince = a.updated_since as string | undefined;
+        let contactList;
+        if (contactIds && contactIds.length > 0) {
+          contactList = contactIds.map((id) => getContact(id));
+        } else {
+          contactList = listContacts({ limit: 10000, ...(updatedSince ? { last_contacted_after: updatedSince } : {}) }).contacts;
+        }
+        const output = await exportContacts(format, contactList);
+        return { content: [{ type: "text", text: output }] };
       }
 
       default:

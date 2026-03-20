@@ -336,7 +336,72 @@ function importFromJson(data: string): CreateContactInput[] {
   });
 }
 
+// ---------- LinkedIn CSV Import ----------
+
+function parseLinkedInCsvLine(line: string): string[] {
+  // Reuse parseCsvLine for consistency
+  return parseCsvLine(line);
+}
+
+export function parseLinkedIn(csv: string): CreateContactInput[] {
+  const lines = csv.split('\n').filter(l => l.trim());
+  if (!lines.length) return [];
+
+  const headers = parseLinkedInCsvLine(lines[0]!).map(h => h.replace(/"/g, '').trim());
+
+  const firstNameIdx = headers.findIndex(h => h === 'First Name');
+  const lastNameIdx = headers.findIndex(h => h === 'Last Name');
+  const emailIdx = headers.findIndex(h => h === 'Email Address');
+  const companyIdx = headers.findIndex(h => h === 'Company');
+  const positionIdx = headers.findIndex(h => h === 'Position');
+  const urlIdx = headers.findIndex(h => h === 'URL');
+  const connectedIdx = headers.findIndex(h => h === 'Connected On');
+
+  const results: CreateContactInput[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseLinkedInCsvLine(lines[i]!);
+    const firstName = firstNameIdx >= 0 ? (cols[firstNameIdx] ?? '').trim() : '';
+    const lastName = lastNameIdx >= 0 ? (cols[lastNameIdx] ?? '').trim() : '';
+    if (!firstName && !lastName) continue;
+
+    const contact: CreateContactInput = {
+      first_name: firstName,
+      last_name: lastName,
+      display_name: `${firstName} ${lastName}`.trim(),
+      source: 'import',
+    };
+
+    if (emailIdx >= 0 && cols[emailIdx]?.trim()) {
+      contact.emails = [{ address: cols[emailIdx]!.trim(), type: 'work', is_primary: true }];
+    }
+    if (positionIdx >= 0 && cols[positionIdx]?.trim()) {
+      contact.job_title = cols[positionIdx]!.trim();
+    }
+    if (urlIdx >= 0 && cols[urlIdx]?.trim()) {
+      contact.social_profiles = [{ platform: 'linkedin', url: cols[urlIdx]!.trim(), is_primary: true }];
+    }
+    if (companyIdx >= 0 && cols[companyIdx]?.trim()) {
+      // Store company name in notes — cannot resolve to company_id without lookup
+      const connectedNote = connectedIdx >= 0 && cols[connectedIdx]?.trim()
+        ? ` Connected on LinkedIn: ${cols[connectedIdx]!.trim()}`
+        : '';
+      contact.notes = `Company: ${cols[companyIdx]!.trim()}${connectedNote}`;
+    } else if (connectedIdx >= 0 && cols[connectedIdx]?.trim()) {
+      contact.notes = `Connected on LinkedIn: ${cols[connectedIdx]!.trim()}`;
+    }
+
+    results.push(contact);
+  }
+  return results;
+}
+
 // ---------- Public API ----------
+
+function isLinkedInFormat(data: string): boolean {
+  const firstLine = data.split('\n')[0] ?? '';
+  const lower = firstLine.toLowerCase();
+  return lower.includes('first name') && lower.includes('url') && lower.includes('connected on');
+}
 
 export async function importContacts(
   format: "json" | "csv" | "vcf",
@@ -344,6 +409,8 @@ export async function importContacts(
 ): Promise<CreateContactInput[]> {
   switch (format) {
     case "csv":
+      // Auto-detect LinkedIn CSV format
+      if (isLinkedInFormat(data)) return parseLinkedIn(data);
       return importFromCsv(data);
     case "vcf":
       return parseVcf(data);

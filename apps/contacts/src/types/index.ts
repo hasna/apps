@@ -148,6 +148,9 @@ export interface Contact {
   follow_up_at: string | null;
   archived: boolean;
   project_id: string | null;
+  do_not_contact?: boolean;
+  priority?: number;
+  timezone?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -179,6 +182,9 @@ export interface CreateContactInput {
   status?: ContactStatus;
   follow_up_at?: string;
   project_id?: string;
+  do_not_contact?: boolean;
+  priority?: number;
+  timezone?: string;
   emails?: CreateEmailInput[];
   phones?: CreatePhoneInput[];
   addresses?: CreateAddressInput[];
@@ -204,6 +210,9 @@ export interface UpdateContactInput {
   status?: ContactStatus;
   follow_up_at?: string | null;
   project_id?: string | null;
+  do_not_contact?: boolean;
+  priority?: number | null;
+  timezone?: string | null;
   emails_add?: CreateEmailInput[];
   phones_add?: CreatePhoneInput[];
 }
@@ -223,6 +232,70 @@ export interface ContactListOptions {
   last_contacted_before?: string;
   order_by?: "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at";
   order_dir?: "asc" | "desc";
+  include_dnc?: boolean;
+  priority_min?: number;
+  updated_since?: string;
+}
+
+// ─── Deals ────────────────────────────────────────────────────────────────────
+
+export type DealStage = 'lead' | 'qualified' | 'proposal' | 'negotiation' | 'won' | 'lost' | 'cancelled';
+
+export interface Deal {
+  id: string;
+  title: string;
+  contact_id?: string | null;
+  company_id?: string | null;
+  stage: DealStage;
+  value_usd?: number | null;
+  currency: string;
+  close_date?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDealInput {
+  title: string;
+  contact_id?: string;
+  company_id?: string;
+  stage?: DealStage;
+  value_usd?: number;
+  currency?: string;
+  close_date?: string;
+  notes?: string;
+}
+
+export type UpdateDealInput = Partial<CreateDealInput>;
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+export type EventType = 'meeting' | 'call' | 'lunch' | 'email' | 'demo' | 'conference' | 'intro' | 'other';
+
+export interface ContactEvent {
+  id: string;
+  title: string;
+  type: EventType;
+  event_date: string;
+  duration_min?: number | null;
+  contact_ids: string[];
+  company_id?: string | null;
+  notes?: string | null;
+  outcome?: string | null;
+  deal_id?: string | null;
+  created_at: string;
+}
+
+export interface CreateEventInput {
+  title: string;
+  type?: EventType;
+  event_date: string;
+  duration_min?: number;
+  contact_ids?: string[];
+  company_id?: string;
+  notes?: string;
+  outcome?: string;
+  deal_id?: string;
 }
 
 // ─── Company ──────────────────────────────────────────────────────────────────
@@ -678,6 +751,9 @@ export interface ContactRow {
   follow_up_at: string | null;
   archived: number;
   project_id: string | null;
+  do_not_contact: number;
+  priority: number;
+  timezone: string | null;
   created_at: string;
   updated_at: string;
 }

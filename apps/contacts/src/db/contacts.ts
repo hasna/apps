@@ -40,6 +40,9 @@ function rowToContact(row: ContactRow): Contact {
     follow_up_at: row.follow_up_at ?? null,
     archived: !!row.archived,
     project_id: row.project_id ?? null,
+    do_not_contact: !!row.do_not_contact,
+    priority: row.priority ?? 3,
+    timezone: row.timezone ?? null,
   };
 }
 
@@ -161,8 +164,8 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
     ?? (firstName || lastName ? `${firstName} ${lastName}`.trim() : "Unnamed Contact");
 
   d.run(
-    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, status, follow_up_at, project_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, status, follow_up_at, project_id, do_not_contact, priority, timezone, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       firstName,
@@ -182,6 +185,9 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
       input.status ?? "active",
       input.follow_up_at ?? null,
       input.project_id ?? null,
+      input.do_not_contact ? 1 : 0,
+      input.priority ?? 3,
+      input.timezone ?? null,
       timestamp,
       timestamp,
     ]
@@ -228,6 +234,9 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
     last_contacted_before,
     order_by = "display_name",
     order_dir = "asc",
+    include_dnc = false,
+    priority_min,
+    updated_since,
   } = opts;
 
   const conditions: string[] = [];
@@ -235,6 +244,10 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
 
   conditions.push("c.archived = ?");
   params.push(archived ? 1 : 0);
+
+  if (!include_dnc) {
+    conditions.push("c.do_not_contact = 0");
+  }
 
   if (company_id) {
     conditions.push("c.company_id = ?");
@@ -282,6 +295,16 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
     params.push(last_contacted_before);
   }
 
+  if (priority_min !== undefined) {
+    conditions.push("c.priority >= ?");
+    params.push(priority_min);
+  }
+
+  if (updated_since) {
+    conditions.push("c.updated_at >= ?");
+    params.push(updated_since);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const validOrderBy = ["display_name", "created_at", "updated_at", "last_contacted_at", "follow_up_at"].includes(order_by) ? order_by : "display_name";
   const validOrderDir = order_dir === "desc" ? "DESC" : "ASC";
@@ -318,6 +341,9 @@ export function updateContact(id: string, input: UpdateContactInput, db?: Databa
   if (input.status !== undefined) { setClauses.push("status = ?"); params.push(input.status); }
   if (input.follow_up_at !== undefined) { setClauses.push("follow_up_at = ?"); params.push(input.follow_up_at); }
   if (input.project_id !== undefined) { setClauses.push("project_id = ?"); params.push(input.project_id); }
+  if (input.do_not_contact !== undefined) { setClauses.push("do_not_contact = ?"); params.push(input.do_not_contact ? 1 : 0); }
+  if (input.priority !== undefined) { setClauses.push("priority = ?"); params.push(input.priority ?? 3); }
+  if (input.timezone !== undefined) { setClauses.push("timezone = ?"); params.push(input.timezone); }
 
   params.push(id);
   d.run(`UPDATE contacts SET ${setClauses.join(", ")} WHERE id = ?`, params);
@@ -541,6 +567,18 @@ export function unarchiveContact(id: string, db?: Database): ContactWithDetails 
   logActivity(d, { contact_id: id, action: "contact.unarchived", details: `Unarchived contact: ${row.display_name}` });
   const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow;
   return loadContactDetails(d, rowToContact(updated));
+}
+
+export function listColdContacts(days: number, db?: Database): ContactWithDetails[] {
+  const d = db || getDatabase();
+  const rows = d.query(
+    `SELECT c.* FROM contacts c
+     WHERE c.archived = 0 AND c.do_not_contact = 0
+       AND (c.last_contacted_at IS NULL OR c.last_contacted_at < datetime('now', ? || ' days'))
+     ORDER BY c.last_contacted_at ASC NULLS FIRST
+     LIMIT 100`
+  ).all(`-${days}`) as ContactRow[];
+  return rows.map(row => loadContactDetails(d, rowToContact(row)));
 }
 
 export function autoLinkContactToCompany(contactId: string, db?: Database): ContactWithDetails | null {
