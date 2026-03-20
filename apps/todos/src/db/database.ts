@@ -524,7 +524,22 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
   INSERT OR IGNORE INTO _migrations (id) VALUES (30);
   `,
-  // Migration 31: File locks — first-class exclusive locks on file paths
+  // Migration 31: Per-project agent roles — override/extend global agent roles per project
+  `
+  CREATE TABLE IF NOT EXISTS project_agent_roles (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    is_lead INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, agent_id, role)
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_agent_roles_project ON project_agent_roles(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_agent_roles_agent ON project_agent_roles(agent_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (31);
+  `,
+  // Migration 32 (was 31): File locks — first-class exclusive locks on file paths
   `
   CREATE TABLE IF NOT EXISTS file_locks (
     id TEXT PRIMARY KEY,
@@ -537,7 +552,7 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_file_locks_path ON file_locks(path);
   CREATE INDEX IF NOT EXISTS idx_file_locks_agent ON file_locks(agent_id);
   CREATE INDEX IF NOT EXISTS idx_file_locks_expires ON file_locks(expires_at);
-  INSERT OR IGNORE INTO _migrations (id) VALUES (31);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (32);
   `,
 ];
 

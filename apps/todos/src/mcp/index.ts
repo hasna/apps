@@ -3561,6 +3561,91 @@ server.tool(
 );
 }
 
+// === PER-PROJECT ORG CHART ===
+
+if (shouldRegisterTool("set_project_agent_role")) {
+server.tool(
+  "set_project_agent_role",
+  "Assign an agent a role on a specific project (client, lead, developer, qa, reviewer, etc.). Per-project roles extend the global org chart.",
+  {
+    project_id: z.string().describe("Project ID"),
+    agent_name: z.string().describe("Agent name"),
+    role: z.string().describe("Role on this project (e.g. 'lead', 'developer', 'qa')"),
+    is_lead: z.coerce.boolean().optional().describe("Whether this agent is the project lead for this role"),
+  },
+  async ({ project_id, agent_name, role, is_lead }) => {
+    try {
+      const { setProjectAgentRole } = require("../db/project-agent-roles.js") as any;
+      const agent = getAgentByName(agent_name);
+      if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_name}` }], isError: true };
+      const pid = resolveId(project_id, "projects");
+      const result = setProjectAgentRole(pid, agent.id, role, is_lead ?? false);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("get_project_org_chart")) {
+server.tool(
+  "get_project_org_chart",
+  "Get org chart scoped to a project — global hierarchy with per-project role overrides merged in.",
+  {
+    project_id: z.string().describe("Project ID"),
+    format: z.enum(["text", "json"]).optional().describe("Output format (default: text)"),
+    filter_to_project: z.coerce.boolean().optional().describe("Only show agents with a role on this project"),
+  },
+  async ({ project_id, format, filter_to_project }) => {
+    try {
+      const { getProjectOrgChart } = require("../db/project-agent-roles.js") as any;
+      const pid = resolveId(project_id, "projects");
+      const tree = getProjectOrgChart(pid, { filter_to_project });
+
+      if (format === "json") {
+        return { content: [{ type: "text" as const, text: JSON.stringify(tree, null, 2) }] };
+      }
+
+      const now = Date.now();
+      const ACTIVE_MS = 30 * 60 * 1000;
+      function render(nodes: any[], indent = 0): string {
+        return nodes.map(n => {
+          const prefix = "  ".repeat(indent);
+          const title = n.agent.title ? ` — ${n.agent.title}` : "";
+          const globalRole = n.agent.role ? ` [${n.agent.role}]` : "";
+          const projectRoles = n.project_roles.length > 0 ? ` <${n.project_roles.join(", ")}>` : "";
+          const lead = n.is_project_lead ? " ★" : "";
+          const lastSeen = new Date(n.agent.last_seen_at).getTime();
+          const active = now - lastSeen < ACTIVE_MS ? " ●" : " ○";
+          const line = `${prefix}${active} ${n.agent.name}${title}${globalRole}${projectRoles}${lead}`;
+          const children = n.reports.length > 0 ? "\n" + render(n.reports, indent + 1) : "";
+          return line + children;
+        }).join("\n");
+      }
+      const text = tree.length > 0 ? render(tree) : "No agents in this project's org chart.";
+      return { content: [{ type: "text" as const, text }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("list_project_agent_roles")) {
+server.tool(
+  "list_project_agent_roles",
+  "List all agent role assignments for a project.",
+  {
+    project_id: z.string().describe("Project ID"),
+  },
+  async ({ project_id }) => {
+    try {
+      const { listProjectAgentRoles } = require("../db/project-agent-roles.js") as any;
+      const pid = resolveId(project_id, "projects");
+      const roles = listProjectAgentRoles(pid);
+      return { content: [{ type: "text" as const, text: JSON.stringify(roles, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 // === AGENT CAPABILITIES ===
 
 if (shouldRegisterTool("get_capable_agents")) {
