@@ -9,7 +9,7 @@ import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, get
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
 import { getDb, getDbPath, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
-import { heartbeat, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
+import { heartbeat, registerAgent, isAgentConflict, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { addReaction, removeReaction, getReactionSummary } from "../lib/reactions.js";
 import { listHotSessions } from "../lib/hot.js";
 import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../lib/topics.js";
@@ -1676,6 +1676,132 @@ agents
     } catch (e: any) {
       console.error(chalk.red(e.message));
       process.exit(1);
+    }
+    closeDb();
+  });
+
+agents
+  .command("register")
+  .description("Register an agent with conflict detection (30 min active window)")
+  .argument("<name>", "Agent name to register")
+  .option("--session <id>", "Session ID (default: random UUID)")
+  .option("--role <role>", "Agent role (default: agent)")
+  .option("--project <id>", "Project ID to lock agent to")
+  .option("--force", "Force takeover even if another session is active")
+  .option("--json", "Output as JSON")
+  .action((name, opts) => {
+    const agentName = (typeof name === "string" ? name : "").trim();
+    if (!agentName) {
+      console.error(chalk.red("Agent name is required."));
+      process.exit(1);
+    }
+
+    const sessionId = opts.session || crypto.randomUUID();
+    const result = registerAgent(agentName, sessionId, opts.role, opts.project);
+
+    if (isAgentConflict(result)) {
+      if (opts.json) {
+        console.log(JSON.stringify(result));
+      } else {
+        console.error(chalk.red(`Conflict: agent "${agentName}" is already active (last seen: ${result.last_seen_at}).`));
+        console.error(chalk.dim("Use --force or wait 30 minutes for the session to expire."));
+      }
+      process.exit(1);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(result));
+    } else {
+      const action = result.took_over ? chalk.yellow("took over") : result.created ? chalk.green("registered") : chalk.cyan("updated");
+      console.log(`  ${action}  ${chalk.bold(result.agent.agent)}  session: ${chalk.dim(sessionId)}`);
+    }
+    closeDb();
+  });
+
+agents
+  .command("heartbeat")
+  .description("Send a presence heartbeat to mark yourself as active")
+  .option("--from <agent>", "Agent identity (default: CONVERSATIONS_AGENT_ID or auto)")
+  .option("--status <status>", "Status: online, busy, idle (default: online)")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const agent = resolveIdentity(opts.from);
+    const status = opts.status || "online";
+    heartbeat(agent, status);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ agent, status, heartbeat: true }));
+    } else {
+      console.log(`  ${chalk.green("♥")}  ${chalk.cyan(agent)}  ${chalk.dim(status)}`);
+    }
+    closeDb();
+  });
+
+// ---- focus ----
+const focus = program
+  .command("focus")
+  .description("Manage agent project focus");
+
+focus
+  .command("set")
+  .description("Set your project focus — scopes read operations to this project")
+  .argument("<project>", "Project ID or name")
+  .option("--from <agent>", "Agent identity")
+  .option("--json", "Output as JSON")
+  .action((projectArg, opts) => {
+    const agent = resolveIdentity(opts.from);
+    const project = getProject(projectArg) || getProjectByName(projectArg);
+    if (!project) {
+      console.error(chalk.red(`Project "${projectArg}" not found.`));
+      process.exit(1);
+    }
+    getDb().prepare("UPDATE agent_presence SET project_id = ? WHERE agent = ?").run(project.id, agent);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ agent, project_id: project.id, project_name: project.name, focused: true }));
+    } else {
+      console.log(`  ${chalk.green("focused")}  ${chalk.cyan(agent)}  →  ${chalk.bold(project.name)}  ${chalk.dim(`(${project.id})`)}`);
+    }
+    closeDb();
+  });
+
+focus
+  .command("clear")
+  .description("Clear your project focus")
+  .option("--from <agent>", "Agent identity")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const agent = resolveIdentity(opts.from);
+    getDb().prepare("UPDATE agent_presence SET project_id = NULL WHERE agent = ?").run(agent);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ agent, project_id: null, focused: false }));
+    } else {
+      console.log(`  ${chalk.yellow("unfocused")}  ${chalk.cyan(agent)}`);
+    }
+    closeDb();
+  });
+
+focus
+  .command("get")
+  .description("Show current project focus")
+  .option("--from <agent>", "Agent identity")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const agent = resolveIdentity(opts.from);
+    const presence = getPresence(agent);
+    const projectId = presence?.project_id ?? null;
+    const project = projectId ? (getProject(projectId) || null) : null;
+
+    if (opts.json) {
+      console.log(JSON.stringify({ agent, project_id: projectId, project_name: project?.name ?? null }));
+    } else {
+      if (projectId) {
+        const name = project?.name ?? chalk.dim("(unknown)");
+        console.log(`  ${chalk.cyan(agent)}  focused on  ${chalk.bold(name)}  ${chalk.dim(`(${projectId})`)}`);
+      } else {
+        console.log(`  ${chalk.cyan(agent)}  ${chalk.dim("no focus set")}`);
+      }
     }
     closeDb();
   });
