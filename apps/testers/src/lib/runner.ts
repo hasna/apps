@@ -9,6 +9,7 @@ import { createClient, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
+import { createFailureTasks, notifyFailureToConversations } from "./failure-pipeline.js";
 import type { Browser, Page } from "playwright";
 
 export interface RunOptions {
@@ -340,10 +341,12 @@ export async function runBatch(
   const eventType = finalRun.status === "failed" ? "failed" : "completed";
   dispatchWebhooks(eventType, finalRun).catch(() => {});
 
-  // Push failures to open-logs if LOGS_URL is set (fire and forget)
+  // Push failures to open-logs / todos / conversations (fire and forget)
   if (finalRun.status === "failed") {
     const failedResults = results.filter(r => r.status === "failed" || r.status === "error");
     pushFailedRunToLogs(finalRun, failedResults, scenarios).catch(() => {});
+    createFailureTasks(finalRun, failedResults, scenarios).catch(() => {});
+    notifyFailureToConversations(finalRun, failedResults, scenarios).catch(() => {});
   }
 
   return { run: finalRun, results };

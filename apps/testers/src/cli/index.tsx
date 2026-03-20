@@ -513,6 +513,54 @@ program
     }
   });
 
+// ─── testers remove <id>  (alias for delete) ────────────────────────────────
+
+program
+  .command("remove <id>")
+  .alias("uninstall")
+  .description("Remove a scenario (alias for delete)")
+  .option("-y, --yes", "Skip confirmation prompt", false)
+  .action(async (id: string, opts) => {
+    try {
+      const scenario = getScenario(id) ?? getScenarioByShortId(id);
+      if (!scenario) {
+        logError(chalk.red(`Scenario not found: ${id}`));
+        process.exit(1);
+      }
+
+      if (!opts.yes) {
+        process.stdout.write(chalk.yellow(`Remove scenario ${scenario.shortId} "${scenario.name}"? [y/N] `));
+        const answer = await new Promise<string>((resolve) => {
+          let buf = "";
+          process.stdin.setRawMode?.(true);
+          process.stdin.resume();
+          process.stdin.once("data", (chunk) => {
+            buf = chunk.toString().trim().toLowerCase();
+            process.stdin.setRawMode?.(false);
+            process.stdin.pause();
+            process.stdout.write("\n");
+            resolve(buf);
+          });
+        });
+        if (answer !== "y" && answer !== "yes") {
+          log(chalk.dim("Cancelled."));
+          return;
+        }
+      }
+
+      const deleted = deleteScenario(scenario.id);
+      if (deleted) {
+        log(chalk.green(`Removed scenario ${scenario.shortId}: ${scenario.name}`));
+      } else {
+        logError(chalk.red(`Failed to remove scenario: ${id}`));
+        process.exit(1);
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
 // ─── testers run <url> [description] ───────────────────────────────────────
 
 program
@@ -538,6 +586,7 @@ program
   .option("--verbose", "Show per-step timing and full tool results", false)
   .option("--watch-results", "When used with --background, poll and display live results table until run completes", false)
   .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
+  .option("--smoke", "Run only smoke-tagged scenarios (fast validation suite, <2 min)", false)
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -578,6 +627,12 @@ program
             log(chalk.yellow("  --yes passed, proceeding despite budget limit."));
           }
         }
+      }
+
+      // --smoke is shorthand for --tag smoke
+      if (opts.smoke && !opts.tag.includes("smoke")) {
+        opts.tag.push("smoke");
+        log(chalk.dim("  Running smoke suite (scenarios tagged 'smoke')..."));
       }
 
       // If --from-todos, import scenarios first
@@ -2310,6 +2365,177 @@ program
       log(chalk.green(`Recording saved as scenario ${chalk.bold(scenario.shortId)}: ${scenario.name}`));
       log(chalk.dim(`  ${recording.actions.length} actions recorded in ${(recording.duration / 1000).toFixed(0)}s`));
       log(chalk.dim(`  ${scenario.steps.length} steps generated`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers run-affected <url> ─────────────────────────────────────────────
+
+program
+  .command("run-affected <url>")
+  .description("Run only scenarios relevant to changed files (diff-aware testing)")
+  .option("-f, --file <path>", "Changed file path (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option("--map <glob:tags>", "Glob→tag mapping, e.g. 'src/chat*:chat,messaging' (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option("--project <id>", "Project ID")
+  .option("-m, --model <model>", "AI model to use")
+  .option("--headed", "Run browser in headed mode", false)
+  .option("--parallel <n>", "Number of parallel browsers", "1")
+  .option("--json", "Output results as JSON", false)
+  .action(async (url: string, opts) => {
+    try {
+      const { matchFilesToScenarios } = await import("../lib/affected.js");
+      const { runBatch } = await import("../lib/runner.js");
+
+      const projectId = resolveProject(opts.project);
+
+      // Parse --map glob:tags options
+      const mappings = (opts.map as string[]).map((m) => {
+        const sep = m.lastIndexOf(":");
+        if (sep < 1) return null;
+        return { glob: m.slice(0, sep), tags: m.slice(sep + 1).split(",").map((t: string) => t.trim()) };
+      }).filter(Boolean) as { glob: string; tags: string[] }[];
+
+      const allScenarios = listScenarios({ projectId });
+      const matched = matchFilesToScenarios(opts.file as string[], allScenarios, mappings);
+
+      if (matched.length === 0) {
+        log(chalk.yellow("  No scenarios matched the provided file paths."));
+        log(chalk.dim("  Tip: use --map 'src/chat*:chat' to add explicit mappings."));
+        process.exit(0);
+      }
+
+      log(chalk.blue(`  Running ${matched.length} affected scenario(s) against ${url}...`));
+      log(chalk.dim(`  Files: ${(opts.file as string[]).slice(0, 5).join(", ")}${(opts.file as string[]).length > 5 ? "…" : ""}`));
+      log("");
+
+      const { run, results } = await runBatch(matched, {
+        url,
+        model: opts.model,
+        headed: opts.headed,
+        parallel: parseInt(opts.parallel, 10),
+        projectId,
+      });
+
+      if (opts.json) {
+        log(JSON.stringify({ run, results }, null, 2));
+      } else {
+        const { formatTerminal } = await import("../lib/reporter.js");
+        log(formatTerminal(run, results));
+      }
+
+      const { getExitCode } = await import("../lib/reporter.js");
+      process.exit(getExitCode(run));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers git-watch <url> ────────────────────────────────────────────────
+
+program
+  .command("git-watch <url>")
+  .description("Watch for git commits and auto-run affected scenarios")
+  .option("--dir <path>", "Git repository directory to watch", process.cwd())
+  .option("--poll <ms>", "Poll interval in milliseconds", "10000")
+  .option("--map <glob:tags>", "Glob→tag mapping (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option("--project <id>", "Project ID")
+  .option("-m, --model <model>", "AI model to use")
+  .option("--headed", "Run browser in headed mode", false)
+  .option("--parallel <n>", "Number of parallel browsers", "1")
+  .action(async (url: string, opts) => {
+    try {
+      const { startGitWatcher } = await import("../lib/git-watch.js");
+      const mappings = (opts.map as string[]).map((m) => {
+        const sep = m.lastIndexOf(":");
+        if (sep < 1) return null;
+        return { glob: m.slice(0, sep), tags: m.slice(sep + 1).split(",").map((t: string) => t.trim()) };
+      }).filter(Boolean) as { glob: string; tags: string[] }[];
+
+      await startGitWatcher({
+        url,
+        dir: opts.dir,
+        pollIntervalMs: parseInt(opts.poll, 10),
+        mappings,
+        projectId: resolveProject(opts.project),
+        model: opts.model,
+        headed: opts.headed,
+        parallel: parseInt(opts.parallel, 10),
+      });
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers agent ──────────────────────────────────────────────────────────
+
+const agentCmd = program.command("agent").description("Manage registered agents");
+
+agentCmd
+  .command("register <name>")
+  .description("Register an agent (idempotent)")
+  .option("-d, --description <text>", "Agent description")
+  .option("-r, --role <role>", "Agent role")
+  .action((name: string, opts) => {
+    try {
+      const { registerAgent } = require("../db/agents.js");
+      const agent = registerAgent({ name, description: opts.description, role: opts.role });
+      log(chalk.green(`Registered agent: ${agent.name} (${agent.id.slice(0, 8)})`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+agentCmd
+  .command("heartbeat <id>")
+  .description("Update agent last_seen_at timestamp")
+  .action((id: string) => {
+    try {
+      const { heartbeatAgent } = require("../db/agents.js");
+      const agent = heartbeatAgent(id);
+      if (!agent) { logError(chalk.red(`Agent not found: ${id}`)); process.exit(1); }
+      log(chalk.green(`Heartbeat sent for ${agent.name} — ${agent.lastSeenAt}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+agentCmd
+  .command("focus <agent-id> [scenario-id]")
+  .description("Set (or clear) an agent's current focus scenario")
+  .action((agentId: string, scenarioId: string | undefined) => {
+    try {
+      const { setAgentFocus } = require("../db/agents.js");
+      const agent = setAgentFocus(agentId, scenarioId ?? null);
+      if (!agent) { logError(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+      const focus = (agent.metadata as Record<string, unknown> | null)?.focus ?? null;
+      log(focus ? chalk.green(`Agent ${agent.name} focus set to: ${focus}`) : chalk.dim(`Agent ${agent.name} focus cleared`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+agentCmd
+  .command("list")
+  .description("List all registered agents")
+  .action(() => {
+    try {
+      const { listAgents } = require("../db/agents.js");
+      const agents = listAgents();
+      if (agents.length === 0) {
+        log(chalk.dim("No agents registered."));
+        return;
+      }
+      for (const a of agents) {
+        const focus = (a.metadata as Record<string, unknown> | null)?.focus;
+        log(`  ${chalk.cyan(a.id.slice(0, 8))}  ${chalk.bold(a.name)}${a.role ? chalk.dim(` [${a.role}]`) : ""}${focus ? chalk.yellow(` → ${focus}`) : ""}  ${chalk.dim(a.lastSeenAt)}`);
+      }
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

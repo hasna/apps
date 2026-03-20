@@ -9,8 +9,9 @@ import { getRun, listRuns, updateRun } from "../db/runs.js";
 import { listResults, getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
 import { createProject, ensureProject, listProjects } from "../db/projects.js";
-import { registerAgent, listAgents } from "../db/agents.js";
+import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
 import { startRunAsync } from "../lib/runner.js";
+import { matchFilesToScenarios } from "../lib/affected.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
@@ -788,6 +789,90 @@ server.tool(
         scenarios = scenarios.filter((s) => s.projectId === projectId);
       }
       return json({ items: scenarios, total: scenarios.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 24. run_affected_scenarios ──────────────────────────────────────────────
+
+server.tool(
+  "run_affected_scenarios",
+  "Run only the scenarios relevant to a set of changed files. Matches files to scenarios via explicit glob→tag rules, targetPath keywords, and name/tag inference. Returns immediately — poll with get_run.",
+  {
+    url: z.string().describe("Target URL to test against"),
+    filePaths: z.array(z.string()).describe("Changed file paths (relative or absolute)"),
+    mappings: z
+      .array(
+        z.object({
+          glob: z.string().describe("File glob pattern (supports * and **)"),
+          tags: z.array(z.string()).describe("Run scenarios tagged with these if glob matches"),
+        }),
+      )
+      .optional()
+      .describe("Explicit file glob → scenario tag mappings"),
+    projectId: z.string().optional().describe("Restrict to scenarios in this project"),
+    model: z.string().optional().describe(MODEL_DESC),
+    headed: z.boolean().optional().describe("Run browser in headed mode"),
+    parallel: z.number().optional().describe("Number of parallel workers"),
+  },
+  async ({ url, filePaths, mappings, projectId, model, headed, parallel }) => {
+    try {
+      const allScenarios = listScenarios({ projectId });
+      const matched = matchFilesToScenarios(filePaths, allScenarios, mappings ?? []);
+      if (matched.length === 0) {
+        return json({ runId: null, scenarioCount: 0, matchedScenarios: [], message: "No scenarios matched the provided file paths." });
+      }
+      const scenarioIds = matched.map((s) => s.id);
+      const { runId, scenarioCount } = startRunAsync({ url, scenarioIds, model, headed, parallel, projectId });
+      return json({
+        runId,
+        scenarioCount,
+        url,
+        status: "running",
+        matchedScenarios: matched.map((s) => ({ id: s.id, shortId: s.shortId, name: s.name, tags: s.tags })),
+        message: "Poll with get_run to check progress.",
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 25. heartbeat ───────────────────────────────────────────────────────────
+
+server.tool(
+  "heartbeat",
+  "Update an agent's last_seen_at timestamp. Call regularly to signal the agent is alive.",
+  {
+    agentId: z.string().describe("Agent ID to heartbeat"),
+  },
+  async ({ agentId }) => {
+    try {
+      const agent = heartbeatAgent(agentId);
+      if (!agent) return errorResponse(notFoundErr(agentId, "Agent"));
+      return json({ ok: true, agentId: agent.id, lastSeenAt: agent.lastSeenAt });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 26. set_focus ───────────────────────────────────────────────────────────
+
+server.tool(
+  "set_focus",
+  "Set (or clear) an agent's current focus scenario. Stored in agent metadata.",
+  {
+    agentId: z.string().describe("Agent ID"),
+    scenarioId: z.string().nullable().describe("Scenario ID the agent is working on, or null to clear"),
+  },
+  async ({ agentId, scenarioId }) => {
+    try {
+      const agent = setAgentFocus(agentId, scenarioId);
+      if (!agent) return errorResponse(notFoundErr(agentId, "Agent"));
+      return json({ ok: true, agentId: agent.id, focus: (agent.metadata as Record<string, unknown> | null)?.focus ?? null });
     } catch (error) {
       return errorResponse(error);
     }

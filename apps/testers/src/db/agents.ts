@@ -55,3 +55,23 @@ export function listAgents(): Agent[] {
   const rows = db.query("SELECT * FROM agents ORDER BY created_at DESC").all() as AgentRow[];
   return rows.map(agentFromRow);
 }
+
+export function heartbeatAgent(id: string): Agent | null {
+  const db = getDatabase();
+  const affected = db.query("UPDATE agents SET last_seen_at = ? WHERE id = ?").run(now(), id);
+  if ((affected as { changes: number }).changes === 0) return null;
+  return getAgent(id);
+}
+
+export function setAgentFocus(id: string, scenarioId: string | null): Agent | null {
+  const db = getDatabase();
+  const agent = getAgent(id);
+  if (!agent) return null;
+  const metadata = { ...(agent.metadata ?? {}), focus: scenarioId };
+  db.query("UPDATE agents SET metadata = ?, last_seen_at = ? WHERE id = ?").run(
+    JSON.stringify(metadata),
+    now(),
+    id,
+  );
+  return getAgent(id);
+}
