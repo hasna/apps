@@ -55,7 +55,9 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
     const sameSession = input.session_id && existing.session_id && input.session_id === existing.session_id;
     const differentSession = input.session_id && existing.session_id && input.session_id !== existing.session_id;
 
-    // Hard block: active agent with a different known session
+    // Hard block: active agent with a different known session.
+    // Security: never reveal the full session_id in the message — doing so would allow
+    // spoofed reclaims (copy the session_id from the error, pass it back to bypass the check).
     if (isActive && differentSession) {
       const minutesAgo = Math.round((Date.now() - lastSeenMs) / 60000);
       const suggestions = input.pool ? getAvailableNamesFromPool(input.pool, d) : [];
@@ -67,7 +69,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
         session_hint: existing.session_id ? existing.session_id.slice(0, 8) : null,
         working_dir: existing.working_dir,
         suggestions: suggestions.slice(0, 5),
-        message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago, session ${existing.session_id?.slice(0, 8)}…, dir: ${existing.working_dir ?? "unknown"}). Are you that agent? If so, pass session_id="${existing.session_id}" to reclaim it. Otherwise choose a different name.${suggestions.length > 0 ? ` Available: ${suggestions.slice(0, 3).join(", ")}` : ""}`,
+        message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago, session …${existing.session_id?.slice(-4)}, dir: ${existing.working_dir ?? "unknown"}). Cannot reclaim an active agent — choose a different name, or wait for the session to go stale.${suggestions.length > 0 ? ` Available: ${suggestions.slice(0, 3).join(", ")}` : ""}`,
       };
     }
 
