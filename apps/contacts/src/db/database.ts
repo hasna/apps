@@ -148,9 +148,7 @@ const MIGRATIONS = [
     last_name,
     nickname,
     notes,
-    job_title,
-    content='contacts',
-    content_rowid='rowid'
+    job_title
   );
 
   CREATE TRIGGER IF NOT EXISTS contacts_fts_insert AFTER INSERT ON contacts BEGIN
