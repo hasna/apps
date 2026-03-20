@@ -103,7 +103,7 @@ const MINIMAL_TOOLS = new Set([
 ]);
 
 const STANDARD_EXCLUDED = new Set([
-  "get_org_chart", "set_reports_to", "rename_agent", "delete_agent", "unarchive_agent",
+  "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
   "create_template", "list_templates", "create_task_from_template", "delete_template",
   "approve_task",
@@ -1999,18 +1999,48 @@ server.tool(
 if (shouldRegisterTool("get_org_chart")) {
 server.tool(
   "get_org_chart",
-  "Get agent org chart showing reporting hierarchy.",
-  {},
-  async () => {
+  "Get agent org chart showing reporting hierarchy with roles, titles, capabilities, and activity status.",
+  {
+    format: z.enum(["text", "json"]).optional().describe("Output format (default: text)"),
+    role: z.string().optional().describe("Filter by agent role (e.g. 'lead', 'developer')"),
+    active_only: z.coerce.boolean().optional().describe("Only show agents active in last 30 min"),
+  },
+  async ({ format, role, active_only }) => {
     try {
       const { getOrgChart } = await import("../db/agents.js");
-      const tree = getOrgChart();
+      let tree: any[] = getOrgChart();
+
+      // Filter helpers
+      const now = Date.now();
+      const ACTIVE_MS = 30 * 60 * 1000;
+
+      function filterTree(nodes: any[]): any[] {
+        return nodes
+          .map(n => ({ ...n, reports: filterTree(n.reports) }))
+          .filter(n => {
+            if (role && n.agent.role !== role) return false;
+            if (active_only) {
+              const lastSeen = new Date(n.agent.last_seen_at).getTime();
+              if (now - lastSeen > ACTIVE_MS) return false;
+            }
+            return true;
+          });
+      }
+      if (role || active_only) tree = filterTree(tree);
+
+      if (format === "json") {
+        return { content: [{ type: "text" as const, text: JSON.stringify(tree, null, 2) }] };
+      }
+
       function render(nodes: any[], indent = 0): string {
         return nodes.map(n => {
           const prefix = "  ".repeat(indent);
           const title = n.agent.title ? ` — ${n.agent.title}` : "";
-          const level = n.agent.level ? ` (${n.agent.level})` : "";
-          const line = `${prefix}${n.agent.name}${title}${level}`;
+          const level = n.agent.level ? ` [${n.agent.level}]` : "";
+          const caps = n.agent.capabilities?.length > 0 ? ` {${n.agent.capabilities.join(", ")}}` : "";
+          const lastSeen = new Date(n.agent.last_seen_at).getTime();
+          const active = now - lastSeen < ACTIVE_MS ? " ●" : " ○";
+          const line = `${prefix}${active} ${n.agent.name}${title}${level}${caps}`;
           const children = n.reports.length > 0 ? "\n" + render(n.reports, indent + 1) : "";
           return line + children;
         }).join("\n");
