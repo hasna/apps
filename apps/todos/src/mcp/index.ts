@@ -2821,6 +2821,69 @@ server.tool(
 );
 }
 
+// === AUTO-ASSIGN ===
+
+if (shouldRegisterTool("auto_assign_task")) {
+server.tool(
+  "auto_assign_task",
+  "Auto-assign a task to the best available agent. Uses Cerebras LLM (llama-3.3-70b) if CEREBRAS_API_KEY is set, otherwise falls back to capability-based matching.",
+  {
+    task_id: z.string().describe("Task to auto-assign"),
+  },
+  async ({ task_id }) => {
+    try {
+      const { autoAssignTask } = await import("../lib/auto-assign.js");
+      const resolvedId = resolveId(task_id);
+      const result = await autoAssignTask(resolvedId);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+if (shouldRegisterTool("auto_assign_unassigned")) {
+server.tool(
+  "auto_assign_unassigned",
+  "Auto-assign all unassigned pending tasks in a project using Cerebras LLM routing. Returns summary of assignments made.",
+  {
+    project_id: z.string().optional().describe("Filter to a specific project"),
+    limit: z.number().optional().describe("Max tasks to assign (default: 20)"),
+  },
+  async ({ project_id, limit }) => {
+    try {
+      const { autoAssignTask } = await import("../lib/auto-assign.js");
+      const { listTasks } = require("../db/tasks.js") as any;
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const tasks = listTasks({
+        status: "pending",
+        project_id: resolvedProjectId,
+      }).tasks.filter((t: any) => !t.assigned_to).slice(0, limit ?? 20);
+
+      const results = [];
+      for (const task of tasks) {
+        try {
+          const r = await autoAssignTask(task.id);
+          results.push(r);
+        } catch { /* continue */ }
+      }
+
+      const assigned = results.filter(r => r.assigned_to);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            total_checked: tasks.length,
+            assigned: assigned.length,
+            skipped: tasks.length - assigned.length,
+            results,
+          }, null, 2),
+        }],
+      };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 // === META TOOLS ===
 
 // search_tools
