@@ -29,6 +29,8 @@ function rowToCompany(row: CompanyRow): Company {
   return {
     ...row,
     custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
+    archived: !!row.archived,
+    project_id: row.project_id ?? null,
   };
 }
 
@@ -173,6 +175,8 @@ export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { c
     offset = 0,
     industry,
     tag_id,
+    project_id,
+    archived = false,
     order_by = "name",
     order_dir = "asc",
   } = opts;
@@ -180,9 +184,17 @@ export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { c
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
+  conditions.push("co.archived = ?");
+  params.push(archived ? 1 : 0);
+
   if (industry) {
     conditions.push("co.industry = ?");
     params.push(industry);
+  }
+
+  if (project_id) {
+    conditions.push("co.project_id = ?");
+    params.push(project_id);
   }
 
   if (tag_id) {
@@ -218,6 +230,7 @@ export function updateCompany(id: string, input: UpdateCompanyInput, db?: Databa
   if (input.founded_year !== undefined) { setClauses.push("founded_year = ?"); params.push(input.founded_year); }
   if (input.notes !== undefined) { setClauses.push("notes = ?"); params.push(input.notes); }
   if (input.custom_fields !== undefined) { setClauses.push("custom_fields = ?"); params.push(JSON.stringify(input.custom_fields)); }
+  if ("project_id" in input && input.project_id !== undefined) { setClauses.push("project_id = ?"); params.push(input.project_id as string | null); }
 
   params.push(id);
   d.run(`UPDATE companies SET ${setClauses.join(", ")} WHERE id = ?`, params);
@@ -261,5 +274,29 @@ export function listCompanyEmployees(companyId: string, db?: Database): Contact[
     source: r.source as Contact["source"],
     custom_fields: JSON.parse(r.custom_fields || "{}") as Record<string, unknown>,
     preferred_contact_method: (r.preferred_contact_method ?? null) as Contact["preferred_contact_method"],
+    status: (r.status ?? "active") as Contact["status"],
+    follow_up_at: r.follow_up_at ?? null,
+    archived: !!r.archived,
+    project_id: r.project_id ?? null,
   }));
+}
+
+export function archiveCompany(id: string, db?: Database): CompanyWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
+  if (!row) throw new CompanyNotFoundError(id);
+  d.run(`UPDATE companies SET archived = 1, updated_at = ? WHERE id = ?`, [now(), id]);
+  logActivity(d, { company_id: id, action: "company.archived", details: `Archived company: ${row.name}` });
+  const updated = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow;
+  return loadCompanyDetails(d, rowToCompany(updated));
+}
+
+export function unarchiveCompany(id: string, db?: Database): CompanyWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
+  if (!row) throw new CompanyNotFoundError(id);
+  d.run(`UPDATE companies SET archived = 0, updated_at = ? WHERE id = ?`, [now(), id]);
+  logActivity(d, { company_id: id, action: "company.unarchived", details: `Unarchived company: ${row.name}` });
+  const updated = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow;
+  return loadCompanyDetails(d, rowToCompany(updated));
 }

@@ -18,11 +18,17 @@ import { getDatabase } from "../db/database.js";
 import {
   createContact,
   getContact,
+  getContactByEmail,
   updateContact,
   deleteContact,
   listContacts,
   searchContacts,
   mergeContacts,
+  addEmailToContact,
+  addPhoneToContact,
+  archiveContact,
+  unarchiveContact,
+  autoLinkContactToCompany,
 } from "../db/contacts.js";
 import {
   createGroup,
@@ -34,6 +40,10 @@ import {
   removeContactFromGroup,
   listContactsInGroup,
   listGroupsForContact,
+  addCompanyToGroup,
+  removeCompanyFromGroup,
+  listCompaniesInGroup,
+  listGroupsForCompany,
 } from "../db/groups.js";
 import { getTagByName } from "../db/tags.js";
 import {
@@ -43,6 +53,8 @@ import {
   deleteCompany,
   listCompanies,
   searchCompanies,
+  archiveCompany,
+  unarchiveCompany,
 } from "../db/companies.js";
 import {
   createTag,
@@ -50,12 +62,16 @@ import {
   deleteTag,
   addTagToContact,
   removeTagFromContact,
+  addTagToCompany,
+  removeTagFromCompany,
 } from "../db/tags.js";
 import {
   createRelationship,
   listRelationships,
   deleteRelationship,
 } from "../db/relationships.js";
+import { listActivity } from "../db/activity.js";
+import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
 
@@ -83,6 +99,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           website: { type: "string", description: "Personal or professional website URL" },
           last_contacted_at: { type: "string", description: "ISO 8601 datetime of last contact" },
           preferred_contact_method: { type: "string", enum: ["email", "phone", "telegram", "whatsapp", "linkedin", "twitter", "other"] },
+          status: { type: "string", enum: ["active", "pending_reply", "converted", "closed", "other"], description: "Contact lifecycle status (default: active)" },
+          follow_up_at: { type: "string", description: "ISO 8601 datetime to follow up with this contact" },
+          project_id: { type: "string", description: "Associate contact with a project ID" },
           emails: {
             type: "array",
             items: {
@@ -151,7 +170,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_contact",
-      description: "Update an existing contact's fields. Only provided fields are changed; omitted fields remain unchanged. Supports all contact fields including last_contacted_at, website, preferred_contact_method.",
+      description: "Update an existing contact's fields. Only provided fields are changed. Supports all contact fields including status, follow_up_at, project_id. Use emails_add/phones_add to append new contact methods without replacing existing ones.",
       inputSchema: {
         type: "object",
         properties: {
@@ -167,7 +186,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           website: { type: "string" },
           last_contacted_at: { type: "string", description: "ISO 8601 datetime of last contact" },
           preferred_contact_method: { type: "string", enum: ["email", "phone", "telegram", "whatsapp", "linkedin", "twitter", "other"] },
+          status: { type: "string", enum: ["active", "pending_reply", "converted", "closed", "other"] },
+          follow_up_at: { type: "string", description: "ISO 8601 datetime for follow-up reminder (null to clear)" },
+          project_id: { type: "string", description: "Project ID to associate this contact with (null to clear)" },
           source: { type: "string", enum: ["manual", "import", "linkedin", "github", "twitter", "email", "calendar", "crm", "other"] },
+          emails_add: { type: "array", items: { type: "object", properties: { address: { type: "string" }, type: { type: "string" }, is_primary: { type: "boolean" } }, required: ["address"] }, description: "New email addresses to append (duplicates are skipped)" },
+          phones_add: { type: "array", items: { type: "object", properties: { number: { type: "string" }, type: { type: "string" }, country_code: { type: "string" }, is_primary: { type: "boolean" } }, required: ["number"] }, description: "New phone numbers to append (duplicates are skipped)" },
         },
         required: ["id"],
       },
@@ -183,15 +207,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_contacts",
-      description: "List contacts with optional filters. Supports filtering by company, tag, or source. Returns paginated results with total count.",
+      description: "List contacts with optional filters. Supports filtering by company, tag(s), source, status, project, follow-up due, last_contacted date range, and archived state. Returns paginated results with total count.",
       inputSchema: {
         type: "object",
         properties: {
           company_id: { type: "string" },
-          tag_id: { type: "string", description: "Filter by tag ID" },
+          tag_id: { type: "string", description: "Filter by a single tag ID" },
+          tag_ids: { type: "array", items: { type: "string" }, description: "Filter by multiple tag IDs (AND logic — contact must have all tags)" },
+          source: { type: "string", enum: ["manual", "import", "linkedin", "github", "twitter", "email", "calendar", "crm", "other"] },
+          status: { type: "string", enum: ["active", "pending_reply", "converted", "closed", "other"] },
+          project_id: { type: "string", description: "Filter by project ID" },
+          archived: { type: "boolean", description: "Include archived contacts (default false)" },
+          follow_up_due: { type: "boolean", description: "Only return contacts whose follow_up_at is in the past" },
+          last_contacted_after: { type: "string", description: "ISO 8601 date — only contacts last contacted after this date" },
+          last_contacted_before: { type: "string", description: "ISO 8601 date — only contacts last contacted before this date" },
           limit: { type: "number", description: "Max results (default 50)" },
           offset: { type: "number" },
-          order_by: { type: "string", enum: ["display_name", "created_at", "updated_at"] },
+          order_by: { type: "string", enum: ["display_name", "created_at", "updated_at", "last_contacted_at", "follow_up_at"] },
           order_dir: { type: "string", enum: ["asc", "desc"] },
         },
       },
@@ -265,12 +297,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_companies",
-      description: "List companies with optional filters by industry or tag. Returns paginated results with total count.",
+      description: "List companies with optional filters by industry, tag, project, or archived state. Returns paginated results with total count.",
       inputSchema: {
         type: "object",
         properties: {
           tag_id: { type: "string" },
           industry: { type: "string" },
+          project_id: { type: "string", description: "Filter by project ID" },
+          archived: { type: "boolean", description: "Include archived companies (default false)" },
           limit: { type: "number" },
           offset: { type: "number" },
         },
@@ -606,6 +640,188 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["contact_id"],
       },
     },
+    {
+      name: "get_contact_by_email",
+      description: "Fast lookup of a contact by exact email address. Returns null if not found. Unlike search_contacts, this is a precise read-only lookup with no side effects.",
+      inputSchema: {
+        type: "object",
+        properties: { email: { type: "string", description: "Exact email address to look up" } },
+        required: ["email"],
+      },
+    },
+    {
+      name: "add_email_to_contact",
+      description: "Append a new email address to a contact. Idempotent — silently skips if the email already exists on this contact.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          address: { type: "string" },
+          type: { type: "string", enum: ["work", "personal", "other"] },
+          is_primary: { type: "boolean" },
+        },
+        required: ["contact_id", "address"],
+      },
+    },
+    {
+      name: "add_phone_to_contact",
+      description: "Append a new phone number to a contact. Idempotent — silently skips if the number already exists on this contact.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          number: { type: "string" },
+          type: { type: "string", enum: ["mobile", "work", "home", "fax", "whatsapp", "other"] },
+          country_code: { type: "string" },
+          is_primary: { type: "boolean" },
+        },
+        required: ["contact_id", "number"],
+      },
+    },
+    {
+      name: "archive_contact",
+      description: "Soft-delete a contact by setting archived=true. Archived contacts are excluded from list_contacts and search_contacts by default. Use unarchive_contact to restore.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "unarchive_contact",
+      description: "Restore an archived contact. Sets archived=false so the contact reappears in lists and searches.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "archive_company",
+      description: "Soft-delete a company by setting archived=true. Archived companies are excluded from list_companies by default.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "unarchive_company",
+      description: "Restore an archived company. Sets archived=false.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "find_duplicates",
+      description: "Scan contacts for potential duplicates — by shared email address (exact) or by similar display name (Levenshtein distance ≤ 2). Returns groups of contact IDs that may be the same person.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "list_interactions",
+      description: "List activity log entries for a contact or company. Shows all logged interactions, creates, updates, and merges in reverse chronological order.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contact_id: { type: "string" },
+          company_id: { type: "string" },
+          limit: { type: "number", description: "Max results (default 50)" },
+          offset: { type: "number" },
+        },
+      },
+    },
+    {
+      name: "add_tag_to_company",
+      description: "Apply an existing tag to a company. Use list_tags to find tag IDs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          tag_id: { type: "string" },
+        },
+        required: ["company_id", "tag_id"],
+      },
+    },
+    {
+      name: "remove_tag_from_company",
+      description: "Remove a tag from a company. The tag itself is not deleted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          tag_id: { type: "string" },
+        },
+        required: ["company_id", "tag_id"],
+      },
+    },
+    {
+      name: "add_company_to_group",
+      description: "Add a company to a group. Returns { added, already_member } — idempotent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          group_id: { type: "string" },
+        },
+        required: ["company_id", "group_id"],
+      },
+    },
+    {
+      name: "remove_company_from_group",
+      description: "Remove a company from a group.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          company_id: { type: "string" },
+          group_id: { type: "string" },
+        },
+        required: ["company_id", "group_id"],
+      },
+    },
+    {
+      name: "list_companies_in_group",
+      description: "List all company IDs in a group.",
+      inputSchema: {
+        type: "object",
+        properties: { group_id: { type: "string" } },
+        required: ["group_id"],
+      },
+    },
+    {
+      name: "list_groups_for_company",
+      description: "List all groups that a company belongs to.",
+      inputSchema: {
+        type: "object",
+        properties: { company_id: { type: "string" } },
+        required: ["company_id"],
+      },
+    },
+    {
+      name: "bulk_create_contacts",
+      description: "Create multiple contacts in one call. Each item in the contacts array follows the same schema as create_contact. Returns { created, errors }.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          contacts: {
+            type: "array",
+            items: { type: "object" },
+            description: "Array of contact input objects (same schema as create_contact)",
+          },
+        },
+        required: ["contacts"],
+      },
+    },
+    {
+      name: "auto_link_to_company",
+      description: "Auto-link a contact to a company by matching the contact's email domain against known company domains. Only sets company_id if the contact has no company yet and a matching company exists. Returns the updated contact, or null if no match.",
+      inputSchema: {
+        type: "object",
+        properties: { contact_id: { type: "string" } },
+        required: ["contact_id"],
+      },
+    },
   ],
 }));
 
@@ -628,6 +844,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           website: a.website as string | undefined,
           last_contacted_at: a.last_contacted_at as string | undefined,
           preferred_contact_method: a.preferred_contact_method as CreateContactInput["preferred_contact_method"],
+          status: a.status as CreateContactInput["status"],
+          follow_up_at: a.follow_up_at as string | undefined,
+          project_id: a.project_id as string | undefined,
           emails: a.emails as CreateContactInput["emails"],
           phones: a.phones as CreateContactInput["phones"],
           addresses: a.addresses as CreateContactInput["addresses"],
@@ -658,7 +877,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           website: rest.website as string | null | undefined,
           last_contacted_at: rest.last_contacted_at as string | null | undefined,
           preferred_contact_method: rest.preferred_contact_method as UpdateContactInput["preferred_contact_method"],
+          status: rest.status as UpdateContactInput["status"],
+          follow_up_at: rest.follow_up_at as string | null | undefined,
+          project_id: rest.project_id as string | null | undefined,
           source: rest.source as UpdateContactInput["source"],
+          emails_add: rest.emails_add as UpdateContactInput["emails_add"],
+          phones_add: rest.phones_add as UpdateContactInput["phones_add"],
         };
         const contact = updateContact(id as string, input);
         return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
@@ -673,9 +897,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = listContacts({
           company_id: a.company_id as string | undefined,
           tag_id: a.tag_id as string | undefined,
+          tag_ids: a.tag_ids as string[] | undefined,
+          source: a.source as CreateContactInput["source"],
+          status: a.status as "active" | "pending_reply" | "converted" | "closed" | "other" | undefined,
+          project_id: a.project_id as string | undefined,
+          archived: a.archived as boolean | undefined,
+          follow_up_due: a.follow_up_due as boolean | undefined,
+          last_contacted_after: a.last_contacted_after as string | undefined,
+          last_contacted_before: a.last_contacted_before as string | undefined,
           limit: a.limit as number | undefined,
           offset: a.offset as number | undefined,
-          order_by: a.order_by as "display_name" | "created_at" | "updated_at" | undefined,
+          order_by: a.order_by as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at" | undefined,
           order_dir: a.order_dir as "asc" | "desc" | undefined,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -687,6 +919,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "create_company": {
+        const rawTagIds = a.tag_ids;
+        const tagIds: string[] | undefined = typeof rawTagIds === "string"
+          ? (JSON.parse(rawTagIds) as string[])
+          : rawTagIds as string[] | undefined;
         const input: CreateCompanyInput = {
           name: a.name as string,
           domain: a.domain as string | undefined,
@@ -699,7 +935,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           phones: a.phones as CreateCompanyInput["phones"],
           addresses: a.addresses as CreateCompanyInput["addresses"],
           social_profiles: a.social_profiles as CreateCompanyInput["social_profiles"],
-          tag_ids: a.tag_ids as string[] | undefined,
+          tag_ids: tagIds,
         };
         const company = createCompany(input);
         return { content: [{ type: "text", text: JSON.stringify(company, null, 2) }] };
@@ -737,6 +973,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = listCompanies({
           tag_id: a.tag_id as string | undefined,
           industry: a.industry as string | undefined,
+          project_id: a.project_id as string | undefined,
+          archived: a.archived as boolean | undefined,
           limit: a.limit as number | undefined,
           offset: a.offset as number | undefined,
         });
@@ -870,25 +1108,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "find_or_create_contact": {
         const db = getDatabase();
-        // Search by email first
+        // Search by email first (exact match)
         const emailAddresses = (a.emails as Array<{ address: string }> | undefined)?.map(e => e.address) ?? [];
         let found = null;
         for (const addr of emailAddresses) {
-          const emailRow = db.prepare(`SELECT contact_id FROM emails WHERE address = ? AND contact_id IS NOT NULL LIMIT 1`).get(addr) as { contact_id: string } | null;
+          const emailRow = db.prepare(`SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`).get(addr) as { contact_id: string } | null;
           if (emailRow) {
             found = getContact(emailRow.contact_id);
             break;
           }
         }
-        // Search by display_name if no email match
-        if (!found && a.display_name) {
-          const results = searchContacts(a.display_name as string);
-          if (results.length > 0) found = results[0]!;
+        // Fall back to fuzzy name search — try display_name, then build from first+last
+        if (!found) {
+          const nameQuery = (a.display_name as string | undefined)
+            ?? (a.first_name || a.last_name ? `${a.first_name ?? ""} ${a.last_name ?? ""}`.trim() : null);
+          if (nameQuery) {
+            const results = searchContacts(nameQuery);
+            if (results.length > 0) found = results[0]!;
+          }
         }
         if (found) {
           return { content: [{ type: "text", text: JSON.stringify({ contact: found, found: true, created: false }, null, 2) }] };
         }
-        const input: CreateContactInput = {
+        const focInput: CreateContactInput = {
           first_name: a.first_name as string | undefined,
           last_name: a.last_name as string | undefined,
           display_name: a.display_name as string | undefined,
@@ -900,6 +1142,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           website: a.website as string | undefined,
           last_contacted_at: a.last_contacted_at as string | undefined,
           preferred_contact_method: a.preferred_contact_method as CreateContactInput["preferred_contact_method"],
+          status: a.status as CreateContactInput["status"],
+          follow_up_at: a.follow_up_at as string | undefined,
+          project_id: a.project_id as string | undefined,
           emails: a.emails as CreateContactInput["emails"],
           phones: a.phones as CreateContactInput["phones"],
           addresses: a.addresses as CreateContactInput["addresses"],
@@ -907,7 +1152,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           tag_ids: a.tag_ids as string[] | undefined,
           source: a.source as CreateContactInput["source"],
         };
-        const contact = createContact(input);
+        const contact = createContact(focInput);
         return { content: [{ type: "text", text: JSON.stringify({ contact, found: false, created: true }, null, 2) }] };
       }
 
@@ -1040,8 +1285,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "add_contact_to_group": {
         const db = getDatabase();
-        addContactToGroup(db, a.contact_id as string, a.group_id as string);
-        return { content: [{ type: "text", text: `Contact ${a.contact_id} added to group ${a.group_id}` }] };
+        const result = addContactToGroup(db, a.contact_id as string, a.group_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "remove_contact_from_group": {
@@ -1060,6 +1305,123 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const db = getDatabase();
         const groups = listGroupsForContact(db, a.contact_id as string);
         return { content: [{ type: "text", text: JSON.stringify(groups, null, 2) }] };
+      }
+
+      case "get_contact_by_email": {
+        const contact = getContactByEmail(a.email as string);
+        if (!contact) return { content: [{ type: "text", text: "null" }] };
+        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "add_email_to_contact": {
+        const contact = addEmailToContact(a.contact_id as string, {
+          address: a.address as string,
+          type: a.type as "work" | "personal" | "other" | undefined,
+          is_primary: a.is_primary as boolean | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "add_phone_to_contact": {
+        const contact = addPhoneToContact(a.contact_id as string, {
+          number: a.number as string,
+          type: a.type as "mobile" | "work" | "home" | "fax" | "whatsapp" | "other" | undefined,
+          country_code: a.country_code as string | undefined,
+          is_primary: a.is_primary as boolean | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "archive_contact": {
+        const contact = archiveContact(a.id as string);
+        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "unarchive_contact": {
+        const contact = unarchiveContact(a.id as string);
+        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+      }
+
+      case "archive_company": {
+        const company = archiveCompany(a.id as string);
+        return { content: [{ type: "text", text: JSON.stringify(company, null, 2) }] };
+      }
+
+      case "unarchive_company": {
+        const company = unarchiveCompany(a.id as string);
+        return { content: [{ type: "text", text: JSON.stringify(company, null, 2) }] };
+      }
+
+      case "find_duplicates": {
+        const db = getDatabase();
+        const byEmail = findEmailDuplicates(db);
+        const byName = findNameDuplicates(db);
+        return { content: [{ type: "text", text: JSON.stringify({ by_email: byEmail, by_name: byName }, null, 2) }] };
+      }
+
+      case "list_interactions": {
+        const result = listActivity({
+          contact_id: a.contact_id as string | undefined,
+          company_id: a.company_id as string | undefined,
+          limit: a.limit as number | undefined,
+          offset: a.offset as number | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "add_tag_to_company": {
+        addTagToCompany(a.company_id as string, a.tag_id as string);
+        return { content: [{ type: "text", text: `Tag ${a.tag_id} added to company ${a.company_id}` }] };
+      }
+
+      case "remove_tag_from_company": {
+        removeTagFromCompany(a.company_id as string, a.tag_id as string);
+        return { content: [{ type: "text", text: `Tag ${a.tag_id} removed from company ${a.company_id}` }] };
+      }
+
+      case "add_company_to_group": {
+        const db = getDatabase();
+        const result = addCompanyToGroup(db, a.company_id as string, a.group_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "remove_company_from_group": {
+        const db = getDatabase();
+        removeCompanyFromGroup(db, a.company_id as string, a.group_id as string);
+        return { content: [{ type: "text", text: `Company ${a.company_id} removed from group ${a.group_id}` }] };
+      }
+
+      case "list_companies_in_group": {
+        const db = getDatabase();
+        const companyIds = listCompaniesInGroup(db, a.group_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(companyIds, null, 2) }] };
+      }
+
+      case "list_groups_for_company": {
+        const db = getDatabase();
+        const groups = listGroupsForCompany(db, a.company_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(groups, null, 2) }] };
+      }
+
+      case "bulk_create_contacts": {
+        const contacts = a.contacts as Record<string, unknown>[];
+        let created = 0;
+        const errors: string[] = [];
+        for (const item of contacts) {
+          try {
+            createContact(item as CreateContactInput);
+            created++;
+          } catch (err) {
+            errors.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ created, errors: errors.length, error_details: errors }, null, 2) }] };
+      }
+
+      case "auto_link_to_company": {
+        const contact = autoLinkContactToCompany(a.contact_id as string);
+        if (!contact) return { content: [{ type: "text", text: "null" }] };
+        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
       }
 
       default:

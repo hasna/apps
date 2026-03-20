@@ -115,6 +115,10 @@ export function listContactsByTag(tagId: string, db?: Database): Contact[] {
     source: r.source as Contact["source"],
     custom_fields: JSON.parse(r.custom_fields || "{}") as Record<string, unknown>,
     preferred_contact_method: (r.preferred_contact_method ?? null) as Contact["preferred_contact_method"],
+    status: (r.status ?? "active") as Contact["status"],
+    follow_up_at: r.follow_up_at ?? null,
+    archived: !!r.archived,
+    project_id: r.project_id ?? null,
   }));
 }
 

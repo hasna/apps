@@ -188,6 +188,21 @@ const MIGRATIONS = [
     PRIMARY KEY (contact_id, group_id)
   );
   `,
+
+  `
+  ALTER TABLE contacts ADD COLUMN status TEXT DEFAULT 'active';
+  ALTER TABLE contacts ADD COLUMN follow_up_at TEXT;
+  ALTER TABLE contacts ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE contacts ADD COLUMN project_id TEXT;
+  ALTER TABLE companies ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE companies ADD COLUMN project_id TEXT;
+
+  CREATE TABLE IF NOT EXISTS company_groups (
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (company_id, group_id)
+  );
+  `,
 ];
 
 let _db: Database | null = null;

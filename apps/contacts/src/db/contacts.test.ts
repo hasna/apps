@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { resetDatabase } from "./database.js";
-import { createContact, getContact, updateContact, deleteContact, listContacts, searchContacts } from "./contacts.js";
+import {
+  createContact, getContact, getContactByEmail, updateContact, deleteContact,
+  listContacts, searchContacts, mergeContacts, addEmailToContact, addPhoneToContact,
+  archiveContact, unarchiveContact, autoLinkContactToCompany,
+} from "./contacts.js";
+import { createCompany } from "./companies.js";
+import { createTag, addTagToContact } from "./tags.js";
 import { ContactNotFoundError } from "../types/index.js";
 
 let tmpDir: string;
@@ -155,5 +161,256 @@ describe("searchContacts", () => {
     createContact({ display_name: "Nobody" });
     const results = searchContacts("zzz_no_match_zzz");
     expect(results).toEqual([]);
+  });
+
+  it("searches by email address", () => {
+    createContact({
+      display_name: "Email Searcher",
+      emails: [{ address: "findme@domain.com", is_primary: true }],
+    });
+    const results = searchContacts("findme@domain.com");
+    expect(results.some((c) => c.display_name === "Email Searcher")).toBe(true);
+  });
+
+  it("excludes archived contacts", () => {
+    const c = createContact({ display_name: "Archived Person" });
+    archiveContact(c.id);
+    const results = searchContacts("Archived Person");
+    expect(results.find((r) => r.id === c.id)).toBeUndefined();
+  });
+});
+
+describe("getContactByEmail", () => {
+  it("returns contact by exact email", () => {
+    createContact({
+      display_name: "Email Guy",
+      emails: [{ address: "emailguy@test.com", is_primary: true }],
+    });
+    const found = getContactByEmail("emailguy@test.com");
+    expect(found).not.toBeNull();
+    expect(found!.display_name).toBe("Email Guy");
+  });
+
+  it("is case-insensitive", () => {
+    createContact({
+      display_name: "Case Guy",
+      emails: [{ address: "case@test.com", is_primary: true }],
+    });
+    const found = getContactByEmail("CASE@TEST.COM");
+    expect(found).not.toBeNull();
+  });
+
+  it("returns null when not found", () => {
+    const found = getContactByEmail("nobody@nowhere.com");
+    expect(found).toBeNull();
+  });
+});
+
+describe("addEmailToContact", () => {
+  it("adds a new email to a contact", () => {
+    const c = createContact({ display_name: "Multi Email" });
+    const updated = addEmailToContact(c.id, { address: "extra@test.com", type: "personal" });
+    expect(updated.emails).toHaveLength(1);
+    expect(updated.emails[0]!.address).toBe("extra@test.com");
+  });
+
+  it("is idempotent — skips duplicate", () => {
+    const c = createContact({
+      display_name: "Idem Email",
+      emails: [{ address: "idem@test.com" }],
+    });
+    addEmailToContact(c.id, { address: "idem@test.com" });
+    const updated = getContact(c.id);
+    expect(updated.emails).toHaveLength(1);
+  });
+
+  it("throws ContactNotFoundError for missing contact", () => {
+    expect(() => addEmailToContact("nonexistent", { address: "x@x.com" })).toThrow(ContactNotFoundError);
+  });
+});
+
+describe("addPhoneToContact", () => {
+  it("adds a new phone to a contact", () => {
+    const c = createContact({ display_name: "Phone Guy" });
+    const updated = addPhoneToContact(c.id, { number: "+1234567890", type: "mobile" });
+    expect(updated.phones).toHaveLength(1);
+    expect(updated.phones[0]!.number).toBe("+1234567890");
+  });
+
+  it("is idempotent — skips duplicate", () => {
+    const c = createContact({
+      display_name: "Idem Phone",
+      phones: [{ number: "+1111111111" }],
+    });
+    addPhoneToContact(c.id, { number: "+1111111111" });
+    const updated = getContact(c.id);
+    expect(updated.phones).toHaveLength(1);
+  });
+});
+
+describe("archiveContact / unarchiveContact", () => {
+  it("archives a contact", () => {
+    const c = createContact({ display_name: "Archive Me" });
+    const archived = archiveContact(c.id);
+    expect(archived.archived).toBe(true);
+  });
+
+  it("archived contacts are excluded from listContacts by default", () => {
+    createContact({ display_name: "Visible" });
+    const toArchive = createContact({ display_name: "Invisible" });
+    archiveContact(toArchive.id);
+    const result = listContacts();
+    expect(result.contacts.some((c) => c.id === toArchive.id)).toBe(false);
+    expect(result.contacts.some((c) => c.display_name === "Visible")).toBe(true);
+  });
+
+  it("shows archived contacts when archived=true", () => {
+    const c = createContact({ display_name: "Show Archived" });
+    archiveContact(c.id);
+    const result = listContacts({ archived: true });
+    expect(result.contacts.some((r) => r.id === c.id)).toBe(true);
+  });
+
+  it("unarchives a contact", () => {
+    const c = createContact({ display_name: "Restore Me" });
+    archiveContact(c.id);
+    const restored = unarchiveContact(c.id);
+    expect(restored.archived).toBe(false);
+    const result = listContacts();
+    expect(result.contacts.some((r) => r.id === c.id)).toBe(true);
+  });
+});
+
+describe("contact status and follow_up_at", () => {
+  it("defaults status to active", () => {
+    const c = createContact({ display_name: "Status Test" });
+    expect(c.status).toBe("active");
+  });
+
+  it("creates contact with custom status", () => {
+    const c = createContact({ display_name: "Converted", status: "converted" });
+    expect(c.status).toBe("converted");
+  });
+
+  it("updates status", () => {
+    const c = createContact({ display_name: "Status Update" });
+    const updated = updateContact(c.id, { status: "pending_reply" });
+    expect(updated.status).toBe("pending_reply");
+  });
+
+  it("filters list_contacts by status", () => {
+    createContact({ display_name: "Active One", status: "active" });
+    createContact({ display_name: "Closed One", status: "closed" });
+    const result = listContacts({ status: "closed" });
+    expect(result.contacts.every((c) => c.status === "closed")).toBe(true);
+    expect(result.total).toBe(1);
+  });
+
+  it("sets follow_up_at and filters by follow_up_due", () => {
+    const past = new Date(Date.now() - 86400000).toISOString();
+    const future = new Date(Date.now() + 86400000).toISOString();
+    createContact({ display_name: "Due Now", follow_up_at: past });
+    createContact({ display_name: "Due Later", follow_up_at: future });
+    const result = listContacts({ follow_up_due: true });
+    expect(result.contacts.some((c) => c.display_name === "Due Now")).toBe(true);
+    expect(result.contacts.some((c) => c.display_name === "Due Later")).toBe(false);
+  });
+});
+
+describe("contact project_id", () => {
+  it("sets project_id on create", () => {
+    const c = createContact({ display_name: "Project Contact", project_id: "proj-123" });
+    expect(c.project_id).toBe("proj-123");
+  });
+
+  it("filters by project_id", () => {
+    createContact({ display_name: "In Project", project_id: "proj-abc" });
+    createContact({ display_name: "No Project" });
+    const result = listContacts({ project_id: "proj-abc" });
+    expect(result.total).toBe(1);
+    expect(result.contacts[0]!.display_name).toBe("In Project");
+  });
+});
+
+describe("mergeContacts deduplication", () => {
+  it("deduplicates emails when merging", () => {
+    const keep = createContact({
+      display_name: "Keep",
+      emails: [{ address: "shared@test.com" }, { address: "keep-only@test.com" }],
+    });
+    const merge = createContact({
+      display_name: "Merge",
+      emails: [{ address: "shared@test.com" }, { address: "merge-only@test.com" }],
+    });
+    const result = mergeContacts(keep.id, merge.id);
+    const addresses = result.emails.map((e) => e.address);
+    // shared email should appear only once
+    expect(addresses.filter((a) => a === "shared@test.com")).toHaveLength(1);
+    expect(addresses).toContain("keep-only@test.com");
+    expect(addresses).toContain("merge-only@test.com");
+  });
+
+  it("deduplicates phones when merging", () => {
+    const keep = createContact({
+      display_name: "Keep Phones",
+      phones: [{ number: "+1111" }, { number: "+2222" }],
+    });
+    const merge = createContact({
+      display_name: "Merge Phones",
+      phones: [{ number: "+1111" }, { number: "+3333" }],
+    });
+    const result = mergeContacts(keep.id, merge.id);
+    const numbers = result.phones.map((p) => p.number);
+    expect(numbers.filter((n) => n === "+1111")).toHaveLength(1);
+    expect(numbers).toContain("+2222");
+    expect(numbers).toContain("+3333");
+  });
+});
+
+describe("listContacts multiple tags", () => {
+  it("filters by multiple tag IDs (AND logic)", () => {
+    const t1 = createTag({ name: "vip" });
+    const t2 = createTag({ name: "client" });
+    const both = createContact({ display_name: "Both Tags" });
+    const one = createContact({ display_name: "One Tag" });
+    addTagToContact(both.id, t1.id);
+    addTagToContact(both.id, t2.id);
+    addTagToContact(one.id, t1.id);
+    const result = listContacts({ tag_ids: [t1.id, t2.id] });
+    expect(result.total).toBe(1);
+    expect(result.contacts[0]!.id).toBe(both.id);
+  });
+});
+
+describe("autoLinkContactToCompany", () => {
+  it("links contact to company by email domain", () => {
+    const company = createCompany({ name: "Acme Corp", domain: "acme.com" });
+    const contact = createContact({
+      display_name: "Acme Employee",
+      emails: [{ address: "employee@acme.com" }],
+    });
+    const linked = autoLinkContactToCompany(contact.id);
+    expect(linked).not.toBeNull();
+    expect(linked!.company_id).toBe(company.id);
+  });
+
+  it("returns null if contact already has a company", () => {
+    const company = createCompany({ name: "Corp", domain: "corp.com" });
+    const contact = createContact({
+      display_name: "Already Linked",
+      company_id: company.id,
+      emails: [{ address: "user@corp.com" }],
+    });
+    const result = autoLinkContactToCompany(contact.id);
+    expect(result).toBeNull();
+  });
+
+  it("returns null if no matching company domain", () => {
+    const contact = createContact({
+      display_name: "No Match",
+      emails: [{ address: "user@unknown.com" }],
+    });
+    const result = autoLinkContactToCompany(contact.id);
+    expect(result).toBeNull();
   });
 });

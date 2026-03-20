@@ -22,6 +22,7 @@ import type {
   Tag,
   TagRow,
   UpdateContactInput,
+  ContactStatus,
 } from "../types/index.js";
 import { ContactNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
@@ -35,6 +36,10 @@ function rowToContact(row: ContactRow): Contact {
     source: row.source as Contact["source"],
     custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
     preferred_contact_method: (row.preferred_contact_method ?? null) as Contact["preferred_contact_method"],
+    status: (row.status ?? "active") as ContactStatus,
+    follow_up_at: row.follow_up_at ?? null,
+    archived: !!row.archived,
+    project_id: row.project_id ?? null,
   };
 }
 
@@ -78,6 +83,8 @@ function rowToCompany(row: CompanyRow): Company {
   return {
     ...row,
     custom_fields: JSON.parse(row.custom_fields || "{}") as Record<string, unknown>,
+    archived: !!row.archived,
+    project_id: row.project_id ?? null,
   };
 }
 
@@ -152,8 +159,8 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
     ?? (firstName || lastName ? `${firstName} ${lastName}`.trim() : "Unnamed Contact");
 
   d.run(
-    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, status, follow_up_at, project_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       firstName,
@@ -170,6 +177,9 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
       input.last_contacted_at ?? null,
       input.website ?? null,
       input.preferred_contact_method ?? null,
+      input.status ?? "active",
+      input.follow_up_at ?? null,
+      input.project_id ?? null,
       timestamp,
       timestamp,
     ]
@@ -206,13 +216,23 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
     offset = 0,
     company_id,
     tag_id,
+    tag_ids,
     source,
+    status,
+    project_id,
+    archived = false,
+    follow_up_due,
+    last_contacted_after,
+    last_contacted_before,
     order_by = "display_name",
     order_dir = "asc",
   } = opts;
 
   const conditions: string[] = [];
   const params: (string | number)[] = [];
+
+  conditions.push("c.archived = ?");
+  params.push(archived ? 1 : 0);
 
   if (company_id) {
     conditions.push("c.company_id = ?");
@@ -224,13 +244,44 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
     params.push(source);
   }
 
+  if (status) {
+    conditions.push("c.status = ?");
+    params.push(status);
+  }
+
+  if (project_id) {
+    conditions.push("c.project_id = ?");
+    params.push(project_id);
+  }
+
   if (tag_id) {
     conditions.push("EXISTS (SELECT 1 FROM contact_tags ct WHERE ct.contact_id = c.id AND ct.tag_id = ?)");
     params.push(tag_id);
   }
 
+  if (tag_ids?.length) {
+    for (const tid of tag_ids) {
+      conditions.push("EXISTS (SELECT 1 FROM contact_tags ct WHERE ct.contact_id = c.id AND ct.tag_id = ?)");
+      params.push(tid);
+    }
+  }
+
+  if (follow_up_due) {
+    conditions.push("c.follow_up_at IS NOT NULL AND c.follow_up_at <= datetime('now')");
+  }
+
+  if (last_contacted_after) {
+    conditions.push("c.last_contacted_at >= ?");
+    params.push(last_contacted_after);
+  }
+
+  if (last_contacted_before) {
+    conditions.push("c.last_contacted_at <= ?");
+    params.push(last_contacted_before);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const validOrderBy = ["display_name", "created_at", "updated_at"].includes(order_by) ? order_by : "display_name";
+  const validOrderBy = ["display_name", "created_at", "updated_at", "last_contacted_at", "follow_up_at"].includes(order_by) ? order_by : "display_name";
   const validOrderDir = order_dir === "desc" ? "DESC" : "ASC";
 
   const totalRow = d.query(`SELECT COUNT(*) as total FROM contacts c ${where}`).get(...params) as { total: number };
@@ -262,9 +313,32 @@ export function updateContact(id: string, input: UpdateContactInput, db?: Databa
   if (input.last_contacted_at !== undefined) { setClauses.push("last_contacted_at = ?"); params.push(input.last_contacted_at); }
   if (input.website !== undefined) { setClauses.push("website = ?"); params.push(input.website); }
   if (input.preferred_contact_method !== undefined) { setClauses.push("preferred_contact_method = ?"); params.push(input.preferred_contact_method); }
+  if (input.status !== undefined) { setClauses.push("status = ?"); params.push(input.status); }
+  if (input.follow_up_at !== undefined) { setClauses.push("follow_up_at = ?"); params.push(input.follow_up_at); }
+  if (input.project_id !== undefined) { setClauses.push("project_id = ?"); params.push(input.project_id); }
 
   params.push(id);
   d.run(`UPDATE contacts SET ${setClauses.join(", ")} WHERE id = ?`, params);
+
+  if (input.emails_add?.length) {
+    for (const e of input.emails_add) {
+      const exists = d.query(`SELECT id FROM emails WHERE contact_id = ? AND LOWER(address) = LOWER(?)`).get(id, e.address);
+      if (!exists) {
+        d.run(`INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, NULL, ?, ?, ?)`,
+          [uuid(), id, e.address, e.type ?? "work", e.is_primary ? 1 : 0]);
+      }
+    }
+  }
+
+  if (input.phones_add?.length) {
+    for (const p of input.phones_add) {
+      const exists = d.query(`SELECT id FROM phones WHERE contact_id = ? AND number = ?`).get(id, p.number);
+      if (!exists) {
+        d.run(`INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+          [uuid(), id, p.number, p.country_code ?? null, p.type ?? "mobile", p.is_primary ? 1 : 0]);
+      }
+    }
+  }
 
   logActivity(d, { contact_id: id, action: "contact.updated", details: `Updated contact: ${existing.display_name}` });
 
@@ -290,30 +364,38 @@ export function searchContacts(query: string, db?: Database): ContactWithDetails
   const ftsRows = d.query(`
     SELECT c.* FROM contacts c
     JOIN contacts_fts fts ON fts.id = c.id
-    WHERE contacts_fts MATCH ?
+    WHERE contacts_fts MATCH ? AND c.archived = 0
     ORDER BY rank
     LIMIT 50
   `).all(`"${query.replace(/"/g, '""')}"*`) as ContactRow[];
 
-  // Also search emails/phones for direct matches
+  // Also search emails for direct matches (address or domain)
   const emailRows = d.query(`
     SELECT DISTINCT c.* FROM contacts c
     JOIN emails e ON e.contact_id = c.id
-    WHERE e.address LIKE ?
+    WHERE e.address LIKE ? AND c.archived = 0
     LIMIT 20
   `).all(`%${query}%`) as ContactRow[];
 
   const phoneRows = d.query(`
     SELECT DISTINCT c.* FROM contacts c
     JOIN phones p ON p.contact_id = c.id
-    WHERE p.number LIKE ?
+    WHERE p.number LIKE ? AND c.archived = 0
+    LIMIT 20
+  `).all(`%${query}%`) as ContactRow[];
+
+  // Also search company name
+  const companyRows = d.query(`
+    SELECT DISTINCT c.* FROM contacts c
+    JOIN companies co ON co.id = c.company_id
+    WHERE co.name LIKE ? AND c.archived = 0
     LIMIT 20
   `).all(`%${query}%`) as ContactRow[];
 
   // Deduplicate by id
   const seen = new Set<string>();
   const allRows: ContactRow[] = [];
-  for (const row of [...ftsRows, ...emailRows, ...phoneRows]) {
+  for (const row of [...ftsRows, ...emailRows, ...phoneRows, ...companyRows]) {
     if (!seen.has(row.id)) {
       seen.add(row.id);
       allRows.push(row);
@@ -340,9 +422,27 @@ export function mergeContacts(keepId: string, mergeId: string, db?: Database): C
   const mergeRow = d.query(`SELECT * FROM contacts WHERE id = ?`).get(mergeId) as ContactRow | null;
   if (!mergeRow) throw new ContactNotFoundError(mergeId);
 
-  // Move all sub-entities from mergeId to keepId
-  d.run(`UPDATE emails SET contact_id = ? WHERE contact_id = ?`, [keepId, mergeId]);
-  d.run(`UPDATE phones SET contact_id = ? WHERE contact_id = ?`, [keepId, mergeId]);
+  // Move all sub-entities from mergeId to keepId, deduplicating emails and phones
+  const mergeEmailRows = d.query(`SELECT * FROM emails WHERE contact_id = ?`).all(mergeId) as { id: string; address: string }[];
+  for (const e of mergeEmailRows) {
+    const exists = d.query(`SELECT id FROM emails WHERE contact_id = ? AND LOWER(address) = LOWER(?)`).get(keepId, e.address);
+    if (exists) {
+      d.run(`DELETE FROM emails WHERE id = ?`, [e.id]);
+    } else {
+      d.run(`UPDATE emails SET contact_id = ? WHERE id = ?`, [keepId, e.id]);
+    }
+  }
+
+  const mergePhoneRows = d.query(`SELECT * FROM phones WHERE contact_id = ?`).all(mergeId) as { id: string; number: string }[];
+  for (const p of mergePhoneRows) {
+    const exists = d.query(`SELECT id FROM phones WHERE contact_id = ? AND number = ?`).get(keepId, p.number);
+    if (exists) {
+      d.run(`DELETE FROM phones WHERE id = ?`, [p.id]);
+    } else {
+      d.run(`UPDATE phones SET contact_id = ? WHERE id = ?`, [keepId, p.id]);
+    }
+  }
+
   d.run(`UPDATE addresses SET contact_id = ? WHERE contact_id = ?`, [keepId, mergeId]);
   d.run(`UPDATE social_profiles SET contact_id = ? WHERE contact_id = ?`, [keepId, mergeId]);
 
@@ -384,4 +484,75 @@ export function mergeContacts(keepId: string, mergeId: string, db?: Database): C
 
   const finalRow = d.query(`SELECT * FROM contacts WHERE id = ?`).get(keepId) as ContactRow;
   return loadContactDetails(d, rowToContact(finalRow));
+}
+
+export function getContactByEmail(email: string, db?: Database): ContactWithDetails | null {
+  const d = db || getDatabase();
+  const emailRow = d.query(`SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`).get(email) as { contact_id: string } | null;
+  if (!emailRow) return null;
+  const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(emailRow.contact_id) as ContactRow | null;
+  if (!row) return null;
+  return loadContactDetails(d, rowToContact(row));
+}
+
+export function addEmailToContact(contactId: string, email: CreateEmailInput, db?: Database): ContactWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
+  if (!row) throw new ContactNotFoundError(contactId);
+  const exists = d.query(`SELECT id FROM emails WHERE contact_id = ? AND LOWER(address) = LOWER(?)`).get(contactId, email.address);
+  if (!exists) {
+    d.run(`INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, NULL, ?, ?, ?)`,
+      [uuid(), contactId, email.address, email.type ?? "work", email.is_primary ? 1 : 0]);
+  }
+  const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow;
+  return loadContactDetails(d, rowToContact(updated));
+}
+
+export function addPhoneToContact(contactId: string, phone: CreatePhoneInput, db?: Database): ContactWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
+  if (!row) throw new ContactNotFoundError(contactId);
+  const exists = d.query(`SELECT id FROM phones WHERE contact_id = ? AND number = ?`).get(contactId, phone.number);
+  if (!exists) {
+    d.run(`INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+      [uuid(), contactId, phone.number, phone.country_code ?? null, phone.type ?? "mobile", phone.is_primary ? 1 : 0]);
+  }
+  const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow;
+  return loadContactDetails(d, rowToContact(updated));
+}
+
+export function archiveContact(id: string, db?: Database): ContactWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
+  if (!row) throw new ContactNotFoundError(id);
+  d.run(`UPDATE contacts SET archived = 1, updated_at = ? WHERE id = ?`, [now(), id]);
+  logActivity(d, { contact_id: id, action: "contact.archived", details: `Archived contact: ${row.display_name}` });
+  const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow;
+  return loadContactDetails(d, rowToContact(updated));
+}
+
+export function unarchiveContact(id: string, db?: Database): ContactWithDetails {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
+  if (!row) throw new ContactNotFoundError(id);
+  d.run(`UPDATE contacts SET archived = 0, updated_at = ? WHERE id = ?`, [now(), id]);
+  logActivity(d, { contact_id: id, action: "contact.unarchived", details: `Unarchived contact: ${row.display_name}` });
+  const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow;
+  return loadContactDetails(d, rowToContact(updated));
+}
+
+export function autoLinkContactToCompany(contactId: string, db?: Database): ContactWithDetails | null {
+  const d = db || getDatabase();
+  const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
+  if (!row || row.company_id) return null;
+  const emailRow = d.query(`SELECT address FROM emails WHERE contact_id = ? AND contact_id IS NOT NULL LIMIT 1`).get(contactId) as { address: string } | null;
+  if (!emailRow) return null;
+  const domain = emailRow.address.split("@")[1];
+  if (!domain) return null;
+  const companyRow = d.query(`SELECT id FROM companies WHERE domain = ? LIMIT 1`).get(domain) as { id: string } | null;
+  if (!companyRow) return null;
+  d.run(`UPDATE contacts SET company_id = ?, updated_at = ? WHERE id = ?`, [companyRow.id, now(), contactId]);
+  logActivity(d, { contact_id: contactId, action: "contact.auto_linked", details: `Auto-linked to company via email domain: ${domain}` });
+  const updated = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow;
+  return loadContactDetails(d, rowToContact(updated));
 }

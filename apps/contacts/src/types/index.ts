@@ -1,5 +1,7 @@
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
+export type ContactStatus = "active" | "pending_reply" | "converted" | "closed" | "other";
+
 export type PreferredContactMethod =
   | "email"
   | "phone"
@@ -142,6 +144,10 @@ export interface Contact {
   last_contacted_at: string | null;
   website: string | null;
   preferred_contact_method: PreferredContactMethod | null;
+  status: ContactStatus;
+  follow_up_at: string | null;
+  archived: boolean;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -170,6 +176,9 @@ export interface CreateContactInput {
   last_contacted_at?: string;
   website?: string;
   preferred_contact_method?: PreferredContactMethod;
+  status?: ContactStatus;
+  follow_up_at?: string;
+  project_id?: string;
   emails?: CreateEmailInput[];
   phones?: CreatePhoneInput[];
   addresses?: CreateAddressInput[];
@@ -192,6 +201,11 @@ export interface UpdateContactInput {
   last_contacted_at?: string | null;
   website?: string | null;
   preferred_contact_method?: PreferredContactMethod | null;
+  status?: ContactStatus;
+  follow_up_at?: string | null;
+  project_id?: string | null;
+  emails_add?: CreateEmailInput[];
+  phones_add?: CreatePhoneInput[];
 }
 
 export interface ContactListOptions {
@@ -199,8 +213,15 @@ export interface ContactListOptions {
   offset?: number;
   company_id?: string;
   tag_id?: string;
+  tag_ids?: string[];
   source?: ContactSource;
-  order_by?: "display_name" | "created_at" | "updated_at";
+  status?: ContactStatus;
+  project_id?: string;
+  archived?: boolean;
+  follow_up_due?: boolean;
+  last_contacted_after?: string;
+  last_contacted_before?: string;
+  order_by?: "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at";
   order_dir?: "asc" | "desc";
 }
 
@@ -217,6 +238,8 @@ export interface Company {
   founded_year: number | null;
   notes: string | null;
   custom_fields: Record<string, unknown>;
+  archived: boolean;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -257,6 +280,7 @@ export interface UpdateCompanyInput {
   founded_year?: number | null;
   notes?: string | null;
   custom_fields?: Record<string, unknown>;
+  project_id?: string | null;
 }
 
 export interface CompanyListOptions {
@@ -264,6 +288,8 @@ export interface CompanyListOptions {
   offset?: number;
   industry?: string;
   tag_id?: string;
+  project_id?: string;
+  archived?: boolean;
   order_by?: "name" | "created_at" | "updated_at";
   order_dir?: "asc" | "desc";
 }
@@ -378,6 +404,10 @@ export interface ContactRow {
   last_contacted_at: string | null;
   website: string | null;
   preferred_contact_method: string | null;
+  status: string;
+  follow_up_at: string | null;
+  archived: number;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -393,6 +423,8 @@ export interface CompanyRow {
   founded_year: number | null;
   notes: string | null;
   custom_fields: string;
+  archived: number;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -485,6 +517,7 @@ export interface Group {
   name: string;
   description: string | null;
   member_count?: number;
+  company_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -492,6 +525,18 @@ export interface Group {
 export interface CreateGroupInput {
   name: string;
   description?: string;
+}
+
+// ─── Dedup ────────────────────────────────────────────────────────────────────
+
+export interface DuplicateByEmail {
+  email: string;
+  contact_ids: string[];
+}
+
+export interface DuplicateByName {
+  contact_ids: [string, string];
+  similarity: number;
 }
 
 // ─── Errors ───────────────────────────────────────────────────────────────────

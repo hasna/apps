@@ -5,12 +5,18 @@ export { getDatabase, resetDatabase } from "./db/database.js";
 export {
   createContact,
   getContact,
+  getContactByEmail,
   listContacts,
   updateContact,
   deleteContact,
   searchContacts,
   mergeContacts,
   listRecentContacts,
+  addEmailToContact,
+  addPhoneToContact,
+  archiveContact,
+  unarchiveContact,
+  autoLinkContactToCompany,
 } from "./db/contacts.js";
 
 // Companies
@@ -22,6 +28,8 @@ export {
   deleteCompany,
   searchCompanies,
   listCompanyEmployees,
+  archiveCompany,
+  unarchiveCompany,
 } from "./db/companies.js";
 
 // Tags
@@ -58,6 +66,10 @@ export {
   removeContactFromGroup,
   listContactsInGroup,
   listGroupsForContact,
+  addCompanyToGroup,
+  removeCompanyFromGroup,
+  listCompaniesInGroup,
+  listGroupsForCompany,
 } from "./db/groups.js";
 
 // Activity
@@ -73,6 +85,7 @@ export type {
   RelationshipType,
   ContactSource,
   PreferredContactMethod,
+  ContactStatus,
   // Sub-entities
   Email,
   Phone,
@@ -106,6 +119,8 @@ export type {
   CreateActivityInput,
   CreateWebhookInput,
   UpdateWebhookInput,
+  DuplicateByEmail,
+  DuplicateByName,
   // Raw rows
   ContactRow,
   CompanyRow,
