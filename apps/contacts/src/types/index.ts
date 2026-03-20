@@ -344,6 +344,16 @@ export interface CreateRelationshipInput {
   notes?: string;
 }
 
+// ─── Structured Notes ─────────────────────────────────────────────────────────
+
+export interface ContactNote {
+  id: string;
+  contact_id: string;
+  body: string;
+  created_by: string | null;
+  created_at: string;
+}
+
 // ─── Company Relationships ────────────────────────────────────────────────────
 
 export type CompanyRelationshipType = "client" | "vendor" | "partner" | "employee" | "contractor" | "investor" | "advisor" | "other";

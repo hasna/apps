@@ -217,6 +217,18 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_company_relationships_contact ON company_relationships(contact_id);
   CREATE INDEX IF NOT EXISTS idx_company_relationships_company ON company_relationships(company_id);
   `,
+
+  `
+  CREATE TABLE IF NOT EXISTS contact_notes (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_contact_notes_contact ON contact_notes(contact_id);
+  `,
 ];
 
 let _db: Database | null = null;

@@ -74,6 +74,7 @@ import {
   deleteCompanyRelationship,
 } from "../db/relationships.js";
 import { listActivity } from "../db/activity.js";
+import { addNote, listNotes, deleteNote, getNote } from "../db/notes.js";
 import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
@@ -518,14 +519,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "add_note",
-      description: "Append a timestamped note to a contact's notes field. Fast and ergonomic — no need for full update_contact. Note is appended as '\\n\\n[YYYY-MM-DD] text' to existing notes.",
+      description: "Add a structured timestamped note to a contact. Returns the note object with id, body, created_at.",
       inputSchema: {
         type: "object",
         properties: {
           contact_id: { type: "string" },
-          note: { type: "string" },
+          note: { type: "string", description: "Note text/body" },
+          created_by: { type: "string", description: "Agent or user who created the note (optional)" },
         },
         required: ["contact_id", "note"],
+      },
+    },
+    {
+      name: "list_notes",
+      description: "List all structured notes for a contact, ordered by date ascending.",
+      inputSchema: {
+        type: "object",
+        properties: { contact_id: { type: "string" } },
+        required: ["contact_id"],
+      },
+    },
+    {
+      name: "delete_note",
+      description: "Delete a specific note by its ID.",
+      inputSchema: {
+        type: "object",
+        properties: { note_id: { type: "string" } },
+        required: ["note_id"],
       },
     },
     {
@@ -1269,14 +1289,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "add_note": {
-        const contactId = a.contact_id as string;
-        const note = a.note as string;
-        const existing = getContact(contactId);
-        const dateStr = new Date().toISOString().slice(0, 10);
-        const existingNotes = existing.notes ?? "";
-        const updatedNotes = existingNotes ? `${existingNotes}\n\n[${dateStr}] ${note}` : `[${dateStr}] ${note}`;
-        const contact = updateContact(contactId, { notes: updatedNotes });
-        return { content: [{ type: "text", text: JSON.stringify(contact, null, 2) }] };
+        const noteObj = addNote(
+          a.contact_id as string,
+          a.note as string,
+          a.created_by as string | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(noteObj, null, 2) }] };
+      }
+
+      case "list_notes": {
+        const notes = listNotes(a.contact_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(notes, null, 2) }] };
+      }
+
+      case "delete_note": {
+        deleteNote(a.note_id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
       }
 
       case "list_contacts_by_company": {
