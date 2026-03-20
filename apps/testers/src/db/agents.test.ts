@@ -2,7 +2,7 @@ process.env.TESTERS_DB_PATH = ":memory:";
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { resetDatabase, closeDatabase } from "./database.js";
-import { registerAgent, getAgent, getAgentByName, listAgents } from "./agents.js";
+import { registerAgent, getAgent, getAgentByName, listAgents, heartbeatAgent, setAgentFocus } from "./agents.js";
 
 describe("agents", () => {
   beforeEach(() => {
@@ -103,6 +103,51 @@ describe("agents", () => {
       registerAgent({ name: "julius" });
       const found = getAgentByName("Julius");
       expect(found).toBeNull();
+    });
+  });
+
+  describe("heartbeatAgent", () => {
+    test("updates last_seen_at and returns agent", async () => {
+      const agent = registerAgent({ name: "heartbeat-agent" });
+      // Small delay to ensure timestamp differs
+      await new Promise((r) => setTimeout(r, 10));
+      const updated = heartbeatAgent(agent.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.id).toBe(agent.id);
+      expect(updated!.lastSeenAt >= agent.lastSeenAt).toBe(true);
+    });
+
+    test("returns null for unknown agent id", () => {
+      const result = heartbeatAgent("00000000-0000-0000-0000-000000000000");
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("setAgentFocus", () => {
+    test("stores scenarioId in agent metadata", () => {
+      const agent = registerAgent({ name: "focus-agent" });
+      const updated = setAgentFocus(agent.id, "scenario-abc");
+      expect(updated).not.toBeNull();
+      expect((updated!.metadata as Record<string, unknown>).focus).toBe("scenario-abc");
+    });
+
+    test("clears focus when null is passed", () => {
+      const agent = registerAgent({ name: "focus-agent-clear" });
+      setAgentFocus(agent.id, "scenario-abc");
+      const cleared = setAgentFocus(agent.id, null);
+      expect((cleared!.metadata as Record<string, unknown>).focus).toBeNull();
+    });
+
+    test("preserves existing metadata keys when setting focus", () => {
+      const agent = registerAgent({ name: "focus-meta-agent" });
+      // Manually write extra metadata via registerAgent then focus
+      const focused = setAgentFocus(agent.id, "sc-1");
+      expect((focused!.metadata as Record<string, unknown>).focus).toBe("sc-1");
+    });
+
+    test("returns null for unknown agent id", () => {
+      const result = setAgentFocus("00000000-0000-0000-0000-000000000000", "sc-1");
+      expect(result).toBeNull();
     });
   });
 
