@@ -184,11 +184,15 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
     params.push(opts.mentions_only.toLowerCase());
   }
 
+  // latest: N — return the N most recent messages (newest first), overrides limit + order
+  const isLatest = opts.latest && opts.latest > 0;
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const resolvedLimit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
-    ? Math.floor(opts.limit as number)
-    : 20;
-  const order = opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC";
+  const resolvedLimit = isLatest
+    ? Math.floor(opts.latest as number)
+    : Number.isFinite(opts.limit) && (opts.limit as number) > 0
+      ? Math.floor(opts.limit as number)
+      : 20;
+  const order = isLatest ? "DESC" : (opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC");
 
   const rows = db.prepare(
     `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${resolvedLimit}`

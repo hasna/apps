@@ -120,6 +120,7 @@ export interface ReadMessagesOptions {
   threads_only?: boolean;
   include_reply_counts?: boolean;
   mentions_only?: string;
+  latest?: number;
 }
 
 export interface SearchMessagesOptions {

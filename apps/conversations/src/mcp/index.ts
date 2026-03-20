@@ -94,6 +94,7 @@ server.registerTool("read_messages", {
     threads_only: z.coerce.boolean().optional().describe("Only return root messages (reply_to IS NULL) — hides thread replies"),
     include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message (adds one extra query)"),
     mentions_only: z.string().optional().describe("Only return messages that @mention this agent"),
+    latest: z.coerce.number().optional().describe("Return the N most recent unread messages, newest first. Shorthand for order:desc + limit:N."),
   },
 }, async (args: Record<string, any>) => {
   const agent = resolveIdentity(args.from);
@@ -379,10 +380,11 @@ server.registerTool("read_space", {
     max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
     threads_only: z.coerce.boolean().optional().describe("Only return root messages (hides thread replies)"),
     include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message"),
+    latest: z.coerce.number().optional().describe("Return the N most recent messages, newest first"),
   },
 }, async (args: Record<string, any>) => {
-  const { space, since, limit, mark_read, max_content_length, threads_only, include_reply_counts } = args;
-  const messages = readMessages({ space, since, limit, max_content_length, threads_only, include_reply_counts });
+  const { space, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
+  const messages = readMessages({ space, since, limit, max_content_length, threads_only, include_reply_counts, latest });
 
   if (mark_read !== false && messages.length > 0) {
     markReadByIds(messages.map((m) => m.id));
