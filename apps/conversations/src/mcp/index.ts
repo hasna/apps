@@ -18,7 +18,7 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { resolveIdentity, updateCachedAutoName } from "../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../lib/presence.js";
 import { addReaction, removeReaction, getReactions, getReactionSummary } from "../lib/reactions.js";
-import { acquireLock, releaseLock, checkLock, listLocks, cleanExpiredLocks, releaseStaleAgentLocks } from "../lib/locks.js";
+import { acquireLock, releaseLock, checkLock, listLocks, listLocksEnriched, cleanExpiredLocks, releaseStaleAgentLocks } from "../lib/locks.js";
 import { listHotSessions } from "../lib/hot.js";
 import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../lib/topics.js";
 import { getConversationSummary } from "../lib/summary.js";
@@ -1008,13 +1008,13 @@ server.registerTool("check_lock", {
 });
 
 server.registerTool("list_locks", {
-  description: "List all active (non-expired) locks. Filter by resource_type or agent.",
+  description: "List all active (non-expired) locks enriched with agent presence details (status, online, last_seen_at) and time context (locked_seconds_ago, expires_in_seconds). Filter by resource_type or agent.",
   inputSchema: {
     resource_type: z.string().optional(),
     agent_id: z.string().optional(),
   },
 }, async (args: Record<string, any>) => {
-  const locks = listLocks({ resource_type: args.resource_type, agent_id: args.agent_id });
+  const locks = listLocksEnriched({ resource_type: args.resource_type, agent_id: args.agent_id });
   return { content: [{ type: "text", text: JSON.stringify(locks) }] };
 });
 
@@ -1243,7 +1243,7 @@ server.registerTool("search_tools", {
 }, async (args: Record<string, any>) => {
   const { query } = args;
   const all = [
-    "send_message", "read_messages", "list_sessions", "reply",
+    "send_message", "read_messages", "read_digest", "list_sessions", "reply",
     "mark_read", "search_messages", "export_messages",
     "create_space", "list_spaces", "send_to_space", "read_space",
     "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
@@ -1275,6 +1275,7 @@ server.registerTool("describe_tools", {
     // DM tools
     send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
     read_messages: "Read messages with filters. Optional: session_id?, from?, to?, space?, since?(ISO), limit?, unread_only?, mark_read?(default true — auto-marks returned messages as read, pass false to peek without consuming)",
+    read_digest: "Lightweight unread digest — preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: space?, session_id?, to?, since?(ISO), limit?, project_id?",
     list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
     reply: "Reply to a message in same session. Required: message_id, content. Optional: from?",
     mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool — mark all unread)",
@@ -1325,7 +1326,7 @@ server.registerTool("describe_tools", {
     acquire_lock: "Acquire advisory/exclusive lock on a resource. On conflict, auto-DMs the holding agent. Required: resource_type, resource_id. Optional: lock_type?(advisory|exclusive), expiry_ms?, from?, auto_dm?(default true)",
     release_lock: "Release lock held by agent. Required: resource_type, resource_id. Optional: from?",
     check_lock: "Check if resource is locked and who holds it. Required: resource_type, resource_id",
-    list_locks: "List active locks. Optional: resource_type?, agent_id?",
+    list_locks: "List active locks enriched with agent presence + time context. Optional: resource_type?, agent_id?",
     clean_expired_locks: "Release expired locks + locks held by agents with stale heartbeat (>30 min). Returns {released_stale_agent, released_expired, total}",
     // Thread tools
     get_thread_replies: "Get all replies in a thread. Required: message_id. Optional: limit?",

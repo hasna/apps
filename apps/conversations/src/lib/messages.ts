@@ -240,6 +240,71 @@ export function markAllRead(agent: string): number {
   return result.changes;
 }
 
+export interface DigestMessage {
+  id: number;
+  from: string;
+  created_at: string;
+  preview: string;
+  priority: string;
+  has_attachments: boolean;
+  space?: string | null;
+  to?: string | null;
+  unread: boolean;
+}
+
+export interface DigestResult {
+  messages: DigestMessage[];
+  total_unread: number;
+  shown: number;
+}
+
+export interface ReadDigestOptions {
+  space?: string;
+  session_id?: string;
+  to?: string;
+  since?: string;
+  limit?: number;
+  unread_only?: boolean;
+  project_id?: string;
+}
+
+export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
+  const db = getDb();
+
+  // Count total unread with same filters
+  const countConditions: string[] = ["read_at IS NULL"];
+  const countParams: (string | number)[] = [];
+  if (opts.space) { countConditions.push("space = ?"); countParams.push(opts.space); }
+  if (opts.session_id) { countConditions.push("session_id = ?"); countParams.push(opts.session_id); }
+  if (opts.to) { countConditions.push("to_agent = ?"); countParams.push(opts.to); }
+  if (opts.since) { countConditions.push("created_at > ?"); countParams.push(opts.since); }
+  if (opts.project_id) { countConditions.push("project_id = ?"); countParams.push(opts.project_id); }
+  const countWhere = `WHERE ${countConditions.join(" AND ")}`;
+  const totalUnread = (db.prepare(`SELECT COUNT(*) as n FROM messages ${countWhere}`).get(...countParams) as { n: number }).n;
+
+  // Fetch messages (unread by default)
+  const messages = readMessages({ ...opts, unread_only: opts.unread_only ?? true });
+
+  // Auto-mark as read
+  if (messages.length > 0) {
+    markReadByIds(messages.map((m) => m.id));
+  }
+
+  const digest: DigestMessage[] = messages.map((m) => ({
+    id: m.id,
+    from: m.from_agent,
+    created_at: m.created_at,
+    preview: m.content.slice(0, 100) + (m.content.length > 100 ? "…" : ""),
+    priority: m.priority,
+    has_attachments: Array.isArray(m.attachments) && m.attachments.length > 0,
+    space: m.space,
+    to: m.to_agent,
+    unread: !m.read_at,
+  }));
+
+  return { messages: digest, total_unread: totalUnread, shown: digest.length };
+}
+
 export interface ExportMessagesOptions {
   space?: string;
   session_id?: string;

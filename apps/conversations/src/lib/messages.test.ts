@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies } from "./messages";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies } from "./messages";
 import { createSpace, joinSpace } from "./spaces";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -755,5 +755,47 @@ describe("attachments", () => {
   test("message without attachments has null attachments field", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "no files" });
     expect(msg.attachments).toBeNull();
+  });
+});
+
+describe("readDigest", () => {
+  test("returns preview, total_unread, shown", () => {
+    sendMessage({ from: "a", to: "b", content: "hello world" });
+    sendMessage({ from: "a", to: "b", content: "x".repeat(200) });
+    const result = readDigest({ to: "b" });
+    expect(result.total_unread).toBe(2);
+    expect(result.shown).toBe(2);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0].preview).toBe("hello world");
+    expect(result.messages[1].preview).toBe("x".repeat(100) + "…");
+  });
+
+  test("auto-marks messages as read", () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "hi" });
+    readDigest({ to: "b" });
+    const updated = getMessageById(msg.id);
+    expect(updated?.read_at).toBeTruthy();
+  });
+
+  test("only shows unread by default", () => {
+    sendMessage({ from: "a", to: "b", content: "first" });
+    readDigest({ to: "b" }); // marks as read
+    sendMessage({ from: "a", to: "b", content: "second" });
+    const result = readDigest({ to: "b" });
+    expect(result.shown).toBe(1);
+    expect(result.messages[0].preview).toBe("second");
+  });
+
+  test("filters by space", () => {
+    sendMessage({ from: "a", to: "myspace", space: "myspace", content: "in space" });
+    sendMessage({ from: "a", to: "b", content: "dm" });
+    const result = readDigest({ space: "myspace" });
+    expect(result.messages.every((m) => m.space === "myspace")).toBe(true);
+  });
+
+  test("has_attachments is false when no attachments", () => {
+    sendMessage({ from: "a", to: "b", content: "plain" });
+    const result = readDigest({ to: "b" });
+    expect(result.messages[0].has_attachments).toBe(false);
   });
 });

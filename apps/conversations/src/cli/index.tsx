@@ -3,7 +3,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
-import { sendMessage, readMessages, markRead, markSessionRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markSessionRead, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../lib/messages.js";
 import { listSessions, getSession } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -145,6 +145,44 @@ program
           const rendered = renderContent(msg.content);
           const indented = rendered.split("\n").map((l: string) => "  " + l).join("\n");
           console.log(indented);
+        }
+      }
+    }
+    closeDb();
+  });
+
+// ---- digest ----
+program
+  .command("digest")
+  .description("Show unread message digest (preview only, auto-marks read)")
+  .argument("[space]", "Space name to digest (omit for DMs)")
+  .option("--since <timestamp>", "Messages after this ISO timestamp")
+  .option("--limit <n>", "Max messages to show", parseInt)
+  .option("--to <agent>", "Filter by recipient (for DMs)")
+  .option("--json", "Output as JSON")
+  .action((spaceArg, opts) => {
+    const result = readDigest({
+      space: spaceArg || undefined,
+      since: opts.since,
+      limit: opts.limit,
+      to: opts.to,
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(chalk.bold(`Unread: ${result.total_unread} total, showing ${result.shown}`));
+      if (result.messages.length === 0) {
+        console.log(chalk.dim("  No unread messages."));
+      } else {
+        for (const msg of result.messages) {
+          const time = chalk.dim(msg.created_at.slice(11, 19));
+          const from = chalk.cyan(msg.from);
+          const dest = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to ?? "?");
+          const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
+          const att = msg.has_attachments ? chalk.dim(" 📎") : "";
+          console.log(`${time} ${from} → ${dest}${priority}${att}`);
+          console.log(`  ${chalk.dim(msg.preview)}`);
         }
       }
     }
