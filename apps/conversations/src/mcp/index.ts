@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies } from "../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts } from "../lib/messages.js";
 import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -278,6 +278,18 @@ server.registerTool("list_spaces", {
 
   return {
     content: [{ type: "text", text: JSON.stringify(spaces) }],
+  };
+});
+
+server.registerTool("list_unread_counts", {
+  description: "Get unread message counts per space without fetching message content. Use this at session start to triage which spaces need attention before calling read_messages.",
+  inputSchema: {
+    agent: z.string().optional().describe("Filter to spaces the agent is a member of or has received messages in. Omit for global unread counts."),
+  },
+}, async (args: Record<string, any>) => {
+  const counts = listUnreadCounts(args.agent as string | undefined);
+  return {
+    content: [{ type: "text", text: JSON.stringify(counts) }],
   };
 });
 
@@ -1315,6 +1327,7 @@ server.registerTool("describe_tools", {
     export_messages: "Export messages as JSON or CSV. Optional: space?, session_id?, from?, since?, until?, format?(json|csv)",
     // Space tools
     create_space: "Create space and auto-join. Required: name. Optional: from?, description?, parent_id?(max 3 levels), project_id?",
+    list_unread_counts: "Get unread message counts per space (no content). Ideal for session start triage. Optional: agent?(filter to agent's spaces)",
     list_spaces: "List spaces with member/message counts. Optional: project_id?, parent_id?(use 'null' for top-level), include_archived?",
     send_to_space: "Post message to space. Required: space, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
     read_space: "Read messages in a space. Required: space. Optional: since?(ISO), limit?, mark_read?(default true — auto-marks returned messages as read)",

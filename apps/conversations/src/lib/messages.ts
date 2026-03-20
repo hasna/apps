@@ -542,3 +542,50 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
     return { ...msg, snippet: null, relevance_score: 0 };
   });
 }
+
+export interface UnreadCount {
+  space: string;
+  unread_count: number;
+  latest_message_at: string | null;
+}
+
+/**
+ * Get unread message counts per space — lightweight alternative to read_messages.
+ * Returns only spaces where the agent is a member (via space_members) or has received messages.
+ * If agent is omitted, returns counts for all spaces.
+ */
+export function listUnreadCounts(agent?: string): UnreadCount[] {
+  const db = getDb();
+
+  if (agent) {
+    const rows = db.prepare(`
+      SELECT
+        space,
+        COUNT(CASE WHEN read_at IS NULL AND (to_agent = ? OR to_agent IS NULL OR to_agent = '') THEN 1 END) AS unread_count,
+        MAX(created_at) AS latest_message_at
+      FROM messages
+      WHERE space IN (
+        SELECT DISTINCT space FROM space_members WHERE agent = ?
+        UNION
+        SELECT DISTINCT space FROM messages WHERE to_agent = ? AND space IS NOT NULL
+      )
+      GROUP BY space
+      HAVING COUNT(*) > 0
+      ORDER BY unread_count DESC, latest_message_at DESC
+    `).all(agent, agent, agent) as Array<{ space: string; unread_count: number; latest_message_at: string | null }>;
+    return rows;
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      space,
+      COUNT(CASE WHEN read_at IS NULL THEN 1 END) AS unread_count,
+      MAX(created_at) AS latest_message_at
+    FROM messages
+    WHERE space IS NOT NULL
+    GROUP BY space
+    HAVING COUNT(*) > 0
+    ORDER BY unread_count DESC, latest_message_at DESC
+  `).all() as Array<{ space: string; unread_count: number; latest_message_at: string | null }>;
+  return rows;
+}
