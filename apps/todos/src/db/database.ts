@@ -524,6 +524,21 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
   INSERT OR IGNORE INTO _migrations (id) VALUES (30);
   `,
+  // Migration 31: File locks — first-class exclusive locks on file paths
+  `
+  CREATE TABLE IF NOT EXISTS file_locks (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    agent_id TEXT NOT NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_file_locks_path ON file_locks(path);
+  CREATE INDEX IF NOT EXISTS idx_file_locks_agent ON file_locks(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_file_locks_expires ON file_locks(expires_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (31);
+  `,
 ];
 
 let _db: Database | null = null;

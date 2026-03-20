@@ -3115,6 +3115,89 @@ server.tool(
 );
 }
 
+// === FILE LOCKS ===
+
+if (shouldRegisterTool("lock_file")) {
+server.tool(
+  "lock_file",
+  "Acquire an exclusive lock on a file path. Throws if another agent holds an active lock. Same agent re-locks refreshes the TTL.",
+  {
+    path: z.string().describe("File path to lock"),
+    agent_id: z.string().describe("Agent acquiring the lock"),
+    task_id: z.string().optional().describe("Task this lock is associated with"),
+    ttl_seconds: z.number().optional().describe("Lock TTL in seconds (default: 1800 = 30 min)"),
+  },
+  async ({ path, agent_id, task_id, ttl_seconds }) => {
+    try {
+      const { lockFile } = require("../db/file-locks.js") as any;
+      const lock = lockFile({ path, agent_id, task_id, ttl_seconds });
+      return { content: [{ type: "text" as const, text: JSON.stringify(lock, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("unlock_file")) {
+server.tool(
+  "unlock_file",
+  "Release a file lock. Only the lock holder can release it. Returns true if released.",
+  {
+    path: z.string().describe("File path to unlock"),
+    agent_id: z.string().describe("Agent releasing the lock (must be the lock holder)"),
+  },
+  async ({ path, agent_id }) => {
+    try {
+      const { unlockFile } = require("../db/file-locks.js") as any;
+      const released = unlockFile(path, agent_id);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ released, path }) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("check_file_lock")) {
+server.tool(
+  "check_file_lock",
+  "Check who holds a lock on a file path. Returns null if unlocked or expired.",
+  {
+    path: z.string().describe("File path to check"),
+  },
+  async ({ path }) => {
+    try {
+      const { checkFileLock } = require("../db/file-locks.js") as any;
+      const lock = checkFileLock(path);
+      if (!lock) return { content: [{ type: "text" as const, text: JSON.stringify({ path, locked: false }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ path, locked: true, ...lock }) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("list_file_locks")) {
+server.tool(
+  "list_file_locks",
+  "List all active file locks. Optionally filter by agent_id.",
+  {
+    agent_id: z.string().optional().describe("Filter locks by agent"),
+  },
+  async ({ agent_id }) => {
+    try {
+      const { listFileLocks } = require("../db/file-locks.js") as any;
+      const locks = listFileLocks(agent_id);
+      return { content: [{ type: "text" as const, text: JSON.stringify(locks, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === HANDOFFS ===
 
 if (shouldRegisterTool("create_handoff")) {
