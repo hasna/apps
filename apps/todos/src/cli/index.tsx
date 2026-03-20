@@ -34,7 +34,7 @@ import {
   ensureProject,
   getProjectByPath,
 } from "../db/projects.js";
-import { registerAgent, isAgentConflict, listAgents } from "../db/agents.js";
+import { registerAgent, isAgentConflict, releaseAgent, listAgents } from "../db/agents.js";
 import { createTaskList, listTaskLists, deleteTaskList } from "../db/task-lists.js";
 import {
   createPlan,
@@ -416,7 +416,14 @@ program
     if (task.tags.length > 0) console.log(`  ${chalk.dim("Tags:")}     ${task.tags.join(", ")}`);
     console.log(`  ${chalk.dim("Version:")}  ${task.version}`);
     console.log(`  ${chalk.dim("Created:")}  ${task.created_at}`);
-    if (task.completed_at) console.log(`  ${chalk.dim("Done:")}     ${task.completed_at}`);
+    if (task.started_at) console.log(`  ${chalk.dim("Started:")}  ${task.started_at}`);
+    if (task.completed_at) {
+      console.log(`  ${chalk.dim("Done:")}     ${task.completed_at}`);
+      if (task.started_at) {
+        const dur = Math.round((new Date(task.completed_at).getTime() - new Date(task.started_at).getTime()) / 60000);
+        console.log(`  ${chalk.dim("Duration:")} ${dur}m`);
+      }
+    }
 
     if (task.subtasks.length > 0) {
       console.log(chalk.bold(`\n  Subtasks (${task.subtasks.length}):`));
@@ -446,6 +453,131 @@ program
         console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
       }
     }
+  });
+
+// inspect — deep task orientation (different from session "context")
+program
+  .command("inspect [id]")
+  .description("Full orientation for a task — details, description, dependencies, blockers, files, commits, comments. If no ID given, shows current in-progress task for --agent.")
+  .action((id?: string) => {
+    const globalOpts = program.opts();
+    let resolvedId = id ? resolveTaskId(id) : null;
+
+    // If no ID, find agent's active task
+    if (!resolvedId && globalOpts.agent) {
+      const { listTasks } = require("../db/tasks.js") as any;
+      const active = listTasks({ status: "in_progress", assigned_to: globalOpts.agent });
+      if (active.length > 0) resolvedId = active[0].id;
+    }
+    if (!resolvedId) { console.error(chalk.red("No task ID given and no active task found. Pass an ID or use --agent.")); process.exit(1); }
+
+    const task = getTaskWithRelations(resolvedId);
+    if (!task) { console.error(chalk.red(`Task not found: ${id || resolvedId}`)); process.exit(1); }
+
+    if (globalOpts.json) {
+      // Enrich with files and commits
+      const { listTaskFiles } = require("../db/task-files.js") as any;
+      const { getTaskCommits } = require("../db/task-commits.js") as any;
+      try { (task as any).files = listTaskFiles(task.id); } catch { (task as any).files = []; }
+      try { (task as any).commits = getTaskCommits(task.id); } catch { (task as any).commits = []; }
+      output(task, true);
+      return;
+    }
+
+    // Header
+    const sid = task.short_id || task.id.slice(0, 8);
+    const statusColor = statusColors[task.status] || chalk.white;
+    const prioColor = priorityColors[task.priority] || chalk.white;
+    console.log(chalk.bold(`\n${chalk.cyan(sid)} ${statusColor(task.status)} ${prioColor(task.priority)} ${task.title}\n`));
+
+    // Description
+    if (task.description) {
+      console.log(chalk.dim("Description:"));
+      console.log(`  ${task.description}\n`);
+    }
+
+    // Key fields
+    if (task.assigned_to) console.log(`  ${chalk.dim("Assigned:")}  ${task.assigned_to}`);
+    if (task.locked_by) console.log(`  ${chalk.dim("Locked by:")} ${task.locked_by}`);
+    if (task.project_id) console.log(`  ${chalk.dim("Project:")}   ${task.project_id}`);
+    if (task.plan_id) console.log(`  ${chalk.dim("Plan:")}      ${task.plan_id}`);
+    if (task.started_at) console.log(`  ${chalk.dim("Started:")}   ${task.started_at}`);
+    if (task.completed_at) {
+      console.log(`  ${chalk.dim("Completed:")} ${task.completed_at}`);
+      if (task.started_at) {
+        const dur = Math.round((new Date(task.completed_at).getTime() - new Date(task.started_at).getTime()) / 60000);
+        console.log(`  ${chalk.dim("Duration:")}  ${dur}m`);
+      }
+    }
+    if (task.estimated_minutes) console.log(`  ${chalk.dim("Estimate:")}  ${task.estimated_minutes}m`);
+    if (task.tags.length > 0) console.log(`  ${chalk.dim("Tags:")}      ${task.tags.join(", ")}`);
+
+    // Dependencies
+    const unfinishedDeps = task.dependencies.filter(d => d.status !== "completed" && d.status !== "cancelled");
+    if (task.dependencies.length > 0) {
+      console.log(chalk.bold(`\n  Depends on (${task.dependencies.length}):`));
+      for (const dep of task.dependencies) {
+        const blocked = dep.status !== "completed" && dep.status !== "cancelled";
+        const icon = blocked ? chalk.red("✗") : chalk.green("✓");
+        console.log(`    ${icon} ${formatTaskLine(dep)}`);
+      }
+    }
+    if (unfinishedDeps.length > 0) {
+      console.log(chalk.red(`\n  BLOCKED by ${unfinishedDeps.length} unfinished dep(s)`));
+    }
+
+    // Blocks
+    if (task.blocked_by.length > 0) {
+      console.log(chalk.bold(`\n  Blocks (${task.blocked_by.length}):`));
+      for (const b of task.blocked_by) console.log(`    ${formatTaskLine(b)}`);
+    }
+
+    // Subtasks
+    if (task.subtasks.length > 0) {
+      console.log(chalk.bold(`\n  Subtasks (${task.subtasks.length}):`));
+      for (const st of task.subtasks) console.log(`    ${formatTaskLine(st)}`);
+    }
+
+    // Files
+    try {
+      const { listTaskFiles } = require("../db/task-files.js") as any;
+      const files = listTaskFiles(task.id);
+      if (files.length > 0) {
+        console.log(chalk.bold(`\n  Files (${files.length}):`));
+        for (const f of files) console.log(`    ${chalk.dim(f.role || "file")} ${f.path}`);
+      }
+    } catch {}
+
+    // Commits
+    try {
+      const { getTaskCommits } = require("../db/task-commits.js") as any;
+      const commits = getTaskCommits(task.id);
+      if (commits.length > 0) {
+        console.log(chalk.bold(`\n  Commits (${commits.length}):`));
+        for (const c of commits) console.log(`    ${chalk.yellow(c.commit_hash.slice(0, 7))} ${c.message || ""}`);
+      }
+    } catch {}
+
+    // Comments
+    if (task.comments.length > 0) {
+      console.log(chalk.bold(`\n  Comments (${task.comments.length}):`));
+      for (const c of task.comments) {
+        const agent = c.agent_id ? chalk.cyan(`[${c.agent_id}] `) : "";
+        console.log(`    ${agent}${chalk.dim(c.created_at)}: ${c.content}`);
+      }
+    }
+
+    // Checklist
+    if (task.checklist && task.checklist.length > 0) {
+      const done = task.checklist.filter((c: any) => c.checked).length;
+      console.log(chalk.bold(`\n  Checklist (${done}/${task.checklist.length}):`));
+      for (const item of task.checklist) {
+        const icon = (item as any).checked ? chalk.green("☑") : chalk.dim("☐");
+        console.log(`    ${icon} ${(item as any).text || (item as any).title}`);
+      }
+    }
+
+    console.log();
   });
 
 // history
@@ -1578,6 +1710,125 @@ function unregisterMcp(agent: string, global?: boolean): void {
   }
 }
 
+// import — GitHub issue import
+program
+  .command("import <url>")
+  .description("Import a GitHub issue as a task")
+  .option("--project <id>", "Project ID")
+  .option("--list <id>", "Task list ID")
+  .action((url: string, opts: { project?: string; list?: string }) => {
+    const globalOpts = program.opts();
+    const { parseGitHubUrl, fetchGitHubIssue, issueToTask } = require("../lib/github.js") as any;
+    const parsed = parseGitHubUrl(url);
+    if (!parsed) { console.error(chalk.red("Invalid GitHub issue URL. Expected: https://github.com/owner/repo/issues/123")); process.exit(1); }
+    try {
+      const issue = fetchGitHubIssue(parsed.owner, parsed.repo, parsed.number);
+      const projectId = opts.project || autoProject(globalOpts) || undefined;
+      const input = issueToTask(issue, { project_id: projectId, task_list_id: opts.list });
+      const task = createTask(input);
+      if (globalOpts.json) { output(task, true); return; }
+      console.log(chalk.green(`Imported GH#${issue.number}: ${issue.title}`));
+      console.log(`  ${chalk.dim("Task ID:")} ${task.short_id || task.id}`);
+      console.log(`  ${chalk.dim("Labels:")}  ${issue.labels.join(", ") || "none"}`);
+      console.log(`  ${chalk.dim("Priority:")} ${task.priority}`);
+    } catch (e: any) {
+      if (e.message?.includes("gh")) {
+        console.error(chalk.red("GitHub CLI (gh) not found or not authenticated. Install: https://cli.github.com"));
+      } else {
+        console.error(chalk.red(`Import failed: ${e.message}`));
+      }
+      process.exit(1);
+    }
+  });
+
+// link-commit — manual or hook-driven commit linking
+program
+  .command("link-commit <task-id> <sha>")
+  .description("Link a git commit to a task")
+  .option("--message <text>", "Commit message")
+  .option("--author <name>", "Commit author")
+  .option("--files <list>", "Comma-separated list of changed files")
+  .action((taskId: string, sha: string, opts: { message?: string; author?: string; files?: string }) => {
+    const globalOpts = program.opts();
+    const resolvedId = resolveTaskId(taskId);
+    const { linkTaskToCommit } = require("../db/task-commits.js") as any;
+    const commit = linkTaskToCommit({
+      task_id: resolvedId,
+      sha,
+      message: opts.message,
+      author: opts.author,
+      files_changed: opts.files ? opts.files.split(",").filter(Boolean) : undefined,
+    });
+    if (globalOpts.json) { output(commit, true); return; }
+    console.log(chalk.green(`Linked commit ${sha.slice(0, 7)} to task ${taskId}`));
+  });
+
+// hook install/uninstall
+const hookCmd = program.command("hook").description("Manage git hooks for auto-linking commits to tasks");
+hookCmd
+  .command("install")
+  .description("Install post-commit hook that auto-links commits to tasks")
+  .action(() => {
+    const { execSync } = require("child_process");
+    try {
+      const gitDir = execSync("git rev-parse --git-dir", { encoding: "utf-8" }).trim();
+      const hookPath = `${gitDir}/hooks/post-commit`;
+      const { existsSync, readFileSync, writeFileSync, chmodSync } = require("fs");
+      const marker = "# todos-auto-link";
+
+      if (existsSync(hookPath)) {
+        const existing = readFileSync(hookPath, "utf-8");
+        if (existing.includes(marker)) {
+          console.log(chalk.yellow("Hook already installed."));
+          return;
+        }
+        // Append to existing hook
+        writeFileSync(hookPath, existing + `\n${marker}\n$(dirname "$0")/../../scripts/post-commit-hook.sh\n`);
+      } else {
+        writeFileSync(hookPath, `#!/usr/bin/env bash\n${marker}\n$(dirname "$0")/../../scripts/post-commit-hook.sh\n`);
+        chmodSync(hookPath, 0o755);
+      }
+      console.log(chalk.green("Post-commit hook installed. Commits with task IDs (e.g. OPE-00042) will auto-link."));
+    } catch (e) {
+      console.error(chalk.red("Not in a git repository or hook install failed."));
+      process.exit(1);
+    }
+  });
+
+hookCmd
+  .command("uninstall")
+  .description("Remove the todos post-commit hook")
+  .action(() => {
+    const { execSync } = require("child_process");
+    try {
+      const gitDir = execSync("git rev-parse --git-dir", { encoding: "utf-8" }).trim();
+      const hookPath = `${gitDir}/hooks/post-commit`;
+      const { existsSync, readFileSync, writeFileSync } = require("fs");
+      const marker = "# todos-auto-link";
+
+      if (!existsSync(hookPath)) {
+        console.log(chalk.dim("No post-commit hook found."));
+        return;
+      }
+      const content = readFileSync(hookPath, "utf-8");
+      if (!content.includes(marker)) {
+        console.log(chalk.dim("Hook not managed by todos."));
+        return;
+      }
+      // Remove our lines
+      const cleaned = content.split("\n").filter((l: string) => !l.includes(marker) && !l.includes("post-commit-hook.sh")).join("\n").trim();
+      if (cleaned === "#!/usr/bin/env bash" || cleaned === "") {
+        require("fs").unlinkSync(hookPath);
+      } else {
+        writeFileSync(hookPath, cleaned + "\n");
+      }
+      console.log(chalk.green("Post-commit hook removed."));
+    } catch (e) {
+      console.error(chalk.red("Not in a git repository or hook removal failed."));
+      process.exit(1);
+    }
+  });
+
 // init
 program
   .command("init <name>")
@@ -1618,6 +1869,30 @@ program
     updateAgentActivity(a.id);
     if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
     else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+  });
+
+// release
+program
+  .command("release [agent]")
+  .description("Release/logout an agent — clears session binding so the name is immediately available")
+  .option("--session-id <id>", "Only release if session ID matches")
+  .action((agent?: string, opts?: { sessionId?: string }) => {
+    const globalOpts = program.opts();
+    const agentId = agent || globalOpts.agent;
+    if (!agentId) { console.error(chalk.red("Agent ID or name required. Use --agent or pass as argument.")); process.exit(1); }
+    const { getAgent, getAgentByName } = require("../db/agents.js") as any;
+    const a = getAgent(agentId) || getAgentByName(agentId);
+    if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+    const released = releaseAgent(a.id, opts?.sessionId);
+    if (!released) {
+      console.error(chalk.red("Release denied: session_id does not match agent's current session."));
+      process.exit(1);
+    }
+    if (globalOpts.json) {
+      console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
+    } else {
+      console.log(chalk.green(`✓ ${a.name} (${a.id}) released — name is now available.`));
+    }
   });
 
 // focus
@@ -2140,6 +2415,71 @@ program
     renderApp(projectId);
   });
 
+// blame
+program
+  .command("blame <file>")
+  .description("Show which tasks/agents touched a file and why — combines task_files + task_commits")
+  .action((filePath: string) => {
+    const globalOpts = program.opts();
+    const { findTasksByFile } = require("../db/task-files.js") as any;
+    const { getTask } = require("../db/tasks.js") as any;
+    const db = getDatabase();
+
+    // Find via task_files
+    const taskFiles = findTasksByFile(filePath, db) as any[];
+
+    // Find via task_commits (search files_changed JSON)
+    const commitRows = db.query(
+      "SELECT tc.*, t.title, t.short_id FROM task_commits tc JOIN tasks t ON t.id = tc.task_id WHERE tc.files_changed LIKE ? ORDER BY tc.committed_at DESC"
+    ).all(`%${filePath}%`) as any[];
+
+    if (globalOpts.json) {
+      output({ file: filePath, task_files: taskFiles, commits: commitRows }, true);
+      return;
+    }
+
+    console.log(chalk.bold(`\nBlame: ${filePath}\n`));
+
+    if (taskFiles.length > 0) {
+      console.log(chalk.bold("Task File Links:"));
+      for (const tf of taskFiles) {
+        const task = getTask(tf.task_id, db);
+        const title = task ? task.title : "unknown";
+        const sid = task?.short_id || tf.task_id.slice(0, 8);
+        console.log(`  ${chalk.cyan(sid)} ${title} — ${chalk.dim(tf.role || "file")} ${chalk.dim(tf.updated_at)}`);
+      }
+    }
+
+    if (commitRows.length > 0) {
+      console.log(chalk.bold(`\nCommit Links (${commitRows.length}):`));
+      for (const c of commitRows) {
+        const sid = c.short_id || c.task_id.slice(0, 8);
+        console.log(`  ${chalk.yellow(c.sha?.slice(0, 7) || "?")} ${chalk.cyan(sid)} ${c.title || ""} — ${chalk.dim(c.author || "")} ${chalk.dim(c.committed_at || "")}`);
+      }
+    }
+
+    if (taskFiles.length === 0 && commitRows.length === 0) {
+      console.log(chalk.dim("No task or commit links found for this file."));
+      console.log(chalk.dim("Use 'todos hook install' to auto-link future commits."));
+    }
+    console.log();
+  });
+
+// dashboard
+program
+  .command("dashboard")
+  .description("Live-updating dashboard showing project health, agents, task flow")
+  .option("--project <id>", "Filter to project")
+  .option("--refresh <ms>", "Refresh interval in ms (default: 2000)", "2000")
+  .action(async (opts) => {
+    const { render } = await import("ink");
+    const React = await import("react");
+    const { Dashboard } = await import("./components/Dashboard.js");
+    const globalOpts = program.opts();
+    const projectId = opts.project || autoProject(globalOpts) || undefined;
+    render(React.createElement(Dashboard, { projectId, refreshMs: parseInt(opts.refresh, 10) }));
+  });
+
 // next
 program
   .command("next")
@@ -2209,6 +2549,131 @@ program
       const t = s.next_task;
       console.log(`  ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${chalk.yellow(t.priority)} ${t.title}`);
     }
+  });
+
+// recap
+program
+  .command("recap")
+  .description("Show what happened in the last N hours — completed tasks, new tasks, agent activity, blockers")
+  .option("--hours <n>", "Look back N hours (default: 8)", "8")
+  .option("--project <id>", "Filter to project")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const { getRecap } = require("../db/audit.js") as any;
+    const recap = getRecap(parseInt(opts.hours, 10), opts.project);
+    if (globalOpts.json) { output(recap, true); return; }
+
+    console.log(chalk.bold(`\nRecap — last ${recap.hours} hours (since ${new Date(recap.since).toLocaleString()})\n`));
+
+    if (recap.completed.length > 0) {
+      console.log(chalk.green.bold(`Completed (${recap.completed.length}):`));
+      for (const t of recap.completed) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const dur = t.duration_minutes != null ? ` (${t.duration_minutes}m)` : "";
+        console.log(`  ${chalk.green("✓")} ${chalk.cyan(id)} ${t.title}${dur}${t.assigned_to ? ` — ${chalk.dim(t.assigned_to)}` : ""}`);
+      }
+    } else {
+      console.log(chalk.dim("No tasks completed in this period."));
+    }
+
+    if (recap.in_progress.length > 0) {
+      console.log(chalk.blue.bold(`\nIn Progress (${recap.in_progress.length}):`));
+      for (const t of recap.in_progress) {
+        const id = t.short_id || t.id.slice(0, 8);
+        console.log(`  ${chalk.blue("→")} ${chalk.cyan(id)} ${t.title}${t.assigned_to ? ` — ${chalk.dim(t.assigned_to)}` : ""}`);
+      }
+    }
+
+    if (recap.blocked.length > 0) {
+      console.log(chalk.red.bold(`\nBlocked (${recap.blocked.length}):`));
+      for (const t of recap.blocked) {
+        const id = t.short_id || t.id.slice(0, 8);
+        console.log(`  ${chalk.red("✗")} ${chalk.cyan(id)} ${t.title}`);
+      }
+    }
+
+    if (recap.stale.length > 0) {
+      console.log(chalk.yellow.bold(`\nStale (${recap.stale.length}):`));
+      for (const t of recap.stale) {
+        const id = t.short_id || t.id.slice(0, 8);
+        const ago = Math.round((Date.now() - new Date(t.updated_at).getTime()) / 60000);
+        console.log(`  ${chalk.yellow("!")} ${chalk.cyan(id)} ${t.title} — last update ${ago}m ago`);
+      }
+    }
+
+    if (recap.created.length > 0) {
+      console.log(chalk.dim.bold(`\nCreated (${recap.created.length}):`));
+      for (const t of recap.created.slice(0, 10)) {
+        const id = t.short_id || t.id.slice(0, 8);
+        console.log(`  ${chalk.dim("+")} ${chalk.cyan(id)} ${t.title}`);
+      }
+      if (recap.created.length > 10) console.log(chalk.dim(`  ... and ${recap.created.length - 10} more`));
+    }
+
+    if (recap.agents.length > 0) {
+      console.log(chalk.bold(`\nAgents:`));
+      for (const a of recap.agents) {
+        const seen = Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000);
+        console.log(`  ${a.name}: ${chalk.green(a.completed_count + " done")} | ${chalk.blue(a.in_progress_count + " active")} | last seen ${seen}m ago`);
+      }
+    }
+    console.log();
+  });
+
+// standup
+program
+  .command("standup")
+  .description("Generate standup notes — completed since yesterday, in progress, blocked. Grouped by agent.")
+  .option("--since <date>", "ISO date or 'yesterday' (default: yesterday)")
+  .option("--project <id>", "Filter to project")
+  .action((opts) => {
+    const globalOpts = program.opts();
+    const sinceDate = opts.since === "yesterday" || !opts.since
+      ? new Date(Date.now() - 24 * 60 * 60 * 1000)
+      : new Date(opts.since);
+    const hours = Math.max(1, Math.round((Date.now() - sinceDate.getTime()) / (60 * 60 * 1000)));
+    const { getRecap } = require("../db/audit.js") as any;
+    const recap = getRecap(hours, opts.project);
+
+    if (globalOpts.json) { output(recap, true); return; }
+
+    console.log(chalk.bold(`\nStandup — since ${sinceDate.toLocaleDateString()}\n`));
+
+    // Group completed by agent
+    const byAgent = new Map<string, any[]>();
+    for (const t of recap.completed) {
+      const agent = t.assigned_to || "unassigned";
+      if (!byAgent.has(agent)) byAgent.set(agent, []);
+      byAgent.get(agent)!.push(t);
+    }
+
+    if (byAgent.size > 0) {
+      console.log(chalk.green.bold("Done:"));
+      for (const [agent, tasks] of byAgent) {
+        console.log(`  ${chalk.cyan(agent)}:`);
+        for (const t of tasks) {
+          const dur = t.duration_minutes != null ? ` (${t.duration_minutes}m)` : "";
+          console.log(`    ${chalk.green("✓")} ${t.short_id || t.id.slice(0, 8)} ${t.title}${dur}`);
+        }
+      }
+    } else {
+      console.log(chalk.dim("Nothing completed."));
+    }
+
+    if (recap.in_progress.length > 0) {
+      console.log(chalk.blue.bold("\nIn Progress:"));
+      for (const t of recap.in_progress) {
+        console.log(`  ${chalk.blue("→")} ${t.short_id || t.id.slice(0, 8)} ${t.title}${t.assigned_to ? ` — ${chalk.dim(t.assigned_to)}` : ""}`);
+      }
+    }
+
+    if (recap.blocked.length > 0) {
+      console.log(chalk.red.bold("\nBlocked:"));
+      for (const t of recap.blocked) {
+        console.log(`  ${chalk.red("✗")} ${t.short_id || t.id.slice(0, 8)} ${t.title}`);
+      }
+    }
+    console.log();
   });
 
 // fail

@@ -571,6 +571,11 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_file_locks_expires ON file_locks(expires_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (33);
   `,
+  // Migration 34: Add started_at to tasks for duration tracking
+  `
+  ALTER TABLE tasks ADD COLUMN started_at TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (34);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -789,6 +794,7 @@ function ensureSchema(db: Database): void {
   ensureColumn("tasks", "spawned_from_session", "TEXT");
   ensureColumn("tasks", "assigned_by", "TEXT");
   ensureColumn("tasks", "assigned_from_project", "TEXT");
+  ensureColumn("tasks", "started_at", "TEXT");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");

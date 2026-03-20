@@ -50,7 +50,7 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../db/agents.js";
+import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
@@ -99,7 +99,7 @@ const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
 const MINIMAL_TOOLS = new Set([
   "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
   "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
-  "get_tasks_changed_since", "heartbeat",
+  "get_tasks_changed_since", "heartbeat", "release_agent",
 ]);
 
 const STANDARD_EXCLUDED = new Set([
@@ -1310,12 +1310,13 @@ server.tool(
     capabilities: z.array(z.string()).optional().describe("Agent capabilities/skills for task routing (e.g. ['typescript', 'testing', 'devops'])"),
     session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
     working_dir: z.string().optional().describe("Working directory of this session — used to look up the project's agent pool and identify who holds the name in a conflict"),
+    force: z.boolean().optional().describe("Force takeover of an active agent's name. Use with caution — only when you know the previous session is dead."),
   },
-  async ({ name, description, capabilities, session_id, working_dir }) => {
+  async ({ name, description, capabilities, session_id, working_dir, force }) => {
     try {
       // Look up the pool for this project (from config, based on working_dir) — null = no restriction
       const pool = getAgentPoolForProject(working_dir);
-      const result = registerAgent({ name, description, capabilities, session_id, working_dir, pool: pool || undefined });
+      const result = registerAgent({ name, description, capabilities, session_id, working_dir, force, pool: pool || undefined });
       if (isAgentConflict(result)) {
         const suggestLine = result.suggestions && result.suggestions.length > 0
           ? `\nAvailable names: ${result.suggestions.join(", ")}`
@@ -1573,6 +1574,38 @@ server.tool(
 );
 }
 
+// release_agent
+if (shouldRegisterTool("release_agent")) {
+server.tool(
+  "release_agent",
+  "Explicitly release/logout an agent — clears session binding and makes the name immediately available. Call this when your session ends instead of waiting for the 30-minute stale timeout.",
+  {
+    agent_id: z.string().describe("Your agent ID or name."),
+    session_id: z.string().optional().describe("Your session ID — if provided, release only succeeds if it matches (prevents other sessions from releasing your agent)."),
+  },
+  async ({ agent_id, session_id }) => {
+    try {
+      const agent = getAgent(agent_id) || getAgentByName(agent_id);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
+      }
+      const released = releaseAgent(agent.id, session_id);
+      if (!released) {
+        return { content: [{ type: "text" as const, text: `Release denied: session_id does not match agent's current session.` }], isError: true };
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Agent released: ${agent.name} (${agent.id}) — session cleared, name is now available.`,
+        }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === TASK LIST TOOLS ===
 
 // create_task_list
@@ -1754,6 +1787,188 @@ server.tool(
       if (activity.length === 0) return { content: [{ type: "text" as const, text: "No recent activity." }] };
       const text = activity.map(h => `${h.created_at} | ${h.task_id.slice(0, 8)} | ${h.action}${h.field ? ` ${h.field}` : ""}${h.agent_id ? ` by ${h.agent_id}` : ""}`).join("\n");
       return { content: [{ type: "text" as const, text: `${activity.length} recent change(s):\n${text}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// recap
+if (shouldRegisterTool("recap")) {
+server.tool(
+  "recap",
+  "Get a summary of what happened in the last N hours — completed tasks with duration, new tasks, in-progress work, blockers, stale tasks, and agent activity. Great for session start or standup prep.",
+  {
+    hours: z.number().optional().describe("Look back N hours (default: 8)"),
+    project_id: z.string().optional().describe("Filter to a specific project"),
+  },
+  async ({ hours, project_id }) => {
+    try {
+      const { getRecap } = await import("../db/audit.js");
+      const recap = getRecap(hours || 8, project_id);
+      const lines: string[] = [`Recap — last ${recap.hours}h (since ${recap.since})`];
+
+      if (recap.completed.length > 0) {
+        lines.push(`\nCompleted (${recap.completed.length}):`);
+        for (const t of recap.completed) {
+          const dur = t.duration_minutes != null ? ` (${t.duration_minutes}m)` : "";
+          lines.push(`  ✓ ${t.short_id || t.id.slice(0, 8)} ${t.title}${dur}${t.assigned_to ? ` — ${t.assigned_to}` : ""}`);
+        }
+      }
+      if (recap.in_progress.length > 0) {
+        lines.push(`\nIn Progress (${recap.in_progress.length}):`);
+        for (const t of recap.in_progress) lines.push(`  → ${t.short_id || t.id.slice(0, 8)} ${t.title}${t.assigned_to ? ` — ${t.assigned_to}` : ""}`);
+      }
+      if (recap.blocked.length > 0) {
+        lines.push(`\nBlocked (${recap.blocked.length}):`);
+        for (const t of recap.blocked) lines.push(`  ✗ ${t.short_id || t.id.slice(0, 8)} ${t.title}`);
+      }
+      if (recap.stale.length > 0) {
+        lines.push(`\nStale (${recap.stale.length}):`);
+        for (const t of recap.stale) lines.push(`  ! ${t.short_id || t.id.slice(0, 8)} ${t.title} — updated ${t.updated_at}`);
+      }
+      if (recap.agents.length > 0) {
+        lines.push(`\nAgents:`);
+        for (const a of recap.agents) lines.push(`  ${a.name}: ${a.completed_count} done, ${a.in_progress_count} active (seen ${a.last_seen_at})`);
+      }
+      lines.push(`\nCreated: ${recap.created.length} new tasks`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// standup
+if (shouldRegisterTool("standup")) {
+server.tool(
+  "standup",
+  "Generate standup notes — completed tasks since yesterday grouped by agent, in-progress work, and blockers. Copy-paste ready.",
+  {
+    hours: z.number().optional().describe("Look back N hours (default: 24)"),
+    project_id: z.string().optional(),
+  },
+  async ({ hours, project_id }) => {
+    try {
+      const { getRecap } = await import("../db/audit.js");
+      const recap = getRecap(hours || 24, project_id);
+      const lines: string[] = [`Standup — last ${recap.hours}h`];
+
+      // Group completed by agent
+      const byAgent = new Map<string, any[]>();
+      for (const t of recap.completed) {
+        const agent = t.assigned_to || "unassigned";
+        if (!byAgent.has(agent)) byAgent.set(agent, []);
+        byAgent.get(agent)!.push(t);
+      }
+
+      if (byAgent.size > 0) {
+        lines.push("\nDone:");
+        for (const [agent, tasks] of byAgent) {
+          lines.push(`  ${agent}:`);
+          for (const t of tasks) {
+            const dur = t.duration_minutes != null ? ` (${t.duration_minutes}m)` : "";
+            lines.push(`    ✓ ${t.short_id || t.id.slice(0, 8)} ${t.title}${dur}`);
+          }
+        }
+      } else {
+        lines.push("\nNothing completed.");
+      }
+
+      if (recap.in_progress.length > 0) {
+        lines.push("\nIn Progress:");
+        for (const t of recap.in_progress) lines.push(`  → ${t.short_id || t.id.slice(0, 8)} ${t.title}${t.assigned_to ? ` — ${t.assigned_to}` : ""}`);
+      }
+      if (recap.blocked.length > 0) {
+        lines.push("\nBlocked:");
+        for (const t of recap.blocked) lines.push(`  ✗ ${t.short_id || t.id.slice(0, 8)} ${t.title}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// import_github_issue
+if (shouldRegisterTool("import_github_issue")) {
+server.tool(
+  "import_github_issue",
+  "Import a GitHub issue as a task. Requires gh CLI installed and authenticated.",
+  {
+    url: z.string().describe("GitHub issue URL (e.g. https://github.com/owner/repo/issues/42)"),
+    project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+  },
+  async ({ url, project_id, task_list_id }) => {
+    try {
+      const { parseGitHubUrl, fetchGitHubIssue, issueToTask } = await import("../lib/github.js");
+      const parsed = parseGitHubUrl(url);
+      if (!parsed) return { content: [{ type: "text" as const, text: "Invalid GitHub issue URL." }], isError: true };
+      const issue = fetchGitHubIssue(parsed.owner, parsed.repo, parsed.number);
+      const input = issueToTask(issue, { project_id, task_list_id });
+      const task = createTask(input);
+      return { content: [{ type: "text" as const, text: `Imported GH#${issue.number}: ${issue.title}\nTask: ${task.short_id || task.id} [${task.priority}]\nLabels: ${issue.labels.join(", ") || "none"}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// blame
+if (shouldRegisterTool("blame")) {
+server.tool(
+  "blame",
+  "Show which tasks and agents touched a file — combines task_files and task_commits data.",
+  {
+    path: z.string().describe("File path to look up"),
+  },
+  async ({ path }) => {
+    try {
+      const { findTasksByFile } = await import("../db/task-files.js");
+      const db = getDatabase();
+      const taskFiles = findTasksByFile(path, db);
+
+      const commitRows = db.query(
+        "SELECT tc.*, t.title, t.short_id FROM task_commits tc JOIN tasks t ON t.id = tc.task_id WHERE tc.files_changed LIKE ? ORDER BY tc.committed_at DESC"
+      ).all(`%${path}%`) as any[];
+
+      const lines: string[] = [`Blame: ${path}`];
+
+      if (taskFiles.length > 0) {
+        lines.push(`\nTask File Links (${taskFiles.length}):`);
+        for (const tf of taskFiles) {
+          const task = getTask(tf.task_id, db);
+          lines.push(`  ${task?.short_id || tf.task_id.slice(0, 8)} ${task?.title || "?"} — ${(tf as any).role || "file"}`);
+        }
+      }
+
+      if (commitRows.length > 0) {
+        lines.push(`\nCommit Links (${commitRows.length}):`);
+        for (const c of commitRows) lines.push(`  ${c.sha?.slice(0, 7)} ${c.short_id || c.task_id.slice(0, 8)} ${c.title || ""} — ${c.author || ""}`);
+      }
+
+      if (taskFiles.length === 0 && commitRows.length === 0) {
+        lines.push("No task or commit links found.");
+      }
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// burndown
+if (shouldRegisterTool("burndown")) {
+server.tool(
+  "burndown",
+  "ASCII burndown chart showing actual vs ideal progress for a plan, project, or task list.",
+  {
+    plan_id: z.string().optional(),
+    project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+  },
+  async ({ plan_id, project_id, task_list_id }) => {
+    try {
+      const { getBurndown } = await import("../lib/burndown.js");
+      const data = getBurndown({ plan_id, project_id, task_list_id });
+      return { content: [{ type: "text" as const, text: `Burndown: ${data.completed}/${data.total} done, ${data.remaining} remaining\n\n${data.chart}` }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
@@ -2687,6 +2902,86 @@ server.tool(
 );
 }
 
+// task_context — deep orientation for a specific task
+if (shouldRegisterTool("task_context")) {
+server.tool(
+  "task_context",
+  "Full orientation for a specific task — details, description, dependencies (with blocked status), files, commits, comments, checklist. Use when starting work on a task.",
+  {
+    id: z.string().describe("Task ID, short_id, or partial ID"),
+  },
+  async ({ id }) => {
+    try {
+      const resolvedId = resolveId(id, "tasks");
+      const task = getTaskWithRelations(resolvedId);
+      if (!task) return { content: [{ type: "text" as const, text: `Task not found: ${id}` }], isError: true };
+
+      const lines: string[] = [];
+      const sid = task.short_id || task.id.slice(0, 8);
+      lines.push(`${sid} [${task.status}] [${task.priority}] ${task.title}`);
+      if (task.description) lines.push(`\nDescription:\n${task.description}`);
+      if (task.assigned_to) lines.push(`Assigned: ${task.assigned_to}`);
+      if (task.started_at) lines.push(`Started: ${task.started_at}`);
+      if (task.completed_at) {
+        lines.push(`Completed: ${task.completed_at}`);
+        if (task.started_at) {
+          const dur = Math.round((new Date(task.completed_at).getTime() - new Date(task.started_at).getTime()) / 60000);
+          lines.push(`Duration: ${dur}m`);
+        }
+      }
+      if (task.tags.length > 0) lines.push(`Tags: ${task.tags.join(", ")}`);
+
+      if (task.dependencies.length > 0) {
+        lines.push(`\nDepends on (${task.dependencies.length}):`);
+        for (const dep of task.dependencies) {
+          const blocked = dep.status !== "completed" && dep.status !== "cancelled";
+          lines.push(`  ${blocked ? "✗" : "✓"} ${dep.short_id || dep.id.slice(0, 8)} [${dep.status}] ${dep.title}`);
+        }
+        const unfinished = task.dependencies.filter(d => d.status !== "completed" && d.status !== "cancelled");
+        if (unfinished.length > 0) lines.push(`⚠ BLOCKED by ${unfinished.length} unfinished dep(s)`);
+      }
+
+      if (task.blocked_by.length > 0) {
+        lines.push(`\nBlocks (${task.blocked_by.length}):`);
+        for (const b of task.blocked_by) lines.push(`  ${b.short_id || b.id.slice(0, 8)} [${b.status}] ${b.title}`);
+      }
+
+      if (task.subtasks.length > 0) {
+        lines.push(`\nSubtasks (${task.subtasks.length}):`);
+        for (const st of task.subtasks) lines.push(`  ${st.short_id || st.id.slice(0, 8)} [${st.status}] ${st.title}`);
+      }
+
+      // Files
+      try {
+        const { listTaskFiles } = await import("../db/task-files.js");
+        const files = listTaskFiles(task.id);
+        if (files.length > 0) {
+          lines.push(`\nFiles (${files.length}):`);
+          for (const f of files) lines.push(`  ${(f as any).role || "file"}: ${(f as any).path}`);
+        }
+      } catch {}
+
+      // Commits
+      try {
+        const { getTaskCommits } = await import("../db/task-commits.js");
+        const commits = getTaskCommits(task.id);
+        if (commits.length > 0) {
+          lines.push(`\nCommits (${commits.length}):`);
+          for (const c of commits) lines.push(`  ${(c as any).commit_hash?.slice(0, 7)} ${(c as any).message || ""}`);
+        }
+      } catch {}
+
+      if (task.comments.length > 0) {
+        lines.push(`\nComments (${task.comments.length}):`);
+        for (const c of task.comments) lines.push(`  [${c.agent_id || "?"}] ${c.created_at}: ${c.content}`);
+      }
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 // get_context — compact text for agent prompt injection
 if (shouldRegisterTool("get_context")) {
 server.tool(
@@ -2962,11 +3257,11 @@ server.tool(
       "create_project","list_projects","add_project_source","remove_project_source","list_project_sources",
       "add_checklist_item","check_checklist_item","update_checklist_item","remove_checklist_item","get_checklist",
       "create_plan","list_plans","get_plan","update_plan","delete_plan",
-      "register_agent","suggest_agent_name","list_agents","get_agent","rename_agent","delete_agent","unarchive_agent","heartbeat",
+      "register_agent","suggest_agent_name","list_agents","get_agent","rename_agent","delete_agent","unarchive_agent","heartbeat","release_agent",
       "get_my_tasks","get_org_chart","set_reports_to",
       "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
       "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
-      "get_task_history","get_recent_activity",
+      "get_task_history","get_recent_activity","recap","task_context","standup","burndown","blame","import_github_issue",
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
@@ -3035,13 +3330,14 @@ server.tool(
 
       // Agents
       suggest_agent_name: "Check available agent names before registering. Shows active agents and, if a pool is configured, which pool names are free.\n  Params: working_dir(string — your working directory, used to look up project pool from config)\n  Example: {working_dir: '/workspace/platform'}",
-      register_agent: "Register an agent. Any name is allowed — pool is advisory. Returns CONFLICT if name is held by a recently-active agent.\n  Params: name(string, req), description(string), capabilities(string[]), session_id(string — unique per session), working_dir(string — used to determine project pool)\n  Example: {name: 'my-agent', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
+      register_agent: "Register an agent. Any name is allowed — pool is advisory. Returns CONFLICT if name is held by a recently-active agent. Use force:true to take over.\n  Params: name(string, req), description(string), capabilities(string[]), session_id(string — unique per session), working_dir(string — used to determine project pool), force(boolean — skip conflict check)\n  Example: {name: 'my-agent', session_id: 'abc123-1741952000', working_dir: '/workspace/platform'}",
       list_agents: "List all registered agents (active by default). Set include_archived: true to see archived agents.\n  Params: include_archived(boolean, optional)\n  Example: {include_archived: true}",
       get_agent: "Get agent details by ID or name. Provide one of id or name.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       rename_agent: "Rename an agent. Resolve by id or current name.\n  Params: id(string), name(string — current name), new_name(string, req)\n  Example: {name: 'old-name', new_name: 'new-name'}",
       delete_agent: "Archive an agent (soft delete). Agent is preserved for task history but hidden from list_agents. Use unarchive_agent to restore.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       unarchive_agent: "Restore an archived agent back to active status.\n  Params: id(string), name(string)\n  Example: {name: 'maximus'}",
       heartbeat: "Update last_seen_at timestamp to signal you're still active. Call periodically during long tasks.\n  Params: agent_id(string, req — your agent ID or name)\n  Example: {agent_id: 'maximus'}",
+      release_agent: "Explicitly release/logout an agent — clears session binding and makes name immediately available. Call when session ends.\n  Params: agent_id(string, req), session_id(string — only releases if matching)\n  Example: {agent_id: 'maximus', session_id: 'my-session-123'}",
       get_my_tasks: "Get all tasks assigned to/created by an agent, with stats (pending/active/done/rate).\n  Params: agent_name(string, req)\n  Example: {agent_name: 'maximus'}",
       get_org_chart: "Get agent org chart showing reporting hierarchy. No params.",
       set_reports_to: "Set who an agent reports to in the org chart. Omit manager_name for top-level.\n  Params: agent_name(string, req), manager_name(string, optional)\n  Example: {agent_name: 'brutus', manager_name: 'maximus'}",
@@ -3072,6 +3368,12 @@ server.tool(
       // Audit
       get_task_history: "Get audit log for a task — all field changes with timestamps and actors.\n  Params: task_id(string, req)\n  Example: {task_id: 'a1b2c3d4'}",
       get_recent_activity: "Get recent task changes across all tasks — global activity feed.\n  Params: limit(number, default:50)\n  Example: {limit: 20}",
+      recap: "Summary of what happened in the last N hours — completed tasks with durations, new tasks, in-progress, blocked, stale, agent activity.\n  Params: hours(number, default:8), project_id(string)\n  Example: {hours: 4}",
+      task_context: "Full orientation for a specific task — description, dependencies with blocked status, files, commits, comments, checklist, duration. Use before starting work.\n  Params: id(string, req)\n  Example: {id: 'OPE-00042'}",
+      standup: "Generate standup notes — completed tasks grouped by agent, in-progress, blocked. Copy-paste ready.\n  Params: hours(number, default:24), project_id(string)\n  Example: {hours: 24}",
+      import_github_issue: "Import a GitHub issue as a task. Requires gh CLI.\n  Params: url(string, req), project_id(string), task_list_id(string)\n  Example: {url: 'https://github.com/owner/repo/issues/42'}",
+      blame: "Show which tasks/agents touched a file — combines task_files and task_commits.\n  Params: path(string, req)\n  Example: {path: 'src/db/agents.ts'}",
+      burndown: "ASCII burndown chart — actual vs ideal progress for a plan, project, or task list.\n  Params: plan_id(string), project_id(string), task_list_id(string)\n  Example: {plan_id: 'abc123'}",
 
       // Webhooks
       create_webhook: "Register a webhook for task change events.\n  Params: url(string, req), events(string[] — empty=all), secret(string — HMAC signing)\n  Example: {url: 'https://example.com/hook', events: ['task.created', 'task.completed']}",

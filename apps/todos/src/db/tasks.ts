@@ -542,9 +542,9 @@ export function startTask(
   const cutoff = lockExpiryCutoff();
   const timestamp = now();
   const result = d.run(
-    `UPDATE tasks SET status = 'in_progress', assigned_to = ?, locked_by = ?, locked_at = ?, version = version + 1, updated_at = ?
+    `UPDATE tasks SET status = 'in_progress', assigned_to = ?, locked_by = ?, locked_at = ?, started_at = COALESCE(started_at, ?), version = version + 1, updated_at = ?
      WHERE id = ? AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)`,
-    [agentId, agentId, timestamp, timestamp, id, agentId, cutoff],
+    [agentId, agentId, timestamp, timestamp, timestamp, id, agentId, cutoff],
   );
 
   if (result.changes === 0) {
@@ -557,7 +557,7 @@ export function startTask(
   dispatchWebhook("task.started", { id, agent_id: agentId, title: task.title }, d).catch(() => {});
 
   // Return constructed result — no re-fetch
-  return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, version: task.version + 1, updated_at: timestamp };
+  return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
 }
 
 export function completeTask(

@@ -83,6 +83,8 @@ export {
 export {
   registerAgent,
   isAgentConflict,
+  releaseAgent,
+  autoReleaseStaleAgents,
   getAgent,
   getAgentByName,
   listAgents,
@@ -119,7 +121,8 @@ export {
 } from "./db/sessions.js";
 
 // Audit
-export { logTaskChange, getTaskHistory, getRecentActivity } from "./db/audit.js";
+export { logTaskChange, getTaskHistory, getRecentActivity, getRecap } from "./db/audit.js";
+export type { RecapSummary } from "./db/audit.js";
 
 // Webhooks
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
@@ -188,6 +191,14 @@ export type { SyncResult } from "./lib/sync-types.js";
 
 // Extract
 export { extractTodos, extractFromSource, tagToPriority, EXTRACT_TAGS } from "./lib/extract.js";
+
+// Burndown
+export { getBurndown } from "./lib/burndown.js";
+export type { BurndownData } from "./lib/burndown.js";
+
+// GitHub import
+export { parseGitHubUrl, fetchGitHubIssue, issueToTask } from "./lib/github.js";
+export type { GitHubIssue } from "./lib/github.js";
 export type { ExtractedComment, ExtractOptions, ExtractResult, ExtractTag } from "./lib/extract.js";
 
 // Config
