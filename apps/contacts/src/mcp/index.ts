@@ -604,14 +604,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "add_contact_to_group",
-      description: "Add a contact to a group.",
+      description: "Add one or more contacts to a group. Pass contact_id for a single contact, or contact_ids (array) for bulk.",
       inputSchema: {
         type: "object",
         properties: {
-          contact_id: { type: "string" },
+          contact_id: { type: "string", description: "Single contact ID (use contact_ids for bulk)" },
+          contact_ids: { type: "array", items: { type: "string" }, description: "Multiple contact IDs to add at once" },
           group_id: { type: "string" },
         },
-        required: ["contact_id", "group_id"],
+        required: ["group_id"],
       },
     },
     {
@@ -1340,8 +1341,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "add_contact_to_group": {
         const db = getDatabase();
-        const result = addContactToGroup(db, a.contact_id as string, a.group_id as string);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        const groupId = a.group_id as string;
+        const ids: string[] = a.contact_ids
+          ? (a.contact_ids as string[])
+          : [a.contact_id as string];
+        if (ids.length === 1) {
+          const result = addContactToGroup(db, ids[0]!, groupId);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        let added = 0;
+        const errors: string[] = [];
+        for (const cid of ids) {
+          try { addContactToGroup(db, cid, groupId); added++; }
+          catch (e) { errors.push(`${cid}: ${e instanceof Error ? e.message : String(e)}`); }
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ added, errors: errors.length, error_details: errors }, null, 2) }] };
       }
 
       case "remove_contact_from_group": {
