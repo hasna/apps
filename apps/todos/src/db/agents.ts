@@ -2,15 +2,39 @@ import type { Database } from "bun:sqlite";
 import type { Agent, AgentConflictError, AgentRow, AgentStatus, RegisterAgentInput } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
 
-/** How long (ms) before an agent is considered stale and its name can be taken over */
-const AGENT_ACTIVE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+/** How long (ms) before an agent is considered stale and its name can be taken over.
+ *  Configurable via TODOS_AGENT_TIMEOUT_MS env var, defaults to 30 minutes. */
+function getActiveWindowMs(): number {
+  const env = process.env["TODOS_AGENT_TIMEOUT_MS"];
+  if (env) {
+    const parsed = parseInt(env, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 30 * 60 * 1000; // 30 minutes
+}
+
+/**
+ * Auto-release stale agents: clears session_id for agents whose last_seen_at
+ * is beyond the active window. Enabled via TODOS_AGENT_AUTO_RELEASE=true.
+ */
+export function autoReleaseStaleAgents(db?: Database): number {
+  if (process.env["TODOS_AGENT_AUTO_RELEASE"] !== "true") return 0;
+  const d = db || getDatabase();
+  const cutoff = new Date(Date.now() - getActiveWindowMs()).toISOString();
+  const result = d.run(
+    "UPDATE agents SET session_id = NULL WHERE status = 'active' AND session_id IS NOT NULL AND last_seen_at < ?",
+    [cutoff],
+  );
+  return result.changes;
+}
 
 /**
  * Returns names from the pool that are not currently held by an active agent.
- * Active = last_seen_at within the past 30 minutes.
+ * Active = last_seen_at within the configured stale window.
  */
 export function getAvailableNamesFromPool(pool: string[], db: Database): string[] {
-  const cutoff = new Date(Date.now() - AGENT_ACTIVE_WINDOW_MS).toISOString();
+  autoReleaseStaleAgents(db);
+  const cutoff = new Date(Date.now() - getActiveWindowMs()).toISOString();
   const activeNames = new Set(
     (db.query("SELECT name FROM agents WHERE status = 'active' AND last_seen_at > ?").all(cutoff) as { name: string }[])
       .map((r) => r.name.toLowerCase()),
@@ -38,9 +62,11 @@ function rowToAgent(row: AgentRow): Agent {
  * Conflict rules:
  *  - Name free → create, bind session_id if provided
  *  - Name taken, same session_id → heartbeat, return agent ✓
- *  - Name taken, different session_id, agent ACTIVE (<30min) → CONFLICT error
- *  - Name taken, different session_id, agent STALE (>30min) → takeover, update session_id
- *  - Name taken, no session_id provided → heartbeat + return (backward compat, no block)
+ *  - Name taken, different session_id, agent ACTIVE → CONFLICT error (unless force: true)
+ *  - Name taken, different session_id, agent STALE → takeover, update session_id
+ *  - Name taken, no session_id provided, agent ACTIVE with session → CONFLICT error (tightened)
+ *  - Name taken, no session_id provided, agent has no session or is stale → heartbeat + return
+ *  - force: true → skip active-agent check and take over regardless
  */
 export function registerAgent(input: RegisterAgentInput, db?: Database): Agent | AgentConflictError {
   const d = db || getDatabase();
@@ -51,29 +77,28 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const existing = getAgentByName(normalizedName, d);
   if (existing) {
     const lastSeenMs = new Date(existing.last_seen_at).getTime();
-    const isActive = Date.now() - lastSeenMs < AGENT_ACTIVE_WINDOW_MS;
+    const activeWindowMs = getActiveWindowMs();
+    const isActive = Date.now() - lastSeenMs < activeWindowMs;
     const sameSession = input.session_id && existing.session_id && input.session_id === existing.session_id;
     const differentSession = input.session_id && existing.session_id && input.session_id !== existing.session_id;
+    const callerHasNoSession = !input.session_id;
+    const existingHasActiveSession = existing.session_id && isActive;
 
-    // Hard block: active agent with a different known session.
-    // Security: never reveal the full session_id in the message — doing so would allow
-    // spoofed reclaims (copy the session_id from the error, pass it back to bypass the check).
-    if (isActive && differentSession) {
-      const minutesAgo = Math.round((Date.now() - lastSeenMs) / 60000);
-      const suggestions = input.pool ? getAvailableNamesFromPool(input.pool, d) : [];
-      return {
-        conflict: true,
-        existing_id: existing.id,
-        existing_name: existing.name,
-        last_seen_at: existing.last_seen_at,
-        session_hint: existing.session_id ? existing.session_id.slice(0, 8) : null,
-        working_dir: existing.working_dir,
-        suggestions: suggestions.slice(0, 5),
-        message: `Agent "${normalizedName}" is already active (last seen ${minutesAgo}m ago, session …${existing.session_id?.slice(-4)}, dir: ${existing.working_dir ?? "unknown"}). Cannot reclaim an active agent — choose a different name, or wait for the session to go stale.${suggestions.length > 0 ? ` Available: ${suggestions.slice(0, 3).join(", ")}` : ""}`,
-      };
+    // Force takeover — skip all conflict checks
+    if (!input.force) {
+      // Hard block: active agent with a different known session
+      if (isActive && differentSession) {
+        return buildConflictError(existing, lastSeenMs, input.pool, d);
+      }
+
+      // Tightened: caller has no session_id but existing agent is actively session-bound
+      // Previously this was a silent heartbeat — now it's a conflict
+      if (callerHasNoSession && existingHasActiveSession) {
+        return buildConflictError(existing, lastSeenMs, input.pool, d);
+      }
     }
 
-    // Takeover: stale agent with a different session — allowed, but update binding
+    // Takeover: stale agent, force takeover, or compatible session — update binding
     // Also reactivate archived agents on re-register
     const updates: string[] = ["last_seen_at = ?", "status = 'active'"];
     const params: (string | null)[] = [now()];
@@ -115,6 +140,43 @@ export function isAgentConflict(result: Agent | AgentConflictError): result is A
   return (result as AgentConflictError).conflict === true;
 }
 
+function buildConflictError(existing: Agent, lastSeenMs: number, pool: string[] | undefined, d: Database): AgentConflictError {
+  const minutesAgo = Math.round((Date.now() - lastSeenMs) / 60000);
+  const suggestions = pool ? getAvailableNamesFromPool(pool, d) : [];
+  return {
+    conflict: true,
+    existing_id: existing.id,
+    existing_name: existing.name,
+    last_seen_at: existing.last_seen_at,
+    session_hint: existing.session_id ? existing.session_id.slice(0, 8) : null,
+    working_dir: existing.working_dir,
+    suggestions: suggestions.slice(0, 5),
+    message: `Agent "${existing.name}" is already active (last seen ${minutesAgo}m ago, session ${existing.session_id ? "…" + existing.session_id.slice(-4) : "none"}, dir: ${existing.working_dir ?? "unknown"}). Pass force: true to take over, or choose a different name.${suggestions.length > 0 ? ` Available: ${suggestions.slice(0, 3).join(", ")}` : ""}`,
+  };
+}
+
+/**
+ * Release an agent — explicit logout. Clears session_id and sets last_seen_at to epoch
+ * so the name is immediately available for other agents.
+ *
+ * If session_id is provided, only release if it matches (prevents other sessions from
+ * releasing your agent).
+ */
+export function releaseAgent(id: string, session_id?: string, db?: Database): boolean {
+  const d = db || getDatabase();
+  const agent = getAgent(id, d);
+  if (!agent) return false;
+
+  // If session_id provided, verify it matches before releasing
+  if (session_id && agent.session_id && agent.session_id !== session_id) {
+    return false;
+  }
+
+  const epoch = new Date(0).toISOString();
+  d.run("UPDATE agents SET session_id = NULL, last_seen_at = ? WHERE id = ?", [epoch, id]);
+  return true;
+}
+
 export function getAgent(id: string, db?: Database): Agent | null {
   const d = db || getDatabase();
   const row = d.query("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow | null;
@@ -138,6 +200,7 @@ export function listAgents(opts?: { include_archived?: boolean } | Database, db?
     includeArchived = (opts as { include_archived?: boolean } | undefined)?.include_archived ?? false;
     d = db || getDatabase();
   }
+  autoReleaseStaleAgents(d);
   if (includeArchived) {
     return (d.query("SELECT * FROM agents ORDER BY name").all() as AgentRow[]).map(rowToAgent);
   }
@@ -162,8 +225,21 @@ export function updateAgent(
   const params: (string | null)[] = [now()];
 
   if (input.name !== undefined) {
+    const newName = input.name.trim().toLowerCase();
+    // Check if name is held by a different active agent
+    const holder = getAgentByName(newName, d);
+    if (holder && holder.id !== id) {
+      const lastSeenMs = new Date(holder.last_seen_at).getTime();
+      const isActive = Date.now() - lastSeenMs < getActiveWindowMs();
+      if (isActive && holder.status === "active") {
+        throw new Error(`Cannot rename: name "${newName}" is held by active agent ${holder.id} (last seen ${Math.round((Date.now() - lastSeenMs) / 60000)}m ago)`);
+      }
+      // Holder is stale or archived — evict by clearing their name to free the UNIQUE constraint
+      const evictedName = `${holder.name}__evicted_${holder.id}`;
+      d.run("UPDATE agents SET name = ? WHERE id = ?", [evictedName, holder.id]);
+    }
     sets.push("name = ?");
-    params.push(input.name.trim().toLowerCase());
+    params.push(newName);
   }
   if (input.description !== undefined) {
     sets.push("description = ?");

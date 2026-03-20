@@ -179,6 +179,7 @@ export interface RegisterAgentInput {
   session_id?: string;
   working_dir?: string;
   project_id?: string;
+  force?: boolean; // skip active-agent check and force takeover
 }
 
 export interface AgentConflictError {
@@ -252,6 +253,7 @@ export interface Task {
   locked_at: string | null;
   created_at: string;
   updated_at: string;
+  started_at: string | null;
   completed_at: string | null;
   due_at: string | null;
   estimated_minutes: number | null;
@@ -437,6 +439,7 @@ export interface TaskRow {
   locked_at: string | null;
   created_at: string;
   updated_at: string;
+  started_at: string | null;
   completed_at: string | null;
   due_at: string | null;
   estimated_minutes: number | null;
