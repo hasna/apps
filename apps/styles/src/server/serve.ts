@@ -18,7 +18,7 @@ import { listProjectDirs, getProjectConfig, setProjectConfig, initProjectDir } f
 import { runHealthCheck, type HealthCheckResult } from "../lib/health.js";
 import { listTemplates, createTemplate, deleteTemplate, applyTemplate } from "../lib/templates.js";
 import { getDb } from "../lib/db.js";
-import { extractStylesFromUrl } from "../lib/extractor.js";
+import { extractStylesFromUrl, enrichTokensWithAi } from "../lib/extractor.js";
 import { tokenizeStyles } from "../lib/tokenizer.js";
 import { transform, type TransformFormat } from "../lib/transformer.js";
 import { saveKit, getKit, listKits, updateKit, deleteKit, kitToProfile } from "../lib/kits.js";
@@ -410,6 +410,17 @@ async function handleRequest(req: Request): Promise<Response> {
       try {
         const raw = await extractStylesFromUrl(body.url);
         const tokens = tokenizeStyles(raw);
+
+        // Auto-enrich with AI if Cerebras key is available
+        let enrichment = null;
+        if (process.env["CEREBRAS_API_KEY"]) {
+          enrichment = await enrichTokensWithAi(tokens, body.url);
+          for (const color of tokens.colors) {
+            const name = enrichment.colorNames[color.value];
+            if (name) color.name = name;
+          }
+        }
+
         const configs = {
           shadcn: transform(tokens, "shadcn").code,
           tailwind: transform(tokens, "tailwind").code,
@@ -421,7 +432,7 @@ async function handleRequest(req: Request): Promise<Response> {
         if (body.save && body.name) {
           kit = saveKit({ name: body.name, url: body.url, tokens, raw, tags: body.tags, extractedAt: raw.extractedAt });
         }
-        return json({ tokens, configs, kit, url: body.url, extractedAt: raw.extractedAt });
+        return json({ tokens, configs, kit, enrichment, url: body.url, extractedAt: raw.extractedAt });
       } catch (e) {
         return err((e as Error).message);
       }

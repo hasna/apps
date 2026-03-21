@@ -1160,7 +1160,7 @@ program
   .option("-o, --output <file>", "Write config to file instead of stdout")
   .option("-t, --tags <tags>", "Comma-separated tags")
   .action(async (url: string, opts: { name?: string; save?: boolean; format?: string; output?: string; tags?: string }) => {
-    const { extractStylesFromUrl } = await import("../lib/extractor.js");
+    const { extractStylesFromUrl, enrichTokensWithAi } = await import("../lib/extractor.js");
     const { tokenizeStyles } = await import("../lib/tokenizer.js");
     const transformMod = await import("../lib/transformer.js");
     const { saveKit } = await import("../lib/kits.js");
@@ -1170,20 +1170,39 @@ program
     try {
       const raw = await extractStylesFromUrl(url);
       const tokens = tokenizeStyles(raw);
+
+      // Auto-enrich with Cerebras if key is available
+      let enrichment = null;
+      if (process.env["CEREBRAS_API_KEY"]) {
+        if (isTTY) process.stdout.write(chalk.dim("  Running AI enrichment..."));
+        enrichment = await enrichTokensWithAi(tokens, url);
+        // Write names back onto ColorToken objects
+        for (const color of tokens.colors) {
+          const name = enrichment.colorNames[color.value];
+          if (name) color.name = name;
+        }
+        if (isTTY) process.stdout.write(chalk.green(" done\n"));
+      }
+
       const format = (opts.format ?? "shadcn") as Parameters<typeof transformMod.transform>[1];
       const result = transformMod.transform(tokens, format);
 
       if (isTTY) {
-        console.log(chalk.green("✔ Extraction complete\n"));
+        console.log(chalk.green("\n✔ Extraction complete\n"));
         console.log(chalk.bold("  Colors found:   ") + tokens.colors.length);
         console.log(chalk.bold("  Fonts found:    ") + tokens.typography.fontFamilies.length);
         console.log(chalk.bold("  Radii found:    ") + tokens.borderRadius.length);
         console.log(chalk.bold("  Shadows found:  ") + tokens.shadows.length);
+        if (enrichment) {
+          console.log(chalk.bold("  Style detected: ") + chalk.cyan(enrichment.detectedStyle));
+          console.log(chalk.bold("  Suggested name: ") + chalk.cyan(enrichment.suggestedName));
+          console.log(chalk.dim(`  ${enrichment.profileDescription}`));
+        }
         console.log();
         console.log(chalk.bold(`  Config (${format}):\n`));
         console.log(result.code);
       } else {
-        jsonOut({ tokens, code: result.code, config: result.config, format });
+        jsonOut({ tokens, code: result.code, config: result.config, format, enrichment });
       }
 
       if (opts.save) {
@@ -1192,7 +1211,8 @@ program
           process.exit(1);
         }
         const tags = opts.tags ? opts.tags.split(",").map((t) => t.trim()) : [];
-        const kit = saveKit({ name: opts.name, url, tokens, raw, tags, extractedAt: raw.extractedAt });
+        const kitName = opts.name === "stripe" && enrichment?.suggestedName ? opts.name : opts.name;
+        const kit = saveKit({ name: kitName, url, tokens, raw, tags, extractedAt: raw.extractedAt });
         if (isTTY) console.log(chalk.green(`\n  Saved as "${kit.name}" (${kit.id})`));
       }
 

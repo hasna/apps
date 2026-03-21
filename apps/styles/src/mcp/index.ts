@@ -34,7 +34,7 @@ import { detectProjectPath } from "../lib/detect.js";
 import { getFixSuggestions, applyFixes } from "../lib/fixer.js";
 import { getExample, listExamples, PATTERNS } from "../lib/examples.js";
 import type { Pattern } from "../lib/examples.js";
-import { extractStylesFromUrl } from "../lib/extractor.js";
+import { extractStylesFromUrl, enrichTokensWithAi } from "../lib/extractor.js";
 import { tokenizeStyles } from "../lib/tokenizer.js";
 import { transform, type TransformFormat } from "../lib/transformer.js";
 import { saveKit, getKit, listKits, deleteKit } from "../lib/kits.js";
@@ -1095,6 +1095,17 @@ export async function startMcpServer(): Promise<void> {
       try {
         const raw = await extractStylesFromUrl(url);
         const tokens = tokenizeStyles(raw);
+
+        // Auto-enrich if Cerebras key available
+        let enrichment = null;
+        if (process.env["CEREBRAS_API_KEY"]) {
+          enrichment = await enrichTokensWithAi(tokens, url);
+          for (const color of tokens.colors) {
+            const colorName = enrichment.colorNames[color.value];
+            if (colorName) color.name = colorName;
+          }
+        }
+
         const result = transform(tokens, format as TransformFormat);
         let kit = null;
         if (save && name) {
@@ -1105,11 +1116,15 @@ export async function startMcpServer(): Promise<void> {
             type: "text",
             text: JSON.stringify({
               url, extractedAt: raw.extractedAt,
+              enrichment,
               summary: {
                 colors: tokens.colors.length,
+                namedColors: tokens.colors.filter(c => c.name).length,
                 fonts: tokens.typography.fontFamilies,
                 borderRadii: tokens.borderRadius,
                 shadows: tokens.shadows.length,
+                detectedStyle: enrichment?.detectedStyle,
+                suggestedName: enrichment?.suggestedName,
               },
               code: result.code,
               kit: kit ? { id: kit.id, name: kit.name } : null,
