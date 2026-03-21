@@ -1,5 +1,30 @@
 import type { RawExtractedStyles } from "./extractor.js";
 
+export interface FontFaceDetail {
+  family: string;
+  weight?: string;
+  style?: string;
+  src?: string;
+  format?: string;
+}
+
+export interface TypeScaleEntry {
+  tag: string;
+  family: string;
+  size: string;
+  weight: string;
+  lineHeight: string;
+  letterSpacing: string;
+  color?: string;
+}
+
+export interface FontFamilyDetail {
+  name: string;
+  weights: string[];
+  styles: string[];
+  isVariable: boolean;
+}
+
 export interface DesignTokens {
   colors: ColorToken[];
   typography: TypographyTokens;
@@ -24,6 +49,9 @@ export interface TypographyTokens {
   fontWeights: string[];
   lineHeights: string[];
   letterSpacings: string[];
+  fontFaces: FontFaceDetail[];
+  families: FontFamilyDetail[];
+  scale: TypeScaleEntry[];
 }
 
 // Matches hex, rgb, rgba, hsl, hsla
@@ -71,6 +99,12 @@ function normalizeColor(c: string): string {
     return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
   }
 
+  // 4-char hex (#rgba) → expand to 8-char (#rrggbbaa)
+  const hex4 = s.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])$/);
+  if (hex4) {
+    return `#${hex4[1]}${hex4[1]}${hex4[2]}${hex4[2]}${hex4[3]}${hex4[3]}${hex4[4]}${hex4[4]}`;
+  }
+
   return s;
 }
 
@@ -79,9 +113,11 @@ function isVisibleColor(raw: string): boolean {
   const s = raw.trim().toLowerCase();
   // rgba with 0 alpha
   if (/rgba?\(\s*[\d.]+[,\s]\s*[\d.]+[,\s]\s*[\d.]+[,\s]\s*0\s*\)/.test(s)) return false;
-  // hex with 00 alpha suffix (8-digit hex: #rrggbbaa)
+  // 4-char hex shorthand with 0 alpha: #rgb0 (e.g. #0000, #fff0)
+  if (/^#[0-9a-f]{3}0$/i.test(s)) return false;
+  // hex with 00 alpha suffix (8-digit hex: #rrggbbaa where aa < 10)
   if (/^#[0-9a-f]{6}(00|01|02|03|04|05|06|07|08|09|0a|0b|0c|0d|0e|0f)$/i.test(s)) return false;
-  // Semi-transparent hex (alpha < ~15%) — keep, just filter pure invisible
+  // 4-char hex with very low alpha (e.g. #0001, #fff1) — keep these, they're barely visible but intentional
   return true;
 }
 
@@ -180,11 +216,67 @@ export function tokenizeStyles(raw: RawExtractedStyles): DesignTokens {
     if (el.letterSpacing && el.letterSpacing !== "normal") letterSpacingsRaw.push(el.letterSpacing);
   }
 
-  // Also extract font-family from @font-face
+  // Parse @font-face declarations into structured details
+  const fontFaceDetails: FontFaceDetail[] = [];
   for (const face of raw.fontFaces) {
-    const match = face.match(/font-family:\s*['"]?([^;'"]+)['"]?/i);
-    if (match) fontFamiliesRaw.push(match[1].trim());
+    const familyMatch = face.match(/font-family:\s*['"]?([^;'"]+)['"]?/i);
+    const weightMatch = face.match(/font-weight:\s*([^;]+)/i);
+    const styleMatch = face.match(/font-style:\s*([^;]+)/i);
+    const srcMatch = face.match(/src:\s*url\(['"]?([^'")\s]+)['"]?\)/i);
+    const formatMatch = face.match(/format\(['"]?([^'")\s]+)['"]?\)/i);
+    if (familyMatch) {
+      const family = familyMatch[1].trim();
+      fontFamiliesRaw.push(family);
+      fontFaceDetails.push({
+        family,
+        weight: weightMatch?.[1]?.trim(),
+        style: styleMatch?.[1]?.trim(),
+        src: srcMatch?.[1]?.trim(),
+        format: formatMatch?.[1]?.trim(),
+      });
+    }
   }
+
+  // Build type scale from computed elements
+  const scaleEntries: TypeScaleEntry[] = [];
+  for (const el of raw.computedElements) {
+    if (el.fontSize && el.fontFamily) {
+      scaleEntries.push({
+        tag: el.tagName,
+        family: el.fontFamily.split(",")[0].trim().replace(/['"]/g, ""),
+        size: el.fontSize.endsWith("px") ? pxToRem(el.fontSize) : el.fontSize,
+        weight: el.fontWeight || "400",
+        lineHeight: el.lineHeight || "normal",
+        letterSpacing: el.letterSpacing || "normal",
+        color: el.color || undefined,
+      });
+    }
+  }
+
+  // Group font families with their available weights and styles
+  const familyMap = new Map<string, { weights: Set<string>; styles: Set<string>; isVariable: boolean }>();
+  for (const fd of fontFaceDetails) {
+    let entry = familyMap.get(fd.family);
+    if (!entry) { entry = { weights: new Set(), styles: new Set(), isVariable: false }; familyMap.set(fd.family, entry); }
+    if (fd.weight) entry.weights.add(fd.weight);
+    if (fd.style) entry.styles.add(fd.style);
+    if (fd.weight?.includes(" ")) entry.isVariable = true; // "100 900" = variable
+  }
+  // Also add weights from computed elements
+  for (const el of raw.computedElements) {
+    if (el.fontFamily && el.fontWeight) {
+      const name = el.fontFamily.split(",")[0].trim().replace(/['"]/g, "");
+      let entry = familyMap.get(name);
+      if (!entry) { entry = { weights: new Set(), styles: new Set(), isVariable: false }; familyMap.set(name, entry); }
+      entry.weights.add(el.fontWeight);
+    }
+  }
+  const familyDetails: FontFamilyDetail[] = Array.from(familyMap.entries()).map(([name, d]) => ({
+    name,
+    weights: Array.from(d.weights).sort(),
+    styles: Array.from(d.styles),
+    isVariable: d.isVariable,
+  }));
 
   // Border radii
   const radiiRaw: string[] = [];
@@ -247,6 +339,9 @@ export function tokenizeStyles(raw: RawExtractedStyles): DesignTokens {
       fontWeights: dedup(fontWeightsRaw).filter(Boolean),
       lineHeights: dedup(lineHeightsRaw).filter(Boolean),
       letterSpacings: dedup(letterSpacingsRaw).filter(Boolean),
+      fontFaces: fontFaceDetails,
+      families: familyDetails,
+      scale: scaleEntries,
     },
     spacing: dedup(spacingRaw).filter(Boolean),
     borderRadius: dedup(radiiRaw).filter(Boolean),
