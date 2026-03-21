@@ -2,6 +2,8 @@ import { scanConsoleErrors } from "./scanners/console.js";
 import { scanNetworkErrors } from "./scanners/network.js";
 import { scanBrokenLinks } from "./scanners/links.js";
 import { scanPerformance } from "./scanners/performance.js";
+import { scanInjection } from "./scanners/injection.js";
+import { scanPiiEndpoint } from "./scanners/pii-scanner.js";
 import { upsertScanIssue, setScanIssueTodoTaskId } from "../db/scan-issues.js";
 import { connectToTodos } from "./todos-connector.js";
 import type { ScanResult, ScanIssue } from "../types/index.js";
@@ -14,8 +16,14 @@ export interface HealthScanOptions {
   projectId?: string;
   headed?: boolean;
   timeoutMs?: number;
-  scanners?: ("console" | "network" | "links" | "performance")[];
+  scanners?: ("console" | "network" | "links" | "performance" | "injection" | "pii")[];
+  injectionEndpoint?: string;
+  injectionInputField?: string;
   maxPages?: number;
+  // PII scanner options
+  piiEndpoint?: string;
+  piiSeedPii?: string[];
+  piiInputField?: string;
 }
 
 export interface HealthScanSummary {
@@ -56,6 +64,26 @@ export async function runHealthScan(options: HealthScanOptions): Promise<HealthS
   }
   if (scanners.includes("performance")) {
     results.push(await scanPerformance({ url, pages, headed, timeoutMs }));
+  }
+  if (scanners.includes("injection")) {
+    const injResult = await scanInjection({
+      url,
+      endpoint: options.injectionEndpoint,
+      inputField: options.injectionInputField,
+      headed,
+      timeoutMs,
+    });
+    results.push(injResult);
+  }
+  if (scanners.includes("pii")) {
+    const piiResult = await scanPiiEndpoint({
+      url,
+      endpoint: options.piiEndpoint,
+      inputField: options.piiInputField,
+      seedPii: options.piiSeedPii,
+      timeoutMs,
+    });
+    results.push(piiResult);
   }
 
   // Deduplicate and persist all issues

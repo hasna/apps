@@ -1,6 +1,9 @@
 import type { ApiCheck, ApiCheckResult, ApiCheckFilter } from "../types/index.js";
 import { createApiCheckResult, listApiChecks } from "../db/api-checks.js";
 import { dispatchApiCheckWebhooks } from "./webhooks.js";
+import { isAIEndpoint, profileAIEndpoint } from "./ai-profiler.js";
+import { scanForPii } from "./scanners/pii.js";
+import type { PiiDetection } from "./scanners/pii.js";
 
 export interface RunApiCheckOptions {
   runId?: string;
@@ -74,16 +77,46 @@ export async function runApiCheck(
 
     const status = assertionsFailed.length === 0 ? "passed" : "failed";
 
+    // Profile AI endpoints and attach to metadata
+    let llmProfile: Awaited<ReturnType<typeof profileAIEndpoint>> | undefined;
+    if (isAIEndpoint(url, responseText)) {
+      llmProfile = await profileAIEndpoint(url, {
+        method: check.method,
+        headers: check.headers as Record<string, string>,
+        body: check.body ?? undefined,
+      });
+    }
+
+    // PII scan on response
+    let piiDetections: PiiDetection[] | undefined;
+    const piiFound = scanForPii(responseText);
+    if (piiFound.length > 0) {
+      piiDetections = piiFound;
+    }
+
+    // If critical/high PII detected, override status to failed
+    let finalStatus = status;
+    if (piiDetections && piiDetections.some((d) => d.severity === "critical" || d.severity === "high")) {
+      finalStatus = "failed";
+      const types = [...new Set(piiDetections.filter((d) => d.severity === "critical" || d.severity === "high").map((d) => d.type))];
+      assertionsFailed.push(`PII detected in response: ${types.join(", ")}`);
+    }
+
+    const metadata: Record<string, unknown> = {};
+    if (llmProfile) metadata.llmProfile = llmProfile;
+    if (piiDetections) metadata.piiDetections = piiDetections;
+
     const result = createApiCheckResult({
       checkId: check.id,
       runId: options?.runId,
-      status,
+      status: finalStatus,
       statusCode: response.status,
       responseTimeMs,
       responseBody: responseText,
       responseHeaders,
       assertionsPassed,
       assertionsFailed,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     });
     // Fire webhooks asynchronously for failures — don't await to avoid slowing down the run
     if (status !== "passed") dispatchApiCheckWebhooks(check, result).catch(() => {});

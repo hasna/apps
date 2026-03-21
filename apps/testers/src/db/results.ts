@@ -68,6 +68,7 @@ export function updateResult(
     durationMs: number;
     tokensUsed: number;
     costCents: number;
+    metadata: Record<string, unknown>;
   }>,
 ): Result {
   const db = getDatabase();
@@ -106,6 +107,10 @@ export function updateResult(
   if (updates.costCents !== undefined) {
     sets.push("cost_cents = ?");
     params.push(updates.costCents);
+  }
+  if (updates.metadata !== undefined) {
+    sets.push("metadata = ?");
+    params.push(JSON.stringify(updates.metadata));
   }
 
   if (sets.length === 0) {

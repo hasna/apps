@@ -2,11 +2,11 @@
 
 export type ScenarioPriority = "low" | "medium" | "high" | "critical";
 export type RunStatus = "pending" | "running" | "passed" | "failed" | "cancelled";
-export type ResultStatus = "passed" | "failed" | "error" | "skipped";
+export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
 export type ModelPreset = "quick" | "thorough" | "deep";
 export type BrowserEngine = "playwright" | "lightpanda";
 
-export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains";
+export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations";
 
 export interface Assertion {
   type: AssertionType;
@@ -62,6 +62,7 @@ export interface ScenarioRow {
   metadata: string | null; // JSON
   assertions: string; // JSON array
   persona_id: string | null;
+  scenario_type: string;
   version: number;
   created_at: string;
   updated_at: string;
@@ -82,6 +83,8 @@ export interface RunRow {
   finished_at: string | null;
   metadata: string | null; // JSON
   is_baseline: number;
+  samples: number;
+  flakiness_threshold: number;
 }
 
 export interface ResultRow {
@@ -194,6 +197,7 @@ export interface Scenario {
   metadata: Record<string, unknown> | null;
   assertions: Assertion[];
   personaId: string | null;
+  scenarioType: "browser" | "eval" | "api" | "pipeline";
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -214,6 +218,8 @@ export interface Run {
   finishedAt: string | null;
   metadata: Record<string, unknown> | null;
   isBaseline: boolean;
+  samples: number;
+  flakinessThreshold: number;
 }
 
 export interface Result {
@@ -311,6 +317,8 @@ export interface CreateRunInput {
   parallel?: number;
   timeout?: number;
   projectId?: string;
+  samples?: number;
+  flakinessThreshold?: number;
 }
 
 export interface ScenarioFilter {
@@ -398,6 +406,9 @@ export interface TestersConfig {
   screenshots: ScreenshotConfig;
   anthropicApiKey?: string;
   todosDbPath?: string;
+  judgeModel?: string;    // model used for LLM-as-judge (any provider)
+  judgeProvider?: string; // explicit provider override for judge
+  selfHeal?: boolean;     // enable self-healing selector repair (default false)
 }
 
 // ─── Row Converters ──────────────────────────────────────────────────────────
@@ -446,6 +457,7 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     assertions: JSON.parse(row.assertions || "[]"),
     personaId: row.persona_id ?? null,
+    scenarioType: (row.scenario_type ?? "browser") as "browser" | "eval" | "api" | "pipeline",
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -468,6 +480,8 @@ export function runFromRow(row: RunRow): Run {
     finishedAt: row.finished_at,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     isBaseline: row.is_baseline === 1,
+    samples: row.samples ?? 1,
+    flakinessThreshold: row.flakiness_threshold ?? 0.95,
   };
 }
 
@@ -603,7 +617,7 @@ export class ScheduleNotFoundError extends Error {
 
 // ─── Scanner Types ────────────────────────────────────────────────────────────
 
-export type ScanIssueType = "console_error" | "network_error" | "broken_link" | "performance";
+export type ScanIssueType = "console_error" | "network_error" | "broken_link" | "performance" | "pii_leak" | "injection";
 export type ScanIssueSeverity = "critical" | "high" | "medium" | "low";
 export type ScanIssueStatus = "open" | "resolved" | "regressed";
 
@@ -873,6 +887,7 @@ export interface ApiCheckResultRow {
   error: string | null;
   assertions_passed: string; // JSON
   assertions_failed: string; // JSON
+  metadata: string | null; // JSON
   created_at: string;
 }
 
@@ -909,6 +924,7 @@ export interface ApiCheckResult {
   error: string | null;
   assertionsPassed: string[];
   assertionsFailed: string[];
+  metadata: Record<string, unknown> | null;
   createdAt: string;
 }
 
@@ -987,6 +1003,7 @@ export function apiCheckResultFromRow(row: ApiCheckResultRow): ApiCheckResult {
     error: row.error,
     assertionsPassed: JSON.parse(row.assertions_passed),
     assertionsFailed: JSON.parse(row.assertions_failed),
+    metadata: row.metadata ? JSON.parse(row.metadata) : null,
     createdAt: row.created_at,
   };
 }

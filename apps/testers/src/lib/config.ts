@@ -25,6 +25,7 @@ export function getDefaultConfig(): TestersConfig {
       quality: 90,
       fullPage: false,
     },
+    selfHeal: false, // opt-in: set to true to enable AI-powered selector repair
   };
 }
 
@@ -58,6 +59,9 @@ export function loadConfig(): TestersConfig {
       : { ...defaults.screenshots },
     anthropicApiKey: fileConfig.anthropicApiKey,
     todosDbPath: fileConfig.todosDbPath,
+    judgeModel: fileConfig.judgeModel,
+    judgeProvider: fileConfig.judgeProvider,
+    selfHeal: fileConfig.selfHeal ?? false,
   };
 
   // Environment variable overrides

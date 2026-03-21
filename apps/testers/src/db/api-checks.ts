@@ -155,14 +155,15 @@ export function createApiCheckResult(input: {
   error?: string;
   assertionsPassed?: string[];
   assertionsFailed?: string[];
+  metadata?: Record<string, unknown>;
 }): ApiCheckResult {
   const db = getDatabase();
   const id = uuid();
   const createdAt = now();
 
   db.query(
-    `INSERT INTO api_check_results (id, check_id, run_id, status, status_code, response_time_ms, response_body, response_headers, error, assertions_passed, assertions_failed, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO api_check_results (id, check_id, run_id, status, status_code, response_time_ms, response_body, response_headers, error, assertions_passed, assertions_failed, metadata, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.checkId,
@@ -175,6 +176,7 @@ export function createApiCheckResult(input: {
     input.error ?? null,
     JSON.stringify(input.assertionsPassed ?? []),
     JSON.stringify(input.assertionsFailed ?? []),
+    input.metadata ? JSON.stringify(input.metadata) : null,
     createdAt,
   );
 

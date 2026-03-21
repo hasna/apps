@@ -13,8 +13,8 @@ export function createRun(input: CreateRunInput & { model: string }): Run {
   const timestamp = now();
 
   db.query(`
-    INSERT INTO runs (id, project_id, status, url, model, headed, parallel, total, passed, failed, started_at, finished_at, metadata)
-    VALUES (?, ?, 'pending', ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?)
+    INSERT INTO runs (id, project_id, status, url, model, headed, parallel, total, passed, failed, started_at, finished_at, metadata, samples, flakiness_threshold)
+    VALUES (?, ?, 'pending', ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?)
   `).run(
     id,
     input.projectId ?? null,
@@ -24,6 +24,8 @@ export function createRun(input: CreateRunInput & { model: string }): Run {
     input.parallel ?? 1,
     timestamp,
     input.model ? JSON.stringify({}) : null,
+    input.samples ?? 1,
+    input.flakinessThreshold ?? 0.95,
   );
 
   return getRun(id)!;
