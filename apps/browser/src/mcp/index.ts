@@ -2330,7 +2330,7 @@ server.tool(
 
 server.tool(
   "browser_script_run",
-  "Run a saved login script — multi-step workflow combining browser actions + connector calls (e.g. magic link login via Gmail). One command, fully automated.",
+  "Run a saved login script asynchronously. Returns a job_id immediately — poll with browser_script_status for step-by-step progress. Combines browser actions + connector calls (e.g. magic link login via Gmail).",
   {
     name: z.string().describe("Script name (e.g. 'usestable')"),
     session_id: z.string().optional(),
@@ -2338,7 +2338,7 @@ server.tool(
   },
   async ({ name, session_id, variables }) => {
     try {
-      const { loadScript, runScript } = await import("../lib/login-scripts.js");
+      const { loadScript, runScriptAsync } = await import("../lib/login-scripts.js");
       const script = loadScript(name);
       if (!script) return err(new Error(`Script '${name}' not found. Use browser_script_list to see available scripts.`));
 
@@ -2353,8 +2353,28 @@ server.tool(
         page = result.page;
       }
 
-      const result = await runScript(script, page, variables ?? {});
-      return json({ ...result, session_id: sid, url: page.url() });
+      const jobId = runScriptAsync(script, page, variables ?? {});
+      return json({ job_id: jobId, session_id: sid, script: name, total_steps: script.steps.length, message: "Script running in background. Poll with browser_script_status for progress." });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_script_status",
+  "Check the progress of a running login script. Shows current step, step-by-step log with durations, and final result when complete.",
+  { job_id: z.string() },
+  async ({ job_id }) => {
+    try {
+      const { getJob } = await import("../lib/login-scripts.js");
+      const job = getJob(job_id);
+      if (!job) return err(new Error(`Job '${job_id}' not found`));
+      return json({
+        status: job.status,
+        progress: `${job.current_step}/${job.total_steps}`,
+        current_step: job.current_step_description,
+        steps_log: job.steps_log,
+        result: job.result ?? undefined,
+      });
     } catch (e) { return err(e); }
   }
 );

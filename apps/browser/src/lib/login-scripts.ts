@@ -69,6 +69,30 @@ export interface ScriptRunResult {
   duration_ms: number;
 }
 
+// ─── Async job tracking ─────────────────────────────────────────────────────
+
+export interface ScriptJob {
+  id: string;
+  script_name: string;
+  status: "running" | "completed" | "failed";
+  current_step: number;
+  total_steps: number;
+  current_step_description: string;
+  steps_log: Array<{ step: number; type: string; description: string; status: "ok" | "failed" | "running"; duration_ms?: number; error?: string }>;
+  result?: ScriptRunResult;
+  started_at: string;
+}
+
+const activeJobs = new Map<string, ScriptJob>();
+
+export function getJob(jobId: string): ScriptJob | null {
+  return activeJobs.get(jobId) ?? null;
+}
+
+export function listJobs(): ScriptJob[] {
+  return Array.from(activeJobs.values());
+}
+
 // ─── Script storage (JSON files in ~/.browser/scripts/) ─────────────────────
 
 function getScriptsDir(): string {
@@ -124,10 +148,15 @@ function interpolate(template: string, vars: Record<string, string>): string {
 
 // ─── Script runner ──────────────────────────────────────────────────────────
 
+function stepDescription(step: ScriptStep): string {
+  return step.description ?? `${step.type}${step.action ? `:${step.action}` : ""}${step.connector ? `:${step.connector}` : ""}`;
+}
+
 export async function runScript(
   script: LoginScript,
   page: Page,
-  overrides: Record<string, string> = {}
+  overrides: Record<string, string> = {},
+  jobId?: string
 ): Promise<ScriptRunResult> {
   const t0 = Date.now();
   const vars: Record<string, string> = { ...script.variables, ...overrides };
@@ -135,9 +164,32 @@ export async function runScript(
   let executed = 0;
   let failed = 0;
 
+  // Create or get job for progress tracking
+  const job: ScriptJob = jobId && activeJobs.has(jobId)
+    ? activeJobs.get(jobId)!
+    : {
+        id: jobId ?? randomUUID(),
+        script_name: script.name,
+        status: "running",
+        current_step: 0,
+        total_steps: script.steps.length,
+        current_step_description: "Starting...",
+        steps_log: [],
+        started_at: new Date().toISOString(),
+      };
+  activeJobs.set(job.id, job);
+
   for (let i = 0; i < script.steps.length; i++) {
     const step = script.steps[i];
+    const desc = stepDescription(step);
     executed++;
+
+    // Update job progress
+    job.current_step = i + 1;
+    job.current_step_description = desc;
+    job.steps_log.push({ step: i + 1, type: step.type, description: desc, status: "running" });
+
+    const stepStart = Date.now();
 
     try {
       switch (step.type) {
@@ -178,16 +230,27 @@ export async function runScript(
           break;
         }
       }
+
+      // Mark step as done
+      const logEntry = job.steps_log[job.steps_log.length - 1];
+      logEntry.status = "ok";
+      logEntry.duration_ms = Date.now() - stepStart;
+
     } catch (err) {
       failed++;
       const msg = `Step ${i + 1} (${step.type}/${step.action ?? step.connector ?? ""}): ${err instanceof Error ? err.message : String(err)}`;
       errors.push(msg);
-      // Don't stop on error — continue with remaining steps unless it's critical
-      if (step.type === "browser" && step.action === "navigate") break; // navigation failure is fatal
+
+      const logEntry = job.steps_log[job.steps_log.length - 1];
+      logEntry.status = "failed";
+      logEntry.error = err instanceof Error ? err.message : String(err);
+      logEntry.duration_ms = Date.now() - stepStart;
+
+      if (step.type === "browser" && step.action === "navigate") break;
     }
   }
 
-  return {
+  const result: ScriptRunResult = {
     success: failed === 0,
     steps_executed: executed,
     steps_failed: failed,
@@ -195,6 +258,42 @@ export async function runScript(
     errors,
     duration_ms: Date.now() - t0,
   };
+
+  job.status = failed === 0 ? "completed" : "failed";
+  job.result = result;
+
+  return result;
+}
+
+/**
+ * Run a script asynchronously — returns immediately with a job ID.
+ * Poll with getJob(jobId) for progress.
+ */
+export function runScriptAsync(
+  script: LoginScript,
+  page: Page,
+  overrides: Record<string, string> = {}
+): string {
+  const jobId = randomUUID();
+  const job: ScriptJob = {
+    id: jobId,
+    script_name: script.name,
+    status: "running",
+    current_step: 0,
+    total_steps: script.steps.length,
+    current_step_description: "Starting...",
+    steps_log: [],
+    started_at: new Date().toISOString(),
+  };
+  activeJobs.set(jobId, job);
+
+  // Fire and forget — runs in background
+  runScript(script, page, overrides, jobId).catch((err) => {
+    job.status = "failed";
+    job.current_step_description = `Fatal error: ${err instanceof Error ? err.message : String(err)}`;
+  });
+
+  return jobId;
 }
 
 // ─── Step runners ───────────────────────────────────────────────────────────
