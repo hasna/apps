@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead } from "../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds } from "../lib/messages.js";
 import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -188,6 +188,21 @@ server.registerTool("mark_read", {
   return {
     content: [{ type: "text", text: JSON.stringify({ marked_read: count }) }],
   };
+});
+
+server.registerTool("mark_unread", {
+  description: "Re-flag a message (or messages) as unread so it re-appears in read_messages(unread_only:true). Useful for bookmarking messages to action later.",
+  inputSchema: {
+    message_id: z.coerce.number().optional().describe("Single message ID"),
+    ids: z.array(z.coerce.number()).optional().describe("Multiple message IDs"),
+  },
+}, async (args: Record<string, any>) => {
+  if (!args.message_id && (!args.ids || args.ids.length === 0)) {
+    return { content: [{ type: "text", text: "Provide message_id or ids" }], isError: true };
+  }
+  const ids: number[] = args.ids ?? (args.message_id ? [args.message_id] : []);
+  const count = markUnreadByIds(ids);
+  return { content: [{ type: "text", text: JSON.stringify({ marked_unread: count }) }] };
 });
 
 server.registerTool("mark_space_read", {

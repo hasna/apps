@@ -730,3 +730,23 @@ export function markMentionsRead(agent: string, space?: string): number {
   ).run(agent);
   return result.changes;
 }
+
+/** Mark a specific message as unread (resets read_at to null). */
+export function markUnread(messageId: number): number {
+  const db = getDb();
+  const result = db.prepare(
+    "UPDATE messages SET read_at = NULL WHERE id = ?"
+  ).run(messageId);
+  return result.changes;
+}
+
+/** Mark multiple messages as unread. */
+export function markUnreadByIds(ids: number[]): number {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(",");
+  const result = db.prepare(
+    `UPDATE messages SET read_at = NULL WHERE id IN (${placeholders})`
+  ).run(...ids);
+  return result.changes;
+}
