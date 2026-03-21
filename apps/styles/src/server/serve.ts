@@ -18,6 +18,10 @@ import { listProjectDirs, getProjectConfig, setProjectConfig, initProjectDir } f
 import { runHealthCheck, type HealthCheckResult } from "../lib/health.js";
 import { listTemplates, createTemplate, deleteTemplate, applyTemplate } from "../lib/templates.js";
 import { getDb } from "../lib/db.js";
+import { extractStylesFromUrl } from "../lib/extractor.js";
+import { tokenizeStyles } from "../lib/tokenizer.js";
+import { transform, type TransformFormat } from "../lib/transformer.js";
+import { saveKit, getKit, listKits, updateKit, deleteKit, kitToProfile } from "../lib/kits.js";
 
 const pkg = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf-8")
@@ -395,6 +399,102 @@ async function handleRequest(req: Request): Promise<Response> {
 
       if (!isApply && method === "DELETE") {
         deleteTemplate(id);
+        return json({ ok: true });
+      }
+    }
+
+    // POST /api/extract
+    if (path === "/api/extract" && method === "POST") {
+      const body = await parseBody<{ url: string; name?: string; save?: boolean; tags?: string[] }>(req);
+      if (!body?.url) return err("url is required");
+      try {
+        const raw = await extractStylesFromUrl(body.url);
+        const tokens = tokenizeStyles(raw);
+        const configs = {
+          shadcn: transform(tokens, "shadcn").code,
+          tailwind: transform(tokens, "tailwind").code,
+          "css-vars": transform(tokens, "css-vars").code,
+          mui: transform(tokens, "mui").code,
+          radix: transform(tokens, "radix").code,
+        };
+        let kit = null;
+        if (body.save && body.name) {
+          kit = saveKit({ name: body.name, url: body.url, tokens, raw, tags: body.tags, extractedAt: raw.extractedAt });
+        }
+        return json({ tokens, configs, kit, url: body.url, extractedAt: raw.extractedAt });
+      } catch (e) {
+        return err((e as Error).message);
+      }
+    }
+
+    // GET /api/kits
+    if (path === "/api/kits" && method === "GET") {
+      const search = url.searchParams.get("search") ?? undefined;
+      const tags = url.searchParams.get("tags")?.split(",").filter(Boolean) ?? undefined;
+      return json(listKits({ search, tags }));
+    }
+
+    // POST /api/kits
+    if (path === "/api/kits" && method === "POST") {
+      const body = await parseBody<{ name: string; url: string; tokens: unknown; tags?: string[]; notes?: string }>(req);
+      if (!body?.name || !body.url || !body.tokens) return err("name, url, and tokens are required");
+      try {
+        const kit = saveKit({ name: body.name, url: body.url, tokens: body.tokens as Parameters<typeof saveKit>[0]["tokens"], tags: body.tags, notes: body.notes });
+        return json(kit, 201);
+      } catch (e) {
+        return err((e as Error).message);
+      }
+    }
+
+    // POST /api/kits/:id/save-as-profile
+    const kitProfileMatch = path.match(/^\/api\/kits\/([^/]+)\/save-as-profile$/);
+    if (kitProfileMatch && method === "POST") {
+      const id = kitProfileMatch[1];
+      const body = await parseBody<{ name: string }>(req);
+      if (!body?.name) return err("name is required");
+      const kit = getKit(id);
+      if (!kit) return err("Kit not found", 404);
+      try {
+        const profileInput = kitToProfile(kit, body.name);
+        const profile = createProfile(profileInput);
+        return json(profile, 201);
+      } catch (e) {
+        return err((e as Error).message);
+      }
+    }
+
+    // GET /api/kits/:id  PUT /api/kits/:id  DELETE /api/kits/:id  GET /api/kits/:id/export
+    const kitMatch = path.match(/^\/api\/kits\/([^/]+)(\/export)?$/);
+    if (kitMatch) {
+      const id = kitMatch[1];
+      const isExport = !!kitMatch[2];
+
+      if (isExport && method === "GET") {
+        const kit = getKit(id);
+        if (!kit) return err("Kit not found", 404);
+        const format = (url.searchParams.get("format") ?? "shadcn") as TransformFormat;
+        const result = transform(kit.tokens, format);
+        return json({ format, code: result.code, config: result.config });
+      }
+
+      if (!isExport && method === "GET") {
+        const kit = getKit(id);
+        if (!kit) return err("Kit not found", 404);
+        return json(kit);
+      }
+
+      if (!isExport && method === "PUT") {
+        const body = await parseBody<Partial<{ name: string; tags: string[]; notes: string }>>(req);
+        if (!body) return err("Invalid JSON body");
+        try {
+          return json(updateKit(id, body));
+        } catch (e) {
+          return err((e as Error).message, 404);
+        }
+      }
+
+      if (!isExport && method === "DELETE") {
+        deleteKit(id);
         return json({ ok: true });
       }
     }

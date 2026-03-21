@@ -1149,6 +1149,144 @@ program
     await startMcpServer();
   });
 
+// ── styles extract ────────────────────────────────────────────────────────────
+
+program
+  .command("extract <url>")
+  .description("Extract design tokens from a live website URL")
+  .option("-n, --name <name>", "Name to save the kit as")
+  .option("-s, --save", "Save extracted kit to database")
+  .option("-f, --format <format>", "Output format: shadcn|tailwind|css-vars|mui|radix", "shadcn")
+  .option("-o, --output <file>", "Write config to file instead of stdout")
+  .option("-t, --tags <tags>", "Comma-separated tags")
+  .action(async (url: string, opts: { name?: string; save?: boolean; format?: string; output?: string; tags?: string }) => {
+    const { extractStylesFromUrl } = await import("../lib/extractor.js");
+    const { tokenizeStyles } = await import("../lib/tokenizer.js");
+    const transformMod = await import("../lib/transformer.js");
+    const { saveKit } = await import("../lib/kits.js");
+
+    if (isTTY) console.log(chalk.dim(`Extracting styles from ${url}...`));
+
+    try {
+      const raw = await extractStylesFromUrl(url);
+      const tokens = tokenizeStyles(raw);
+      const format = (opts.format ?? "shadcn") as Parameters<typeof transformMod.transform>[1];
+      const result = transformMod.transform(tokens, format);
+
+      if (isTTY) {
+        console.log(chalk.green("✔ Extraction complete\n"));
+        console.log(chalk.bold("  Colors found:   ") + tokens.colors.length);
+        console.log(chalk.bold("  Fonts found:    ") + tokens.typography.fontFamilies.length);
+        console.log(chalk.bold("  Radii found:    ") + tokens.borderRadius.length);
+        console.log(chalk.bold("  Shadows found:  ") + tokens.shadows.length);
+        console.log();
+        console.log(chalk.bold(`  Config (${format}):\n`));
+        console.log(result.code);
+      } else {
+        jsonOut({ tokens, code: result.code, config: result.config, format });
+      }
+
+      if (opts.save) {
+        if (!opts.name) {
+          if (isTTY) console.error(chalk.red("--name is required when using --save"));
+          process.exit(1);
+        }
+        const tags = opts.tags ? opts.tags.split(",").map((t) => t.trim()) : [];
+        const kit = saveKit({ name: opts.name, url, tokens, raw, tags, extractedAt: raw.extractedAt });
+        if (isTTY) console.log(chalk.green(`\n  Saved as "${kit.name}" (${kit.id})`));
+      }
+
+      if (opts.output) {
+        const { writeFileSync } = await import("fs");
+        writeFileSync(opts.output, result.code, "utf-8");
+        if (isTTY) console.log(chalk.green(`\n  Written to ${opts.output}`));
+      }
+    } catch (e) {
+      error((e as Error).message);
+    }
+  });
+
+// ── styles kits ───────────────────────────────────────────────────────────────
+
+const kitsCmd = program.command("kits").description("Manage saved style kits");
+
+kitsCmd
+  .command("list")
+  .description("List all saved style kits")
+  .option("-s, --search <query>", "Search by name, URL, or tags")
+  .action(async (opts: { search?: string }) => {
+    const { listKits } = await import("../lib/kits.js");
+    const kits = listKits({ search: opts.search });
+    if (!isTTY) { jsonOut(kits); return; }
+    if (!kits.length) { console.log(chalk.dim("No kits saved yet. Run: styles extract <url> --save --name <name>")); return; }
+    for (const k of kits) {
+      console.log(`  ${chalk.cyan(k.id.slice(0, 8))}  ${chalk.bold(k.name)}  ${chalk.dim(k.url)}  ${chalk.dim(new Date(k.createdAt).toLocaleDateString())}`);
+    }
+  });
+
+kitsCmd
+  .command("get <id>")
+  .description("Show details of a saved kit")
+  .action(async (id: string) => {
+    const { getKit } = await import("../lib/kits.js");
+    const kit = getKit(id);
+    if (!kit) error(`Kit not found: ${id}`);
+    if (!isTTY) { jsonOut(kit); return; }
+    console.log(chalk.bold(`\n  ${kit!.name}`));
+    console.log(`  URL:      ${kit!.url}`);
+    console.log(`  Saved:    ${new Date(kit!.createdAt).toLocaleString()}`);
+    console.log(`  Colors:   ${kit!.tokens.colors.length}`);
+    console.log(`  Fonts:    ${kit!.tokens.typography.fontFamilies.join(", ") || "—"}`);
+    console.log(`  Radii:    ${kit!.tokens.borderRadius.join(", ") || "—"}`);
+    console.log(`  Shadows:  ${kit!.tokens.shadows.length}`);
+    if (kit!.tags.length) console.log(`  Tags:     ${kit!.tags.join(", ")}`);
+  });
+
+kitsCmd
+  .command("delete <id>")
+  .description("Delete a saved kit")
+  .action(async (id: string) => {
+    const { deleteKit } = await import("../lib/kits.js");
+    deleteKit(id);
+    if (isTTY) console.log(chalk.green(`  Deleted kit ${id}`));
+    else jsonOut({ ok: true });
+  });
+
+kitsCmd
+  .command("export <id>")
+  .description("Export a kit as a config")
+  .option("-f, --format <format>", "Format: shadcn|tailwind|css-vars|mui|radix", "shadcn")
+  .option("-o, --output <file>", "Write to file")
+  .action(async (id: string, opts: { format?: string; output?: string }) => {
+    const { getKit } = await import("../lib/kits.js");
+    const { transform } = await import("../lib/transformer.js");
+    const kit = getKit(id);
+    if (!kit) error(`Kit not found: ${id}`);
+    const result = transform(kit!.tokens, (opts.format ?? "shadcn") as Parameters<typeof transform>[1]);
+    if (opts.output) {
+      const { writeFileSync } = await import("fs");
+      writeFileSync(opts.output, result.code, "utf-8");
+      if (isTTY) console.log(chalk.green(`Written to ${opts.output}`));
+    } else {
+      if (isTTY) console.log(result.code);
+      else jsonOut({ code: result.code, config: result.config, format: opts.format ?? "shadcn" });
+    }
+  });
+
+kitsCmd
+  .command("save-as-profile <id> <name>")
+  .description("Convert a saved kit into a reusable style profile")
+  .action(async (id: string, name: string) => {
+    const { getKit, kitToProfile } = await import("../lib/kits.js");
+    const { createProfile } = await import("../lib/profiles.js");
+    const kit = getKit(id);
+    if (!kit) error(`Kit not found: ${id}`);
+    const profileInput = kitToProfile(kit!, name);
+    const profile = createProfile(profileInput);
+    if (isTTY) console.log(chalk.green(`  Created profile "${profile.name}" (${profile.id})`));
+    else jsonOut(profile);
+  });
+
 // ── Parse & run ───────────────────────────────────────────────────────────────
 
 program.parse(process.argv);
