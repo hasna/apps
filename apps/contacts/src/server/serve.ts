@@ -29,6 +29,7 @@ import type {
 } from "../types/index.js";
 import { importContacts } from "../lib/import.js";
 import { exportContacts } from "../lib/export.js";
+import { getImagePath, saveImage, deleteImage, getImagesDir } from "../lib/images.js";
 
 const DASHBOARD_DIST = join(import.meta.dir, "../../dashboard/dist");
 
@@ -267,6 +268,67 @@ async function handleExport(req: Request): Promise<Response> {
   });
 }
 
+// ─── /api/images ─────────────────────────────────────────────────────────────
+
+async function handleImages(req: Request, _url: URL, segments: string[]): Promise<Response> {
+  const entityId = segments[2]; // /api/images/:entity-id
+
+  if (!entityId) return apiError("Entity ID required");
+
+  // GET /api/images/:id — serve the image file
+  if (req.method === "GET") {
+    const imagePath = getImagePath(entityId);
+    if (!imagePath || !existsSync(imagePath)) {
+      return new Response(null, { status: 404, headers: { "Content-Type": "text/plain" } });
+    }
+    return new Response(Bun.file(imagePath), {
+      headers: { "Cache-Control": "public, max-age=3600" },
+    });
+  }
+
+  // POST /api/images/:id — upload image (multipart form-data or base64 JSON)
+  if (req.method === "POST") {
+    const contentType = req.headers.get("content-type") || "";
+
+    if (contentType.includes("multipart/form-data")) {
+      const formData = await req.formData();
+      const file = formData.get("image") as File | null;
+      if (!file) return apiError("No image file in form data");
+      const ext = file.name?.split(".").pop() || "jpg";
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const tmpPath = join(getImagesDir(), `_upload_${entityId}.${ext}`);
+      const { writeFileSync: wfs } = await import("node:fs");
+      wfs(tmpPath, buffer);
+      try {
+        const filename = saveImage(entityId, tmpPath);
+        const { unlinkSync } = await import("node:fs");
+        try { unlinkSync(tmpPath); } catch {}
+        return json({ ok: true, entity_id: entityId, filename });
+      } catch (e) {
+        return apiError(e instanceof Error ? e.message : "Upload failed");
+      }
+    }
+
+    // JSON body with base64
+    const body = await parseJson(req) as { image?: string; format?: string } | null;
+    if (!body?.image) return apiError("Provide image as base64 string or file upload");
+    try {
+      const filename = saveImage(entityId, body.image, { format: body.format });
+      return json({ ok: true, entity_id: entityId, filename });
+    } catch (e) {
+      return apiError(e instanceof Error ? e.message : "Upload failed");
+    }
+  }
+
+  // DELETE /api/images/:id — remove image
+  if (req.method === "DELETE") {
+    const deleted = deleteImage(entityId);
+    return json({ ok: true, deleted });
+  }
+
+  return apiError("Method not allowed", 405);
+}
+
 // ─── Static file serving ──────────────────────────────────────────────────────
 
 function serveStaticFile(filePath: string): Response | null {
@@ -319,6 +381,9 @@ export function startServer(port: number): void {
               response = req.method === "GET"
                 ? await handleExport(req)
                 : apiError("Method not allowed", 405);
+              break;
+            case "images":
+              response = await handleImages(req, url, segments);
               break;
             default:
               response = apiError("Not found", 404);

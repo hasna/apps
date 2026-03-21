@@ -164,6 +164,7 @@ import { ingestMeetingParticipants } from "../lib/meeting-capture.js";
 import { getFreshnessScore, getStaleContacts, markFieldVerified } from "../db/freshness.js";
 import { addOrgChartEdge, listOrgChart, setDealContactRole, getDealTeam, getCoverageGaps } from "../db/org-chart.js";
 import type { OrgEdgeType, AccountRole } from "../db/org-chart.js";
+import { saveImage, getImagePath, getImageAsBase64, deleteImage } from "../lib/images.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -1643,6 +1644,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: "get_coverage_gaps", description: "Identify coverage gaps in a company account — missing economic buyer, technical evaluator, or org chart relationships.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
     // Events/subscriptions (CON-00081)
     { name: "get_recent_contact_events", description: "Polling fallback for change events — returns recent activity log entries, optionally filtered by event type or date.", inputSchema: { type: "object", properties: { since: { type: "string", description: "ISO 8601 datetime — only events after this date" }, event_types: { type: "array", items: { type: "string" } } } } },
+    // Image management
+    { name: "set_contact_photo", description: "Set a contact's profile photo. Provide either a local file path or base64-encoded image data (with or without data URI prefix). Stores image in ~/.contacts/images/ and updates avatar_url. Supported formats: jpg, png, gif, webp, svg, avif.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, image: { type: "string", description: "File path (e.g. /tmp/photo.jpg) OR base64 data (e.g. data:image/png;base64,...) OR raw base64 string" }, format: { type: "string", description: "Image format hint when using raw base64 (jpg, png, webp). Not needed for file paths or data URIs." } }, required: ["contact_id", "image"] } },
+    { name: "get_contact_photo", description: "Get a contact's profile photo as base64 data URI. Returns null if no photo is set.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "delete_contact_photo", description: "Remove a contact's profile photo.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "set_company_logo", description: "Set a company's logo image. Provide either a local file path or base64-encoded image data. Stores image in ~/.contacts/images/ and updates logo_url.", inputSchema: { type: "object", properties: { company_id: { type: "string" }, image: { type: "string", description: "File path or base64 data" }, format: { type: "string", description: "Image format hint for raw base64" } }, required: ["company_id", "image"] } },
+    { name: "get_company_logo", description: "Get a company's logo as base64 data URI.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
+    { name: "delete_company_logo", description: "Remove a company's logo image.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
   ],
 }));
 
@@ -3356,6 +3364,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         sql += ` ORDER BY created_at DESC LIMIT 100`;
         const events = db.query(sql).all(...params) as unknown[];
         return { content: [{ type: "text", text: JSON.stringify({ events }, null, 2) }] };
+      }
+
+      // ─── Image management ──────────────────────────────────────────────
+      case "set_contact_photo": {
+        const { contact_id, image, format } = a as { contact_id: string; image: string; format?: string };
+        const contact = getContact(contact_id);
+        const filename = saveImage(contact_id, image, { format });
+        updateContact(contact_id, { avatar_url: `~/.contacts/images/${filename}` });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, contact_id, filename, avatar_url: `~/.contacts/images/${filename}` }) }] };
+      }
+      case "get_contact_photo": {
+        const { contact_id } = a as { contact_id: string };
+        const dataUri = getImageAsBase64(contact_id);
+        if (!dataUri) return { content: [{ type: "text", text: JSON.stringify({ contact_id, has_photo: false, data: null }) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ contact_id, has_photo: true, data: dataUri }) }] };
+      }
+      case "delete_contact_photo": {
+        const { contact_id } = a as { contact_id: string };
+        const deleted = deleteImage(contact_id);
+        if (deleted) updateContact(contact_id, { avatar_url: null });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted }) }] };
+      }
+      case "set_company_logo": {
+        const { company_id, image, format } = a as { company_id: string; image: string; format?: string };
+        const co = getCompany(company_id);
+        const filename = saveImage(company_id, image, { format });
+        updateCompany(company_id, { logo_url: `~/.contacts/images/${filename}` });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, company_id, filename, logo_url: `~/.contacts/images/${filename}` }) }] };
+      }
+      case "get_company_logo": {
+        const { company_id } = a as { company_id: string };
+        const dataUri = getImageAsBase64(company_id);
+        if (!dataUri) return { content: [{ type: "text", text: JSON.stringify({ company_id, has_logo: false, data: null }) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ company_id, has_logo: true, data: dataUri }) }] };
+      }
+      case "delete_company_logo": {
+        const { company_id } = a as { company_id: string };
+        const deleted = deleteImage(company_id);
+        if (deleted) updateCompany(company_id, { logo_url: null });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted }) }] };
       }
 
       default:

@@ -2509,4 +2509,103 @@ dealsTeamCmd
 
 // ─── Parse ────────────────────────────────────────────────────────────────────
 
+// ─── Image / Photo management ────────────────────────────────────────────────
+
+const photoCmd = program.command('photo').description('Manage contact profile photos');
+
+photoCmd
+  .command('set <contact-id> <image-path>')
+  .description('Set a contact\'s profile photo from a local file')
+  .action((contactId: string, imagePath: string) => {
+    const { saveImage } = require('../lib/images.js') as typeof import('../lib/images.js');
+    try {
+      const contact = getContact(contactId);
+      const filename = saveImage(contactId, imagePath);
+      updateContact(contactId, { avatar_url: `~/.contacts/images/${filename}` });
+      console.log(chalk.green(`Photo set for ${contact.display_name}: ~/.contacts/images/${filename}`));
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+    }
+  });
+
+photoCmd
+  .command('show <contact-id>')
+  .description('Show the path to a contact\'s profile photo')
+  .action((contactId: string) => {
+    const { getImagePath } = require('../lib/images.js') as typeof import('../lib/images.js');
+    const contact = getContact(contactId);
+    const path = getImagePath(contactId);
+    if (path) {
+      console.log(`${chalk.bold(contact.display_name)}: ${chalk.cyan(path)}`);
+    } else {
+      console.log(chalk.yellow(`No photo set for ${contact.display_name}`));
+    }
+  });
+
+photoCmd
+  .command('remove <contact-id>')
+  .description('Remove a contact\'s profile photo')
+  .action((contactId: string) => {
+    const { deleteImage } = require('../lib/images.js') as typeof import('../lib/images.js');
+    const contact = getContact(contactId);
+    const deleted = deleteImage(contactId);
+    if (deleted) {
+      updateContact(contactId, { avatar_url: null });
+      console.log(chalk.green(`Photo removed for ${contact.display_name}`));
+    } else {
+      console.log(chalk.yellow(`No photo found for ${contact.display_name}`));
+    }
+  });
+
+photoCmd
+  .command('list')
+  .description('List all stored photos')
+  .action(() => {
+    const { listImages } = require('../lib/images.js') as typeof import('../lib/images.js');
+    const images = listImages();
+    if (!images.length) { console.log(chalk.yellow('No photos stored')); return; }
+    for (const img of images) {
+      try {
+        const contact = getContact(img.entity_id);
+        console.log(`${chalk.bold(contact.display_name)}: ${chalk.cyan(img.path)}`);
+      } catch {
+        console.log(`${chalk.gray(img.entity_id)}: ${chalk.cyan(img.path)}`);
+      }
+    }
+  });
+
+const logoCmd = program.command('logo').description('Manage company logos');
+
+logoCmd
+  .command('set <company-id> <image-path>')
+  .description('Set a company\'s logo from a local file')
+  .action((companyId: string, imagePath: string) => {
+    const { saveImage } = require('../lib/images.js') as typeof import('../lib/images.js');
+    try {
+      const company = getCompany(companyId);
+      if (!company) { console.error(chalk.red('Company not found')); return; }
+      const filename = saveImage(companyId, imagePath);
+      const { updateCompany } = require('../db/companies.js');
+      updateCompany(companyId, { logo_url: `~/.contacts/images/${filename}` });
+      console.log(chalk.green(`Logo set for ${company.name}: ~/.contacts/images/${filename}`));
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+    }
+  });
+
+logoCmd
+  .command('show <company-id>')
+  .description('Show the path to a company\'s logo')
+  .action((companyId: string) => {
+    const { getImagePath } = require('../lib/images.js') as typeof import('../lib/images.js');
+    const company = getCompany(companyId);
+    if (!company) { console.error(chalk.red('Company not found')); return; }
+    const path = getImagePath(companyId);
+    if (path) {
+      console.log(`${chalk.bold(company.name)}: ${chalk.cyan(path)}`);
+    } else {
+      console.log(chalk.yellow(`No logo set for ${company.name}`));
+    }
+  });
+
 program.parse(process.argv);

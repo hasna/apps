@@ -382,3 +382,6 @@ export { ingestMeetingParticipants } from "./lib/meeting-capture.js";
 
 // find-or-create (CON-00078)
 export { findOrCreateContact } from "./db/contacts.js";
+
+// Images
+export { saveImage, getImagePath, getImageAsBase64, deleteImage, listImages, getImagesDir } from "./lib/images.js";
