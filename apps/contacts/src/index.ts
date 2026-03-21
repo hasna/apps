@@ -206,6 +206,7 @@ export type {
   ContactSource,
   PreferredContactMethod,
   ContactStatus,
+  Sensitivity,
   EntityType,
   CompanyRelationshipType,
   VendorCommType,
@@ -385,3 +386,18 @@ export { findOrCreateContact } from "./db/contacts.js";
 
 // Images
 export { saveImage, getImagePath, getImageAsBase64, deleteImage, listImages, getImagesDir } from "./lib/images.js";
+
+// Vault (CON-00085)
+export { initVault, unlockVault, lockVault, isVaultUnlocked, isVaultInitialized, encrypt, decrypt, encryptFile, decryptFile, requireVault, getDocumentsDir } from "./lib/vault.js";
+
+// Documents (CON-00085)
+export { addDocument, getDocument, listDocuments, deleteDocument, DOCUMENT_TYPES } from "./db/documents.js";
+export type { DocumentType, ContactDocument, ContactDocumentSummary, CreateDocumentInput } from "./db/documents.js";
+
+// Health Data (CON-00086)
+export { setHealthData, getHealthData, deleteHealthData } from "./db/health.js";
+export type { ContactHealth, SetHealthInput, EmergencyContact } from "./db/health.js";
+
+// Document Scanner (CON-00087)
+export { scanDocument } from "./lib/document-scanner.js";
+export type { DocumentScanResult } from "./lib/document-scanner.js";

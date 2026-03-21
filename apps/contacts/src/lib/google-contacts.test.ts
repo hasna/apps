@@ -120,6 +120,7 @@ describe("contactToGoogleArgs", () => {
     follow_up_at: null,
     archived: false,
     project_id: null,
+    sensitivity: "normal",
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
     emails: [{ id: "e1", contact_id: "abc", company_id: null, address: "bob@test.com", type: "work", is_primary: true, created_at: "2024-01-01T00:00:00Z" }],

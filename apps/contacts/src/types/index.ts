@@ -56,6 +56,8 @@ export type ContactSource =
   | "crm"
   | "other";
 
+export type Sensitivity = "normal" | "confidential" | "restricted";
+
 // ─── Sub-entities ─────────────────────────────────────────────────────────────
 
 export interface Email {
@@ -148,6 +150,7 @@ export interface Contact {
   follow_up_at: string | null;
   archived: boolean;
   project_id: string | null;
+  sensitivity: Sensitivity;
   do_not_contact?: boolean;
   priority?: number;
   timezone?: string | null;
@@ -182,6 +185,7 @@ export interface CreateContactInput {
   status?: ContactStatus;
   follow_up_at?: string;
   project_id?: string;
+  sensitivity?: Sensitivity;
   do_not_contact?: boolean;
   priority?: number;
   timezone?: string;
@@ -210,6 +214,7 @@ export interface UpdateContactInput {
   status?: ContactStatus;
   follow_up_at?: string | null;
   project_id?: string | null;
+  sensitivity?: Sensitivity;
   do_not_contact?: boolean;
   priority?: number | null;
   timezone?: string | null;
@@ -233,6 +238,7 @@ export interface ContactListOptions {
   order_by?: "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at";
   order_dir?: "asc" | "desc";
   include_dnc?: boolean;
+  include_restricted?: boolean;
   priority_min?: number;
   updated_since?: string;
 }
@@ -751,6 +757,7 @@ export interface ContactRow {
   follow_up_at: string | null;
   archived: number;
   project_id: string | null;
+  sensitivity: string;
   do_not_contact: number;
   priority: number;
   timezone: string | null;

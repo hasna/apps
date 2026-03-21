@@ -40,6 +40,7 @@ function rowToContact(row: ContactRow): Contact {
     follow_up_at: row.follow_up_at ?? null,
     archived: !!row.archived,
     project_id: row.project_id ?? null,
+    sensitivity: (row.sensitivity ?? "normal") as Contact["sensitivity"],
     do_not_contact: !!row.do_not_contact,
     priority: row.priority ?? 3,
     timezone: row.timezone ?? null,
@@ -164,8 +165,8 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
     ?? (firstName || lastName ? `${firstName} ${lastName}`.trim() : "Unnamed Contact");
 
   d.run(
-    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, status, follow_up_at, project_id, do_not_contact, priority, timezone, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contacts (id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday, company_id, job_title, source, custom_fields, last_contacted_at, website, preferred_contact_method, status, follow_up_at, project_id, sensitivity, do_not_contact, priority, timezone, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       firstName,
@@ -185,6 +186,7 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
       input.status ?? "active",
       input.follow_up_at ?? null,
       input.project_id ?? null,
+      input.sensitivity ?? "normal",
       input.do_not_contact ? 1 : 0,
       input.priority ?? 3,
       input.timezone ?? null,
@@ -235,6 +237,7 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
     order_by = "display_name",
     order_dir = "asc",
     include_dnc = false,
+    include_restricted = false,
     priority_min,
     updated_since,
   } = opts;
@@ -247,6 +250,10 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
 
   if (!include_dnc) {
     conditions.push("c.do_not_contact = 0");
+  }
+
+  if (!include_restricted) {
+    conditions.push("c.sensitivity != 'restricted'");
   }
 
   if (company_id) {
@@ -341,6 +348,7 @@ export function updateContact(id: string, input: UpdateContactInput, db?: Databa
   if (input.status !== undefined) { setClauses.push("status = ?"); params.push(input.status); }
   if (input.follow_up_at !== undefined) { setClauses.push("follow_up_at = ?"); params.push(input.follow_up_at); }
   if (input.project_id !== undefined) { setClauses.push("project_id = ?"); params.push(input.project_id); }
+  if (input.sensitivity !== undefined) { setClauses.push("sensitivity = ?"); params.push(input.sensitivity); }
   if (input.do_not_contact !== undefined) { setClauses.push("do_not_contact = ?"); params.push(input.do_not_contact ? 1 : 0); }
   if (input.priority !== undefined) { setClauses.push("priority = ?"); params.push(input.priority ?? 3); }
   if (input.timezone !== undefined) { setClauses.push("timezone = ?"); params.push(input.timezone); }
@@ -392,7 +400,7 @@ export function searchContacts(query: string, db?: Database): ContactWithDetails
   const ftsRows = d.query(`
     SELECT c.* FROM contacts c
     JOIN contacts_fts fts ON fts.id = c.id
-    WHERE contacts_fts MATCH ? AND c.archived = 0
+    WHERE contacts_fts MATCH ? AND c.archived = 0 AND c.sensitivity != 'restricted'
     ORDER BY rank
     LIMIT 50
   `).all(`"${query.replace(/"/g, '""')}"*`) as ContactRow[];
@@ -401,14 +409,14 @@ export function searchContacts(query: string, db?: Database): ContactWithDetails
   const emailRows = d.query(`
     SELECT DISTINCT c.* FROM contacts c
     JOIN emails e ON e.contact_id = c.id
-    WHERE e.address LIKE ? AND c.archived = 0
+    WHERE e.address LIKE ? AND c.archived = 0 AND c.sensitivity != 'restricted'
     LIMIT 20
   `).all(`%${query}%`) as ContactRow[];
 
   const phoneRows = d.query(`
     SELECT DISTINCT c.* FROM contacts c
     JOIN phones p ON p.contact_id = c.id
-    WHERE p.number LIKE ? AND c.archived = 0
+    WHERE p.number LIKE ? AND c.archived = 0 AND c.sensitivity != 'restricted'
     LIMIT 20
   `).all(`%${query}%`) as ContactRow[];
 
@@ -416,7 +424,7 @@ export function searchContacts(query: string, db?: Database): ContactWithDetails
   const companyRows = d.query(`
     SELECT DISTINCT c.* FROM contacts c
     JOIN companies co ON co.id = c.company_id
-    WHERE co.name LIKE ? AND c.archived = 0
+    WHERE co.name LIKE ? AND c.archived = 0 AND c.sensitivity != 'restricted'
     LIMIT 20
   `).all(`%${query}%`) as ContactRow[];
 

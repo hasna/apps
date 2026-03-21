@@ -165,6 +165,13 @@ import { getFreshnessScore, getStaleContacts, markFieldVerified } from "../db/fr
 import { addOrgChartEdge, listOrgChart, setDealContactRole, getDealTeam, getCoverageGaps } from "../db/org-chart.js";
 import type { OrgEdgeType, AccountRole } from "../db/org-chart.js";
 import { saveImage, getImagePath, getImageAsBase64, deleteImage } from "../lib/images.js";
+// ─── v0.6.0 imports ────────────────────────────────────────────────────────────
+import { initVault, unlockVault, lockVault, isVaultUnlocked, isVaultInitialized } from "../lib/vault.js";
+import { addDocument, getDocument, listDocuments, deleteDocument, DOCUMENT_TYPES } from "../db/documents.js";
+import type { DocumentType } from "../db/documents.js";
+import { setHealthData, getHealthData, deleteHealthData } from "../db/health.js";
+import type { SetHealthInput } from "../db/health.js";
+import { scanDocument } from "../lib/document-scanner.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -248,6 +255,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           tag_ids: { type: "array", items: { type: "string" }, description: "Tag IDs to assign" },
           source: { type: "string", enum: ["manual", "import", "linkedin", "github", "twitter", "email", "calendar", "crm", "other"] },
+          sensitivity: { type: "string", enum: ["normal", "confidential", "restricted"], description: "Contact sensitivity level (default: normal)" },
         },
       },
     },
@@ -283,6 +291,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           project_id: { type: "string", description: "Primary project ID (single, null to clear)" },
           project_ids: { type: "array", items: { type: "string" }, description: "Replace all project links with this array of todos project IDs" },
           source: { type: "string", enum: ["manual", "import", "linkedin", "github", "twitter", "email", "calendar", "crm", "other"] },
+          sensitivity: { type: "string", enum: ["normal", "confidential", "restricted"] },
           emails_add: { type: "array", items: { type: "object", properties: { address: { type: "string" }, type: { type: "string" }, is_primary: { type: "boolean" } }, required: ["address"] }, description: "New email addresses to append (duplicates are skipped)" },
           phones_add: { type: "array", items: { type: "object", properties: { number: { type: "string" }, type: { type: "string" }, country_code: { type: "string" }, is_primary: { type: "boolean" } }, required: ["number"] }, description: "New phone numbers to append (duplicates are skipped)" },
         },
@@ -311,6 +320,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           status: { type: "string", enum: ["active", "pending_reply", "converted", "closed", "other"] },
           project_id: { type: "string", description: "Filter by project ID" },
           archived: { type: "boolean", description: "Include archived contacts (default false)" },
+          include_restricted: { type: "boolean", description: "Include restricted-sensitivity contacts (default false)" },
           follow_up_due: { type: "boolean", description: "Only return contacts whose follow_up_at is in the past" },
           last_contacted_after: { type: "string", description: "ISO 8601 date — only contacts last contacted after this date" },
           last_contacted_before: { type: "string", description: "ISO 8601 date — only contacts last contacted before this date" },
@@ -1651,6 +1661,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: "set_company_logo", description: "Set a company's logo image. Provide either a local file path or base64-encoded image data. Stores image in ~/.contacts/images/ and updates logo_url.", inputSchema: { type: "object", properties: { company_id: { type: "string" }, image: { type: "string", description: "File path or base64 data" }, format: { type: "string", description: "Image format hint for raw base64" } }, required: ["company_id", "image"] } },
     { name: "get_company_logo", description: "Get a company's logo as base64 data URI.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
     { name: "delete_company_logo", description: "Remove a company's logo image.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
+    // ─── v0.6.0 tools ──────────────────────────────────────────────────────────
+    // Sensitivity
+    { name: "set_sensitivity", description: "Set a contact's sensitivity level (normal, confidential, restricted). Restricted contacts are hidden from list/search unless explicitly requested.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, sensitivity: { type: "string", enum: ["normal", "confidential", "restricted"] } }, required: ["contact_id", "sensitivity"] } },
+    // Vault
+    { name: "vault_init", description: "Initialize the encrypted document vault with a passphrase. Must be called before storing documents or health data.", inputSchema: { type: "object", properties: { passphrase: { type: "string" } }, required: ["passphrase"] } },
+    { name: "vault_unlock", description: "Unlock the vault for this session with a passphrase.", inputSchema: { type: "object", properties: { passphrase: { type: "string" } }, required: ["passphrase"] } },
+    { name: "vault_lock", description: "Lock the vault, clearing the encryption key from memory.", inputSchema: { type: "object", properties: {} } },
+    { name: "vault_status", description: "Check vault initialization and lock status.", inputSchema: { type: "object", properties: {} } },
+    // Documents
+    { name: "add_document", description: "Store an encrypted document for a contact (passport, tax_id, medical_record, etc.). Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, doc_type: { type: "string", enum: [...DOCUMENT_TYPES] }, label: { type: "string" }, value: { type: "string", description: "Plaintext value (will be encrypted)" }, file_path: { type: "string", description: "Optional file to encrypt and attach" }, metadata: { type: "object" }, expires_at: { type: "string" } }, required: ["contact_id", "doc_type", "value"] } },
+    { name: "list_documents", description: "List documents for a contact (metadata only — no decryption needed).", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "get_document", description: "Get a document with decrypted value. Vault must be unlocked.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
+    { name: "delete_document", description: "Delete a document and its encrypted file.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
+    // Document scanner
+    { name: "scan_document", description: "Scan a document image using AI vision (OpenAI GPT-4o) to extract structured data. Optionally auto-save to vault.", inputSchema: { type: "object", properties: { image: { type: "string", description: "File path or base64 image data" }, doc_type: { type: "string", description: "Hint: passport, national_id, drivers_license, etc." }, contact_id: { type: "string", description: "Contact to associate scanned document with" }, auto_save: { type: "boolean", description: "Automatically save extracted data as a vault document" } }, required: ["image"] } },
+    // Health data
+    { name: "set_health_data", description: "Set or update health data for a contact. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, blood_type: { type: "string" }, allergies: { type: "array", items: { type: "string" } }, medical_conditions: { type: "array", items: { type: "string" } }, medications: { type: "array", items: { type: "string" } }, emergency_contacts: { type: "array", items: { type: "object", properties: { name: { type: "string" }, phone: { type: "string" }, relationship: { type: "string" } }, required: ["name", "phone", "relationship"] } }, health_insurance_provider: { type: "string" }, health_insurance_id: { type: "string" }, primary_physician: { type: "string" }, primary_physician_phone: { type: "string" }, organ_donor: { type: "boolean" }, notes: { type: "string" } }, required: ["contact_id"] } },
+    { name: "get_health_data", description: "Get health data for a contact. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "delete_health_data", description: "Delete all health data for a contact.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
   ],
 }));
 
@@ -1682,6 +1711,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           social_profiles: a.social_profiles as CreateContactInput["social_profiles"],
           tag_ids: a.tag_ids as string[] | undefined,
           source: a.source as CreateContactInput["source"],
+          sensitivity: a.sensitivity as CreateContactInput["sensitivity"],
         };
         const contact = createContact(input);
         // Link to multiple projects if project_ids array was provided
@@ -1719,6 +1749,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           follow_up_at: rest.follow_up_at as string | null | undefined,
           project_id: rest.project_id as string | null | undefined,
           source: rest.source as UpdateContactInput["source"],
+          sensitivity: rest.sensitivity as UpdateContactInput["sensitivity"],
           emails_add: rest.emails_add as UpdateContactInput["emails_add"],
           phones_add: rest.phones_add as UpdateContactInput["phones_add"],
         };
@@ -1745,6 +1776,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           status: a.status as "active" | "pending_reply" | "converted" | "closed" | "other" | undefined,
           project_id: a.project_id as string | undefined,
           archived: a.archived as boolean | undefined,
+          include_restricted: a.include_restricted as boolean | undefined,
           follow_up_due: a.follow_up_due as boolean | undefined,
           last_contacted_after: a.last_contacted_after as string | undefined,
           last_contacted_before: a.last_contacted_before as string | undefined,
@@ -3404,6 +3436,112 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const deleted = deleteImage(company_id);
         if (deleted) updateCompany(company_id, { logo_url: null });
         return { content: [{ type: "text", text: JSON.stringify({ ok: true, deleted }) }] };
+      }
+
+      // ─── v0.6.0 handlers ──────────────────────────────────────────────────────
+
+      case "set_sensitivity": {
+        const contact = updateContact(a.contact_id as string, { sensitivity: a.sensitivity as "normal" | "confidential" | "restricted" });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, contact_id: a.contact_id, sensitivity: a.sensitivity }) }] };
+      }
+
+      case "vault_init": {
+        initVault(a.passphrase as string);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, message: "Vault initialized and unlocked" }) }] };
+      }
+
+      case "vault_unlock": {
+        const ok = unlockVault(a.passphrase as string);
+        if (!ok) return { content: [{ type: "text", text: "Invalid passphrase" }], isError: true };
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, message: "Vault unlocked" }) }] };
+      }
+
+      case "vault_lock": {
+        lockVault();
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, message: "Vault locked" }) }] };
+      }
+
+      case "vault_status": {
+        const initialized = isVaultInitialized();
+        const unlocked = isVaultUnlocked();
+        const db = getDatabase();
+        let docCount = 0;
+        try { docCount = (db.query("SELECT COUNT(*) as n FROM contact_documents").get() as { n: number }).n; } catch { /* table may not exist */ }
+        return { content: [{ type: "text", text: JSON.stringify({ initialized, unlocked, document_count: docCount }) }] };
+      }
+
+      case "add_document": {
+        const doc = addDocument({
+          contact_id: a.contact_id as string,
+          doc_type: a.doc_type as DocumentType,
+          label: a.label as string | undefined,
+          value: a.value as string,
+          file_path: a.file_path as string | undefined,
+          metadata: a.metadata as Record<string, unknown> | undefined,
+          expires_at: a.expires_at as string | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] };
+      }
+
+      case "list_documents": {
+        const docs = listDocuments(a.contact_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(docs, null, 2) }] };
+      }
+
+      case "get_document": {
+        const doc = getDocument(a.document_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] };
+      }
+
+      case "delete_document": {
+        deleteDocument(a.document_id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
+      }
+
+      case "scan_document": {
+        const result = await scanDocument(a.image as string, a.doc_type as string | undefined);
+        if (a.auto_save && a.contact_id && isVaultUnlocked()) {
+          try {
+            const doc = addDocument({
+              contact_id: a.contact_id as string,
+              doc_type: (result.document_type as DocumentType) || "other",
+              label: `Scanned ${result.document_type}`,
+              value: JSON.stringify(result.fields),
+              metadata: { raw_text: result.raw_text, confidence: result.confidence },
+            });
+            return { content: [{ type: "text", text: JSON.stringify({ scan: result, saved_document: doc }, null, 2) }] };
+          } catch (saveErr) {
+            return { content: [{ type: "text", text: JSON.stringify({ scan: result, save_error: saveErr instanceof Error ? saveErr.message : String(saveErr) }, null, 2) }] };
+          }
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "set_health_data": {
+        const health = setHealthData(a.contact_id as string, {
+          blood_type: a.blood_type as string | undefined,
+          allergies: a.allergies as string[] | undefined,
+          medical_conditions: a.medical_conditions as string[] | undefined,
+          medications: a.medications as string[] | undefined,
+          emergency_contacts: a.emergency_contacts as SetHealthInput["emergency_contacts"],
+          health_insurance_provider: a.health_insurance_provider as string | undefined,
+          health_insurance_id: a.health_insurance_id as string | undefined,
+          primary_physician: a.primary_physician as string | undefined,
+          primary_physician_phone: a.primary_physician_phone as string | undefined,
+          organ_donor: a.organ_donor as boolean | undefined,
+          notes: a.notes as string | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(health, null, 2) }] };
+      }
+
+      case "get_health_data": {
+        const health = getHealthData(a.contact_id as string);
+        return { content: [{ type: "text", text: JSON.stringify(health, null, 2) }] };
+      }
+
+      case "delete_health_data": {
+        deleteHealthData(a.contact_id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
       }
 
       default:

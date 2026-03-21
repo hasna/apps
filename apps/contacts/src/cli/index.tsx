@@ -204,7 +204,7 @@ async function confirm(question: string): Promise<boolean> {
 program
   .name("contacts")
   .description("Open Contacts — contact management for AI coding agents")
-  .version("0.5.0");
+  .version("0.6.0");
 
 // ─── contacts add ─────────────────────────────────────────────────────────────
 
@@ -312,11 +312,13 @@ program
   .description("List contacts")
   .option("--tag <tag_id>", "Filter by tag ID")
   .option("--company <id>", "Filter by company ID")
+  .option("--include-restricted", "Include restricted-sensitivity contacts")
   .option("--limit <n>", "Max results", "50")
-  .action(async (opts: { tag?: string; company?: string; limit: string }) => {
+  .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string }) => {
     const result = listContacts({
       tag_id: opts.tag,
       company_id: opts.company,
+      include_restricted: opts.includeRestricted,
       limit: parseInt(opts.limit, 10),
     });
 
@@ -2607,5 +2609,275 @@ logoCmd
       console.log(chalk.yellow(`No logo set for ${company.name}`));
     }
   });
+
+// ─── contacts set-sensitivity ─────────────────────────────────────────────────
+
+program
+  .command('set-sensitivity <id> <level>')
+  .description('Set contact sensitivity level (normal, confidential, restricted)')
+  .action((id: string, level: string) => {
+    if (!['normal', 'confidential', 'restricted'].includes(level)) {
+      console.error(chalk.red(`\nInvalid sensitivity level: ${level}. Use: normal, confidential, restricted\n`));
+      process.exit(1);
+    }
+    const contact = getContact(id);
+    updateContact(id, { sensitivity: level as 'normal' | 'confidential' | 'restricted' });
+    console.log(chalk.green(`\nSensitivity set to ${level} for ${contact.display_name}\n`));
+  });
+
+// ─── contacts vault ──────────────────────────────────────────────────────────
+
+const vaultCmd = program.command('vault').description('Manage the encrypted document vault');
+
+function promptPassphrase(promptText: string): Promise<string> {
+  const { createInterface } = require("readline");
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    process.stdout.write(promptText);
+    rl.question("", (answer: string) => { rl.close(); resolve(answer); });
+  });
+}
+
+vaultCmd
+  .command('init')
+  .description('Initialize the encrypted vault')
+  .action(async () => {
+    const { initVault, isVaultInitialized } = await import('../lib/vault.js');
+    if (isVaultInitialized()) {
+      console.log(chalk.yellow('\nVault already initialized. Use "contacts vault unlock" to access it.\n'));
+      return;
+    }
+    const passphrase = await promptPassphrase('Enter vault passphrase: ');
+    if (!passphrase) { console.error(chalk.red('Passphrase is required.')); process.exit(1); }
+    const confirm = await promptPassphrase('Confirm passphrase: ');
+    if (passphrase !== confirm) { console.error(chalk.red('Passphrases do not match.')); process.exit(1); }
+    initVault(passphrase);
+    console.log(chalk.green('\nVault initialized and unlocked.\n'));
+  });
+
+vaultCmd
+  .command('unlock')
+  .description('Unlock the vault')
+  .action(async () => {
+    const { unlockVault } = await import('../lib/vault.js');
+    const passphrase = await promptPassphrase('Enter vault passphrase: ');
+    const ok = unlockVault(passphrase);
+    if (!ok) {
+      console.error(chalk.red('\nInvalid passphrase.\n'));
+      process.exit(1);
+    }
+    console.log(chalk.green('\nVault unlocked.\n'));
+  });
+
+vaultCmd
+  .command('lock')
+  .description('Lock the vault')
+  .action(async () => {
+    const { lockVault } = await import('../lib/vault.js');
+    lockVault();
+    console.log(chalk.green('\nVault locked.\n'));
+  });
+
+vaultCmd
+  .command('status')
+  .description('Show vault status')
+  .action(async () => {
+    const { isVaultInitialized, isVaultUnlocked } = await import('../lib/vault.js');
+    const initialized = isVaultInitialized();
+    const unlocked = isVaultUnlocked();
+    console.log(chalk.bold.blue('\nVault Status:'));
+    console.log(`  Initialized: ${initialized ? chalk.green('yes') : chalk.red('no')}`);
+    console.log(`  Unlocked:    ${unlocked ? chalk.green('yes') : chalk.red('no')}`);
+    if (initialized) {
+      const db = getDatabase();
+      try {
+        const docCount = (db.query("SELECT COUNT(*) as n FROM contact_documents").get() as { n: number }).n;
+        console.log(`  Documents:   ${chalk.cyan(String(docCount))}`);
+      } catch { /* table may not exist yet */ }
+    }
+    console.log();
+  });
+
+// ─── contacts docs ───────────────────────────────────────────────────────────
+
+const docsCmd = program.command('docs').description('Manage encrypted contact documents');
+
+docsCmd
+  .command('add <contact-id>')
+  .description('Add an encrypted document')
+  .option('--type <type>', 'Document type (passport, national_id, tax_id, ssn, drivers_license, bank_account, visa, insurance, contract, certificate, medical_record, prescription, allergy_list, vaccination, blood_type, health_insurance, medical_condition, emergency_contact_medical, other)', 'other')
+  .option('--label <label>', 'Document label')
+  .option('--value <value>', 'Document value (required)')
+  .option('--file <path>', 'File to encrypt and attach')
+  .option('--expires <date>', 'Expiry date (YYYY-MM-DD)')
+  .action(async (contactId: string, opts: { type?: string; label?: string; value?: string; file?: string; expires?: string }) => {
+    const { addDocument } = await import('../db/documents.js');
+    if (!opts.value) { console.error(chalk.red('--value is required')); process.exit(1); }
+    const doc = addDocument({
+      contact_id: contactId,
+      doc_type: (opts.type || 'other') as import('../db/documents.js').DocumentType,
+      label: opts.label,
+      value: opts.value,
+      file_path: opts.file,
+      expires_at: opts.expires,
+    });
+    console.log(chalk.green(`\nDocument added: ${doc.doc_type} (${doc.id})\n`));
+  });
+
+docsCmd
+  .command('list <contact-id>')
+  .description('List documents for a contact (metadata only)')
+  .action(async (contactId: string) => {
+    const { listDocuments } = await import('../db/documents.js');
+    const docs = listDocuments(contactId);
+    if (!docs.length) {
+      console.log(chalk.gray('\nNo documents found.\n'));
+      return;
+    }
+    console.log();
+    renderTable(
+      ['Type', 'Label', 'Has File', 'Expires', 'Created'],
+      docs.map(d => ({
+        Type: d.doc_type,
+        Label: d.label || '',
+        'Has File': d.has_file ? 'yes' : 'no',
+        Expires: d.expires_at ? d.expires_at.slice(0, 10) : '',
+        Created: d.created_at.slice(0, 10),
+      }))
+    );
+    console.log(chalk.gray(`\n${docs.length} document(s)\n`));
+  });
+
+docsCmd
+  .command('show <doc-id>')
+  .description('Show a document with decrypted value (vault must be unlocked)')
+  .action(async (docId: string) => {
+    const { getDocument } = await import('../db/documents.js');
+    const doc = getDocument(docId);
+    console.log(chalk.bold.blue(`\nDocument: ${doc.doc_type}`));
+    if (doc.label) console.log(chalk.gray('  Label:   ') + doc.label);
+    console.log(chalk.gray('  Value:   ') + doc.value);
+    console.log(chalk.gray('  Has File:') + (doc.has_file ? ' yes' : ' no'));
+    if (doc.expires_at) console.log(chalk.gray('  Expires: ') + doc.expires_at.slice(0, 10));
+    console.log(chalk.gray(`  ID: ${doc.id}\n`));
+  });
+
+docsCmd
+  .command('remove <doc-id>')
+  .description('Delete a document')
+  .action(async (docId: string) => {
+    const { deleteDocument } = await import('../db/documents.js');
+    deleteDocument(docId);
+    console.log(chalk.green(`\nDocument deleted: ${docId}\n`));
+  });
+
+docsCmd
+  .command('scan <image-path>')
+  .description('Scan a document image using AI vision')
+  .option('--contact <id>', 'Contact ID to associate with')
+  .option('--type <type>', 'Document type hint')
+  .action(async (imagePath: string, opts: { contact?: string; type?: string }) => {
+    const { scanDocument } = await import('../lib/document-scanner.js');
+    console.log(chalk.blue('\nScanning document...\n'));
+    const result = await scanDocument(imagePath, opts.type);
+    console.log(chalk.bold(`  Type: ${result.document_type}  Confidence: ${(result.confidence * 100).toFixed(0)}%\n`));
+    console.log(chalk.yellow('  Extracted fields:'));
+    for (const [k, v] of Object.entries(result.fields)) {
+      console.log(`    ${chalk.gray(k.padEnd(20))} ${v}`);
+    }
+    console.log();
+  });
+
+docsCmd
+  .command('types')
+  .description('List all valid document types')
+  .action(async () => {
+    const { DOCUMENT_TYPES } = await import('../db/documents.js');
+    console.log(chalk.bold.blue('\nDocument Types:\n'));
+    for (const t of DOCUMENT_TYPES) {
+      console.log(`  ${chalk.cyan(t)}`);
+    }
+    console.log();
+  });
+
+// ─── contacts health ─────────────────────────────────────────────────────────
+
+const healthCmd = program.command('health').description('Manage contact health data (vault required)');
+
+healthCmd
+  .command('show <id>')
+  .description('Show health data for a contact')
+  .action(async (id: string) => {
+    const { getHealthData } = await import('../db/health.js');
+    const contact = getContact(id);
+    const health = getHealthData(id);
+    if (!health) {
+      console.log(chalk.gray(`\nNo health data for ${contact.display_name}.\n`));
+      return;
+    }
+    console.log(chalk.bold.blue(`\nHealth: ${contact.display_name}\n`));
+    if (health.blood_type) console.log(chalk.gray('  Blood Type:      ') + health.blood_type);
+    if (health.allergies.length) console.log(chalk.gray('  Allergies:       ') + health.allergies.join(', '));
+    if (health.medical_conditions.length) console.log(chalk.gray('  Conditions:      ') + health.medical_conditions.join(', '));
+    if (health.medications.length) console.log(chalk.gray('  Medications:     ') + health.medications.join(', '));
+    if (health.emergency_contacts.length) {
+      console.log(chalk.yellow('\n  Emergency Contacts:'));
+      for (const ec of health.emergency_contacts) {
+        console.log(`    ${chalk.bold(ec.name)}  ${ec.phone}  ${chalk.gray(ec.relationship)}`);
+      }
+    }
+    if (health.health_insurance_provider) console.log(chalk.gray('\n  Insurance:       ') + `${health.health_insurance_provider} (${health.health_insurance_id || 'no ID'})`);
+    if (health.primary_physician) console.log(chalk.gray('  Physician:       ') + `${health.primary_physician} ${health.primary_physician_phone || ''}`);
+    console.log(chalk.gray('  Organ Donor:     ') + (health.organ_donor ? 'yes' : 'no'));
+    if (health.notes) console.log(chalk.gray('  Notes:           ') + health.notes);
+    console.log();
+  });
+
+healthCmd
+  .command('set <id>')
+  .description('Set health data for a contact')
+  .option('--blood-type <type>', 'Blood type (e.g. A+, O-)')
+  .option('--allergies <list>', 'Comma-separated allergies')
+  .option('--conditions <list>', 'Comma-separated medical conditions')
+  .option('--medications <list>', 'Comma-separated medications')
+  .option('--insurance-provider <name>', 'Health insurance provider')
+  .option('--insurance-id <id>', 'Health insurance ID')
+  .option('--physician <name>', 'Primary physician')
+  .option('--physician-phone <phone>', 'Physician phone')
+  .option('--organ-donor', 'Mark as organ donor')
+  .option('--notes <text>', 'Health notes')
+  .action(async (id: string, opts: {
+    bloodType?: string; allergies?: string; conditions?: string; medications?: string;
+    insuranceProvider?: string; insuranceId?: string; physician?: string; physicianPhone?: string;
+    organDonor?: boolean; notes?: string;
+  }) => {
+    const { setHealthData } = await import('../db/health.js');
+    const contact = getContact(id);
+    const input: Record<string, unknown> = {};
+    if (opts.bloodType) input.blood_type = opts.bloodType;
+    if (opts.allergies) input.allergies = opts.allergies.split(',').map(s => s.trim());
+    if (opts.conditions) input.medical_conditions = opts.conditions.split(',').map(s => s.trim());
+    if (opts.medications) input.medications = opts.medications.split(',').map(s => s.trim());
+    if (opts.insuranceProvider) input.health_insurance_provider = opts.insuranceProvider;
+    if (opts.insuranceId) input.health_insurance_id = opts.insuranceId;
+    if (opts.physician) input.primary_physician = opts.physician;
+    if (opts.physicianPhone) input.primary_physician_phone = opts.physicianPhone;
+    if (opts.organDonor !== undefined) input.organ_donor = opts.organDonor;
+    if (opts.notes) input.notes = opts.notes;
+    setHealthData(id, input as import('../db/health.js').SetHealthInput);
+    console.log(chalk.green(`\nHealth data updated for ${contact.display_name}\n`));
+  });
+
+healthCmd
+  .command('clear <id>')
+  .description('Delete all health data for a contact')
+  .action(async (id: string) => {
+    const { deleteHealthData } = await import('../db/health.js');
+    const contact = getContact(id);
+    deleteHealthData(id);
+    console.log(chalk.green(`\nHealth data cleared for ${contact.display_name}\n`));
+  });
+
+// ─── Parse ────────────────────────────────────────────────────────────────────
 
 program.parse(process.argv);
