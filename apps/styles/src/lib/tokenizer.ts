@@ -26,14 +26,14 @@ export interface TypographyTokens {
   letterSpacings: string[];
 }
 
-// Matches hex, rgb, rgba, hsl, hsla, named CSS colors (basic set)
+// Matches hex, rgb, rgba, hsl, hsla
 const COLOR_RE =
-  /#([0-9a-fA-F]{3,8})\b|rgba?\(\s*[\d.,%\s]+\)|hsla?\(\s*[\d.,%\s]+\)/g;
+  /#([0-9a-fA-F]{3,8})\b|rgba?\(\s*[\d.,/%\s]+\)|hsla?\(\s*[\d.,/%\s]+\)/g;
 
 const GRADIENT_RE = /(linear|radial|conic)-gradient\([^)]+\)/g;
 
-const SHADOW_RE =
-  /(-?\d+px\s+-?\d+px(?:\s+-?\d+px)?(?:\s+-?\d+px)?\s+(?:rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}|\w+)(?:\s+inset)?)/g;
+// A valid shadow fragment must start with at least two offset values (e.g. "0px 4px")
+const VALID_SHADOW_RE = /^-?\d+(\.\d+)?(px|rem|em)?\s+-?\d+(\.\d+)?(px|rem|em)?/;
 
 function pxToRem(px: string): string {
   const val = parseFloat(px);
@@ -45,12 +45,48 @@ function dedup<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
 }
 
-function extractColorsFromText(text: string): string[] {
-  return Array.from(text.matchAll(COLOR_RE)).map((m) => m[0]);
+// ── Color normalization ───────────────────────────────────────────────────────
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return "#" + [r, g, b].map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, "0")).join("");
 }
 
+/** Convert any color string to lowercase hex (where possible) for reliable dedup */
 function normalizeColor(c: string): string {
-  return c.replace(/\s+/g, " ").trim().toLowerCase();
+  const s = c.replace(/\s+/g, " ").trim().toLowerCase();
+
+  // rgb(r, g, b) or rgb(r g b)
+  const rgbMatch = s.match(/^rgba?\(\s*([\d.]+)[,\s]\s*([\d.]+)[,\s]\s*([\d.]+)/);
+  if (rgbMatch) {
+    const a = s.match(/,\s*([\d.]+)\s*\)$/);
+    const alpha = a ? parseFloat(a[1]) : 1;
+    if (alpha < 0.05) return ""; // fully transparent → discard
+    return rgbToHex(parseFloat(rgbMatch[1]), parseFloat(rgbMatch[2]), parseFloat(rgbMatch[3]));
+  }
+
+  // Expand 3-char hex to 6-char
+  const hex3 = s.match(/^#([0-9a-f]{3})$/);
+  if (hex3) {
+    const [, h] = hex3;
+    return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+  }
+
+  return s;
+}
+
+/** Returns true if the color is visible (not transparent/ghost) */
+function isVisibleColor(raw: string): boolean {
+  const s = raw.trim().toLowerCase();
+  // rgba with 0 alpha
+  if (/rgba?\(\s*[\d.]+[,\s]\s*[\d.]+[,\s]\s*[\d.]+[,\s]\s*0\s*\)/.test(s)) return false;
+  // hex with 00 alpha suffix (8-digit hex: #rrggbbaa)
+  if (/^#[0-9a-f]{6}(00|01|02|03|04|05|06|07|08|09|0a|0b|0c|0d|0e|0f)$/i.test(s)) return false;
+  // Semi-transparent hex (alpha < ~15%) — keep, just filter pure invisible
+  return true;
+}
+
+function extractColorsFromText(text: string): string[] {
+  return Array.from(text.matchAll(COLOR_RE)).map((m) => m[0]);
 }
 
 function extractGradients(text: string): string[] {
@@ -74,7 +110,8 @@ function parseShadow(val: string): string[] {
     }
   }
   if (current.trim()) shadows.push(current.trim());
-  return shadows.filter((s) => s !== "none");
+  // Validate: must look like a real shadow (starts with at least 2 offset values)
+  return shadows.filter((s) => s !== "none" && s.length > 8 && VALID_SHADOW_RE.test(s));
 }
 
 function normalizeSpacing(val: string): string[] {
@@ -89,6 +126,7 @@ export function tokenizeStyles(raw: RawExtractedStyles): DesignTokens {
   const colorFreq = new Map<string, { freq: number; source: ColorToken["source"] }>();
 
   function addColor(c: string, source: ColorToken["source"]) {
+    if (!isVisibleColor(c)) return;
     const key = normalizeColor(c);
     if (!key) return;
     const existing = colorFreq.get(key);

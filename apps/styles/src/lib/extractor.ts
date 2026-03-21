@@ -163,7 +163,7 @@ export async function extractStylesFromUrl(url: string): Promise<RawExtractedSty
       return vars;
     });
 
-    // Extract computed styles from key elements
+    // Extract computed styles from key elements — sample up to 5 per selector
     const computedElements: ComputedElementStyles[] = await page.evaluate((selectors) => {
       const results: ComputedElementStyles[] = [];
       const props = [
@@ -172,16 +172,20 @@ export async function extractStylesFromUrl(url: string): Promise<RawExtractedSty
         "padding", "margin", "transition",
       ];
       for (const { selector, tagName } of selectors) {
-        const el = document.querySelector(selector) as HTMLElement | null;
-        if (!el) continue;
-        const cs = getComputedStyle(el);
-        const entry: Record<string, string> = { selector, tagName };
-        for (const p of props) {
-          entry[p] = cs.getPropertyValue(
-            p.replace(/([A-Z])/g, (m) => `-${m.toLowerCase()}`)
-          );
+        const els = Array.from(document.querySelectorAll(selector)).slice(0, 5) as HTMLElement[];
+        for (const el of els) {
+          // Skip invisible elements
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          const cs = getComputedStyle(el);
+          const entry: Record<string, string> = { selector, tagName };
+          for (const p of props) {
+            entry[p] = cs.getPropertyValue(
+              p.replace(/([A-Z])/g, (m) => `-${m.toLowerCase()}`)
+            );
+          }
+          results.push(entry as unknown as import("./extractor").ComputedElementStyles);
         }
-        results.push(entry as unknown as import("./extractor").ComputedElementStyles);
       }
       return results;
     }, ELEMENT_SELECTORS);
