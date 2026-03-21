@@ -24,6 +24,8 @@ import {
   moveTask,
   getNextTask,
   claimNextTask,
+  stealTask,
+  claimOrSteal,
   getActiveWork,
   getTasksChangedSince,
   failTask,
@@ -1887,6 +1889,149 @@ server.tool(
 );
 }
 
+// log_cost
+if (shouldRegisterTool("log_cost")) {
+server.tool(
+  "log_cost",
+  "Log token usage and cost to a task. Accumulates — call after each LLM invocation.",
+  { task_id: z.string(), tokens: z.number().describe("Token count"), usd: z.number().describe("Cost in USD") },
+  async ({ task_id, tokens, usd }) => {
+    try {
+      const { logCost } = await import("../db/tasks.js");
+      const resolvedId = resolveId(task_id, "tasks");
+      logCost(resolvedId, tokens, usd);
+      return { content: [{ type: "text" as const, text: `Logged ${tokens} tokens ($${usd.toFixed(4)}) to ${task_id}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// log_trace
+if (shouldRegisterTool("log_trace")) {
+server.tool(
+  "log_trace",
+  "Log a trace entry (tool call, LLM call, error, handoff) to a task for observability.",
+  {
+    task_id: z.string(), agent_id: z.string().optional(),
+    trace_type: z.enum(["tool_call", "llm_call", "error", "handoff", "custom"]),
+    name: z.string().optional(), input_summary: z.string().optional(), output_summary: z.string().optional(),
+    duration_ms: z.number().optional(), tokens: z.number().optional(), cost_usd: z.number().optional(),
+  },
+  async ({ task_id, agent_id, trace_type, name, input_summary, output_summary, duration_ms, tokens, cost_usd }) => {
+    try {
+      const { logTrace } = await import("../db/traces.js");
+      const resolvedId = resolveId(task_id, "tasks");
+      const trace = logTrace({ task_id: resolvedId, agent_id, trace_type, name, input_summary, output_summary, duration_ms, tokens, cost_usd });
+      return { content: [{ type: "text" as const, text: `Trace logged: ${trace.id} [${trace_type}] ${name || ""}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// get_traces
+if (shouldRegisterTool("get_traces")) {
+server.tool(
+  "get_traces",
+  "Get execution traces for a task — tool calls, LLM invocations, errors, handoffs.",
+  { task_id: z.string() },
+  async ({ task_id }) => {
+    try {
+      const { getTaskTraces, getTraceStats } = await import("../db/traces.js");
+      const resolvedId = resolveId(task_id, "tasks");
+      const traces = getTaskTraces(resolvedId);
+      const stats = getTraceStats(resolvedId);
+      const lines = [`Traces for ${task_id}: ${stats.total} total (${stats.tool_calls} tools, ${stats.llm_calls} LLM, ${stats.errors} errors) | ${stats.total_tokens} tokens | $${stats.total_cost_usd.toFixed(4)} | ${stats.total_duration_ms}ms`];
+      for (const t of traces.slice(0, 20)) {
+        lines.push(`  ${t.created_at} [${t.trace_type}] ${t.name || ""} ${t.tokens ? t.tokens + "tok" : ""} ${t.duration_ms ? t.duration_ms + "ms" : ""}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// save_snapshot
+if (shouldRegisterTool("save_snapshot")) {
+server.tool(
+  "save_snapshot",
+  "Save a structured context snapshot — what you were working on, what files are open, what was tried, blockers, next steps. Call on session end or before handoff.",
+  {
+    agent_id: z.string().optional(), task_id: z.string().optional(), project_id: z.string().optional(),
+    snapshot_type: z.enum(["interrupt", "complete", "handoff", "checkpoint"]),
+    plan_summary: z.string().optional(), files_open: z.array(z.string()).optional(),
+    attempts: z.array(z.string()).optional(), blockers: z.array(z.string()).optional(), next_steps: z.string().optional(),
+  },
+  async ({ agent_id, task_id, project_id, snapshot_type, plan_summary, files_open, attempts, blockers, next_steps }) => {
+    try {
+      const { saveSnapshot } = await import("../db/snapshots.js");
+      const snap = saveSnapshot({ agent_id, task_id, project_id, snapshot_type, plan_summary, files_open, attempts, blockers, next_steps });
+      return { content: [{ type: "text" as const, text: `Snapshot saved: ${snap.id} [${snapshot_type}]${plan_summary ? " — " + plan_summary.slice(0, 80) : ""}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// get_snapshot
+if (shouldRegisterTool("get_snapshot")) {
+server.tool(
+  "get_snapshot",
+  "Get the latest context snapshot for an agent or task — use to resume work after interruption.",
+  { agent_id: z.string().optional(), task_id: z.string().optional() },
+  async ({ agent_id, task_id }) => {
+    try {
+      const { getLatestSnapshot } = await import("../db/snapshots.js");
+      const snap = getLatestSnapshot(agent_id, task_id);
+      if (!snap) return { content: [{ type: "text" as const, text: "No snapshot found." }] };
+      const lines = [`Snapshot [${snap.snapshot_type}] from ${snap.created_at}`];
+      if (snap.plan_summary) lines.push(`Plan: ${snap.plan_summary}`);
+      if (snap.files_open.length > 0) lines.push(`Files: ${snap.files_open.join(", ")}`);
+      if (snap.blockers.length > 0) lines.push(`Blockers: ${snap.blockers.join(", ")}`);
+      if (snap.next_steps) lines.push(`Next: ${snap.next_steps}`);
+      if (snap.attempts.length > 0) lines.push(`Attempts: ${snap.attempts.join("; ")}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// set_budget
+if (shouldRegisterTool("set_budget")) {
+server.tool(
+  "set_budget",
+  "Set execution budget for an agent — max concurrent tasks, cost limit, time limit per period.",
+  {
+    agent_id: z.string(), max_concurrent: z.number().optional(),
+    max_cost_usd: z.number().optional(), max_task_minutes: z.number().optional(), period_hours: z.number().optional(),
+  },
+  async ({ agent_id, max_concurrent, max_cost_usd, max_task_minutes, period_hours }) => {
+    try {
+      const { setBudget } = await import("../db/budgets.js");
+      const budget = setBudget(agent_id, { max_concurrent, max_cost_usd, max_task_minutes, period_hours });
+      return { content: [{ type: "text" as const, text: `Budget set for ${agent_id}: max ${budget.max_concurrent} concurrent, $${budget.max_cost_usd ?? "∞"} cost limit, ${budget.period_hours}h period` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// check_budget
+if (shouldRegisterTool("check_budget")) {
+server.tool(
+  "check_budget",
+  "Check if an agent is within their execution budget (concurrent tasks, cost, time).",
+  { agent_id: z.string() },
+  async ({ agent_id }) => {
+    try {
+      const { checkBudget } = await import("../db/budgets.js");
+      const result = checkBudget(agent_id);
+      if (result.allowed) {
+        return { content: [{ type: "text" as const, text: `Budget OK: ${result.current_concurrent}/${result.max_concurrent} concurrent tasks` }] };
+      }
+      return { content: [{ type: "text" as const, text: `BUDGET EXCEEDED: ${result.reason}` }], isError: true };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
 // import_github_issue
 if (shouldRegisterTool("import_github_issue")) {
 server.tool(
@@ -2694,6 +2839,58 @@ server.tool(
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
+  },
+);
+}
+
+// steal_task
+if (shouldRegisterTool("steal_task")) {
+server.tool(
+  "steal_task",
+  "Work-stealing: take the highest-priority stale in_progress task from another agent and reassign it to you.",
+  {
+    agent_id: z.string().describe("Your agent ID"),
+    stale_minutes: z.number().optional().describe("How long a task must be stale before stealing (default: 30)"),
+    project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+  },
+  async ({ agent_id, stale_minutes, project_id, task_list_id }) => {
+    try {
+      const task = stealTask(agent_id, { stale_minutes, project_id, task_list_id });
+      if (!task) return { content: [{ type: "text" as const, text: "No stale tasks available to steal." }] };
+      return { content: [{ type: "text" as const, text: `Stolen: ${formatTask(task)}\nPrevious owner: ${task.metadata?._stolen_from || "unknown"}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// claim_or_steal
+if (shouldRegisterTool("claim_or_steal")) {
+server.tool(
+  "claim_or_steal",
+  "Try to claim a pending task first; if none available, steal from a stale agent. Best single call for getting work.",
+  {
+    agent_id: z.string(),
+    project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+    plan_id: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    stale_minutes: z.number().optional().describe("Stale threshold for work-stealing fallback (default: 30)"),
+  },
+  async ({ agent_id, project_id, task_list_id, plan_id, tags, stale_minutes }) => {
+    try {
+      const filters: any = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+      if (plan_id) filters.plan_id = resolveId(plan_id, "plans");
+      if (tags) filters.tags = tags;
+      if (stale_minutes) filters.stale_minutes = stale_minutes;
+
+      const result = claimOrSteal(agent_id, Object.keys(filters).length > 0 ? filters : undefined);
+      if (!result) return { content: [{ type: "text" as const, text: "No tasks available to claim or steal." }] };
+      const prefix = result.stolen ? "Stolen" : "Claimed";
+      return { content: [{ type: "text" as const, text: `${prefix}: ${formatTask(result.task)}\n${formatTaskDetail(result.task, 300)}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
 }

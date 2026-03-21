@@ -2521,6 +2521,21 @@ program
     console.log(chalk.green(`Claimed: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
   });
 
+// steal
+program
+  .command("steal <agent>")
+  .description("Work-stealing: take the highest-priority stale task from another agent")
+  .option("--stale-minutes <n>", "How long a task must be stale (default: 30)", "30")
+  .option("--project <id>", "Filter to project")
+  .action((agent, opts) => {
+    const globalOpts = program.opts();
+    const { stealTask } = require("../db/tasks.js") as any;
+    const task = stealTask(agent, { stale_minutes: parseInt(opts.staleMinutes, 10), project_id: opts.project });
+    if (!task) { console.log(chalk.dim("No stale tasks available to steal.")); return; }
+    if (globalOpts.json) { output(task, true); return; }
+    console.log(chalk.green(`Stolen: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
+  });
+
 // status
 program
   .command("status")

@@ -576,6 +576,62 @@ const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN started_at TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (34);
   `,
+  // Migration 35: Cost tracking + delegation + retry + SLA + context snapshots + traces + budgets
+  `
+  ALTER TABLE tasks ADD COLUMN cost_tokens INTEGER DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN cost_usd REAL DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN delegated_from TEXT;
+  ALTER TABLE tasks ADD COLUMN delegation_depth INTEGER DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0;
+  ALTER TABLE tasks ADD COLUMN max_retries INTEGER DEFAULT 3;
+  ALTER TABLE tasks ADD COLUMN retry_after TEXT;
+  ALTER TABLE tasks ADD COLUMN sla_minutes INTEGER;
+
+  CREATE TABLE IF NOT EXISTS task_traces (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    trace_type TEXT NOT NULL CHECK(trace_type IN ('tool_call','llm_call','error','handoff','custom')),
+    name TEXT,
+    input_summary TEXT,
+    output_summary TEXT,
+    duration_ms INTEGER,
+    tokens INTEGER,
+    cost_usd REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_traces_agent ON task_traces(agent_id);
+
+  CREATE TABLE IF NOT EXISTS context_snapshots (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    snapshot_type TEXT NOT NULL CHECK(snapshot_type IN ('interrupt','complete','handoff','checkpoint')),
+    plan_summary TEXT,
+    files_open TEXT DEFAULT '[]',
+    attempts TEXT DEFAULT '[]',
+    blockers TEXT DEFAULT '[]',
+    next_steps TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_snapshots_agent ON context_snapshots(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_snapshots_task ON context_snapshots(task_id);
+
+  CREATE TABLE IF NOT EXISTS agent_budgets (
+    agent_id TEXT PRIMARY KEY,
+    max_concurrent INTEGER DEFAULT 5,
+    max_cost_usd REAL,
+    max_task_minutes INTEGER,
+    period_hours INTEGER DEFAULT 24,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (35);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -795,6 +851,14 @@ function ensureSchema(db: Database): void {
   ensureColumn("tasks", "assigned_by", "TEXT");
   ensureColumn("tasks", "assigned_from_project", "TEXT");
   ensureColumn("tasks", "started_at", "TEXT");
+  ensureColumn("tasks", "cost_tokens", "INTEGER DEFAULT 0");
+  ensureColumn("tasks", "cost_usd", "REAL DEFAULT 0");
+  ensureColumn("tasks", "delegated_from", "TEXT");
+  ensureColumn("tasks", "delegation_depth", "INTEGER DEFAULT 0");
+  ensureColumn("tasks", "retry_count", "INTEGER DEFAULT 0");
+  ensureColumn("tasks", "max_retries", "INTEGER DEFAULT 3");
+  ensureColumn("tasks", "retry_after", "TEXT");
+  ensureColumn("tasks", "sla_minutes", "INTEGER");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");

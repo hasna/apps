@@ -31,6 +31,9 @@ export {
   moveTask,
   getNextTask,
   claimNextTask,
+  stealTask,
+  claimOrSteal,
+  logCost,
   getActiveWork,
   failTask,
   getTasksChangedSince,
@@ -199,6 +202,18 @@ export type { BurndownData } from "./lib/burndown.js";
 // GitHub import
 export { parseGitHubUrl, fetchGitHubIssue, issueToTask } from "./lib/github.js";
 export type { GitHubIssue } from "./lib/github.js";
+
+// Traces
+export { logTrace, getTaskTraces, getTraceStats } from "./db/traces.js";
+export type { TaskTrace, LogTraceInput, TraceType } from "./db/traces.js";
+
+// Context Snapshots
+export { saveSnapshot, getLatestSnapshot, listSnapshots } from "./db/snapshots.js";
+export type { ContextSnapshot, SaveSnapshotInput, SnapshotType } from "./db/snapshots.js";
+
+// Agent Budgets
+export { setBudget, getBudget, checkBudget } from "./db/budgets.js";
+export type { AgentBudget, BudgetCheck } from "./db/budgets.js";
 export type { ExtractedComment, ExtractOptions, ExtractResult, ExtractTag } from "./lib/extract.js";
 
 // Config

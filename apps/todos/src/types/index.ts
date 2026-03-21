@@ -268,6 +268,14 @@ export interface Task {
   spawned_from_session: string | null;
   assigned_by: string | null; // agent_id who created/assigned this task
   assigned_from_project: string | null; // project_id the assigning agent was in
+  cost_tokens: number;
+  cost_usd: number;
+  delegated_from: string | null;
+  delegation_depth: number;
+  retry_count: number;
+  max_retries: number;
+  retry_after: string | null;
+  sla_minutes: number | null;
 }
 
 // Checklist item — ordered sub-steps within a task
@@ -454,6 +462,14 @@ export interface TaskRow {
   spawned_from_session: string | null;
   assigned_by: string | null;
   assigned_from_project: string | null;
+  cost_tokens: number;
+  cost_usd: number;
+  delegated_from: string | null;
+  delegation_depth: number;
+  retry_count: number;
+  max_retries: number;
+  retry_after: string | null;
+  sla_minutes: number | null;
 }
 
 export interface SessionRow {

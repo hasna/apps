@@ -640,6 +640,26 @@ export function completeTask(
   if (spawnedFromTemplate) {
     (meta as Record<string, unknown>)._spawned_task = { id: spawnedFromTemplate.id, short_id: spawnedFromTemplate.short_id, title: spawnedFromTemplate.title };
   }
+
+  // Check for newly unblocked dependents
+  const unblockedDeps = d.query(
+    `SELECT DISTINCT t.id, t.short_id, t.title FROM tasks t
+     JOIN task_dependencies td ON td.task_id = t.id
+     WHERE td.depends_on = ? AND t.status = 'pending'
+     AND NOT EXISTS (
+       SELECT 1 FROM task_dependencies td2
+       JOIN tasks dep2 ON dep2.id = td2.depends_on
+       WHERE td2.task_id = t.id AND dep2.status NOT IN ('completed', 'cancelled') AND dep2.id != ?
+     )`
+  ).all(id, id) as { id: string; short_id: string | null; title: string }[];
+
+  if (unblockedDeps.length > 0) {
+    (meta as Record<string, unknown>)._unblocked = unblockedDeps.map(d => ({ id: d.id, short_id: d.short_id, title: d.title }));
+    for (const dep of unblockedDeps) {
+      dispatchWebhook("task.unblocked", { id: dep.id, unblocked_by: id, title: dep.title }, d).catch(() => {});
+    }
+  }
+
   return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, confidence, version: task.version + 1, updated_at: timestamp, metadata: meta };
 }
 
@@ -1076,29 +1096,48 @@ export function failTask(
     updated_at: timestamp,
   };
 
-  // Auto-retry: create a new pending copy
+  // Auto-retry: create a new pending copy with exponential backoff
   let retryTask: Task | undefined;
   if (options?.retry) {
-    // Strip short_id prefix from title
-    let title = task.title;
-    if (task.short_id && title.startsWith(task.short_id + ": ")) {
-      title = title.slice(task.short_id.length + 2);
-    }
+    const retryCount = (task.retry_count || 0) + 1;
+    const maxRetries = task.max_retries || 3;
 
-    retryTask = createTask({
-      title,
-      description: task.description ?? undefined,
-      priority: task.priority,
-      project_id: task.project_id ?? undefined,
-      task_list_id: task.task_list_id ?? undefined,
-      plan_id: task.plan_id ?? undefined,
-      assigned_to: task.assigned_to ?? undefined,
-      tags: task.tags,
-      metadata: { ...task.metadata, _retry: { original_id: task.id, retry_after: options.retry_after || null, failure_reason: reason } },
-      estimated_minutes: task.estimated_minutes ?? undefined,
-      recurrence_rule: task.recurrence_rule ?? undefined,
-      due_at: options.retry_after || task.due_at || undefined,
-    }, d);
+    if (retryCount > maxRetries) {
+      // Exceeded max retries — don't create retry copy, add to metadata
+      d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [
+        JSON.stringify({ ...meta, _retry_exhausted: { retry_count: retryCount - 1, max_retries: maxRetries } }),
+        id,
+      ]);
+    } else {
+      // Exponential backoff: 1min, 5min, 25min, 125min...
+      const backoffMinutes = Math.pow(5, retryCount - 1);
+      const retryAfter = options.retry_after || new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
+
+      // Strip short_id prefix from title
+      let title = task.title;
+      if (task.short_id && title.startsWith(task.short_id + ": ")) {
+        title = title.slice(task.short_id.length + 2);
+      }
+
+      retryTask = createTask({
+        title,
+        description: task.description ?? undefined,
+        priority: task.priority,
+        project_id: task.project_id ?? undefined,
+        task_list_id: task.task_list_id ?? undefined,
+        plan_id: task.plan_id ?? undefined,
+        assigned_to: task.assigned_to ?? undefined,
+        tags: task.tags,
+        metadata: { ...task.metadata, _retry: { original_id: task.id, retry_count: retryCount, max_retries: maxRetries, retry_after: retryAfter, failure_reason: reason } },
+        estimated_minutes: task.estimated_minutes ?? undefined,
+        recurrence_rule: task.recurrence_rule ?? undefined,
+        due_at: retryAfter,
+      }, d);
+
+      // Set retry fields on the new task
+      d.run("UPDATE tasks SET retry_count = ?, max_retries = ?, retry_after = ? WHERE id = ?",
+        [retryCount, maxRetries, retryAfter, retryTask.id]);
+    }
   }
 
   return { task: failedTask, retryTask };
@@ -1127,6 +1166,72 @@ export function getStaleTasks(
   ).all(...params) as TaskRow[];
 
   return rows.map(rowToTask);
+}
+
+/**
+ * Log cost (tokens + USD) to a task. Accumulates — does not replace.
+ */
+export function logCost(taskId: string, tokens: number, usd: number, db?: Database): void {
+  const d = db || getDatabase();
+  d.run(
+    "UPDATE tasks SET cost_tokens = cost_tokens + ?, cost_usd = cost_usd + ?, updated_at = ? WHERE id = ?",
+    [tokens, usd, now(), taskId],
+  );
+}
+
+/**
+ * Work-stealing: find the highest-priority stale in_progress task and reassign it to the given agent.
+ * A task is stealable if it's in_progress and its lock/update is older than staleMinutes.
+ */
+export function stealTask(
+  agentId: string,
+  opts?: { stale_minutes?: number; project_id?: string; task_list_id?: string },
+  db?: Database,
+): Task | null {
+  const d = db || getDatabase();
+  const staleMinutes = opts?.stale_minutes ?? 30;
+  const staleTasks = getStaleTasks(staleMinutes, { project_id: opts?.project_id, task_list_id: opts?.task_list_id }, d);
+  if (staleTasks.length === 0) return null;
+
+  // Pick highest priority stale task
+  const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  staleTasks.sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9));
+  const target = staleTasks[0]!;
+
+  const timestamp = now();
+  d.run(
+    `UPDATE tasks SET assigned_to = ?, locked_by = ?, locked_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    [agentId, agentId, timestamp, timestamp, target.id],
+  );
+
+  logTaskChange(target.id, "steal", "assigned_to", target.assigned_to, agentId, agentId, d);
+  dispatchWebhook("task.assigned", { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to }, d).catch(() => {});
+
+  return { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
+}
+
+/**
+ * Enhanced claim: try pending queue first, then steal from stale agents if nothing pending.
+ */
+export function claimOrSteal(
+  agentId: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[]; stale_minutes?: number },
+  db?: Database,
+): { task: Task; stolen: boolean } | null {
+  const d = db || getDatabase();
+  const tx = d.transaction(() => {
+    // Try normal claim first
+    const next = getNextTask(agentId, filters, d);
+    if (next) {
+      const started = startTask(next.id, agentId, d);
+      return { task: started, stolen: false };
+    }
+    // Fall back to work-stealing
+    const stolen = stealTask(agentId, { stale_minutes: filters?.stale_minutes, project_id: filters?.project_id, task_list_id: filters?.task_list_id }, d);
+    if (stolen) return { task: stolen, stolen: true };
+    return null;
+  });
+  return tx();
 }
 
 export interface StatusSummary {
