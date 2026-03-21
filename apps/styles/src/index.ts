@@ -138,3 +138,34 @@ export type { FixSuggestion, FixResult } from "./lib/fixer.js";
 // ── Examples ──────────────────────────────────────────────────────────────────
 export { getExample, listExamples, PATTERNS } from "./lib/examples.js";
 export type { Pattern } from "./lib/examples.js";
+
+// ── Extractor ─────────────────────────────────────────────────────────────────
+export { extractStylesFromUrl, enrichTokensWithAi } from "./lib/extractor.js";
+export type { RawExtractedStyles, ComputedElementStyles, AiEnrichment } from "./lib/extractor.js";
+
+// ── Tokenizer ─────────────────────────────────────────────────────────────────
+export { tokenizeStyles } from "./lib/tokenizer.js";
+export type { DesignTokens, ColorToken, TypographyTokens } from "./lib/tokenizer.js";
+
+// ── Transformer ───────────────────────────────────────────────────────────────
+export {
+  transform,
+  toShadcnConfig,
+  toCssVariables,
+  toTailwindTheme,
+  toMuiTheme,
+  toRadixConfig,
+} from "./lib/transformer.js";
+export type { TransformFormat, TransformResult } from "./lib/transformer.js";
+
+// ── Style Kits ────────────────────────────────────────────────────────────────
+export {
+  saveKit,
+  getKit,
+  listKits,
+  updateKit,
+  deleteKit,
+  searchKits,
+  kitToProfile,
+} from "./lib/kits.js";
+export type { StyleKit, CreateKitInput } from "./lib/kits.js";
