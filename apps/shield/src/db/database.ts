@@ -14,6 +14,14 @@ function getDbPath(): string {
   return global;
 }
 
+let _postInitCallbacks: Array<() => void> = [];
+let _initialized = false;
+
+export function onDbInit(cb: () => void): void {
+  _postInitCallbacks.push(cb);
+  if (_initialized) cb();
+}
+
 export function getDb(): Database {
   if (_db) return _db;
   const dbPath = getDbPath();
@@ -23,6 +31,10 @@ export function getDb(): Database {
   _db.exec("PRAGMA foreign_keys = ON");
   _db.exec("PRAGMA busy_timeout = 5000");
   runMigrations(_db);
+  if (!_initialized) {
+    _initialized = true;
+    for (const cb of _postInitCallbacks) cb();
+  }
   return _db;
 }
 
@@ -109,7 +121,7 @@ const MIGRATIONS = [
       CREATE TABLE findings (
         id TEXT PRIMARY KEY,
         scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-        rule_id TEXT NOT NULL REFERENCES rules(id),
+        rule_id TEXT NOT NULL,
         scanner_type TEXT NOT NULL,
         severity TEXT NOT NULL,
         file TEXT NOT NULL,

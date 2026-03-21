@@ -1,4 +1,4 @@
-export { getDb, closeDb, getTestDb } from "./database.js";
+export { getDb, closeDb, getTestDb, onDbInit } from "./database.js";
 export { createProject, getProject, getProjectByPath, listProjects, deleteProject } from "./projects.js";
 export { createScan, getScan, listScans, updateScanStatus, completeScan, deleteScan } from "./scans.js";
 export {
