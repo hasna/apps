@@ -17,6 +17,8 @@ import { createApiCheck, getApiCheck, listApiChecks, updateApiCheck, deleteApiCh
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { listProjects, createProject, getProject, updateProject } from "../db/projects.js";
 import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironmentById } from "../db/environments.js";
+import { createPersona, getPersona, listPersonas, updatePersona, deletePersona, countPersonas } from "../db/personas.js";
+import { PersonaNotFoundError } from "../types/index.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -133,6 +135,28 @@ const UpdateApiCheckSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
+const CreatePersonaSchema = z.object({
+  name: z.string().min(1),
+  role: z.string().min(1),
+  description: z.string().default(""),
+  instructions: z.string().default(""),
+  traits: z.array(z.string()).default([]),
+  goals: z.array(z.string()).default([]),
+  projectId: z.string().optional(),
+  enabled: z.boolean().default(true),
+});
+
+const UpdatePersonaSchema = z.object({
+  version: z.number().int().nonnegative(),
+  name: z.string().min(1).optional(),
+  role: z.string().optional(),
+  description: z.string().optional(),
+  instructions: z.string().optional(),
+  traits: z.array(z.string()).optional(),
+  goals: z.array(z.string()).optional(),
+  enabled: z.boolean().optional(),
+});
+
 const CreateRunSchema = z.object({
   url: z.string().url("url must be a valid URL"),
   scenarioIds: z.array(z.string()).optional(),
@@ -179,6 +203,56 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // ── API Routes ──────────────────────────────────────────────────────────
 
+  // GET /api/stats — aggregated metrics for dashboard
+  if (pathname === "/api/stats" && method === "GET") {
+    const db = getDatabase();
+    const days = parseInt(searchParams.get("days") ?? "30", 10);
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+
+    // Last N runs for trend (up to 50)
+    const trendRows = db.query(
+      `SELECT date(started_at) as date, status, passed, total
+       FROM runs WHERE started_at >= ? ORDER BY started_at ASC LIMIT 50`
+    ).all(since) as { date: string; status: string; passed: number; total: number }[];
+
+    // Aggregate by date
+    const byDate = new Map<string, { passed: number; total: number }>();
+    for (const r of trendRows) {
+      const existing = byDate.get(r.date) ?? { passed: 0, total: 0 };
+      byDate.set(r.date, { passed: existing.passed + r.passed, total: existing.total + r.total });
+    }
+    const trend = Array.from(byDate.entries()).map(([date, { passed, total }]) => ({
+      date,
+      passRate: total > 0 ? Math.round((passed / total) * 100) : null,
+      runs: trendRows.filter((r) => r.date === date).length,
+    }));
+
+    // Last 7 days summary
+    const since7d = new Date(Date.now() - 7 * 86400000).toISOString();
+    const recent = db.query(
+      `SELECT COUNT(*) as count, SUM(passed) as passed, SUM(total) as total
+       FROM runs WHERE started_at >= ?`
+    ).get(since7d) as { count: number; passed: number; total: number };
+
+    // API check pass rate (last 100 results)
+    const apiStats = db.query(
+      `SELECT COUNT(*) as total, SUM(CASE WHEN status='passed' THEN 1 ELSE 0 END) as passed
+       FROM api_check_results ORDER BY created_at DESC LIMIT 100`
+    ).get() as { total: number; passed: number };
+
+    return jsonResponse({
+      trend,
+      last7d: {
+        runs: recent.count ?? 0,
+        passRate: (recent.total ?? 0) > 0 ? Math.round(((recent.passed ?? 0) / recent.total) * 100) : null,
+      },
+      apiChecks: {
+        total: apiStats.total ?? 0,
+        passRate: (apiStats.total ?? 0) > 0 ? Math.round(((apiStats.passed ?? 0) / apiStats.total) * 100) : null,
+      },
+    });
+  }
+
   // GET /api/status
   if (pathname === "/api/status" && method === "GET") {
     const config = loadConfig();
@@ -193,6 +267,7 @@ async function handleRequest(req: Request): Promise<Response> {
       scenarioCount: scenarios.length,
       runCount: runs.length,
       apiCheckCount: countApiChecks(),
+      personaCount: countPersonas(),
       version: "0.0.1",
     });
   }
@@ -724,6 +799,233 @@ async function handleRequest(req: Request): Promise<Response> {
     const deleted = deleteApiCheck(id);
     if (!deleted) return errorResponse("API check not found", 404);
     return jsonResponse({ deleted: true });
+  }
+
+  // ── SSE: live run result streaming ────────────────────────────────────
+
+  // GET /api/runs/:id/stream — Server-Sent Events for live run updates
+  const runStreamMatch = pathname.match(/^\/api\/runs\/([^/]+)\/stream$/);
+  if (runStreamMatch && method === "GET") {
+    const runId = runStreamMatch[1]!;
+    const run = getRun(runId);
+    if (!run) return errorResponse("Run not found", 404);
+
+    // If already finished, return a single "done" event and close
+    if (run.status !== "pending" && run.status !== "running") {
+      const results = getResultsByRun(runId);
+      const body = `data: ${JSON.stringify({ type: "done", run, results })}\n\n`;
+      return new Response(body, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+
+    // Stream live updates by polling every second
+    const encoder = new TextEncoder();
+    let closed = false;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const send = (data: unknown) => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          } catch {
+            closed = true;
+          }
+        };
+
+        const poll = async () => {
+          if (closed) return;
+          try {
+            const current = getRun(runId);
+            const results = getResultsByRun(runId);
+            send({ type: "update", run: current, results });
+
+            if (!current || current.status === "passed" || current.status === "failed" || current.status === "cancelled") {
+              send({ type: "done", run: current, results });
+              closed = true;
+              controller.close();
+              return;
+            }
+          } catch {
+            closed = true;
+            controller.close();
+            return;
+          }
+          setTimeout(poll, 1000);
+        };
+
+        setTimeout(poll, 500);
+      },
+      cancel() {
+        closed = true;
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  // ── Scan Issues ───────────────────────────────────────────────────────
+
+  // GET /api/scan-issues
+  if (pathname === "/api/scan-issues" && method === "GET") {
+    const { listScanIssues } = await import("../db/scan-issues.js");
+    const status = searchParams.get("status") ?? undefined;
+    const type = searchParams.get("type") ?? undefined;
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const limit = searchParams.get("limit");
+    const issues = listScanIssues({ status, type, projectId, limit: limit ? parseInt(limit, 10) : 100 });
+    return jsonResponse(issues, 200, { "X-Total-Count": String(issues.length) });
+  }
+
+  // PUT /api/scan-issues/:id/resolve
+  const scanResolveMatch = pathname.match(/^\/api\/scan-issues\/([^/]+)\/resolve$/);
+  if (scanResolveMatch && method === "PUT") {
+    const { resolveScanIssue } = await import("../db/scan-issues.js");
+    const ok = resolveScanIssue(scanResolveMatch[1]!);
+    if (!ok) return errorResponse("Scan issue not found", 404);
+    return jsonResponse({ resolved: true });
+  }
+
+  // ── Personas ──────────────────────────────────────────────────────────
+
+  // GET /api/personas
+  if (pathname === "/api/personas" && method === "GET") {
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const enabledParam = searchParams.get("enabled");
+    const globalOnly = searchParams.get("globalOnly") === "true";
+    const limit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
+
+    const filter = {
+      projectId,
+      enabled: enabledParam !== null ? enabledParam === "true" : undefined,
+      globalOnly,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    };
+    const personas = listPersonas(filter);
+    const total = countPersonas(filter);
+    return jsonResponse(personas, 200, { "X-Total-Count": String(total) });
+  }
+
+  // POST /api/personas
+  if (pathname === "/api/personas" && method === "POST") {
+    try {
+      const body = await req.json();
+      const parsed = CreatePersonaSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const persona = createPersona(parsed.data as Parameters<typeof createPersona>[0]);
+      return jsonResponse(persona, 201);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
+  }
+
+  // GET /api/personas/:id
+  const personaGetMatch = pathname.match(/^\/api\/personas\/([^/]+)$/);
+  if (personaGetMatch && method === "GET") {
+    const id = personaGetMatch[1]!;
+    const persona = getPersona(id);
+    if (!persona) return errorResponse("Persona not found", 404);
+    return jsonResponse(persona);
+  }
+
+  // PUT /api/personas/:id
+  const personaUpdateMatch = pathname.match(/^\/api\/personas\/([^/]+)$/);
+  if (personaUpdateMatch && method === "PUT") {
+    const id = personaUpdateMatch[1]!;
+    try {
+      const body = await req.json();
+      const parsed = UpdatePersonaSchema.safeParse(body);
+      if (!parsed.success) return validationError(parsed.error.issues);
+      const { version, ...updates } = parsed.data;
+      const persona = updatePersona(id, updates as Parameters<typeof updatePersona>[1], version);
+      return jsonResponse(persona);
+    } catch (err) {
+      if (err instanceof VersionConflictError) return errorResponse(err.message, 409);
+      if (err instanceof PersonaNotFoundError) return errorResponse(err.message, 404);
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResponse(msg, 400);
+    }
+  }
+
+  // DELETE /api/personas/:id
+  const personaDeleteMatch = pathname.match(/^\/api\/personas\/([^/]+)$/);
+  if (personaDeleteMatch && method === "DELETE") {
+    const id = personaDeleteMatch[1]!;
+    const deleted = deletePersona(id);
+    if (!deleted) return errorResponse("Persona not found", 404);
+    return jsonResponse({ deleted: true });
+  }
+
+  // ── Coverage Map ──────────────────────────────────────────────────────
+
+  // GET /api/coverage — which routes/pages have scenarios vs are uncovered
+  if (pathname === "/api/coverage" && method === "GET") {
+    const projectId = searchParams.get("projectId") ?? undefined;
+    const db = getDatabase();
+
+    // Collect scenario target paths
+    const scenarios = listScenarios({ projectId });
+    const coverageMap = new Map<string, { scenarioCount: number; scenarios: string[]; lastPassRate: number | null }>();
+
+    for (const s of scenarios) {
+      const path = s.targetPath ?? "(no path)";
+      const existing = coverageMap.get(path) ?? { scenarioCount: 0, scenarios: [], lastPassRate: null };
+      existing.scenarioCount++;
+      existing.scenarios.push(s.name);
+      coverageMap.set(path, existing);
+    }
+
+    // Get last pass rate per scenario from most recent result
+    for (const s of scenarios) {
+      const path = s.targetPath ?? "(no path)";
+      const entry = coverageMap.get(path)!;
+      const lastResult = db.query(
+        `SELECT status FROM results WHERE scenario_id = ? ORDER BY created_at DESC LIMIT 1`
+      ).get(s.id) as { status: string } | null;
+      if (lastResult) {
+        const currentRate = entry.lastPassRate ?? 0;
+        const passed = lastResult.status === "passed" ? 1 : 0;
+        entry.lastPassRate = (currentRate + passed) / 2; // rolling avg
+      }
+      coverageMap.set(path, entry);
+    }
+
+    // Collect api_check URLs as separate coverage entries
+    const apiChecks = db.query(
+      `SELECT url, COUNT(*) as count FROM api_checks ${projectId ? "WHERE project_id = ?" : ""} GROUP BY url ORDER BY count DESC`
+    ).all(...(projectId ? [projectId] : [])) as { url: string; count: number }[];
+
+    const routes = Array.from(coverageMap.entries()).map(([path, data]) => ({
+      path,
+      type: "scenario" as const,
+      scenarioCount: data.scenarioCount,
+      scenarios: data.scenarios,
+      lastPassRate: data.lastPassRate != null ? Math.round(data.lastPassRate * 100) : null,
+    })).sort((a, b) => b.scenarioCount - a.scenarioCount);
+
+    const apiRoutes = apiChecks.map((r) => ({
+      path: r.url,
+      type: "api_check" as const,
+      checkCount: r.count,
+    }));
+
+    return jsonResponse({ routes, apiRoutes, totalCovered: coverageMap.size });
   }
 
   // ── Static file serving (dashboard SPA) ───────────────────────────────

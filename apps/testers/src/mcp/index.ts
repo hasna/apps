@@ -21,6 +21,8 @@ import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
 import { createApiCheck, getApiCheck, listApiChecks, updateApiCheck, deleteApiCheck, getLatestApiCheckResult, listApiCheckResults } from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
+import { createPersona, getPersona, listPersonas, updatePersona, deletePersona } from "../db/personas.js";
+import { PersonaNotFoundError } from "../types/index.js";
 
 // ─── Response Helpers ────────────────────────────────────────────────────────
 
@@ -225,20 +227,35 @@ server.tool(
 
 server.tool(
   "run_scenarios",
-  "Run test scenarios against a URL",
+  "Run test scenarios against a URL. Provide url directly, or use env to look up a named environment's URL.",
   {
-    url: z.string().describe("Target URL to test against"),
+    url: z.string().optional().describe("Target URL to test against (omit if using env)"),
+    env: z.string().optional().describe("Named environment to use for the URL (from environments table)"),
     tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
     scenarioIds: z.array(z.string()).optional().describe("Run specific scenario IDs"),
     priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Filter by priority"),
     model: z.string().optional().describe(MODEL_DESC),
     headed: z.boolean().optional().describe("Run browser in headed mode"),
     parallel: z.number().optional().describe("Number of parallel workers"),
+    personaId: z.string().optional().describe("Override persona ID for this run"),
   },
-  async ({ url, tags, scenarioIds, priority, model, headed, parallel }) => {
+  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId }) => {
     try {
-      const { runId, scenarioCount } = startRunAsync({ url, tags, scenarioIds, priority, model, headed, parallel });
-      return json({ runId, scenarioCount, url, status: "running", message: "Poll with get_run to check progress." });
+      let resolvedUrl = url;
+      if (!resolvedUrl && env) {
+        const { getEnvironment } = await import("./db/environments.js").catch(() => import("../db/environments.js"));
+        const environment = getEnvironment(env);
+        if (!environment) return errorResponse(notFoundErr(env, "Environment"));
+        resolvedUrl = environment.url;
+      }
+      if (!resolvedUrl) {
+        const { getDefaultEnvironment } = await import("./db/environments.js").catch(() => import("../db/environments.js"));
+        const defaultEnv = getDefaultEnvironment();
+        if (defaultEnv) resolvedUrl = defaultEnv.url;
+      }
+      if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
+      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId });
+      return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);
     }
@@ -1246,6 +1263,181 @@ server.tool(
       if (!check) return errorResponse(notFoundErr(checkId, "ApiCheck"));
       const results = listApiCheckResults(check.id, { limit });
       return json({ items: results, total: results.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── Persona Tools ───────────────────────────────────────────────────────────
+
+// ─── 42. create_persona ──────────────────────────────────────────────────────
+
+server.tool(
+  "create_persona",
+  "Create a new test persona. Leave projectId null to create a global persona.",
+  {
+    name: z.string().describe("Persona name"),
+    role: z.string().describe("Persona role (e.g. first-time user, admin, power user, security auditor)"),
+    description: z.string().optional().describe("Short description of the persona"),
+    instructions: z.string().optional().describe("Detailed behavior instructions for the AI when acting as this persona"),
+    traits: z.array(z.string()).optional().describe("Personality traits (e.g. impatient, curious, detail-oriented)"),
+    goals: z.array(z.string()).optional().describe("Goals the persona is trying to accomplish"),
+    projectId: z.string().nullable().optional().describe("Project ID (null = global persona)"),
+  },
+  async ({ name, role, description, instructions, traits, goals, projectId }) => {
+    try {
+      const persona = createPersona({
+        name,
+        role,
+        description,
+        instructions,
+        traits,
+        goals,
+        projectId: projectId ?? undefined,
+      });
+      return json(persona);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 43. list_personas ───────────────────────────────────────────────────────
+
+server.tool(
+  "list_personas",
+  "List personas with optional filters",
+  {
+    projectId: z.string().optional().describe("Filter by project ID (includes global personas)"),
+    enabled: z.boolean().optional().describe("Filter by enabled status"),
+    globalOnly: z.boolean().optional().describe("Return only global personas (no project)"),
+  },
+  async ({ projectId, enabled, globalOnly }) => {
+    try {
+      const personas = listPersonas({ projectId, enabled, globalOnly });
+      return json({ items: personas, total: personas.length });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 44. get_persona ─────────────────────────────────────────────────────────
+
+server.tool(
+  "get_persona",
+  `Get a persona by ID or short ID, including the scenario IDs that use it. ${ID_DESC}`,
+  {
+    id: z.string().describe(`Persona ID or short ID. ${ID_DESC}`),
+  },
+  async ({ id }) => {
+    try {
+      const persona = getPersona(id);
+      if (!persona) return errorResponse(notFoundErr(id, "Persona"));
+
+      const db = getDatabase();
+      const scenarioRows = db
+        .query("SELECT id, short_id, name FROM scenarios WHERE persona_id = ?")
+        .all(persona.id) as { id: string; short_id: string; name: string }[];
+
+      return json({
+        ...persona,
+        usedByScenarios: scenarioRows.map((r) => ({ id: r.id, shortId: r.short_id, name: r.name })),
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 45. update_persona ──────────────────────────────────────────────────────
+
+server.tool(
+  "update_persona",
+  `Update an existing persona (requires version for optimistic locking). ${ID_DESC}`,
+  {
+    id: z.string().describe(`Persona ID or short ID. ${ID_DESC}`),
+    version: z.number().describe("Current version (for optimistic locking)"),
+    name: z.string().optional().describe("New name"),
+    role: z.string().optional().describe("New role"),
+    description: z.string().optional().describe("New description"),
+    instructions: z.string().optional().describe("New instructions"),
+    traits: z.array(z.string()).optional().describe("New traits"),
+    goals: z.array(z.string()).optional().describe("New goals"),
+    enabled: z.boolean().optional().describe("Enable or disable the persona"),
+  },
+  async ({ id, version, ...updates }) => {
+    try {
+      const persona = updatePersona(id, updates, version);
+      return json(persona);
+    } catch (error) {
+      return errorResponse(error, {
+        fetchCurrent: () => getPersona(id),
+      });
+    }
+  },
+);
+
+// ─── 46. delete_persona ──────────────────────────────────────────────────────
+
+server.tool(
+  "delete_persona",
+  `Delete a persona by ID. ${ID_DESC}`,
+  {
+    id: z.string().describe(`Persona ID or short ID. ${ID_DESC}`),
+  },
+  async ({ id }) => {
+    try {
+      const deleted = deletePersona(id);
+      if (!deleted) return errorResponse(notFoundErr(id, "Persona"));
+      return json({ deleted: true, id });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 47. attach_persona ──────────────────────────────────────────────────────
+
+server.tool(
+  "attach_persona",
+  "Attach a persona to a scenario. The scenario will use this persona's role and instructions during test runs.",
+  {
+    personaId: z.string().describe("Persona ID or short ID"),
+    scenarioId: z.string().describe("Scenario ID or short ID"),
+  },
+  async ({ personaId, scenarioId }) => {
+    try {
+      const persona = getPersona(personaId);
+      if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
+
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
+
+      const updated = updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
+      return json({ ...updated, attachedPersona: persona });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 48. detach_persona ──────────────────────────────────────────────────────
+
+server.tool(
+  "detach_persona",
+  "Remove the persona from a scenario (set persona_id to null).",
+  {
+    scenarioId: z.string().describe("Scenario ID or short ID"),
+  },
+  async ({ scenarioId }) => {
+    try {
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
+
+      const updated = updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
+      return json(updated);
     } catch (error) {
       return errorResponse(error);
     }
