@@ -1,9 +1,9 @@
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 
-let _db: Database.Database | null = null;
+let _db: Database | null = null;
 
 function getDbPath(): string {
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
@@ -14,14 +14,14 @@ function getDbPath(): string {
   return global;
 }
 
-export function getDb(): Database.Database {
+export function getDb(): Database {
   if (_db) return _db;
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
   _db = new Database(dbPath);
-  _db.pragma("journal_mode = WAL");
-  _db.pragma("foreign_keys = ON");
-  _db.pragma("busy_timeout = 5000");
+  _db.exec("PRAGMA journal_mode = WAL");
+  _db.exec("PRAGMA foreign_keys = ON");
+  _db.exec("PRAGMA busy_timeout = 5000");
   runMigrations(_db);
   return _db;
 }
@@ -33,15 +33,15 @@ export function closeDb(): void {
   }
 }
 
-export function getTestDb(): Database.Database {
+export function getTestDb(): Database {
   const db = new Database(":memory:");
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
   return db;
 }
 
-function runMigrations(db: Database.Database): void {
+function runMigrations(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
