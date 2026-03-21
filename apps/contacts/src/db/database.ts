@@ -359,6 +359,143 @@ const MIGRATIONS = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+
+  `
+  -- CON-00069: temporal field history
+  CREATE TABLE IF NOT EXISTS contact_field_history (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    field_name TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    valid_from TEXT NOT NULL DEFAULT (datetime('now')),
+    source TEXT,
+    confidence TEXT NOT NULL DEFAULT 'imported' CHECK(confidence IN ('verified','inferred','imported','stale')),
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- CON-00070: job history
+  CREATE TABLE IF NOT EXISTS job_history (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    company_name TEXT NOT NULL,
+    title TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    is_current INTEGER NOT NULL DEFAULT 0,
+    inferred INTEGER NOT NULL DEFAULT 0,
+    source TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- CON-00071: learnings
+  CREATE TABLE IF NOT EXISTS contact_learnings (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'fact' CHECK(type IN ('preference','fact','inference','warning','signal')),
+    confidence INTEGER NOT NULL DEFAULT 70 CHECK(confidence BETWEEN 0 AND 100),
+    importance INTEGER NOT NULL DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+    learned_by TEXT,
+    session_id TEXT,
+    visibility TEXT NOT NULL DEFAULT 'shared' CHECK(visibility IN ('private','shared','human')),
+    tags TEXT NOT NULL DEFAULT '[]',
+    confirmed_count INTEGER NOT NULL DEFAULT 0,
+    contradicts_id TEXT REFERENCES contact_learnings(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- CON-00072: coordination
+  CREATE TABLE IF NOT EXISTS contact_locks (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL UNIQUE REFERENCES contacts(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    reason TEXT,
+    acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL,
+    session_id TEXT
+  );
+  CREATE TABLE IF NOT EXISTS contact_agent_activity (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    details TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- CON-00073: relationship graph extra columns
+  ALTER TABLE contact_relationships ADD COLUMN strength_score INTEGER NOT NULL DEFAULT 50;
+  ALTER TABLE contact_relationships ADD COLUMN interaction_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE contact_relationships ADD COLUMN last_interaction TEXT;
+  ALTER TABLE contact_relationships ADD COLUMN relationship_status TEXT NOT NULL DEFAULT 'stable' CHECK(relationship_status IN ('warming','stable','cooling','ghost'));
+
+  -- CON-00074: identity resolution
+  CREATE TABLE IF NOT EXISTS contact_identities (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    system TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    external_url TEXT,
+    confidence TEXT NOT NULL DEFAULT 'inferred' CHECK(confidence IN ('verified','inferred')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(system, external_id)
+  );
+  ALTER TABLE contacts ADD COLUMN canonical_id TEXT;
+
+  -- CON-00076: relationship signals
+  ALTER TABLE contacts ADD COLUMN relationship_health INTEGER NOT NULL DEFAULT 50;
+  ALTER TABLE contacts ADD COLUMN avg_response_hours REAL;
+  ALTER TABLE contacts ADD COLUMN preferred_channel TEXT;
+  ALTER TABLE contacts ADD COLUMN engagement_status TEXT NOT NULL DEFAULT 'new' CHECK(engagement_status IN ('warming','stable','cooling','ghost','new'));
+  ALTER TABLE contacts ADD COLUMN interaction_count_30d INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE contacts ADD COLUMN interaction_count_90d INTEGER NOT NULL DEFAULT 0;
+
+  -- CON-00079: freshness scoring
+  CREATE TABLE IF NOT EXISTS contact_field_confidence (
+    id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    field_name TEXT NOT NULL,
+    confidence TEXT NOT NULL DEFAULT 'imported' CHECK(confidence IN ('verified','inferred','imported','stale')),
+    source TEXT,
+    last_verified_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(contact_id, field_name)
+  );
+
+  -- CON-00080: org chart
+  CREATE TABLE IF NOT EXISTS org_chart_edges (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    contact_a_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    contact_b_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    edge_type TEXT NOT NULL CHECK(edge_type IN ('reports_to','manages','collaborates_with','peer')),
+    inferred INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(company_id, contact_a_id, contact_b_id, edge_type)
+  );
+  CREATE TABLE IF NOT EXISTS deal_contact_roles (
+    id TEXT PRIMARY KEY,
+    deal_id TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    account_role TEXT NOT NULL CHECK(account_role IN ('economic_buyer','technical_evaluator','champion','blocker','influencer','user','sponsor','other')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(deal_id, contact_id)
+  );
+
+  -- CON-00075: embeddings
+  CREATE TABLE IF NOT EXISTS contact_embeddings (
+    contact_id TEXT PRIMARY KEY REFERENCES contacts(id) ON DELETE CASCADE,
+    embedding TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT 'tfidf',
+    embedded_text TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
 ];
 
 let _db: Database | null = null;

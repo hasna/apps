@@ -148,6 +148,22 @@ import {
   deleteEvent,
 } from "../db/events.js";
 import { getContactTimeline } from "../lib/timeline.js";
+// ─── v0.5.0 imports ────────────────────────────────────────────────────────────
+import { getFieldHistory, getContactAt } from "../db/field-history.js";
+import { addJobEntry, getJobHistory } from "../db/job-history.js";
+import { saveLearning, getLearnings, searchLearnings, confirmLearning, decayLearnings, deleteLearning } from "../db/learnings.js";
+import type { CreateLearningInput } from "../db/learnings.js";
+import { acquireLock, releaseLock, checkLock, logAgentActivity, getAgentActivity } from "../db/coordination.js";
+import { computeRelationshipStrength, findWarmPath, findConnectionsAtCompany, detectCoolingRelationships } from "../db/graph.js";
+import { resolveByPartial, addIdentity, getIdentities } from "../db/identity.js";
+import { semanticSearch, embedAllContacts, embedContact } from "../lib/embeddings.js";
+import { getRelationshipSignals, getGhostContacts, getWarmingContacts, recomputeAllSignals } from "../db/signals.js";
+import { getContactCard, getContactBrief as getContactBriefContext, assembleContext } from "../lib/context.js";
+import { parseEmailSignature, extractContactsFromEmailThread } from "../lib/signature-parser.js";
+import { ingestMeetingParticipants } from "../lib/meeting-capture.js";
+import { getFreshnessScore, getStaleContacts, markFieldVerified } from "../db/freshness.js";
+import { addOrgChartEdge, listOrgChart, setDealContactRole, getDealTeam, getCoverageGaps } from "../db/org-chart.js";
+import type { OrgEdgeType, AccountRole } from "../db/org-chart.js";
 
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
@@ -1572,6 +1588,61 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["contact_id", "do_not_contact"],
       },
     },
+    // ─── v0.5.0 tools ──────────────────────────────────────────────────────────
+    // Temporal tools (CON-00069/70)
+    { name: "get_field_history", description: "Get the change history for one or all fields of a contact (temporal audit trail).", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, field_name: { type: "string", description: "Optional — filter to a single field" } }, required: ["contact_id"] } },
+    { name: "get_contact_at", description: "Reconstruct a contact's profile as it was at a specific point in time, using field history.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, timestamp: { type: "string", description: "ISO 8601 datetime — reconstruct profile at this point in time" } }, required: ["contact_id", "timestamp"] } },
+    { name: "get_job_history", description: "Get the employment timeline for a contact — all past and current job entries in reverse chronological order.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "add_job_entry", description: "Add a job history entry to a contact's employment timeline.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, company_name: { type: "string" }, title: { type: "string" }, start_date: { type: "string" }, end_date: { type: "string" }, is_current: { type: "boolean" } }, required: ["contact_id", "company_name"] } },
+    // Learnings tools (CON-00071/82)
+    { name: "save_learning", description: "Save a structured learning about a contact — preferences, facts, inferences, warnings, or signals. Include confidence (0-100) and importance (1-10).", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, content: { type: "string" }, type: { type: "string", enum: ["preference", "fact", "inference", "warning", "signal"] }, confidence: { type: "number" }, importance: { type: "number" }, learned_by: { type: "string" }, visibility: { type: "string", enum: ["private", "shared", "human"] }, tags: { type: "array", items: { type: "string" } } }, required: ["contact_id", "content"] } },
+    { name: "get_learnings", description: "Get all learnings for a contact, optionally filtered by type and minimum importance.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, type: { type: "string", enum: ["preference", "fact", "inference", "warning", "signal"] }, min_importance: { type: "number" } }, required: ["contact_id"] } },
+    { name: "search_learnings", description: "Cross-contact search across all learnings for a keyword or phrase.", inputSchema: { type: "object", properties: { query: { type: "string" }, type: { type: "string" }, contact_id: { type: "string", description: "Optional — limit to a specific contact" } }, required: ["query"] } },
+    { name: "confirm_learning", description: "Confirm a learning as correct, boosting its confidence score.", inputSchema: { type: "object", properties: { learning_id: { type: "string" }, agent_name: { type: "string" } }, required: ["learning_id", "agent_name"] } },
+    { name: "get_stale_learnings", description: "Find learnings that haven't been confirmed recently and may need review.", inputSchema: { type: "object", properties: { days_old: { type: "number" }, min_confidence: { type: "number" } } } },
+    { name: "run_learning_maintenance", description: "Run decay (reduce confidence on old unconfirmed learnings) and contradiction detection across all learnings.", inputSchema: { type: "object", properties: {} } },
+    // Coordination tools (CON-00072)
+    { name: "acquire_contact_lock", description: "Acquire a write lock on a contact to prevent conflicts when multiple agents edit the same record. Returns {acquired, lock, held_by}.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, agent_name: { type: "string" }, ttl_seconds: { type: "number" }, reason: { type: "string" }, session_id: { type: "string" } }, required: ["contact_id", "agent_name"] } },
+    { name: "release_contact_lock", description: "Release a contact write lock previously acquired by this agent.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, agent_name: { type: "string" } }, required: ["contact_id", "agent_name"] } },
+    { name: "check_contact_lock", description: "Check if a contact is currently locked by any agent.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "log_agent_activity", description: "Log an agent action against a contact for audit/coordination purposes.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, agent_name: { type: "string" }, action: { type: "string" }, details: { type: "string" }, session_id: { type: "string" } }, required: ["contact_id", "agent_name", "action"] } },
+    { name: "get_contact_agent_activity", description: "Get the recent agent activity log for a contact.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, limit: { type: "number" } }, required: ["contact_id"] } },
+    // Graph tools (CON-00073)
+    { name: "get_relationship_strength", description: "Compute and return the relationship strength score (0-100) for a contact based on interaction frequency and recency.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "find_warm_path", description: "Find the shortest warm introduction path between two contacts through the relationship graph.", inputSchema: { type: "object", properties: { from_contact_id: { type: "string" }, to_contact_id: { type: "string" } }, required: ["from_contact_id", "to_contact_id"] } },
+    { name: "find_connections_at_company", description: "Find all contacts linked to a specific company, with relationship strength scores.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
+    { name: "get_cooling_relationships", description: "Get all relationships that are cooling (no contact in 45+ days) — use to prioritize re-engagement outreach.", inputSchema: { type: "object", properties: {} } },
+    // Identity tools (CON-00074)
+    { name: "resolve_contact_identity", description: "Resolve a contact's identity from partial signals (email, name, LinkedIn URL, phone, or external system ID). Returns ranked matches with confidence scores.", inputSchema: { type: "object", properties: { email: { type: "string" }, name: { type: "string" }, linkedin_url: { type: "string" }, phone: { type: "string" }, system: { type: "string" }, external_id: { type: "string" } } } },
+    { name: "add_contact_identity", description: "Register an external system identity (e.g. Salesforce ID, LinkedIn URL) for a contact.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, system: { type: "string" }, external_id: { type: "string" }, external_url: { type: "string" }, confidence: { type: "string", enum: ["verified", "inferred"] } }, required: ["contact_id", "system", "external_id"] } },
+    { name: "get_contact_identities", description: "Get all registered external system identities for a contact.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    // Semantic search (CON-00075)
+    { name: "semantic_search_contacts", description: "Search contacts by capability or context using TF-IDF semantic similarity — finds contacts based on meaning, not just keyword match.", inputSchema: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] } },
+    { name: "embed_all_contacts", description: "Build TF-IDF embeddings for all contacts in the database — run once to enable semantic_search_contacts.", inputSchema: { type: "object", properties: {} } },
+    // Signals (CON-00076)
+    { name: "get_relationship_signals", description: "Get relationship health signals for a contact: warming/cooling/ghost/healthy status with reasons.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "get_ghost_contacts", description: "List contacts you haven't been in touch with for 180+ days — relationships at risk of becoming permanently cold.", inputSchema: { type: "object", properties: {} } },
+    { name: "get_warming_contacts", description: "List contacts with rising interaction frequency — relationships gaining momentum.", inputSchema: { type: "object", properties: {} } },
+    { name: "recompute_signals", description: "Recompute engagement_status for all contacts based on interaction counts and recency.", inputSchema: { type: "object", properties: {} } },
+    // Context packaging (CON-00077)
+    { name: "get_contact_card", description: "Get a minimal ~50-token contact summary: name, title, company, primary email and phone. Ideal for lists and agent context injection.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "assemble_context", description: "Assemble a multi-contact context package for meetings, deals, outreach, or research. Returns task-relevant briefs for each contact.", inputSchema: { type: "object", properties: { contact_ids: { type: "array", items: { type: "string" } }, format: { type: "string", enum: ["meeting_prep", "deal_review", "outreach", "research"] } }, required: ["contact_ids"] } },
+    // Capture tools (CON-00078)
+    { name: "parse_email_signature", description: "Parse an email signature text to extract contact fields (name, title, company, phone, email, LinkedIn, website). Does NOT create a contact.", inputSchema: { type: "object", properties: { signature_text: { type: "string" } }, required: ["signature_text"] } },
+    { name: "ingest_email_participants", description: "Find or create contacts from email thread participants (with optional signatures). Returns { created, updated, contacts }.", inputSchema: { type: "object", properties: { participants: { type: "array", items: { type: "object", properties: { name: { type: "string" }, email: { type: "string" }, signature: { type: "string" } }, required: ["email"] } }, context: { type: "string" } }, required: ["participants"] } },
+    { name: "ingest_meeting_participants", description: "Ingest meeting attendees: find-or-create contacts and log the meeting as an event. Returns { created, updated, contact_ids }.", inputSchema: { type: "object", properties: { title: { type: "string" }, event_date: { type: "string" }, attendees: { type: "array", items: { type: "object", properties: { name: { type: "string" }, email: { type: "string" } }, required: ["name", "email"] } }, context: { type: "string" } }, required: ["title", "event_date", "attendees"] } },
+    // Freshness tools (CON-00079)
+    { name: "get_freshness_score", description: "Get a per-field freshness and confidence breakdown for a contact — shows which fields are verified, stale, or missing.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "get_stale_contacts", description: "List contacts with low data completeness scores (below threshold). Default threshold: 40.", inputSchema: { type: "object", properties: { threshold: { type: "number", description: "Score threshold 0-100 (default 40)" } } } },
+    { name: "mark_field_verified", description: "Mark a specific contact field as verified by a human or trusted source.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, field_name: { type: "string" }, source: { type: "string" } }, required: ["contact_id", "field_name"] } },
+    // Org chart + deal team (CON-00080)
+    { name: "add_org_chart_edge", description: "Add a relationship edge to the org chart for a company (reports_to, manages, peer, collaborates_with).", inputSchema: { type: "object", properties: { company_id: { type: "string" }, contact_a_id: { type: "string" }, contact_b_id: { type: "string" }, edge_type: { type: "string", enum: ["reports_to", "manages", "collaborates_with", "peer"] } }, required: ["company_id", "contact_a_id", "contact_b_id", "edge_type"] } },
+    { name: "get_org_chart", description: "Get the org chart for a company as a list of directed edges with contact names.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
+    { name: "set_deal_contact_role", description: "Assign a contact a buying committee role in a deal (economic_buyer, technical_evaluator, champion, blocker, influencer, user, sponsor, other).", inputSchema: { type: "object", properties: { deal_id: { type: "string" }, contact_id: { type: "string" }, account_role: { type: "string", enum: ["economic_buyer", "technical_evaluator", "champion", "blocker", "influencer", "user", "sponsor", "other"] } }, required: ["deal_id", "contact_id", "account_role"] } },
+    { name: "get_deal_team", description: "Get the full buying committee for a deal with contact names and roles.", inputSchema: { type: "object", properties: { deal_id: { type: "string" } }, required: ["deal_id"] } },
+    { name: "get_coverage_gaps", description: "Identify coverage gaps in a company account — missing economic buyer, technical evaluator, or org chart relationships.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
+    // Events/subscriptions (CON-00081)
+    { name: "get_recent_contact_events", description: "Polling fallback for change events — returns recent activity log entries, optionally filtered by event type or date.", inputSchema: { type: "object", properties: { since: { type: "string", description: "ISO 8601 datetime — only events after this date" }, event_types: { type: "array", items: { type: "string" } } } } },
   ],
 }));
 
@@ -2654,12 +2725,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // ─── v0.4.0 handlers ──────────────────────────────────────────────────────
 
-      case "get_contact_brief": {
-        const db = getDatabase();
-        const brief = generateBrief(a.contact_id as string, db);
-        return { content: [{ type: "text", text: JSON.stringify({ brief }, null, 2) }] };
-      }
-
       case "list_cold_contacts": {
         const db = getDatabase();
         const contacts = listColdContacts((a.days as number | undefined) ?? 30, db);
@@ -2923,6 +2988,374 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const output = await exportContacts(format, contactList);
         return { content: [{ type: "text", text: output }] };
+      }
+
+      // ─── v0.5.0 handlers ──────────────────────────────────────────────────────
+
+      case "get_field_history": {
+        const db = getDatabase();
+        const history = getFieldHistory(a.contact_id as string, a.field_name as string | undefined, db);
+        return { content: [{ type: "text", text: JSON.stringify({ history }, null, 2) }] };
+      }
+
+      case "get_contact_at": {
+        const db = getDatabase();
+        const snapshot = getContactAt(a.contact_id as string, a.timestamp as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ contact_id: a.contact_id, timestamp: a.timestamp, snapshot }, null, 2) }] };
+      }
+
+      case "get_job_history": {
+        const db = getDatabase();
+        const history = getJobHistory(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ history }, null, 2) }] };
+      }
+
+      case "add_job_entry": {
+        const db = getDatabase();
+        const entry = addJobEntry(a.contact_id as string, {
+          company_name: a.company_name as string,
+          title: a.title as string | undefined,
+          start_date: a.start_date as string | undefined,
+          end_date: a.end_date as string | undefined,
+          is_current: a.is_current as boolean | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
+      }
+
+      case "save_learning": {
+        const db = getDatabase();
+        const input: CreateLearningInput = {
+          content: a.content as string,
+          type: a.type as CreateLearningInput["type"] | undefined,
+          confidence: a.confidence as number | undefined,
+          importance: a.importance as number | undefined,
+          learned_by: a.learned_by as string | undefined,
+          visibility: a.visibility as CreateLearningInput["visibility"] | undefined,
+          tags: a.tags as string[] | undefined,
+        };
+        const learning = saveLearning(a.contact_id as string, input, db);
+        return { content: [{ type: "text", text: JSON.stringify(learning, null, 2) }] };
+      }
+
+      case "get_learnings": {
+        const db = getDatabase();
+        const learnings = getLearnings(a.contact_id as string, {
+          type: a.type as string | undefined,
+          min_importance: a.min_importance as number | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify({ learnings }, null, 2) }] };
+      }
+
+      case "search_learnings": {
+        const db = getDatabase();
+        const results = searchLearnings(a.query as string, {
+          type: a.type as string | undefined,
+          contact_id: a.contact_id as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }] };
+      }
+
+      case "confirm_learning": {
+        const db = getDatabase();
+        confirmLearning(a.learning_id as string, a.agent_name as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ confirmed: true }) }] };
+      }
+
+      case "get_stale_learnings": {
+        const db = getDatabase();
+        const daysOld = (a.days_old as number | undefined) ?? 30;
+        const minConf = (a.min_confidence as number | undefined) ?? 0;
+        const cutoff = new Date(Date.now() - daysOld * 86400000).toISOString();
+        const rows = db.query(`SELECT * FROM contact_learnings WHERE confirmed_count=0 AND created_at<? AND confidence>=? ORDER BY confidence ASC LIMIT 50`).all(cutoff, minConf) as unknown[];
+        return { content: [{ type: "text", text: JSON.stringify({ stale_learnings: rows }, null, 2) }] };
+      }
+
+      case "run_learning_maintenance": {
+        const db = getDatabase();
+        const decayed = decayLearnings(db);
+        // Simple contradiction detection: find pairs with same contact_id and similar content patterns
+        const duplicates = db.query(`SELECT contact_id, COUNT(*) as cnt FROM contact_learnings GROUP BY contact_id, LOWER(SUBSTR(content,1,30)) HAVING cnt > 1`).all() as unknown[];
+        return { content: [{ type: "text", text: JSON.stringify({ decayed_count: decayed, potential_contradictions: duplicates }, null, 2) }] };
+      }
+
+      case "acquire_contact_lock": {
+        const db = getDatabase();
+        const result = acquireLock(
+          a.contact_id as string,
+          a.agent_name as string,
+          a.ttl_seconds as number | undefined,
+          a.reason as string | undefined,
+          a.session_id as string | undefined,
+          db,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "release_contact_lock": {
+        const db = getDatabase();
+        const released = releaseLock(a.contact_id as string, a.agent_name as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ released }, null, 2) }] };
+      }
+
+      case "check_contact_lock": {
+        const db = getDatabase();
+        const lock = checkLock(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ locked: !!lock, lock }, null, 2) }] };
+      }
+
+      case "log_agent_activity": {
+        const db = getDatabase();
+        logAgentActivity(
+          a.contact_id as string,
+          a.agent_name as string,
+          a.action as string,
+          a.details as string | undefined,
+          a.session_id as string | undefined,
+          db,
+        );
+        return { content: [{ type: "text", text: JSON.stringify({ logged: true }) }] };
+      }
+
+      case "get_contact_agent_activity": {
+        const db = getDatabase();
+        const activity = getAgentActivity(a.contact_id as string, (a.limit as number | undefined) ?? 20, db);
+        return { content: [{ type: "text", text: JSON.stringify({ activity }, null, 2) }] };
+      }
+
+      case "get_relationship_strength": {
+        const db = getDatabase();
+        const score = computeRelationshipStrength(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ contact_id: a.contact_id, strength_score: score }, null, 2) }] };
+      }
+
+      case "find_warm_path": {
+        const db = getDatabase();
+        const path = findWarmPath(a.from_contact_id as string, a.to_contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ path, hops: path.length }, null, 2) }] };
+      }
+
+      case "find_connections_at_company": {
+        const db = getDatabase();
+        const connections = findConnectionsAtCompany(a.company_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ connections }, null, 2) }] };
+      }
+
+      case "get_cooling_relationships": {
+        const db = getDatabase();
+        const cooling = detectCoolingRelationships(db);
+        return { content: [{ type: "text", text: JSON.stringify({ cooling }, null, 2) }] };
+      }
+
+      case "resolve_contact_identity": {
+        const db = getDatabase();
+        const matches = resolveByPartial({
+          email: a.email as string | undefined,
+          name: a.name as string | undefined,
+          linkedin_url: a.linkedin_url as string | undefined,
+          phone: a.phone as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify({ matches }, null, 2) }] };
+      }
+
+      case "add_contact_identity": {
+        const db = getDatabase();
+        const identity = addIdentity(
+          a.contact_id as string,
+          a.system as string,
+          a.external_id as string,
+          a.external_url as string | undefined,
+          (a.confidence as "verified" | "inferred" | undefined) ?? "inferred",
+          db,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(identity, null, 2) }] };
+      }
+
+      case "get_contact_identities": {
+        const db = getDatabase();
+        const identities = getIdentities(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ identities }, null, 2) }] };
+      }
+
+      case "semantic_search_contacts": {
+        const db = getDatabase();
+        const results = semanticSearch(a.query as string, (a.limit as number | undefined) ?? 10, db);
+        const enriched = results.map(r => {
+          try { return { ...r, contact: getContact(r.contact_id) }; }
+          catch { return r; }
+        });
+        return { content: [{ type: "text", text: JSON.stringify({ results: enriched }, null, 2) }] };
+      }
+
+      case "embed_all_contacts": {
+        const db = getDatabase();
+        const count = await embedAllContacts(db);
+        return { content: [{ type: "text", text: JSON.stringify({ embedded: count }) }] };
+      }
+
+      case "get_relationship_signals": {
+        const db = getDatabase();
+        const signals = getRelationshipSignals(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ signals }, null, 2) }] };
+      }
+
+      case "get_ghost_contacts": {
+        const db = getDatabase();
+        const ghosts = getGhostContacts(db);
+        return { content: [{ type: "text", text: JSON.stringify({ ghosts }, null, 2) }] };
+      }
+
+      case "get_warming_contacts": {
+        const db = getDatabase();
+        const warming = getWarmingContacts(db);
+        return { content: [{ type: "text", text: JSON.stringify({ warming }, null, 2) }] };
+      }
+
+      case "recompute_signals": {
+        const db = getDatabase();
+        const result = recomputeAllSignals(db);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "get_contact_card": {
+        const db = getDatabase();
+        const card = getContactCard(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify(card, null, 2) }] };
+      }
+
+      case "get_contact_brief": {
+        // Override v0.4.0 handler to support task_context and format params
+        const db = getDatabase();
+        const taskContext = (a.task_context as string | undefined) ?? (a.format as string | undefined);
+        if (taskContext) {
+          const brief = getContactBriefContext(a.contact_id as string, taskContext, db);
+          return { content: [{ type: "text", text: JSON.stringify(brief, null, 2) }] };
+        }
+        const brief = generateBrief(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ brief }, null, 2) }] };
+      }
+
+      case "assemble_context": {
+        const db = getDatabase();
+        const ctx = await assembleContext(
+          a.contact_ids as string[],
+          (a.format as "meeting_prep" | "deal_review" | "outreach" | "research" | undefined) ?? "meeting_prep",
+          db,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(ctx, null, 2) }] };
+      }
+
+      case "parse_email_signature": {
+        const parsed = parseEmailSignature(a.signature_text as string);
+        return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }] };
+      }
+
+      case "ingest_email_participants": {
+        const db = getDatabase();
+        const participants = a.participants as Array<{ name?: string; email: string; signature?: string }>;
+        const extracted = extractContactsFromEmailThread(participants);
+        let created = 0;
+        let updated = 0;
+        const contacts = [];
+        const { findOrCreateContact: findOrCreate } = await import('../db/contacts.js');
+        for (const ci of extracted) {
+          try {
+            const result = await findOrCreate({
+              display_name: ci.display_name,
+              job_title: ci.job_title,
+              website: ci.website,
+              emails: ci.emails?.map(e => ({ address: e.address, type: e.type as import('../types/index.js').EmailType, is_primary: e.is_primary })),
+              phones: ci.phones?.map(p => ({ number: p.number, type: p.type as import('../types/index.js').PhoneType, is_primary: p.is_primary })),
+              social_profiles: ci.social_profiles?.map(s => ({ platform: 'linkedin' as const, url: s.url, is_primary: s.is_primary })),
+              source: 'import' as const,
+            }, db);
+            contacts.push(result.contact);
+            if (result.created) created++;
+            else updated++;
+          } catch { /* skip */ }
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ created, updated, contacts }, null, 2) }] };
+      }
+
+      case "ingest_meeting_participants": {
+        const db = getDatabase();
+        const result = await ingestMeetingParticipants({
+          title: a.title as string,
+          event_date: a.event_date as string,
+          attendees: a.attendees as Array<{ name: string; email: string }>,
+          context: a.context as string | undefined,
+        }, db);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "get_freshness_score": {
+        const db = getDatabase();
+        const score = getFreshnessScore(a.contact_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify(score, null, 2) }] };
+      }
+
+      case "get_stale_contacts": {
+        const db = getDatabase();
+        const contacts = getStaleContacts((a.threshold as number | undefined) ?? 40, db);
+        return { content: [{ type: "text", text: JSON.stringify({ contacts }, null, 2) }] };
+      }
+
+      case "mark_field_verified": {
+        const db = getDatabase();
+        markFieldVerified(a.contact_id as string, a.field_name as string, a.source as string | undefined, db);
+        return { content: [{ type: "text", text: JSON.stringify({ verified: true }) }] };
+      }
+
+      case "add_org_chart_edge": {
+        const db = getDatabase();
+        const edge = addOrgChartEdge(
+          a.company_id as string,
+          a.contact_a_id as string,
+          a.contact_b_id as string,
+          a.edge_type as OrgEdgeType,
+          false,
+          db,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(edge, null, 2) }] };
+      }
+
+      case "get_org_chart": {
+        const db = getDatabase();
+        const edges = listOrgChart(a.company_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ company_id: a.company_id, edges }, null, 2) }] };
+      }
+
+      case "set_deal_contact_role": {
+        const db = getDatabase();
+        const role = setDealContactRole(a.deal_id as string, a.contact_id as string, a.account_role as AccountRole, db);
+        return { content: [{ type: "text", text: JSON.stringify(role, null, 2) }] };
+      }
+
+      case "get_deal_team": {
+        const db = getDatabase();
+        const team = getDealTeam(a.deal_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify({ deal_id: a.deal_id, team }, null, 2) }] };
+      }
+
+      case "get_coverage_gaps": {
+        const db = getDatabase();
+        const gaps = getCoverageGaps(a.company_id as string, db);
+        return { content: [{ type: "text", text: JSON.stringify(gaps, null, 2) }] };
+      }
+
+      case "get_recent_contact_events": {
+        const db = getDatabase();
+        const since = a.since as string | undefined;
+        const eventTypes = a.event_types as string[] | undefined;
+        let sql = `SELECT * FROM activity_log WHERE 1=1`;
+        const params: string[] = [];
+        if (since) { sql += ` AND created_at >= ?`; params.push(since); }
+        if (eventTypes?.length) {
+          sql += ` AND action IN (${eventTypes.map(() => '?').join(',')})`;
+          params.push(...eventTypes);
+        }
+        sql += ` ORDER BY created_at DESC LIMIT 100`;
+        const events = db.query(sql).all(...params) as unknown[];
+        return { content: [{ type: "text", text: JSON.stringify({ events }, null, 2) }] };
       }
 
       default:

@@ -293,3 +293,92 @@ export {
   TagNotFoundError,
   DuplicateTagNameError,
 } from "./types/index.js";
+
+// Field History (CON-00069)
+export {
+  recordFieldChange,
+  getFieldHistory,
+  getContactAt,
+} from "./db/field-history.js";
+export type { ContactFieldHistory } from "./db/field-history.js";
+
+// Job History (CON-00070)
+export {
+  addJobEntry,
+  getJobHistory,
+  getCurrentRole,
+  getPreviousEmployers,
+} from "./db/job-history.js";
+export type { JobHistoryEntry, CreateJobEntryInput } from "./db/job-history.js";
+
+// Learnings (CON-00071)
+export {
+  saveLearning,
+  getLearnings,
+  searchLearnings,
+  confirmLearning,
+  decayLearnings,
+  deleteLearning,
+} from "./db/learnings.js";
+export type { ContactLearning, CreateLearningInput } from "./db/learnings.js";
+
+// Coordination (CON-00072)
+export {
+  acquireLock,
+  releaseLock,
+  checkLock,
+  cleanExpiredLocks,
+  logAgentActivity,
+  getAgentActivity,
+} from "./db/coordination.js";
+export type { ContactLock, AgentActivity } from "./db/coordination.js";
+
+// Relationship Graph (CON-00073)
+export {
+  computeRelationshipStrength,
+  findWarmPath,
+  findConnectionsAtCompany,
+  detectCoolingRelationships,
+} from "./db/graph.js";
+export type { PathNode } from "./db/graph.js";
+
+// Identity Resolution (CON-00074)
+export {
+  addIdentity,
+  resolveIdentity,
+  resolveByPartial,
+  getIdentities,
+} from "./db/identity.js";
+export type { ContactIdentity, IdentityMatch } from "./db/identity.js";
+
+// Org Chart & Deal Roles (CON-00080)
+export {
+  addOrgChartEdge,
+  listOrgChart,
+  setDealContactRole,
+  getDealTeam,
+  getCoverageGaps,
+} from "./db/org-chart.js";
+export type { OrgEdgeType, AccountRole, OrgChartEdge, DealContactRole } from "./db/org-chart.js";
+
+// Relationship Signals (CON-00076)
+export { getRelationshipSignals, getGhostContacts, getWarmingContacts, recomputeAllSignals } from "./db/signals.js";
+export type { RelationshipSignal } from "./db/signals.js";
+
+// Freshness Scoring (CON-00079)
+export { getFreshnessScore, getStaleContacts, markFieldVerified } from "./db/freshness.js";
+export type { FreshnessScore, FieldFreshness } from "./db/freshness.js";
+
+// Context Packaging (CON-00077)
+export { getContactCard, getContactBrief, assembleContext } from "./lib/context.js";
+
+// Embeddings (CON-00075)
+export { semanticSearch, embedContact, embedAllContacts, buildContactEmbeddingText } from "./lib/embeddings.js";
+
+// Signature Parser & Meeting Capture (CON-00078)
+export { parseEmailSignature, extractContactsFromEmailThread } from "./lib/signature-parser.js";
+export type { ParsedSignature } from "./lib/signature-parser.js";
+export { ingestMeetingParticipants } from "./lib/meeting-capture.js";
+
+// find-or-create (CON-00078)
+export { findOrCreateContact } from "./db/contacts.js";

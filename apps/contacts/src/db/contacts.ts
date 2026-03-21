@@ -581,6 +581,39 @@ export function listColdContacts(days: number, db?: Database): ContactWithDetail
   return rows.map(row => loadContactDetails(d, rowToContact(row)));
 }
 
+export async function findOrCreateContact(
+  input: CreateContactInput,
+  db?: Database,
+): Promise<{ contact: ContactWithDetails; created: boolean }> {
+  const d = db || getDatabase();
+  // Search by email first (exact match)
+  const emailAddresses = (input.emails ?? []).map((e) => e.address);
+  for (const addr of emailAddresses) {
+    const emailRow = d
+      .query(
+        `SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`,
+      )
+      .get(addr) as { contact_id: string } | null;
+    if (emailRow) {
+      return { contact: getContact(emailRow.contact_id, d), created: false };
+    }
+  }
+  // Fall back to fuzzy name search
+  const nameQuery =
+    input.display_name ??
+    (input.first_name || input.last_name
+      ? `${input.first_name ?? ""} ${input.last_name ?? ""}`.trim()
+      : null);
+  if (nameQuery) {
+    const results = searchContacts(nameQuery, d);
+    if (results.length > 0 && results[0]) {
+      return { contact: results[0], created: false };
+    }
+  }
+  const contact = createContact(input, d);
+  return { contact, created: true };
+}
+
 export function autoLinkContactToCompany(contactId: string, db?: Database): ContactWithDetails | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
