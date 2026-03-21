@@ -65,7 +65,8 @@ export async function takeScreenshot(
     const stem = String(timestamp);
 
     // Always capture raw PNG from Playwright first (lossless source)
-    const rawOpts: Parameters<Page["screenshot"]>[0] = {
+    // NOTE: Do NOT include undefined fields in rawOpts — Playwright 1.58+ rejects them
+    const rawOpts: { fullPage: boolean; type: "png" } = {
       fullPage: opts?.fullPage ?? false,
       type: "png",
     };
@@ -81,14 +82,23 @@ export async function takeScreenshot(
 
     const originalSizeBytes = rawBuffer.length;
 
-    // Compress via sharp pipeline
+    // Compress via sharp pipeline — with fallback if sharp fails
     let finalBuffer: Buffer;
-    if (compress && format !== "png") {
-      finalBuffer = await compressBuffer(rawBuffer, format, quality ?? 82, maxWidth);
-    } else if (compress && format === "png") {
-      // Even for PNG, apply resize + max compression
-      finalBuffer = await compressBuffer(rawBuffer, "png", quality ?? 9, maxWidth);
-    } else {
+    let compressed = true;
+    let fallback = false;
+    try {
+      if (compress && format !== "png") {
+        finalBuffer = await compressBuffer(rawBuffer, format, quality ?? 82, maxWidth);
+      } else if (compress && format === "png") {
+        finalBuffer = await compressBuffer(rawBuffer, "png", quality ?? 9, maxWidth);
+      } else {
+        finalBuffer = rawBuffer;
+        compressed = false;
+      }
+    } catch (sharpErr) {
+      // Fallback: use raw PNG if sharp fails
+      fallback = true;
+      compressed = false;
       finalBuffer = rawBuffer;
     }
 
@@ -125,6 +135,7 @@ export async function takeScreenshot(
       compression_ratio: compressionRatio,
       thumbnail_path: thumbnailPath,
       thumbnail_base64: thumbnailBase64,
+      ...(fallback ? { fallback: true, compressed: false } : {}),
     };
 
     // Auto-track in gallery (can be disabled with opts.track = false)

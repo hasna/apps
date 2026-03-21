@@ -3,6 +3,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
 
 import { createSession, closeSession, getSession, listSessions, getSessionPage, getSessionByName, renameSession, setSessionPage, getTokenBudget } from "../lib/session.js";
 import { navigate, click, type as typeText, fill, scroll, hover, selectOption, checkBox, uploadFile, goBack, goForward, reload, waitForSelector, pressKey, clickText, fillForm, waitForText, watchPage, getWatchChanges, stopWatch, clickRef, typeRef, fillRef, selectRef, checkRef, hoverRef } from "../lib/actions.js";
@@ -123,8 +127,14 @@ server.tool(
 
 server.tool(
   "browser_navigate",
-  "Navigate to a URL. Returns title + thumbnail + accessibility snapshot preview with refs.",
-  { session_id: z.string(), url: z.string(), timeout: z.number().optional().default(30000), auto_snapshot: z.boolean().optional().default(true), auto_thumbnail: z.boolean().optional().default(true) },
+  "Navigate to a URL. Auto-detects redirects, auto-names session, returns compact refs + thumbnail.",
+  {
+    session_id: z.string(),
+    url: z.string(),
+    timeout: z.number().optional().default(30000),
+    auto_snapshot: z.boolean().optional().default(true),
+    auto_thumbnail: z.boolean().optional().default(true),
+  },
   async ({ session_id, url, timeout, auto_snapshot, auto_thumbnail }) => {
     try {
       const page = getSessionPage(session_id);
@@ -132,9 +142,40 @@ server.tool(
       const title = await getTitle(page);
       const current_url = await getUrl(page);
 
-      const result: Record<string, unknown> = { url, title, current_url };
+      // Redirect detection
+      const redirected = current_url !== url && current_url !== url + "/" && url !== current_url.replace(/\/$/, "");
+      let redirect_type: string | undefined;
+      if (redirected) {
+        try {
+          const reqHost = new URL(url).hostname;
+          const resHost = new URL(current_url).hostname;
+          const reqPath = new URL(url).pathname;
+          const resPath = new URL(current_url).pathname;
+          if (reqHost !== resHost) redirect_type = "canonical";
+          else if (resPath.match(/\/[a-z]{2}-[a-z]{2}\//)) redirect_type = "geo";
+          else if (current_url.includes("login") || current_url.includes("signin")) redirect_type = "auth";
+          else redirect_type = "unknown";
+        } catch {}
+      }
 
-      // Auto-thumbnail
+      // Auto-name session if it has no name
+      try {
+        const session = getSession(session_id);
+        if (!session.name) {
+          const hostname = new URL(current_url).hostname;
+          renameSession(session_id, hostname);
+        }
+      } catch {}
+
+      const result: Record<string, unknown> = {
+        url,
+        title,
+        current_url,
+        redirected,
+        ...(redirect_type ? { redirect_type } : {}),
+      };
+
+      // Auto-thumbnail (small, token-efficient)
       if (auto_thumbnail) {
         try {
           const ss = await takeScreenshot(page, { maxWidth: 400, quality: 60, track: false, thumbnail: false });
@@ -142,11 +183,15 @@ server.tool(
         } catch {}
       }
 
-      // Auto-snapshot with refs
+      // Auto-snapshot with compact refs (≤30 elements)
       if (auto_snapshot) {
         try {
           const snap = await takeSnapshotFn(page, session_id);
-          result.snapshot_preview = snap.tree.slice(0, 3000);
+          setLastSnapshot(session_id, snap);
+          const refEntries = Object.entries(snap.refs).slice(0, 30);
+          result.snapshot_refs = refEntries
+            .map(([ref, info]) => `${info.role}:${info.name.slice(0, 50)} [${ref}]`)
+            .join(", ");
           result.interactive_count = snap.interactive_count;
           result.has_errors = getConsoleLog(session_id, "error").length > 0;
         } catch {}
@@ -278,7 +323,7 @@ server.tool(
 );
 
 server.tool(
-  "browser_check",
+  "browser_toggle",
   "Check or uncheck a checkbox by ref or selector",
   { session_id: z.string(), selector: z.string().optional(), ref: z.string().optional(), checked: z.boolean() },
   async ({ session_id, selector, ref, checked }) => {
@@ -404,15 +449,41 @@ server.tool(
 
 server.tool(
   "browser_snapshot",
-  "Get a structured accessibility snapshot with element refs (@e0, @e1...). Use refs in browser_click, browser_type, etc.",
-  { session_id: z.string() },
-  async ({ session_id }) => {
+  "Get accessibility snapshot with element refs (@e0, @e1...). Use compact=true (default) for token-efficient output. Use refs in browser_click, browser_type, etc.",
+  {
+    session_id: z.string(),
+    compact: z.boolean().optional().default(true),
+    max_refs: z.number().optional().default(50),
+    full_tree: z.boolean().optional().default(false),
+  },
+  async ({ session_id, compact, max_refs, full_tree }) => {
     try {
       const page = getSessionPage(session_id);
       const result = await takeSnapshotFn(page, session_id);
-      // Cache for snapshot diff
       setLastSnapshot(session_id, result);
-      return json({ snapshot: result.tree, refs: result.refs, interactive_count: result.interactive_count });
+
+      // Limit refs to max_refs
+      const refEntries = Object.entries(result.refs).slice(0, max_refs);
+      const limitedRefs = Object.fromEntries(refEntries);
+      const truncated = Object.keys(result.refs).length > max_refs;
+
+      if (compact && !full_tree) {
+        // Compact: return refs as a single concise line per element
+        const compactRefs = refEntries
+          .map(([ref, info]) => `${info.role}:${info.name.slice(0, 60)} [${ref}]${info.checked !== undefined ? ` checked=${info.checked}` : ""}${!info.enabled ? " disabled" : ""}`)
+          .join("\n");
+        return json({
+          snapshot_compact: compactRefs,
+          interactive_count: result.interactive_count,
+          shown_count: refEntries.length,
+          truncated,
+          refs: limitedRefs,
+        });
+      }
+
+      // Full tree mode — truncate to 5000 chars
+      const tree = full_tree ? result.tree : result.tree.slice(0, 5000) + (result.tree.length > 5000 ? "\n... (truncated — use full_tree=true for complete)" : "");
+      return json({ snapshot: tree, refs: limitedRefs, interactive_count: result.interactive_count, truncated });
     } catch (e) { return err(e); }
   }
 );
@@ -1102,55 +1173,6 @@ server.tool(
   }
 );
 
-// ── Meta: browser_page_check ──────────────────────────────────────────────────
-
-server.tool(
-  "browser_page_check",
-  "One-call page summary: page info + console errors + performance metrics + thumbnail + accessibility snapshot preview. Replaces 4-5 separate tool calls.",
-  { session_id: z.string() },
-  async ({ session_id }) => {
-    try {
-      const page = getSessionPage(session_id);
-
-      // Page info
-      const info = await getPageInfo(page);
-
-      // Console errors
-      const errors = getConsoleLog(session_id, "error");
-      info.has_console_errors = errors.length > 0;
-
-      // Performance
-      let perf = {};
-      try { perf = await getPerformanceMetrics(page); } catch {}
-
-      // Thumbnail screenshot
-      let thumbnail_base64 = "";
-      try {
-        const ss = await takeScreenshot(page, { maxWidth: 400, quality: 60, track: false, thumbnail: false });
-        thumbnail_base64 = ss.base64;
-      } catch {}
-
-      // Snapshot preview
-      let snapshot_preview = "";
-      let interactive_count = 0;
-      try {
-        const snap = await takeSnapshotFn(page, session_id);
-        snapshot_preview = snap.tree.slice(0, 2000);
-        interactive_count = snap.interactive_count;
-      } catch {}
-
-      return json({
-        ...info,
-        error_count: errors.length,
-        performance: perf,
-        thumbnail_base64: thumbnail_base64.length > 50000 ? "" : thumbnail_base64,
-        snapshot_preview,
-        interactive_count,
-      });
-    } catch (e) { return err(e); }
-  }
-);
-
 // ── Gallery ───────────────────────────────────────────────────────────────────
 
 server.tool(
@@ -1607,7 +1629,7 @@ server.tool(
           { tool: "browser_hover", description: "Hover over an element" },
           { tool: "browser_scroll", description: "Scroll the page" },
           { tool: "browser_select", description: "Select a dropdown option" },
-          { tool: "browser_check", description: "Check/uncheck a checkbox" },
+          { tool: "browser_toggle", description: "Check/uncheck a checkbox" },
           { tool: "browser_upload", description: "Upload a file to an input" },
           { tool: "browser_press_key", description: "Press a keyboard key" },
           { tool: "browser_wait", description: "Wait for a selector to appear" },
@@ -1627,9 +1649,10 @@ server.tool(
           { tool: "browser_evaluate", description: "Execute JavaScript in page context" },
         ],
         Capture: [
-          { tool: "browser_screenshot", description: "Take a screenshot (PNG/JPEG/WebP)" },
+          { tool: "browser_screenshot", description: "Take a screenshot (PNG/JPEG/WebP, annotate=true for labels)" },
           { tool: "browser_pdf", description: "Generate a PDF of the page" },
           { tool: "browser_scroll_and_screenshot", description: "Scroll then screenshot in one call" },
+          { tool: "browser_scroll_to_element", description: "Scroll element into view + screenshot" },
         ],
         Storage: [
           { tool: "browser_cookies_get", description: "Get cookies" },
@@ -1708,7 +1731,8 @@ server.tool(
           { tool: "browser_tab_close", description: "Close a tab by index" },
         ],
         Meta: [
-          { tool: "browser_page_check", description: "One-call page summary with diagnostics" },
+          { tool: "browser_check", description: "RECOMMENDED: One-call page summary with diagnostics" },
+          { tool: "browser_version", description: "Show running binary version and tool count" },
           { tool: "browser_help", description: "Show this help (all tools)" },
           { tool: "browser_snapshot_diff", description: "Diff current snapshot vs previous" },
           { tool: "browser_watch_start", description: "Watch page for DOM changes" },
@@ -1724,7 +1748,113 @@ server.tool(
   }
 );
 
+// ── browser_version ───────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_version",
+  "Get the running browser MCP version, tool count, and environment info. Use this to verify which binary is active.",
+  {},
+  async () => {
+    try {
+      const { getDataDir } = await import("../db/schema.js");
+      const toolCount = Object.keys((server as any)._registeredTools ?? {}).length;
+      return json({
+        version: _pkg.version,
+        mcp_tools_count: toolCount,
+        bun_version: Bun.version,
+        data_dir: getDataDir(),
+        node_env: process.env["NODE_ENV"] ?? "production",
+      });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── browser_scroll_to_element ─────────────────────────────────────────────────
+
+server.tool(
+  "browser_scroll_to_element",
+  "Scroll an element into view (by ref or selector) then optionally take a screenshot of it. Replaces scroll + wait + screenshot pattern.",
+  {
+    session_id: z.string(),
+    selector: z.string().optional(),
+    ref: z.string().optional(),
+    screenshot: z.boolean().optional().default(true),
+    wait_ms: z.number().optional().default(200),
+  },
+  async ({ session_id, selector, ref, screenshot: doScreenshot, wait_ms }) => {
+    try {
+      const page = getSessionPage(session_id);
+      let locator;
+      if (ref) {
+        const { getRefLocator } = await import("../lib/snapshot.js");
+        locator = getRefLocator(page, session_id, ref);
+      } else if (selector) {
+        locator = page.locator(selector).first();
+      } else {
+        return err(new Error("Either ref or selector is required"));
+      }
+
+      await locator.scrollIntoViewIfNeeded();
+      await new Promise((r) => setTimeout(r, wait_ms));
+
+      const result: Record<string, unknown> = { scrolled: ref ?? selector };
+
+      if (doScreenshot) {
+        try {
+          const ss = await takeScreenshot(page, { selector: selector, track: false });
+          ss.url = page.url();
+          if (ss.base64.length > 50000) {
+            (ss as any).base64_truncated = true;
+            ss.base64 = ss.thumbnail_base64 ?? "";
+          }
+          result.screenshot = ss;
+        } catch {}
+      }
+
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── browser_check (renamed from browser_page_check) ───────────────────────────
+
+server.tool(
+  "browser_check",
+  "RECOMMENDED FIRST CALL: one-shot page summary — url, title, errors, performance, thumbnail, refs. Replaces 4+ separate tool calls.",
+  { session_id: z.string() },
+  async ({ session_id }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const info = await getPageInfo(page);
+      const errors = getConsoleLog(session_id, "error");
+      info.has_console_errors = errors.length > 0;
+      let perf = {};
+      try { perf = await getPerformanceMetrics(page); } catch {}
+      let thumbnail_base64 = "";
+      try {
+        const ss = await takeScreenshot(page, { maxWidth: 400, quality: 60, track: false, thumbnail: false });
+        thumbnail_base64 = ss.base64.length > 50000 ? "" : ss.base64;
+      } catch {}
+      let snapshot_refs = "";
+      let interactive_count = 0;
+      try {
+        const snap = await takeSnapshotFn(page, session_id);
+        setLastSnapshot(session_id, snap);
+        interactive_count = snap.interactive_count;
+        snapshot_refs = Object.entries(snap.refs).slice(0, 30)
+          .map(([ref, i]) => `${i.role}:${i.name.slice(0, 50)} [${ref}]`)
+          .join(", ");
+      } catch {}
+      return json({ ...info, error_count: errors.length, performance: perf, thumbnail_base64, snapshot_refs, interactive_count });
+    } catch (e) { return err(e); }
+  }
+);
+
 // ── Start ─────────────────────────────────────────────────────────────────────
+
+// Log version to stderr on startup so debugging is instant
+const _startupToolCount = Object.keys((server as any)._registeredTools ?? {}).length;
+console.error(`@hasna/browser v${_pkg.version} — ${_startupToolCount} tools | data: ${(await import("../db/schema.js")).getDataDir()}`);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

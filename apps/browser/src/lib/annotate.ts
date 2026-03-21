@@ -19,11 +19,13 @@ export interface AnnotatedScreenshotResult {
   labelToRef: Record<number, string>;
 }
 
+const MAX_ANNOTATIONS = 40; // Cap to prevent timeout on pages with 100+ interactive elements
+
 export async function annotateScreenshot(
   page: Page,
   sessionId?: string
 ): Promise<AnnotatedScreenshotResult> {
-  // 1. Take snapshot to get refs
+  // 1. Take snapshot to get refs (capped at MAX_ANNOTATIONS for performance)
   const snapshot = await takeSnapshot(page, sessionId);
 
   // 2. Take raw screenshot
@@ -37,7 +39,10 @@ export async function annotateScreenshot(
   const labelToRef: Record<number, string> = {};
   let labelCounter = 1;
 
-  for (const [ref, info] of Object.entries(snapshot.refs)) {
+  // Limit to MAX_ANNOTATIONS to prevent timeout on complex pages
+  const refsToAnnotate = Object.entries(snapshot.refs).slice(0, MAX_ANNOTATIONS);
+
+  for (const [ref, info] of refsToAnnotate) {
     try {
       const locator = page.getByRole(info.role as any, { name: info.name }).first();
       const box = await locator.boundingBox();

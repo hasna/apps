@@ -57,12 +57,14 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     });
   }
 
+  // Compute session name, falling back gracefully if already taken
+  let sessionName = opts.name ?? (opts.startUrl ? (() => { try { return new URL(opts.startUrl!).hostname; } catch { return undefined; } })() : undefined);
   const session = dbCreateSession({
     engine: resolvedEngine,
     projectId: opts.projectId,
     agentId: opts.agentId,
     startUrl: opts.startUrl,
-    name: opts.name ?? (opts.startUrl ? new URL(opts.startUrl).hostname : undefined),
+    name: sessionName,
   });
 
   // Apply stealth patches if requested (before any navigation)

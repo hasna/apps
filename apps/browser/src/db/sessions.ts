@@ -14,9 +14,19 @@ export interface CreateSessionData {
 export function createSession(data: CreateSessionData): Session {
   const db = getDatabase();
   const id = randomUUID();
+
+  // If a name is requested but already taken, fall back to name-{short_id}
+  let name = data.name ?? null;
+  if (name) {
+    const existing = db.query<{ id: string }, string>("SELECT id FROM sessions WHERE name = ?").get(name);
+    if (existing) {
+      name = `${name}-${id.slice(0, 6)}`;
+    }
+  }
+
   db.prepare(
     "INSERT INTO sessions (id, engine, project_id, agent_id, start_url, name) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, data.engine, data.projectId ?? null, data.agentId ?? null, data.startUrl ?? null, data.name ?? null);
+  ).run(id, data.engine, data.projectId ?? null, data.agentId ?? null, data.startUrl ?? null, name);
   return getSession(id);
 }
 
