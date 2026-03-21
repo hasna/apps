@@ -15,6 +15,7 @@ import {
   getPageByUrl,
   listPages,
   savePageVersion,
+  updatePage,
 } from "../db/pages.js";
 import { diffTexts } from "./diff.js";
 
@@ -99,6 +100,34 @@ async function captureScreenshot(
   }
 }
 
+// ─── shouldCrawlUrl ───────────────────────────────────────────────────────────
+
+const BINARY_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".bmp", ".tiff",
+  ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx",
+  ".woff", ".woff2", ".ttf", ".eot", ".otf",
+  ".mp4", ".mp3", ".wav", ".ogg", ".avi", ".mov", ".webm",
+  ".zip", ".tar", ".gz", ".bz2", ".xz", ".rar", ".7z",
+  ".exe", ".dmg", ".pkg", ".deb", ".rpm",
+  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+]);
+
+export function shouldCrawlUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    // Skip non-http protocols
+    if (!u.protocol.startsWith("http")) return false;
+    // Skip fragments-only
+    if (u.pathname === "/" && u.hash) return false;
+    // Check extension
+    const ext = u.pathname.match(/(\.[a-z0-9]+)$/i)?.[1]?.toLowerCase();
+    if (ext && BINARY_EXTENSIONS.has(ext)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── crawlUrl ─────────────────────────────────────────────────────────────────
 
 export async function crawlUrl(
@@ -179,9 +208,7 @@ export async function crawlUrl(
   if (options?.screenshot) {
     const screenshotPath = await captureScreenshot(normalizedUrl, crawlId, page.id);
     if (screenshotPath) {
-      // Update the screenshot path by re-creating — pages.ts has no updatePage,
-      // so we store it in the metadata for now and note it via savePageVersion
-      savePageVersion(page.id, extracted?.text ?? null, `screenshot: ${screenshotPath}`);
+      updatePage(page.id, { screenshotPath });
     }
   }
 
@@ -242,18 +269,30 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
 
         const page = await crawlUrl(normalized, crawl.id, options);
         pageCount++;
+        input.options?.onProgress?.({ url: normalized, pageNumber: pageCount, total: maxPages });
 
         // Collect internal links for further crawling
         const newLinks: Array<[string, number]> = [];
-        if (depth < maxDepth) {
+        if (depth < maxDepth && !page.metadata?.nofollow) {
           const links = page.metadata?.links ?? [];
           for (const link of links) {
             const linkNorm = normalizeUrl(link.href);
             if (
               linkNorm &&
               !visited.has(linkNorm) &&
-              isSameDomain(linkNorm, domain)
+              isSameDomain(linkNorm, domain) &&
+              shouldCrawlUrl(linkNorm)
             ) {
+              // include filter — URL must match at least one pattern if include is set
+              if (options?.include && options.include.length > 0) {
+                const path = new URL(linkNorm).pathname;
+                if (!options.include.some(p => path.includes(p))) continue;
+              }
+              // exclude filter — skip if URL matches any exclude pattern
+              if (options?.exclude && options.exclude.length > 0) {
+                const path = new URL(linkNorm).pathname;
+                if (options.exclude.some(p => path.includes(p))) continue;
+              }
               newLinks.push([linkNorm, depth + 1]);
             }
           }
@@ -346,6 +385,66 @@ export async function batchCrawl(
   }
 
   return getCrawl(crawl.id)!;
+}
+
+// ─── resumeCrawl ──────────────────────────────────────────────────────────────
+
+export async function resumeCrawl(crawlId: string): Promise<Crawl> {
+  const crawl = getCrawl(crawlId);
+  if (!crawl) throw new Error(`Crawl not found: ${crawlId}`);
+
+  // Get already-visited URLs
+  const existingPages = listPages(crawlId, { limit: 10000 });
+  const visited = new Set(existingPages.map(p => normalizeUrl(p.url)));
+
+  // Reset status to running
+  updateCrawl(crawlId, { status: "running", updatedAt: new Date().toISOString() });
+
+  const config = getConfig();
+  const options = crawl.options;
+
+  // Re-run BFS from the original URL, skipping already-visited
+  try {
+    const queue: Array<{ url: string; depth: number }> = [{ url: crawl.url, depth: 0 }];
+    let pageCount = existingPages.length;
+
+    while (queue.length > 0 && pageCount < crawl.maxPages) {
+      const item = queue.shift();
+      if (!item) break;
+      const { url: currentUrl, depth } = item;
+      const normalized = normalizeUrl(currentUrl);
+      if (visited.has(normalized)) continue;
+      visited.add(normalized);
+
+      try {
+        await sleep(options.delay ?? config.defaultDelay);
+        const page = await crawlUrl(currentUrl, crawlId, options);
+        pageCount++;
+        updateCrawl(crawlId, { pagesCrawled: pageCount });
+
+        if (depth < crawl.depth && page.metadata?.links) {
+          const domain = extractDomain(crawl.url);
+          for (const link of page.metadata.links) {
+            if (link.href && isSameDomain(link.href, domain) && !visited.has(normalizeUrl(link.href)) && shouldCrawlUrl(link.href)) {
+              queue.push({ url: link.href, depth: depth + 1 });
+            }
+          }
+        }
+      } catch {
+        // skip failed pages
+      }
+    }
+
+    updateCrawl(crawlId, {
+      status: "completed",
+      completedAt: new Date().toISOString(),
+      pagesCrawled: pageCount,
+    });
+  } catch (err) {
+    updateCrawl(crawlId, { status: "failed", errorMessage: String(err) });
+  }
+
+  return getCrawl(crawlId)!;
 }
 
 // ─── recrawl ──────────────────────────────────────────────────────────────────

@@ -69,6 +69,7 @@ export function getCrawl(id: string): Crawl | null {
 
 export function listCrawls(options?: {
   status?: string;
+  domain?: string;
   limit?: number;
   offset?: number;
 }): Crawl[] {
@@ -76,17 +77,23 @@ export function listCrawls(options?: {
   const limit = options?.limit ?? 100;
   const offset = options?.offset ?? 0;
 
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
   if (options?.status) {
-    const stmt = db.prepare<CrawlRow, [string, number, number]>(
-      "SELECT * FROM crawls WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    );
-    return stmt.all(options.status, limit, offset).map(rowToCrawl);
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  if (options?.domain) {
+    conditions.push("url LIKE ?");
+    params.push(`%${options.domain}%`);
   }
 
-  const stmt = db.prepare<CrawlRow, [number, number]>(
-    "SELECT * FROM crawls ORDER BY created_at DESC LIMIT ? OFFSET ?"
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const stmt = db.prepare<CrawlRow, (string | number)[]>(
+    `SELECT * FROM crawls ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`
   );
-  return stmt.all(limit, offset).map(rowToCrawl);
+  return stmt.all(...params, limit, offset).map(rowToCrawl);
 }
 
 export function updateCrawl(
@@ -136,6 +143,40 @@ export function deleteCrawl(id: string): boolean {
   const stmt = db.prepare("DELETE FROM crawls WHERE id = ?");
   const result = stmt.run(id);
   return result.changes > 0;
+}
+
+export function getGlobalStats(): {
+  totalCrawls: number;
+  totalPages: number;
+  totalWords: number;
+  topDomains: Array<{ domain: string; pages: number }>;
+  dbSizeBytes: number;
+  avgPagesPerCrawl: number;
+} {
+  const db = getDb();
+
+  const totalCrawlsRow = db.prepare<{ count: number }, []>("SELECT COUNT(*) as count FROM crawls").get();
+  const totalCrawls = totalCrawlsRow?.count ?? 0;
+
+  const totalPagesRow = db.prepare<{ count: number }, []>("SELECT COUNT(*) as count FROM pages").get();
+  const totalPages = totalPagesRow?.count ?? 0;
+
+  const totalWordsRow = db.prepare<{ total: number | null }, []>("SELECT SUM(word_count) as total FROM pages").get();
+  const totalWords = totalWordsRow?.total ?? 0;
+
+  const topDomainsRows = db
+    .prepare<{ domain: string; pages: number }, []>(
+      "SELECT domain, COUNT(*) as pages FROM crawls WHERE domain IS NOT NULL GROUP BY domain ORDER BY pages DESC LIMIT 10"
+    )
+    .all();
+  const topDomains = topDomainsRows.map((row) => ({ domain: row.domain, pages: row.pages }));
+
+  const avgPagesPerCrawl = totalCrawls > 0 ? totalPages / totalCrawls : 0;
+
+  const dbPath = process.env.CRAWL_DB_PATH ?? `${process.env.HOME}/.open-crawl/data.db`;
+  const dbSizeBytes = Bun.file(dbPath).size;
+
+  return { totalCrawls, totalPages, totalWords, topDomains, dbSizeBytes, avgPagesPerCrawl };
 }
 
 export function getCrawlStats(

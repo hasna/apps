@@ -3,7 +3,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "child_process";
 import { createWriteStream } from "fs";
-import { getCrawl, listCrawls, getCrawlStats } from "../db/crawls.js";
+import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
 import { getPage, listPages, searchPages, getPageVersions } from "../db/pages.js";
 import { getConfig, setConfig, resetConfig, getConfigPath } from "../lib/config.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
@@ -12,10 +12,11 @@ import type { ExportFormat } from "../types/index.js";
 
 // These modules exist at runtime but are not yet written; typed as any to avoid type errors.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { startCrawl, batchCrawl, recrawl } = await import("../lib/crawler.js").catch(() => ({
+const { startCrawl, batchCrawl, recrawl, resumeCrawl } = await import("../lib/crawler.js").catch(() => ({
   startCrawl: null as any,
   batchCrawl: null as any,
   recrawl: null as any,
+  resumeCrawl: null as any,
 }));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { checkAiProviders } = await import("../lib/ai.js").catch(() => ({
@@ -44,6 +45,8 @@ program
   .option("--screenshot", "capture screenshots")
   .option("--delay <ms>", "delay between requests (ms)", "1000")
   .option("--extract <schema>", "AI extraction schema (JSON string)")
+  .option("--include <pattern>", "only follow URLs matching this pattern (repeatable)")
+  .option("--exclude <pattern>", "skip URLs matching this pattern (repeatable)")
   .option("--json", "output as JSON")
   .action(async (url: string, opts: {
     depth: string;
@@ -52,6 +55,8 @@ program
     screenshot?: boolean;
     delay: string;
     extract?: string;
+    include?: string | string[];
+    exclude?: string | string[];
     json?: boolean;
   }) => {
     try {
@@ -75,6 +80,11 @@ program
           render: opts.render,
           screenshot: opts.screenshot,
           delay,
+          include: opts.include ? [opts.include].flat() : undefined,
+          exclude: opts.exclude ? [opts.exclude].flat() : undefined,
+          onProgress: opts.json ? undefined : ({ url: pageUrl, pageNumber }: { url: string; pageNumber: number }) => {
+            process.stderr.write(chalk.gray(`  [${pageNumber}] ${pageUrl.slice(0, 90)}\n`));
+          },
         },
       });
 
@@ -122,10 +132,11 @@ program
   .command("list")
   .description("List all crawl jobs")
   .option("--status <status>", "filter by status (pending|running|completed|failed)")
+  .option("--domain <domain>", "filter by domain")
   .option("--json", "output as JSON")
-  .action((opts: { status?: string; json?: boolean }) => {
+  .action((opts: { status?: string; domain?: string; json?: boolean }) => {
     try {
-      const crawls = listCrawls({ status: opts.status, limit: 50 });
+      const crawls = listCrawls({ status: opts.status, domain: opts.domain, limit: 50 });
 
       if (opts.json) {
         process.stdout.write(JSON.stringify(crawls, null, 2) + "\n");
@@ -145,6 +156,83 @@ program
           `${chalk.white(String(crawl.pagesCrawled).padStart(4))} pages  ` +
           `${chalk.blue(crawl.url.slice(0, 60))}\n`
         );
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── stats ────────────────────────────────────────────────────────────────────
+
+program
+  .command("stats")
+  .description("Show database stats and overview")
+  .option("--json", "output as JSON")
+  .action((opts: { json?: boolean }) => {
+    try {
+      const s = getGlobalStats();
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(s, null, 2) + "\n");
+        return;
+      }
+      process.stderr.write(chalk.bold("open-crawl stats\n") + chalk.gray("─".repeat(50)) + "\n");
+      process.stderr.write(`  ${chalk.cyan("Total crawls:".padEnd(25))} ${chalk.white(String(s.totalCrawls))}\n`);
+      process.stderr.write(`  ${chalk.cyan("Total pages:".padEnd(25))} ${chalk.white(String(s.totalPages))}\n`);
+      process.stderr.write(`  ${chalk.cyan("Total words:".padEnd(25))} ${chalk.white(s.totalWords.toLocaleString())}\n`);
+      process.stderr.write(`  ${chalk.cyan("Avg pages/crawl:".padEnd(25))} ${chalk.white(s.avgPagesPerCrawl.toFixed(1))}\n`);
+      process.stderr.write(`  ${chalk.cyan("DB size:".padEnd(25))} ${chalk.white(formatBytes(s.dbSizeBytes))}\n`);
+      if (s.topDomains.length > 0) {
+        process.stderr.write("\n" + chalk.bold("Top domains:\n"));
+        for (const d of s.topDomains) {
+          process.stderr.write(`  ${chalk.blue((d.domain ?? "unknown").padEnd(40))} ${chalk.gray(String(d.pages) + " crawls")}\n`);
+        }
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── clean ────────────────────────────────────────────────────────────────────
+
+program
+  .command("clean")
+  .description("Remove failed/old crawls and reclaim disk space")
+  .option("--failed", "remove all failed crawls")
+  .option("--older-than <days>", "remove crawls older than N days")
+  .option("--vacuum", "run SQLite VACUUM to reclaim space")
+  .option("--json", "output as JSON")
+  .action(async (opts: { failed?: boolean; olderThan?: string; vacuum?: boolean; json?: boolean }) => {
+    try {
+      const { getDb } = await import("../db/database.js");
+      const db = getDb();
+      let removed = 0;
+      const conditions: string[] = [];
+      const params: (string | number)[] = [];
+
+      if (opts.failed) {
+        conditions.push("status = 'failed'");
+      }
+      if (opts.olderThan) {
+        const cutoff = new Date(Date.now() - parseInt(opts.olderThan, 10) * 86400000).toISOString();
+        conditions.push("created_at < ?");
+        params.push(cutoff);
+      }
+      if (conditions.length > 0) {
+        const stmt = db.prepare(`DELETE FROM crawls WHERE ${conditions.join(" AND ")}`);
+        const result = stmt.run(...(params as Parameters<typeof stmt.run>));
+        removed = result.changes;
+      }
+      if (opts.vacuum) {
+        db.exec("VACUUM");
+      }
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ removed, vacuumed: opts.vacuum ?? false }) + "\n");
+      } else {
+        if (removed > 0) process.stderr.write(chalk.green(`✓ Removed ${removed} crawl(s)\n`));
+        if (opts.vacuum) process.stderr.write(chalk.green("✓ Database vacuumed\n"));
+        if (removed === 0 && !opts.vacuum) process.stderr.write(chalk.gray("Nothing to clean. Use --failed, --older-than <days>, or --vacuum.\n"));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
@@ -246,6 +334,41 @@ program
     }
   });
 
+// ─── links <crawl-id> ─────────────────────────────────────────────────────────
+
+program
+  .command("links <crawl-id>")
+  .description("Show broken links (4xx/5xx) found during a crawl")
+  .option("--json", "output as JSON")
+  .action((crawlId: string, opts: { json?: boolean }) => {
+    try {
+      const crawl = getCrawl(crawlId);
+      if (!crawl) {
+        process.stderr.write(chalk.red(`Crawl not found: ${crawlId}\n`));
+        process.exit(1);
+      }
+      const pages = listPages(crawlId, { limit: 10000 });
+      const broken = pages.filter(p => (p.statusCode ?? 0) >= 400);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(broken, null, 2) + "\n");
+        return;
+      }
+      if (broken.length === 0) {
+        process.stderr.write(chalk.green("✓ No broken links found\n"));
+        return;
+      }
+      process.stderr.write(chalk.bold(`${broken.length} broken link(s):\n\n`));
+      for (const page of broken) {
+        const code = page.statusCode ?? 0;
+        const color = code >= 500 ? chalk.red : chalk.yellow;
+        process.stderr.write(`  ${color(String(code))}  ${chalk.blue(page.url.slice(0, 80))}\n`);
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
 // ─── get <page-id> ────────────────────────────────────────────────────────────
 
 program
@@ -266,12 +389,12 @@ program
         return;
       }
 
-      process.stderr.write(chalk.bold(page.title ?? "(no title)") + "\n");
-      process.stderr.write(chalk.blue(page.url) + "\n");
-      process.stderr.write(
-        chalk.gray(`${page.wordCount ?? 0} words  ·  status ${page.statusCode ?? "?"}`) + "\n"
-      );
-      process.stderr.write(chalk.gray("─".repeat(60)) + "\n\n");
+      if (process.stdout.isTTY) {
+        process.stderr.write(chalk.bold(page.title ?? "(no title)") + "\n");
+        process.stderr.write(chalk.blue(page.url) + "\n");
+        process.stderr.write(chalk.gray(`${page.wordCount ?? 0} words  ·  status ${page.statusCode ?? "?"}\n`));
+        process.stderr.write(chalk.gray("─".repeat(60)) + "\n\n");
+      }
 
       const content =
         opts.format === "text"
@@ -451,6 +574,68 @@ program
     }
   });
 
+// ─── resume <crawl-id> ────────────────────────────────────────────────────────
+
+program
+  .command("resume <crawl-id>")
+  .description("Resume an interrupted crawl, skipping already-crawled pages")
+  .option("--json", "output as JSON")
+  .action(async (crawlId: string, opts: { json?: boolean }) => {
+    try {
+      const crawl = getCrawl(crawlId);
+      if (!crawl) {
+        process.stderr.write(chalk.red(`Crawl not found: ${crawlId}\n`));
+        process.exit(1);
+      }
+      if (!opts.json) {
+        process.stderr.write(chalk.cyan(`Resuming crawl ${crawlId.slice(0, 8)} (${crawl.pagesCrawled} pages already done)...\n`));
+      }
+      const result = await resumeCrawl(crawlId);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      } else {
+        process.stderr.write(chalk.green(`✓ Resume complete — ${result.pagesCrawled} total pages\n`));
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── delete <crawl-id> ────────────────────────────────────────────────────────
+
+program
+  .command("delete <crawl-id>")
+  .description("Delete a crawl and all its pages")
+  .option("--force", "skip confirmation")
+  .option("--json", "output as JSON")
+  .action(async (crawlId: string, opts: { force?: boolean; json?: boolean }) => {
+    try {
+      const crawl = getCrawl(crawlId);
+      if (!crawl) {
+        process.stderr.write(chalk.red(`Crawl not found: ${crawlId}\n`));
+        process.exit(1);
+      }
+      const stats = getCrawlStats(crawlId);
+      if (!opts.force && !opts.json) {
+        process.stderr.write(
+          chalk.yellow(`Delete crawl ${crawlId.slice(0, 8)} (${stats.total} pages)?`) +
+          chalk.gray(" Pass --force to confirm.\n")
+        );
+        process.exit(0);
+      }
+      deleteCrawl(crawlId);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ deleted: crawlId, pages: stats.total }) + "\n");
+      } else {
+        process.stderr.write(chalk.green(`✓ Deleted crawl ${crawlId.slice(0, 8)} and ${stats.total} pages\n`));
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
 // ─── batch <url1> <url2> ... ─────────────────────────────────────────────────
 
 program
@@ -552,6 +737,27 @@ program
         chalk.gray(`Previous: ${previous.crawledAt}  →  Current: ${page.crawledAt}`) + "\n\n"
       );
       process.stderr.write(chalk.bold("Changes: ") + summary + "\n");
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── open <page-id> ───────────────────────────────────────────────────────────
+
+program
+  .command("open <page-id>")
+  .description("Open the original URL of a page in your browser")
+  .action((pageId: string) => {
+    try {
+      const page = getPage(pageId);
+      if (!page) {
+        process.stderr.write(chalk.red(`Page not found: ${pageId}\n`));
+        process.exit(1);
+      }
+      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+      execSync(`${cmd} "${page.url}"`);
+      process.stderr.write(chalk.green(`✓ Opened ${page.url}\n`));
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -763,7 +969,20 @@ function parseConfigValue(value: string): unknown {
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 // ─── Run ─────────────────────────────────────────────────────────────────────
+
+// Default command: if first real arg looks like a URL, treat as `crawl crawl <url>`
+const args = process.argv.slice(2);
+const firstArg = args[0];
+if (firstArg && (firstArg.startsWith("http://") || firstArg.startsWith("https://"))) {
+  process.argv.splice(2, 0, "crawl");
+}
 
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(chalk.red(`Fatal: ${(err as Error).message}\n`));

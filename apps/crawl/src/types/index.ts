@@ -15,6 +15,9 @@ export interface CrawlOptions {
   storeHtml?: boolean;
   userAgent?: string;
   timeout?: number;
+  include?: string[];   // URL patterns to include (e.g. ["/blog", "/docs"])
+  exclude?: string[];   // URL patterns to exclude (e.g. ["/admin", ".pdf"])
+  onProgress?: (info: { url: string; pageNumber: number; total?: number }) => void;
 }
 
 export interface Crawl {
@@ -51,6 +54,8 @@ export interface PageMetadata {
   canonicalUrl?: string;
   lang?: string;
   robots?: string;
+  noindex?: boolean;
+  nofollow?: boolean;
 }
 
 export interface Page {

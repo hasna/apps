@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getCrawl, listCrawls, getCrawlStats } from "../db/crawls.js";
+import { getCrawl, listCrawls, getCrawlStats, deleteCrawl, getGlobalStats } from "../db/crawls.js";
 import { getPage, listPages, searchPages } from "../db/pages.js";
 import { getConfig, setConfig } from "../lib/config.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
@@ -597,6 +597,58 @@ server.tool(
         content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
         isError: true,
       };
+    }
+  }
+);
+
+// ─── Tool: delete_crawl ──────────────────────────────────────────────────────
+
+server.tool(
+  "delete_crawl",
+  "Delete a crawl job and all its pages",
+  { id: z.string().describe("Crawl ID to delete") },
+  async ({ id }) => {
+    try {
+      const crawl = getCrawl(id);
+      if (!crawl) return { content: [{ type: "text" as const, text: `Crawl not found: ${id}` }], isError: true };
+      const stats = getCrawlStats(id);
+      deleteCrawl(id);
+      return { content: [{ type: "text" as const, text: `Deleted crawl ${id} and ${stats.total} pages` }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: String(err) }], isError: true };
+    }
+  }
+);
+
+// ─── Tool: get_stats ─────────────────────────────────────────────────────────
+
+server.tool(
+  "get_stats",
+  "Get global stats: total crawls, pages, words, top domains, DB size",
+  {},
+  async () => {
+    try {
+      const stats = getGlobalStats();
+      return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: String(err) }], isError: true };
+    }
+  }
+);
+
+// ─── Tool: resume_crawl ──────────────────────────────────────────────────────
+
+server.tool(
+  "resume_crawl",
+  "Resume an interrupted crawl, skipping already-crawled pages",
+  { id: z.string().describe("Crawl ID to resume") },
+  async ({ id }) => {
+    try {
+      const { resumeCrawl } = await import("../lib/crawler.js");
+      const result = await resumeCrawl(id);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ id: result.id, status: result.status, pagesCrawled: result.pagesCrawled }, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: String(err) }], isError: true };
     }
   }
 );

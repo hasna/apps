@@ -178,6 +178,50 @@ export function searchPages(query: string, options?: SearchOptions): SearchResul
   }));
 }
 
+export function updatePage(
+  id: string,
+  updates: Partial<Pick<Page, "screenshotPath" | "textContent" | "markdownContent" | "title" | "description" | "metadata">>
+): Page | null {
+  const db = getDb();
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.screenshotPath !== undefined) {
+    setClauses.push("screenshot_path = ?");
+    values.push(updates.screenshotPath);
+  }
+  if (updates.textContent !== undefined) {
+    setClauses.push("text_content = ?");
+    values.push(updates.textContent);
+  }
+  if (updates.markdownContent !== undefined) {
+    setClauses.push("markdown_content = ?");
+    values.push(updates.markdownContent);
+  }
+  if (updates.title !== undefined) {
+    setClauses.push("title = ?");
+    values.push(updates.title);
+  }
+  if (updates.description !== undefined) {
+    setClauses.push("description = ?");
+    values.push(updates.description);
+  }
+  if (updates.metadata !== undefined) {
+    setClauses.push("metadata = ?");
+    values.push(JSON.stringify(updates.metadata));
+  }
+
+  if (setClauses.length === 0) return getPage(id);
+
+  values.push(id);
+  const stmt = db.prepare(
+    `UPDATE pages SET ${setClauses.join(", ")} WHERE id = ?`
+  );
+  stmt.run(...(values as Parameters<typeof stmt.run>));
+
+  return getPage(id);
+}
+
 export function savePageVersion(
   pageId: string,
   textContent: string | null,

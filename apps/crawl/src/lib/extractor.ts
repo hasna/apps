@@ -405,6 +405,13 @@ function extractMetadata(html: string, baseUrl: string): PageMetadata {
     metadata.robots = robotsValue;
   }
 
+  // Check robots meta tag for noindex/nofollow
+  const robotsMeta = html.match(/<meta\s+name=["']robots["']\s+content=["']([^"']+)["']/i)?.[1]?.toLowerCase() ?? "";
+  const noindex = robotsMeta.includes("noindex");
+  const nofollow = robotsMeta.includes("nofollow");
+  if (noindex) metadata.noindex = true;
+  if (nofollow) metadata.nofollow = true;
+
   return metadata;
 }
 
