@@ -227,7 +227,6 @@ export async function runEvalScenario(
     scenarioId: scenario.id,
     model: "eval",
     stepsTotal: caseResults.length,
-    stepsCompleted: passedCases,
   });
 
   return updateResult(result.id, {
@@ -418,7 +417,6 @@ export async function runRagEval(
     scenarioId: scenario.id,
     model: "rag-eval",
     stepsTotal: caseResults.length,
-    stepsCompleted: passedCases,
   });
 
   return updateResult(result.id, {
@@ -456,7 +454,6 @@ export async function runPipelineScenario(
     scenarioId: scenario.id,
     model: "pipeline",
     stepsTotal: pipelineConfig.steps.length,
-    stepsCompleted: pipelineResult.stepsCompleted,
   });
 
   return updateResult(result.id, {

@@ -10,7 +10,7 @@
  */
 
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
-import { createClientForModel, callOpenAICompatible, detectProvider } from "./ai-client.js";
+import { callOpenAICompatible, detectProvider } from "./ai-client.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadConfig } from "./config.js";
 import { AIClientError } from "../types/index.js";

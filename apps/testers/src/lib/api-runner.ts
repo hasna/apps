@@ -95,7 +95,7 @@ export async function runApiCheck(
     }
 
     // If critical/high PII detected, override status to failed
-    let finalStatus = status;
+    let finalStatus: "passed" | "failed" | "error" = status;
     if (piiDetections && piiDetections.some((d) => d.severity === "critical" || d.severity === "high")) {
       finalStatus = "failed";
       const types = [...new Set(piiDetections.filter((d) => d.severity === "critical" || d.severity === "high").map((d) => d.type))];

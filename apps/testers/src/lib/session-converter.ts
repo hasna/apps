@@ -232,36 +232,37 @@ export async function convertSessionToScenario(
   let steps: string[];
 
   // Try AI synthesis if model provided and API key available
-  if (options?.model && (process.env["ANTHROPIC_API_KEY"] || process.env["OPENAI_API_KEY"])) {
+  if (options?.model && (process.env["ANTHROPIC_API_KEY"] || process.env["OPENAI_API_KEY"] || process.env["GOOGLE_API_KEY"])) {
     try {
-      const { createClientForModel, runAgentLoop, resolveModel } = await import("./ai-client.js");
-      const model = resolveModel(options.model);
+      const { callOpenAICompatible, detectProvider } = await import("./ai-client.js");
+      const model = options.model;
+      const provider = detectProvider(model);
       const condensed = events
         .filter((e) => e.type !== "network")
         .map((e) => `[${e.type}] ${e.url ?? e.selector ?? e.value ?? ""}`)
         .slice(0, 100)
         .join("\n");
 
-      const client = createClientForModel(model);
-      const messages: Array<{ role: "user" | "assistant"; content: string }> = [
-        {
-          role: "user",
-          content: `Convert these recorded browser session events into clear, human-readable test scenario steps. Each step should be a single action. Output ONLY the steps, one per line, no numbering, no extra text.\n\nEvents:\n${condensed}`,
-        },
-      ];
+      const prompt = `Convert these recorded browser session events into clear, human-readable test scenario steps. Each step should be a single action. Output ONLY the steps, one per line, no numbering, no extra text.\n\nEvents:\n${condensed}`;
 
-      let aiSteps: string[] | null = null;
-      await runAgentLoop(client, model, messages, [], {
-        onText: (text: string) => {
-          aiSteps = text
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean);
-        },
-      });
+      let rawText = "";
+      if (provider === "openai" || provider === "google") {
+        const baseUrl = provider === "openai" ? "https://api.openai.com/v1" : "https://generativelanguage.googleapis.com/v1beta/openai";
+        const apiKey = provider === "openai" ? (process.env["OPENAI_API_KEY"] ?? "") : (process.env["GOOGLE_API_KEY"] ?? "");
+        const resp = await callOpenAICompatible({ baseUrl, apiKey, model, system: "You are a QA engineer.", messages: [{ role: "user", content: prompt }], tools: [], maxTokens: 1024 });
+        const block = resp.content.find((b) => b.type === "text") as { text: string } | undefined;
+        rawText = block?.text ?? "";
+      } else {
+        const { default: Anthropic } = await import("@anthropic-ai/sdk");
+        const anthropic = new Anthropic({ apiKey: process.env["ANTHROPIC_API_KEY"] ?? "" });
+        const resp = await anthropic.messages.create({ model, max_tokens: 1024, messages: [{ role: "user", content: prompt }] });
+        const block = resp.content.find((b) => b.type === "text") as { type: "text"; text: string } | undefined;
+        rawText = block?.text ?? "";
+      }
 
-      if (aiSteps && (aiSteps as string[]).length > 0) {
-        steps = aiSteps as string[];
+      const aiSteps = rawText.split("\n").map((s) => s.trim()).filter(Boolean);
+      if (aiSteps.length > 0) {
+        steps = aiSteps;
       } else {
         steps = eventsToSteps(events);
       }
