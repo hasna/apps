@@ -77,6 +77,8 @@ export interface SessionOptions {
   captureConsole?: boolean;  // default: true — auto-enable console capture
   stealth?: boolean;         // default: false — apply anti-detection patches
   autoGallery?: boolean;       // default: false — auto-save screenshot to gallery on every navigate
+  cdpUrl?: string;             // Connect to existing Chrome via CDP (e.g. http://localhost:9222)
+  storageState?: string;        // Name of a saved storage state to load (restores cookies/auth)
 }
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────

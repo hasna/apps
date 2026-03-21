@@ -231,6 +231,28 @@ sessionCmd
     console.log(chalk.green(`✓ Session closed: ${id}`));
   });
 
+sessionCmd
+  .command("save-state <name>")
+  .description("Save current session auth state for reuse")
+  .requiredOption("--session <id>", "Session ID")
+  .action(async (name: string, opts: { session: string }) => {
+    const page = getSessionPage(opts.session);
+    const { saveStateFromPage } = await import("../lib/storage-state.js");
+    const path = await saveStateFromPage(page, name);
+    console.log(chalk.green(`✓ State saved: ${name}`));
+    console.log(chalk.gray(`  Path: ${path}`));
+  });
+
+sessionCmd
+  .command("list-states")
+  .description("List saved auth states")
+  .action(async () => {
+    const { listStates } = await import("../lib/storage-state.js");
+    const states = listStates();
+    if (states.length === 0) { console.log(chalk.gray("No saved states")); return; }
+    states.forEach(s => console.log(`${s.name} ${chalk.gray(s.modified)}`));
+  });
+
 // ─── record ──────────────────────────────────────────────────────────────────
 
 const recordCmd = program.command("record").description("Manage action recordings");
@@ -343,6 +365,28 @@ projectCmd
       console.log(chalk.gray("No projects found"));
     } else {
       projects.forEach((p) => console.log(`${p.id} "${p.name}" ${p.path}`));
+    }
+  });
+
+// ─── attach (CDP connect) ─────────────────────────────────────────────────────
+
+program
+  .command("attach")
+  .description("Attach to a running Chrome browser via CDP")
+  .option("--port <port>", "Chrome debugging port", "9222")
+  .option("--host <host>", "Chrome debugging host", "localhost")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { port: string; host: string; json?: boolean }) => {
+    const cdpUrl = `http://${opts.host}:${opts.port}`;
+    const { session, page } = await createSession({ cdpUrl });
+    const title = await page.title();
+    const url = page.url();
+    if (opts.json) {
+      console.log(JSON.stringify({ session_id: session.id, url, title, cdp_url: cdpUrl }));
+    } else {
+      console.log(chalk.green(`✓ Attached to Chrome at ${cdpUrl}`));
+      console.log(chalk.blue(`  Session: ${session.id}`));
+      console.log(chalk.blue(`  Page: ${title} (${url})`));
     }
   });
 

@@ -220,6 +220,23 @@ function runMigrations(db: Database): void {
         CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag);
       `,
     },
+    {
+      version: 6,
+      sql: `
+        CREATE TABLE IF NOT EXISTS auth_flows (
+          id                 TEXT PRIMARY KEY,
+          name               TEXT NOT NULL UNIQUE,
+          domain             TEXT NOT NULL,
+          recording_id       TEXT REFERENCES recordings(id),
+          storage_state_path TEXT,
+          created_at         TEXT DEFAULT (datetime('now')),
+          last_used          TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_auth_flows_domain ON auth_flows(domain);
+        CREATE INDEX IF NOT EXISTS idx_auth_flows_name ON auth_flows(name);
+      `,
+    },
   ];
 
   for (const m of migrations) {

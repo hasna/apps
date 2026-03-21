@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { BrowserError, ElementNotFoundError, NavigationError } from "../types/index.js";
 import { getRefLocator } from "./snapshot.js";
+import { healSelector } from "./self-heal.js";
 
 export interface ClickOptions {
   button?: "left" | "right" | "middle";
@@ -20,7 +21,7 @@ export interface WaitOptions {
   timeout?: number;
 }
 
-export async function click(page: Page, selector: string, opts?: ClickOptions): Promise<void> {
+export async function click(page: Page, selector: string, opts?: ClickOptions & { selfHeal?: boolean }): Promise<{ healed?: boolean; method?: string; attempts?: string[] }> {
   try {
     await page.click(selector, {
       button: opts?.button ?? "left",
@@ -28,32 +29,63 @@ export async function click(page: Page, selector: string, opts?: ClickOptions): 
       delay: opts?.delay,
       timeout: opts?.timeout ?? 10000,
     });
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("not found")) {
+    return {};
+  } catch (originalError) {
+    // Self-heal attempt
+    if (opts?.selfHeal !== false) {
+      const result = await healSelector(page, selector);
+      if (result.found && result.locator) {
+        await result.locator.click({
+          button: opts?.button ?? "left",
+          timeout: opts?.timeout ?? 10000,
+        });
+        return { healed: true, method: result.method, attempts: result.attempts };
+      }
+    }
+    if (originalError instanceof Error && originalError.message.includes("not found")) {
       throw new ElementNotFoundError(selector);
     }
-    throw new BrowserError(`Click failed on '${selector}': ${err instanceof Error ? err.message : String(err)}`, "CLICK_FAILED");
+    throw new BrowserError(`Click failed on '${selector}': ${originalError instanceof Error ? originalError.message : String(originalError)}`, "CLICK_FAILED");
   }
 }
 
-export async function type(page: Page, selector: string, text: string, opts?: TypeOptions): Promise<void> {
+export async function type(page: Page, selector: string, text: string, opts?: TypeOptions & { selfHeal?: boolean }): Promise<{ healed?: boolean; method?: string; attempts?: string[] }> {
   try {
     if (opts?.clear) {
       await page.fill(selector, "", { timeout: opts?.timeout ?? 10000 });
     }
     await page.type(selector, text, { delay: opts?.delay, timeout: opts?.timeout ?? 10000 });
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("not found")) {
+    return {};
+  } catch (originalError) {
+    // Self-heal attempt
+    if (opts?.selfHeal !== false) {
+      const result = await healSelector(page, selector);
+      if (result.found && result.locator) {
+        if (opts?.clear) await result.locator.fill("", { timeout: opts?.timeout ?? 10000 });
+        await result.locator.pressSequentially(text, { delay: opts?.delay, timeout: opts?.timeout ?? 10000 });
+        return { healed: true, method: result.method, attempts: result.attempts };
+      }
+    }
+    if (originalError instanceof Error && originalError.message.includes("not found")) {
       throw new ElementNotFoundError(selector);
     }
-    throw new BrowserError(`Type failed on '${selector}': ${err instanceof Error ? err.message : String(err)}`, "TYPE_FAILED");
+    throw new BrowserError(`Type failed on '${selector}': ${originalError instanceof Error ? originalError.message : String(originalError)}`, "TYPE_FAILED");
   }
 }
 
-export async function fill(page: Page, selector: string, value: string, timeout = 10000): Promise<void> {
+export async function fill(page: Page, selector: string, value: string, timeout = 10000, selfHeal = true): Promise<{ healed?: boolean; method?: string; attempts?: string[] }> {
   try {
     await page.fill(selector, value, { timeout });
-  } catch (err) {
+    return {};
+  } catch (originalError) {
+    // Self-heal attempt
+    if (selfHeal) {
+      const result = await healSelector(page, selector);
+      if (result.found && result.locator) {
+        await result.locator.fill(value, { timeout });
+        return { healed: true, method: result.method, attempts: result.attempts };
+      }
+    }
     throw new ElementNotFoundError(selector);
   }
 }
@@ -239,14 +271,44 @@ import type { FormFillResult } from "../types/index.js";
 export async function fillForm(
   page: Page,
   fields: Record<string, string | boolean>,
-  submitSelector?: string
-): Promise<FormFillResult> {
+  submitSelector?: string,
+  selfHeal = true
+): Promise<FormFillResult & { healed_fields?: string[] }> {
   let filled = 0;
   const errors: string[] = [];
+  const healedFields: string[] = [];
 
   for (const [selector, value] of Object.entries(fields)) {
     try {
-      const el = await page.$(selector);
+      let el = await page.$(selector);
+
+      // Self-heal: if element not found, try fallback strategies
+      if (!el && selfHeal) {
+        const result = await healSelector(page, selector);
+        if (result.found && result.locator) {
+          const handle = await result.locator.elementHandle();
+          if (handle) {
+            el = handle as any;
+            healedFields.push(selector);
+            // For healed elements, use the locator directly
+            const tagName = await result.locator.evaluate((e) => (e as HTMLElement).tagName.toLowerCase());
+            const inputType = await result.locator.evaluate((e) => (e as HTMLInputElement).type?.toLowerCase() ?? "text");
+            if (tagName === "select") {
+              await result.locator.selectOption(String(value));
+            } else if (tagName === "input" && (inputType === "checkbox" || inputType === "radio")) {
+              if (Boolean(value)) await result.locator.check();
+              else await result.locator.uncheck();
+            } else {
+              await result.locator.fill(String(value));
+            }
+            filled++;
+            continue;
+          }
+        }
+        errors.push(`${selector}: element not found`);
+        continue;
+      }
+
       if (!el) { errors.push(`${selector}: element not found`); continue; }
 
       const tagName = await el.evaluate((e) => (e as HTMLElement).tagName.toLowerCase());
@@ -273,12 +335,23 @@ export async function fillForm(
   if (submitSelector) {
     try {
       await page.click(submitSelector);
-    } catch (err) {
-      errors.push(`submit(${submitSelector}): ${err instanceof Error ? err.message : String(err)}`);
+    } catch (submitErr) {
+      // Self-heal the submit button too
+      if (selfHeal) {
+        const result = await healSelector(page, submitSelector);
+        if (result.found && result.locator) {
+          await result.locator.click();
+          healedFields.push(submitSelector);
+        } else {
+          errors.push(`submit(${submitSelector}): ${submitErr instanceof Error ? submitErr.message : String(submitErr)}`);
+        }
+      } else {
+        errors.push(`submit(${submitSelector}): ${submitErr instanceof Error ? submitErr.message : String(submitErr)}`);
+      }
     }
   }
 
-  return { filled, errors, fields_attempted: Object.keys(fields).length };
+  return { filled, errors, fields_attempted: Object.keys(fields).length, ...(healedFields.length > 0 ? { healed_fields: healedFields } : {}) };
 }
 
 // ─── QoL: wait for text ───────────────────────────────────────────────────────

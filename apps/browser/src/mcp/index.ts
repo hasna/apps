@@ -96,7 +96,7 @@ const server = new McpServer({
 
 server.tool(
   "browser_session_create",
-  "Create a new browser session. If agent_id is set and already has an active session, returns the existing one (use force_new to override). If session_id is omitted on other tools, the single active session is auto-selected.",
+  "Create a new browser session. If agent_id is set and already has an active session, returns the existing one (use force_new to override). If session_id is omitted on other tools, the single active session is auto-selected. Use cdp_url to attach to an already-running Chrome instance.",
   {
     engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "auto"]).optional().default("auto"),
     use_case: z.string().optional(),
@@ -108,10 +108,12 @@ server.tool(
     viewport_height: z.number().optional().default(720),
     stealth: z.boolean().optional().default(false),
     auto_gallery: z.boolean().optional().default(false),
+    storage_state: z.string().optional().describe("Name of saved storage state to load (restores cookies/auth from previous session)"),
     force_new: z.boolean().optional().default(false).describe("Force create a new session even if agent already has one"),
     tags: z.array(z.string()).optional(),
+    cdp_url: z.string().optional().describe("Connect to existing Chrome via CDP (e.g. http://localhost:9222). Start Chrome with --remote-debugging-port=9222"),
   },
-  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, force_new, tags }) => {
+  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, storage_state, force_new, tags, cdp_url }) => {
     try {
       // Auto-reuse: if agent already has an active session, return it
       if (agent_id && !force_new) {
@@ -128,6 +130,8 @@ server.tool(
         viewport: { width: viewport_width, height: viewport_height },
         stealth,
         autoGallery: auto_gallery,
+        storageState: storage_state,
+        cdpUrl: cdp_url,
       });
       // Apply tags if provided
       if (tags?.length) {
@@ -339,9 +343,9 @@ server.tool(
 
 server.tool(
   "browser_click",
-  "Click an element by ref (from snapshot) or CSS selector. Prefer ref for reliability.",
-  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), button: z.enum(["left", "right", "middle"]).optional(), timeout: z.number().optional() },
-  async ({ session_id, selector, ref, button, timeout }) => {
+  "Click an element by ref (from snapshot) or CSS selector. Prefer ref for reliability. Self-healing auto-tries fallback selectors if element not found.",
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), button: z.enum(["left", "right", "middle"]).optional(), timeout: z.number().optional(), self_heal: z.boolean().optional().default(true).describe("Auto-try fallback selectors if element not found") },
+  async ({ session_id, selector, ref, button, timeout, self_heal }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
@@ -351,8 +355,11 @@ server.tool(
         return json({ clicked: ref, method: "ref" });
       }
       if (!selector) return err(new Error("Either ref or selector is required"));
-      await click(page, selector, { button, timeout });
-      logEvent(sid, "click", { selector, method: "selector" });
+      const healInfo = await click(page, selector, { button, timeout, selfHeal: self_heal });
+      logEvent(sid, "click", { selector, method: healInfo.healed ? "healed" : "selector" });
+      if (healInfo.healed) {
+        return json({ clicked: selector, method: "healed", heal_method: healInfo.method, attempts: healInfo.attempts });
+      }
       return json({ clicked: selector, method: "selector" });
     } catch (e) { return errWithScreenshot(e, session_id); }
   }
@@ -360,9 +367,9 @@ server.tool(
 
 server.tool(
   "browser_type",
-  "Type text into an element by ref or selector. Prefer ref.",
-  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), text: z.string(), clear: z.boolean().optional().default(false), delay: z.number().optional() },
-  async ({ session_id, selector, ref, text, clear, delay }) => {
+  "Type text into an element by ref or selector. Prefer ref. Self-healing auto-tries fallback selectors if element not found.",
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), text: z.string(), clear: z.boolean().optional().default(false), delay: z.number().optional(), self_heal: z.boolean().optional().default(true).describe("Auto-try fallback selectors if element not found") },
+  async ({ session_id, selector, ref, text, clear, delay, self_heal }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
@@ -372,8 +379,11 @@ server.tool(
         return json({ typed: text, ref, method: "ref" });
       }
       if (!selector) return err(new Error("Either ref or selector is required"));
-      await typeText(page, selector, text, { clear, delay });
-      logEvent(sid, "type", { selector, text: text.slice(0, 100) });
+      const healInfo = await typeText(page, selector, text, { clear, delay, selfHeal: self_heal });
+      logEvent(sid, "type", { selector, text: text.slice(0, 100), method: healInfo.healed ? "healed" : "selector" });
+      if (healInfo.healed) {
+        return json({ typed: text, selector, method: "healed", heal_method: healInfo.method, attempts: healInfo.attempts });
+      }
       return json({ typed: text, selector, method: "selector" });
     } catch (e) { return errWithScreenshot(e, session_id); }
   }
@@ -487,26 +497,38 @@ server.tool(
 
 server.tool(
   "browser_get_text",
-  "Get text content from the page or a selector",
-  { session_id: z.string().optional(), selector: z.string().optional() },
-  async ({ session_id, selector }) => {
+  "Get text content from the page or a selector. Sanitizes prompt injection by default.",
+  { session_id: z.string().optional(), selector: z.string().optional(), sanitize: z.boolean().optional().default(true).describe("Strip prompt injection patterns from text (default: true)") },
+  async ({ session_id, selector, sanitize }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      return json({ text: await getText(page, selector) });
+      const text = await getText(page, selector);
+      if (sanitize) {
+        const { sanitizeText } = await import("../lib/sanitize.js");
+        const sanitized = sanitizeText(text);
+        return json({ text: sanitized.text, stripped: sanitized.stripped, warnings: sanitized.warnings });
+      }
+      return json({ text });
     } catch (e) { return err(e); }
   }
 );
 
 server.tool(
   "browser_get_html",
-  "Get HTML content from the page or a selector",
-  { session_id: z.string().optional(), selector: z.string().optional() },
-  async ({ session_id, selector }) => {
+  "Get HTML content from the page or a selector. Sanitizes prompt injection by default.",
+  { session_id: z.string().optional(), selector: z.string().optional(), sanitize: z.boolean().optional().default(true).describe("Strip prompt injection patterns and hidden elements from HTML (default: true)") },
+  async ({ session_id, selector, sanitize }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      return json({ html: await getHTML(page, selector) });
+      const html = await getHTML(page, selector);
+      if (sanitize) {
+        const { sanitizeHTML } = await import("../lib/sanitize.js");
+        const sanitized = sanitizeHTML(html);
+        return json({ html: sanitized.text, stripped: sanitized.stripped, warnings: sanitized.warnings });
+      }
+      return json({ html });
     } catch (e) { return err(e); }
   }
 );
@@ -527,18 +549,34 @@ server.tool(
 
 server.tool(
   "browser_extract",
-  "Extract content from the page in a specified format",
+  "Extract content from the page in a specified format. Sanitizes prompt injection by default.",
   {
     session_id: z.string().optional(),
     format: z.enum(["text", "html", "links", "table", "structured"]).optional().default("text"),
     selector: z.string().optional(),
     schema: z.record(z.string()).optional(),
+    sanitize: z.boolean().optional().default(true).describe("Strip prompt injection patterns from extracted content (default: true)"),
   },
-  async ({ session_id, format, selector, schema }) => {
+  async ({ session_id, format, selector, schema, sanitize }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       const result = await extract(page, { format, selector, schema });
+      if (sanitize) {
+        const { sanitizeText, sanitizeHTML } = await import("../lib/sanitize.js");
+        if (result.text) {
+          const s = sanitizeText(result.text);
+          result.text = s.text;
+          (result as any).stripped = s.stripped;
+          (result as any).warnings = s.warnings;
+        }
+        if (result.html) {
+          const s = sanitizeHTML(result.html);
+          result.html = s.text;
+          (result as any).stripped = s.stripped;
+          (result as any).warnings = s.warnings;
+        }
+      }
       return json(result);
     } catch (e) { return err(e); }
   }
@@ -561,19 +599,31 @@ server.tool(
 
 server.tool(
   "browser_snapshot",
-  "Get accessibility snapshot with element refs (@e0, @e1...). Use compact=true (default) for token-efficient output. Use refs in browser_click, browser_type, etc.",
+  "Get accessibility snapshot with element refs (@e0, @e1...). Use compact=true (default) for token-efficient output. Use refs in browser_click, browser_type, etc. Sanitizes prompt injection by default.",
   {
     session_id: z.string().optional(),
     compact: z.boolean().optional().default(true),
     max_refs: z.number().optional().default(50),
     full_tree: z.boolean().optional().default(false),
+    sanitize: z.boolean().optional().default(true).describe("Strip prompt injection patterns from snapshot text (default: true)"),
   },
-  async ({ session_id, compact, max_refs, full_tree }) => {
+  async ({ session_id, compact, max_refs, full_tree, sanitize }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       const result = await takeSnapshotFn(page, sid);
       setLastSnapshot(sid, result);
+
+      // Apply sanitization to tree text
+      let injection_warnings: string[] | undefined;
+      if (sanitize) {
+        const { sanitizeText } = await import("../lib/sanitize.js");
+        const sanitized = sanitizeText(result.tree);
+        if (sanitized.stripped > 0) {
+          injection_warnings = sanitized.warnings;
+          result.tree = sanitized.text;
+        }
+      }
 
       // Limit refs to max_refs
       const refEntries = Object.entries(result.refs).slice(0, max_refs);
@@ -591,12 +641,13 @@ server.tool(
           shown_count: refEntries.length,
           truncated,
           refs: limitedRefs,
+          ...(injection_warnings ? { injection_warnings } : {}),
         });
       }
 
       // Full tree mode — truncate to 5000 chars
       const tree = full_tree ? result.tree : result.tree.slice(0, 5000) + (result.tree.length > 5000 ? "\n... (truncated — use full_tree=true for complete)" : "");
-      return json({ snapshot: tree, refs: limitedRefs, interactive_count: result.interactive_count, truncated });
+      return json({ snapshot: tree, refs: limitedRefs, interactive_count: result.interactive_count, truncated, ...(injection_warnings ? { injection_warnings } : {}) });
     } catch (e) { return err(e); }
   }
 );
@@ -1230,6 +1281,129 @@ server.tool(
   }
 );
 
+// ── Storage State Tools ───────────────────────────────────────────────────────
+
+server.tool(
+  "browser_session_save_state",
+  "Save current session's auth state (cookies, localStorage) for reuse. Use after login to avoid re-authenticating.",
+  { session_id: z.string().optional(), name: z.string().describe("Name for this state (e.g. 'github', 'gmail')") },
+  async ({ session_id, name }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const { saveStateFromPage } = await import("../lib/storage-state.js");
+      const path = await saveStateFromPage(page, name);
+      return json({ saved: true, name, path });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_session_list_states",
+  "List all saved storage states (auth snapshots)",
+  {},
+  async () => {
+    try {
+      const { listStates } = await import("../lib/storage-state.js");
+      const states = listStates();
+      return json({ states, count: states.length });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_session_delete_state",
+  "Delete a saved storage state",
+  { name: z.string() },
+  async ({ name }) => {
+    try {
+      const { deleteState } = await import("../lib/storage-state.js");
+      return json({ deleted: deleteState(name), name });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Auth Flow Tools ──────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_auth_record",
+  "Start recording a login flow. Navigate to the login page, perform the login, then call browser_auth_stop to save.",
+  { session_id: z.string().optional(), name: z.string().describe("Name for this auth flow (e.g. 'github', 'gmail')"), start_url: z.string().optional().describe("Login page URL") },
+  async ({ session_id, name, start_url }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      if (start_url) await navigate(page, start_url);
+      const recording = startRecording(sid, `auth-${name}`, page.url());
+      return json({ recording_id: recording.id, name, message: "Recording started. Perform login, then call browser_auth_stop." });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_auth_stop",
+  "Stop recording a login flow and save as a reusable auth flow with storage state.",
+  { session_id: z.string().optional(), name: z.string(), recording_id: z.string() },
+  async ({ session_id, name, recording_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const recording = stopRecording(recording_id);
+      // Save storage state
+      const { saveStateFromPage } = await import("../lib/storage-state.js");
+      const statePath = await saveStateFromPage(page, name);
+      // Extract domain
+      let domain = "";
+      try { domain = new URL(page.url()).hostname; } catch {}
+      // Save auth flow
+      const { saveAuthFlow } = await import("../lib/auth-flow.js");
+      const flow = saveAuthFlow({ name, domain, recordingId: recording.id, storageStatePath: statePath });
+      return json({ flow, recording_steps: recording.steps.length });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_auth_replay",
+  "Manually replay a saved auth flow for a domain",
+  { session_id: z.string().optional(), name: z.string().describe("Auth flow name to replay") },
+  async ({ session_id, name }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const { getAuthFlowByName, tryReplayAuth } = await import("../lib/auth-flow.js");
+      const flow = getAuthFlowByName(name);
+      if (!flow) return err(new Error(`Auth flow '${name}' not found`));
+      const result = await tryReplayAuth(page, flow.domain);
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_auth_list",
+  "List all saved auth flows",
+  {},
+  async () => {
+    try {
+      const { listAuthFlows } = await import("../lib/auth-flow.js");
+      return json({ flows: listAuthFlows() });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_auth_delete",
+  "Delete a saved auth flow",
+  { name: z.string() },
+  async ({ name }) => {
+    try {
+      const { deleteAuthFlow } = await import("../lib/auth-flow.js");
+      return json({ deleted: deleteAuthFlow(name) });
+    } catch (e) { return err(e); }
+  }
+);
+
 // ── QoL: click by text ────────────────────────────────────────────────────────
 
 server.tool(
@@ -1250,19 +1424,50 @@ server.tool(
 
 server.tool(
   "browser_fill_form",
-  "Fill multiple form fields in one call. Fields map: { selector: value }. Handles text, checkboxes, selects.",
+  "Fill multiple form fields in one call. Fields map: { selector: value }. Handles text, checkboxes, selects. Self-healing auto-tries fallback selectors per field.",
   {
     session_id: z.string().optional(),
     fields: z.record(z.union([z.string(), z.boolean()])),
     submit_selector: z.string().optional(),
+    self_heal: z.boolean().optional().default(true).describe("Auto-try fallback selectors if element not found"),
   },
-  async ({ session_id, fields, submit_selector }) => {
+  async ({ session_id, fields, submit_selector, self_heal }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      const result = await fillForm(page, fields, submit_selector);
+      const result = await fillForm(page, fields, submit_selector, self_heal);
       return json(result);
     } catch (e) { return errWithScreenshot(e, session_id); }
+  }
+);
+
+// ── Vision fallback ──────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_find_visual",
+  "Find an element using AI vision when selectors and a11y refs fail. Useful for canvas, images, custom widgets. Takes a screenshot and asks a vision model to locate the element.",
+  {
+    session_id: z.string().optional(),
+    description: z.string().describe("Natural language description of the element to find (e.g. 'the blue Submit button', 'the search icon in the top right')"),
+    click: z.boolean().optional().default(false).describe("Click the element after finding it"),
+    model: z.string().optional().describe("Vision model to use (default: claude-sonnet-4-5-20250929)"),
+  },
+  async ({ session_id, description, click: doClick, model }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      if (doClick) {
+        const { clickByVision } = await import("../lib/vision-fallback.js");
+        const result = await clickByVision(page, description, { model });
+        logEvent(sid, "vision_click", { query: description, ...result });
+        return json(result);
+      } else {
+        const { findElementByVision } = await import("../lib/vision-fallback.js");
+        const result = await findElementByVision(page, description, { model });
+        logEvent(sid, "vision_find", { query: description, ...result });
+        return json(result);
+      }
+    } catch (e) { return err(e); }
   }
 );
 
@@ -1862,6 +2067,7 @@ server.tool(
           { tool: "browser_wait", description: "Wait for a selector to appear" },
           { tool: "browser_wait_for_text", description: "Wait for text to appear" },
           { tool: "browser_fill_form", description: "Fill multiple form fields at once" },
+          { tool: "browser_find_visual", description: "Find element using AI vision (for canvas, images, custom widgets)" },
           { tool: "browser_handle_dialog", description: "Accept or dismiss a dialog" },
         ],
         Extraction: [
@@ -1891,6 +2097,9 @@ server.tool(
           { tool: "browser_profile_load", description: "Load and apply a saved profile" },
           { tool: "browser_profile_list", description: "List saved profiles" },
           { tool: "browser_profile_delete", description: "Delete a saved profile" },
+          { tool: "browser_session_save_state", description: "Save auth state (Playwright storageState) for reuse" },
+          { tool: "browser_session_list_states", description: "List saved storage states" },
+          { tool: "browser_session_delete_state", description: "Delete a saved storage state" },
         ],
         Network: [
           { tool: "browser_network_log", description: "Get captured network requests" },
@@ -1913,6 +2122,13 @@ server.tool(
           { tool: "browser_record_stop", description: "Stop and save recording" },
           { tool: "browser_record_replay", description: "Replay a recorded sequence" },
           { tool: "browser_recordings_list", description: "List all recordings" },
+        ],
+        Auth: [
+          { tool: "browser_auth_record", description: "Start recording a login flow" },
+          { tool: "browser_auth_stop", description: "Stop recording and save auth flow" },
+          { tool: "browser_auth_replay", description: "Replay a saved auth flow" },
+          { tool: "browser_auth_list", description: "List all saved auth flows" },
+          { tool: "browser_auth_delete", description: "Delete a saved auth flow" },
         ],
         Crawl: [
           { tool: "browser_crawl", description: "Crawl a URL recursively" },
@@ -1971,6 +2187,7 @@ server.tool(
           { tool: "browser_watch_start", description: "Watch page for DOM changes" },
           { tool: "browser_watch_get_changes", description: "Get captured DOM changes" },
           { tool: "browser_watch_stop", description: "Stop DOM watcher" },
+          { tool: "browser_parallel", description: "Execute actions across multiple sessions in parallel" },
         ],
       };
 
@@ -2322,6 +2539,93 @@ server.tool(
         final_snapshot,
         elapsed_ms: Date.now() - t0,
       });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_parallel — execute actions across DIFFERENT sessions concurrently
+server.tool(
+  "browser_parallel",
+  "Execute actions across multiple sessions in parallel. Each action targets a different session. Returns results array.",
+  {
+    actions: z.array(z.object({
+      session_id: z.string().describe("Target session ID"),
+      tool: z.string().describe("Tool name (e.g. browser_navigate, browser_screenshot, browser_click)"),
+      args: z.record(z.unknown()).optional().default({}),
+    })),
+    timeout: z.number().optional().default(30000).describe("Timeout per action in ms"),
+  },
+  async ({ actions, timeout }) => {
+    try {
+      const t0 = Date.now();
+
+      const promises = actions.map(async (action, index) => {
+        try {
+          const sid = action.session_id;
+          const page = getSessionPage(sid);
+          const args = action.args as Record<string, unknown>;
+          const toolName = action.tool.replace(/^browser_/, "");
+
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout after ${timeout}ms`)), timeout)
+          );
+
+          const actionPromise = (async () => {
+            switch (toolName) {
+              case "navigate": {
+                await navigate(page, args.url as string);
+                const title = await page.title();
+                return { url: page.url(), title };
+              }
+              case "screenshot": {
+                const result = await takeScreenshot(page, {
+                  maxWidth: (args.max_width as number) ?? 800,
+                  quality: (args.quality as number) ?? 60,
+                });
+                return { path: result.path, size_bytes: result.size_bytes };
+              }
+              case "click": {
+                if (args.selector) await click(page, args.selector as string);
+                return { clicked: args.selector };
+              }
+              case "type": {
+                if (args.selector && args.text) await typeText(page, args.selector as string, args.text as string);
+                return { typed: args.text };
+              }
+              case "get_text": {
+                const text = await getText(page);
+                return { text: text.slice(0, 1000), length: text.length };
+              }
+              case "get_links": {
+                const links = await getLinks(page);
+                return { links, count: links.length };
+              }
+              case "snapshot": {
+                const snap = await takeSnapshotFn(page, sid);
+                return { interactive_count: snap.interactive_count, refs_count: Object.keys(snap.refs).length };
+              }
+              case "evaluate": {
+                const result = await page.evaluate(args.expression as string);
+                return { result };
+              }
+              default:
+                return { error: `Unknown tool: ${action.tool}` };
+            }
+          })();
+
+          const result = await Promise.race([actionPromise, timeoutPromise]);
+          return { index, session_id: sid, tool: action.tool, success: true, result };
+        } catch (e) {
+          return { index, session_id: action.session_id, tool: action.tool, success: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      });
+
+      const results = await Promise.all(promises);
+      const duration_ms = Date.now() - t0;
+      const succeeded = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
+
+      return json({ results, duration_ms, succeeded, failed, total: actions.length });
     } catch (e) { return err(e); }
   }
 );

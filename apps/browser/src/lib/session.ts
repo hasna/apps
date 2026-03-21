@@ -60,6 +60,37 @@ export interface CreateSessionResult {
 }
 
 export async function createSession(opts: SessionOptions = {}): Promise<CreateSessionResult> {
+  // CDP attach: connect to existing browser
+  if (opts.cdpUrl) {
+    const { connectToExistingBrowser } = await import("../engines/cdp.js");
+    const cdpBrowser = await connectToExistingBrowser(opts.cdpUrl);
+    const contexts = cdpBrowser.contexts();
+    const context = contexts.length > 0 ? contexts[0] : await cdpBrowser.newContext();
+    const pages = context.pages();
+    const page = pages.length > 0 ? pages[0] : await context.newPage();
+
+    const session = dbCreateSession({
+      engine: "cdp",
+      projectId: opts.projectId,
+      agentId: opts.agentId,
+      startUrl: page.url(),
+      name: opts.name ?? "attached",
+    });
+
+    const cleanups: Array<() => void> = [];
+    if (opts.captureNetwork !== false) {
+      try { cleanups.push(enableNetworkLogging(page, session.id)); } catch {}
+    }
+    if (opts.captureConsole !== false) {
+      try { cleanups.push(enableConsoleCapture(page, session.id)); } catch {}
+    }
+    try { cleanups.push(setupDialogHandler(page, session.id)); } catch {}
+
+    handles.set(session.id, { browser: cdpBrowser, bunView: null, page, engine: "cdp", cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false });
+
+    return { session, page };
+  }
+
   const engine = opts.engine === "auto" || !opts.engine
     ? selectEngine(opts.useCase ?? UseCase.SPA_NAVIGATE, opts.engine)
     : opts.engine;
@@ -95,7 +126,22 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
   } else {
     // playwright or cdp both use Playwright under the hood — use shared pool
     browser = await pool.acquire(opts.headless ?? true);
-    page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
+    if (opts.storageState) {
+      const { loadStatePath } = await import("./storage-state.js");
+      const statePath = loadStatePath(opts.storageState);
+      if (statePath) {
+        const context = await browser.newContext({
+          viewport: opts.viewport ?? { width: 1280, height: 720 },
+          userAgent: opts.userAgent,
+          storageState: statePath,
+        });
+        page = await context.newPage();
+      } else {
+        page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
+      }
+    } else {
+      page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
+    }
   }
 
   // Compute session name, falling back gracefully if already taken

@@ -1,6 +1,21 @@
-import type { Page, CDPSession } from "playwright";
+import type { Browser, Page, CDPSession } from "playwright";
 import type { PerformanceMetrics, CoverageEntry, CoverageResult } from "../types/index.js";
 import { BrowserError } from "../types/index.js";
+
+// ─── Connect to existing browser via CDP ─────────────────────────────────────
+
+export async function connectToExistingBrowser(cdpUrl: string): Promise<Browser> {
+  const { chromium } = await import("playwright");
+  try {
+    return await chromium.connectOverCDP(cdpUrl);
+  } catch (err) {
+    throw new BrowserError(
+      `Failed to connect to browser at ${cdpUrl}: ${err instanceof Error ? err.message : String(err)}. Start Chrome with: google-chrome --remote-debugging-port=9222`,
+      "CDP_CONNECT_FAILED",
+      true
+    );
+  }
+}
 
 // ─── CDP Session Wrapper ──────────────────────────────────────────────────────
 
