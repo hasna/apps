@@ -760,17 +760,21 @@ scriptCmd
   });
 
 scriptCmd
-  .command("create-usestable")
-  .description("Create the usestable.com login script (magic link via Gmail)")
-  .option("--email <email>", "Email address", "andrei@hasna.com")
-  .action(async (opts: { email: string }) => {
-    const { createUsestableScript, saveScript } = await import("../lib/login-scripts.js");
-    const script = createUsestableScript(opts.email);
-    const path = saveScript(script);
-    console.log(chalk.green(`✓ Script saved: ${script.name}`));
-    console.log(chalk.gray(`  Path: ${path}`));
-    console.log(chalk.gray(`  Steps: ${script.steps.length}`));
-    console.log(chalk.gray(`  Run with: browser script run usestable`));
+  .command("create <file>")
+  .description("Create a script from a JSON file (see docs for schema)")
+  .action(async (file: string) => {
+    const { createScriptFromFile, saveScript } = await import("../lib/login-scripts.js");
+    try {
+      const script = createScriptFromFile(file);
+      const path = saveScript(script);
+      console.log(chalk.green(`✓ Script saved: ${script.name}`));
+      console.log(chalk.gray(`  Domain: ${script.domain}`));
+      console.log(chalk.gray(`  Steps: ${script.steps.length}`));
+      console.log(chalk.gray(`  Path: ${path}`));
+      console.log(chalk.gray(`  Run with: browser script run ${script.name}`));
+    } catch (err) {
+      console.log(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    }
   });
 
 scriptCmd

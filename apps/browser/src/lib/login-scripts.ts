@@ -434,49 +434,27 @@ function runExtractStep(step: ScriptStep, vars: Record<string, string>): void {
   }
 }
 
-// ─── Helper: create the usestable login script ──────────────────────────────
+// ─── Create script from JSON file or inline JSON ────────────────────────────
 
-export function createUsestableScript(email: string): LoginScript {
+export function createScriptFromJSON(jsonStr: string): LoginScript {
+  const parsed = JSON.parse(jsonStr);
+  if (!parsed.name) throw new Error("Script must have a 'name' field");
+  if (!parsed.domain) throw new Error("Script must have a 'domain' field");
+  if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+    throw new Error("Script must have a non-empty 'steps' array");
+  }
   return {
-    name: "usestable",
-    domain: "dashboard.usestable.com",
-    description: "Login to Stable via magic link (email → Gmail → click link)",
-    variables: { email },
-    steps: [
-      { type: "browser", action: "navigate", url: "https://dashboard.usestable.com/login", description: "Go to login page" },
-      { type: "browser", action: "type", selector: "input", value: "{{email}}", description: "Enter email" },
-      { type: "browser", action: "click_text", text: "Continue", description: "Click Continue" },
-      { type: "wait", seconds: 1, description: "Wait for login options" },
-      { type: "browser", action: "click_text", text: "Send login link", description: "Request magic link" },
-      { type: "wait", seconds: 5, description: "Wait for email delivery" },
-      {
-        type: "connector", connector: "gmail",
-        args: ["search", "from:authenticate.usestable.com newer_than:5m", "-n", "1"],
-        description: "Search Gmail for magic link email",
-      },
-      {
-        type: "extract", pattern: "id:\\s*([a-f0-9]+)", save_as: "email_id",
-        description: "Extract email ID from search results",
-      },
-      {
-        type: "connector", connector: "gmail",
-        args: ["messages", "read", "{{email_id}}", "--body", "--html"],
-        save_as: "email_body",
-        description: "Read the magic link email",
-      },
-      {
-        type: "extract", pattern: "href='(https://dashboard\\.usestable\\.com/login\\?[^']+)'",
-        check: "email_body", save_as: "magic_link",
-        description: "Extract magic link URL from email HTML",
-      },
-      { type: "browser", action: "navigate", url: "{{magic_link}}", description: "Open magic link" },
-      { type: "wait", seconds: 2, description: "Wait for page to load" },
-      { type: "browser", action: "type", selector: "input", value: "{{email}}", description: "Re-enter email" },
-      { type: "browser", action: "click_text", text: "Login", description: "Click Login" },
-      { type: "browser", action: "wait_for_navigation", timeout: 15000, description: "Wait for redirect to dashboard" },
-      { type: "save_state", name: "usestable", description: "Save auth state" },
-    ],
+    name: parsed.name,
+    domain: parsed.domain,
+    description: parsed.description ?? "",
+    variables: parsed.variables ?? {},
+    steps: parsed.steps,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
+}
+
+export function createScriptFromFile(filePath: string): LoginScript {
+  if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+  return createScriptFromJSON(readFileSync(filePath, "utf8"));
 }
