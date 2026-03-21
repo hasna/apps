@@ -224,21 +224,34 @@ program
         storedFindings.push(finding);
       }
 
-      // LLM analysis
+      // Complete scan first (don't block on LLM)
+      completeScan(scan.id, storedFindings.length);
+
+      // LLM analysis — parallel batches of 5
       if (useLLM && isLLMAvailable() && storedFindings.length > 0) {
         console.log(
-          chalk.gray(`  Running LLM analysis on ${storedFindings.length} findings...`),
+          chalk.gray(`  Running LLM analysis on ${storedFindings.length} findings (5 concurrent)...`),
         );
-        for (const finding of storedFindings) {
-          const codeContext = getCodeContext(
-            resolve(scanPath, finding.file),
-            finding.line,
+        const BATCH_SIZE = 5;
+        let analyzed = 0;
+        for (let i = 0; i < storedFindings.length; i += BATCH_SIZE) {
+          const batch = storedFindings.slice(i, i + BATCH_SIZE);
+          await Promise.allSettled(
+            batch.map(async (finding) => {
+              const codeContext = getCodeContext(
+                resolve(scanPath, finding.file),
+                finding.line,
+              );
+              const analysis = await llmAnalyzeFinding(finding, codeContext);
+              if (analysis) {
+                finding.llm_exploitability = analysis.exploitability;
+              }
+              analyzed++;
+            }),
           );
-          const analysis = await llmAnalyzeFinding(finding, codeContext);
-          if (analysis) {
-            finding.llm_exploitability = analysis.exploitability;
-          }
+          process.stdout.write(chalk.gray(`\r  Analyzed ${analyzed}/${storedFindings.length} findings`));
         }
+        console.log();
       } else if (useLLM && !isLLMAvailable()) {
         console.log(
           chalk.yellow(
@@ -246,9 +259,6 @@ program
           ),
         );
       }
-
-      // Complete scan
-      completeScan(scan.id, storedFindings.length);
 
       const duration = Date.now() - startTime;
       console.log(

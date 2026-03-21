@@ -164,22 +164,31 @@ export function startServer(port: number) {
           // Store findings
           const findings = findingInputs.map((input) => createFinding(scan.id, input));
 
-          // LLM analysis if requested
-          if (llm_analyze && isLLMAvailable()) {
-            for (const finding of findings) {
-              const context = getCodeContext(finding.file, finding.line);
-              if (context) {
-                const analysis = await llmAnalyze(finding, context);
-                if (analysis) {
-                  updateFinding(finding.id, {
-                    llm_exploitability: analysis.exploitability,
-                  });
-                }
-              }
-            }
-          }
-
+          // Complete scan immediately
           completeScan(scan.id, findings.length);
+
+          // LLM analysis runs in background — don't block scan completion
+          if (llm_analyze && isLLMAvailable()) {
+            const BATCH_SIZE = 5;
+            (async () => {
+              for (let i = 0; i < findings.length; i += BATCH_SIZE) {
+                const batch = findings.slice(i, i + BATCH_SIZE);
+                await Promise.allSettled(
+                  batch.map(async (finding) => {
+                    const context = getCodeContext(finding.file, finding.line);
+                    if (context) {
+                      const analysis = await llmAnalyze(finding, context);
+                      if (analysis) {
+                        updateFinding(finding.id, {
+                          llm_exploitability: analysis.exploitability,
+                        });
+                      }
+                    }
+                  }),
+                );
+              }
+            })().catch(() => {});
+          }
         } catch (error) {
           updateScanStatus(scan.id, ScanStatus.Failed, undefined, String(error));
         }

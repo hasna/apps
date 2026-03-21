@@ -118,23 +118,32 @@ server.tool(
       // Store findings
       const findings = findingInputs.map((input) => createFinding(scan.id, input));
 
-      // LLM analysis if requested
-      if (llm_analyze && isLLMAvailable()) {
-        for (const finding of findings) {
-          const context = getCodeContext(finding.file, finding.line);
-          if (context) {
-            const analysis = await llmAnalyze(finding, context);
-            if (analysis) {
-              updateFinding(finding.id, {
-                llm_exploitability: analysis.exploitability,
-              });
-            }
-          }
-        }
-      }
-
-      // Complete scan
+      // Complete scan immediately
       completeScan(scan.id, findings.length);
+
+      // LLM analysis runs in background — don't block the response
+      if (llm_analyze && isLLMAvailable()) {
+        const analyzeInBackground = async () => {
+          const BATCH_SIZE = 5;
+          for (let i = 0; i < findings.length; i += BATCH_SIZE) {
+            const batch = findings.slice(i, i + BATCH_SIZE);
+            await Promise.allSettled(
+              batch.map(async (finding) => {
+                const context = getCodeContext(finding.file, finding.line);
+                if (context) {
+                  const analysis = await llmAnalyze(finding, context);
+                  if (analysis) {
+                    updateFinding(finding.id, {
+                      llm_exploitability: analysis.exploitability,
+                    });
+                  }
+                }
+              }),
+            );
+          }
+        };
+        analyzeInBackground().catch(() => {});
+      }
 
       const completedScan = getScan(scan.id);
       const score = getSecurityScore(scan.id);
@@ -143,6 +152,7 @@ server.tool(
         scan: completedScan,
         score,
         findings_count: findings.length,
+        llm_analysis: llm_analyze ? "running in background (5 concurrent)" : "not requested",
         by_severity: {
           critical: score.critical,
           high: score.high,
