@@ -1,14 +1,14 @@
 {
-  "name": "@hasnaxyz/open-security",
+  "name": "@hasnaxyz/security",
   "version": "0.1.0",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "open-security": "bin/open-security.sh",
-    "open-security-mcp": "bin/open-security-mcp.sh",
-    "open-security-serve": "bin/open-security-serve.sh"
+    "security": "bin/security.sh",
+    "security-mcp": "bin/security-mcp.sh",
+    "security-serve": "bin/security-serve.sh"
   },
   "exports": {
     ".": {
@@ -67,7 +67,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasnaxyz/open-security"
+    "url": "https://github.com/hasnaxyz/security"
   },
   "keywords": [
     "security",

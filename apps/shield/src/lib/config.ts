@@ -3,7 +3,7 @@ import { join, dirname, basename } from "path";
 import { homedir } from "os";
 import { type ConfigFile, DEFAULT_CONFIG } from "../types/index.js";
 
-const CONFIG_DIR_NAME = ".open-security";
+const CONFIG_DIR_NAME = ".security";
 const CONFIG_FILE_NAME = "config.json";
 
 export function getGlobalConfigDir(): string {
@@ -106,7 +106,7 @@ export function initProject(path: string): void {
     );
   }
 
-  // Create .gitignore inside .open-security to ignore cache/db files
+  // Create .gitignore inside .security to ignore cache/db files
   const gitignorePath = join(configDir, ".gitignore");
   if (!existsSync(gitignorePath)) {
     writeFileSync(gitignorePath, "*.db\n*.db-journal\ncache/\n", "utf-8");

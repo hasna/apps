@@ -1,4 +1,4 @@
-# open-security
+# security
 
 AI-powered security scanner for git repos.
 
@@ -9,7 +9,7 @@ Monorepo with 5 surfaces sharing a single SQLite database:
 - **MCP** (`src/mcp/`) — Model Context Protocol server (stdio)
 - **API** (`src/server/`) — Express REST API
 - **Web** (`dashboard/`) — React SPA (Vite + TailwindCSS + Radix UI)
-- **SDK** (`sdk/`) — REST client package (@hasnaxyz/open-security-sdk)
+- **SDK** (`sdk/`) — REST client package (@hasnaxyz/security-sdk)
 
 ## Data Flow
 
@@ -45,7 +45,7 @@ bun run build                # Build all
 
 ## Database Location
 
-env `OPEN_SECURITY_DB` → `.open-security/security.db` → `~/.open-security/security.db`
+env `SECURITY_DB` → `.security/security.db` → `~/.security/security.db`
 
 ## Cerebras API
 

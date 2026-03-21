@@ -55,9 +55,9 @@ describe("SARIF reporter", () => {
   test("has correct tool driver info", () => {
     const parsed = JSON.parse(reportFindings([makeFinding()]));
     const driver = parsed.runs[0].tool.driver;
-    expect(driver.name).toBe("open-security");
+    expect(driver.name).toBe("security");
     expect(driver.version).toBe("0.1.0");
-    expect(driver.informationUri).toContain("open-security");
+    expect(driver.informationUri).toContain("security");
   });
 
   test("maps findings to SARIF results", () => {
@@ -124,7 +124,7 @@ describe("SARIF reporter", () => {
       reportFindings([makeFinding({ fingerprint: "abc123def456" })]),
     );
     const result = parsed.runs[0].results[0];
-    expect(result.fingerprints["open-security/fingerprint"]).toBe("abc123def456");
+    expect(result.fingerprints["security/fingerprint"]).toBe("abc123def456");
   });
 
   test("deduplicates rules in the driver", () => {

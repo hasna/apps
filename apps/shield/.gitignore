@@ -7,7 +7,7 @@ sdk/dist/
 *.db-shm
 .env
 .secrets/
-.open-security/
+.security/
 *.log
 .DS_Store
 coverage/

@@ -136,7 +136,7 @@ function ensureProject(scanPath: string) {
 const program = new Command();
 
 program
-  .name("open-security")
+  .name("security")
   .description("AI-powered security scanner for git repos")
   .version("0.1.0");
 
@@ -293,7 +293,7 @@ program
     getDb();
     const scans = listScans(undefined, 1);
     if (scans.length === 0) {
-      console.log(chalk.yellow("\n  No scans found. Run `open-security scan` first.\n"));
+      console.log(chalk.yellow("\n  No scans found. Run `security scan` first.\n"));
       return;
     }
 
@@ -494,16 +494,16 @@ program
 // init
 program
   .command("init")
-  .description("Initialize open-security for this repository")
+  .description("Initialize security for this repository")
   .action(async () => {
     const cwd = process.cwd();
     initProject(cwd);
     console.log(
-      chalk.green(`\n  Initialized open-security in ${chalk.cyan(cwd)}`),
+      chalk.green(`\n  Initialized security in ${chalk.cyan(cwd)}`),
     );
-    console.log(chalk.gray("  Created .open-security/config.json"));
+    console.log(chalk.gray("  Created .security/config.json"));
     console.log(
-      chalk.gray("  Run `open-security scan` to start scanning.\n"),
+      chalk.gray("  Run `security scan` to start scanning.\n"),
     );
   });
 
@@ -516,7 +516,7 @@ program
     const scans = listScans(undefined, 1);
     if (scans.length === 0) {
       console.log(
-        chalk.yellow("\n  No scans found. Run `open-security scan` first.\n"),
+        chalk.yellow("\n  No scans found. Run `security scan` first.\n"),
       );
       return;
     }
@@ -556,7 +556,7 @@ program
     const scans = listScans(undefined, 1);
     if (scans.length === 0) {
       console.log(
-        chalk.yellow("\n  No scans found. Run `open-security scan` first.\n"),
+        chalk.yellow("\n  No scans found. Run `security scan` first.\n"),
       );
       return;
     }
@@ -609,7 +609,7 @@ program
 // mcp — install/uninstall MCP server for AI agents
 program
   .command("mcp")
-  .description("Install/uninstall open-security as MCP server for AI agents")
+  .description("Install/uninstall security as MCP server for AI agents")
   .option("--claude", "Install for Claude Code")
   .option("--codex", "Install for Codex")
   .option("--gemini", "Install for Gemini")
@@ -629,14 +629,14 @@ program
     }
 
     if (targets.length === 0) {
-      console.log(chalk.bold("\n  open-security mcp \u2014 Install MCP server for AI agents\n"));
+      console.log(chalk.bold("\n  security mcp \u2014 Install MCP server for AI agents\n"));
       console.log("  Usage:");
-      console.log(chalk.gray("    open-security mcp --claude          Install for Claude Code"));
-      console.log(chalk.gray("    open-security mcp --codex           Install for Codex"));
-      console.log(chalk.gray("    open-security mcp --gemini          Install for Gemini"));
-      console.log(chalk.gray("    open-security mcp --all             Install for all agents"));
-      console.log(chalk.gray("    open-security mcp --all --uninstall Uninstall from all"));
-      console.log(chalk.gray("    open-security mcp --claude --scope project  Install per-project\n"));
+      console.log(chalk.gray("    security mcp --claude          Install for Claude Code"));
+      console.log(chalk.gray("    security mcp --codex           Install for Codex"));
+      console.log(chalk.gray("    security mcp --gemini          Install for Gemini"));
+      console.log(chalk.gray("    security mcp --all             Install for all agents"));
+      console.log(chalk.gray("    security mcp --all --uninstall Uninstall from all"));
+      console.log(chalk.gray("    security mcp --claude --scope project  Install per-project\n"));
       return;
     }
 
@@ -646,12 +646,12 @@ program
       try {
         if (target === "claude") {
           if (uninstall) {
-            execSync("claude mcp remove open-security", { stdio: "pipe" });
+            execSync("claude mcp remove security", { stdio: "pipe" });
             console.log(chalk.green("  Removed from Claude Code"));
           } else {
             const scope = options.scope || "user";
             execSync(
-              `claude mcp add --transport stdio --scope ${scope} open-security -- ${mcpBin}`,
+              `claude mcp add --transport stdio --scope ${scope} security -- ${mcpBin}`,
               { stdio: "pipe" },
             );
             console.log(chalk.green(`  Installed for Claude Code (scope: ${scope})`));
@@ -683,7 +683,7 @@ program
 
     console.log();
     if (!uninstall) {
-      console.log(chalk.gray("  Restart your AI agent to use open-security MCP tools."));
+      console.log(chalk.gray("  Restart your AI agent to use security MCP tools."));
       console.log();
     }
   });
@@ -697,7 +697,7 @@ program
     const port = parseInt(options.port, 10);
     console.log(
       chalk.bold(
-        `\n  Starting open-security dashboard on port ${chalk.cyan(port.toString())}...\n`,
+        `\n  Starting security dashboard on port ${chalk.cyan(port.toString())}...\n`,
       ),
     );
 
@@ -729,17 +729,17 @@ program
 
 function getMcpBinPath(): string {
   try {
-    const resolved = execSync("which open-security-mcp", { encoding: "utf-8" }).trim();
+    const resolved = execSync("which security-mcp", { encoding: "utf-8" }).trim();
     if (resolved) return resolved;
   } catch {}
 
   try {
     const bunBin = execSync("bun pm bin -g", { encoding: "utf-8" }).trim();
-    const candidate = `${bunBin}/open-security-mcp`;
+    const candidate = `${bunBin}/security-mcp`;
     if (existsSync(candidate)) return candidate;
   } catch {}
 
-  return "open-security-mcp";
+  return "security-mcp";
 }
 
 function addCodexMcp(configPath: string, mcpBin: string): void {
@@ -748,13 +748,13 @@ function addCodexMcp(configPath: string, mcpBin: string): void {
     content = readFileSync(configPath, "utf-8");
   } catch {}
 
-  if (content.includes("[mcp_servers.open-security]")) {
+  if (content.includes("[mcp_servers.security]")) {
     content = content.replace(
-      /\[mcp_servers\.open-security\][^\[]*/s,
-      `[mcp_servers.open-security]\ncommand = "${mcpBin}"\nargs = []\n\n`,
+      /\[mcp_servers\.security\][^\[]*/s,
+      `[mcp_servers.security]\ncommand = "${mcpBin}"\nargs = []\n\n`,
     );
   } else {
-    content += `\n[mcp_servers.open-security]\ncommand = "${mcpBin}"\nargs = []\n`;
+    content += `\n[mcp_servers.security]\ncommand = "${mcpBin}"\nargs = []\n`;
   }
 
   mkdirSync(configPath.replace(/\/[^/]+$/, ""), { recursive: true });
@@ -768,7 +768,7 @@ function removeCodexMcp(configPath: string): void {
   } catch {
     return;
   }
-  content = content.replace(/\n?\[mcp_servers\.open-security\][^\[]*/s, "");
+  content = content.replace(/\n?\[mcp_servers\.security\][^\[]*/s, "");
   writeFileSync(configPath, content, "utf-8");
 }
 
@@ -780,7 +780,7 @@ function addGeminiMcp(configPath: string, mcpBin: string): void {
   } catch {}
 
   if (!config.mcpServers) config.mcpServers = {};
-  config.mcpServers["open-security"] = { command: mcpBin, args: [] };
+  config.mcpServers["security"] = { command: mcpBin, args: [] };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
@@ -791,8 +791,8 @@ function removeGeminiMcp(configPath: string): void {
   } catch {
     return;
   }
-  if (config.mcpServers?.["open-security"]) {
-    delete config.mcpServers["open-security"];
+  if (config.mcpServers?.["security"]) {
+    delete config.mcpServers["security"];
   }
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }

@@ -1,7 +1,7 @@
 {
-  "name": "@hasnaxyz/open-security-sdk",
+  "name": "@hasnaxyz/security-sdk",
   "version": "0.1.0",
-  "description": "REST client SDK for open-security server",
+  "description": "REST client SDK for security server",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -6,10 +6,10 @@ import { homedir } from "os";
 let _db: Database.Database | null = null;
 
 function getDbPath(): string {
-  if (process.env.OPEN_SECURITY_DB) return process.env.OPEN_SECURITY_DB;
-  const local = join(process.cwd(), ".open-security", "security.db");
+  if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
+  const local = join(process.cwd(), ".security", "security.db");
   if (existsSync(dirname(local))) return local;
-  const global = join(homedir(), ".open-security", "security.db");
+  const global = join(homedir(), ".security", "security.db");
   mkdirSync(dirname(global), { recursive: true });
   return global;
 }

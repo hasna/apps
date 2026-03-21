@@ -1,4 +1,4 @@
-# open-security
+# security
 
 AI-powered security scanner for git repos with CLI, MCP server, REST API, Web Dashboard, and SDK.
 
@@ -19,28 +19,28 @@ AI-powered security scanner for git repos with CLI, MCP server, REST API, Web Da
 
 ```bash
 # Install globally
-bun add -g @hasnaxyz/open-security
+bun add -g @hasnaxyz/security
 
 # Scan current directory (all 6 scanners)
-open-security scan
+security scan
 
 # Quick scan (secrets + dependencies only)
-open-security scan --quick
+security scan --quick
 
 # Scan with LLM analysis
-open-security scan --llm
+security scan --llm
 
 # Get AI explanation for a finding
-open-security explain <finding-id>
+security explain <finding-id>
 
 # Get AI fix suggestion
-open-security fix <finding-id>
+security fix <finding-id>
 
 # Review staged git changes for security issues
-open-security review
+security review
 
 # Start web dashboard
-open-security serve
+security serve
 ```
 
 ## Installation
@@ -48,20 +48,20 @@ open-security serve
 ### bun (recommended)
 
 ```bash
-bun add -g @hasnaxyz/open-security
+bun add -g @hasnaxyz/security
 ```
 
 ### npm
 
 ```bash
-npm install -g @hasnaxyz/open-security
+npm install -g @hasnaxyz/security
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/hasnaxyz/open-security.git
-cd open-security
+git clone https://github.com/hasnaxyz/security.git
+cd security
 bun install
 bun run build
 ```
@@ -70,15 +70,15 @@ bun run build
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
-| `open-security scan [path]` | Run security scan on a directory | `--quick`, `--scanner <type>`, `--format <format>`, `--severity <level>`, `--llm`, `--no-cache` |
-| `open-security findings` | List findings from the latest scan | `--severity <level>`, `--scanner <type>`, `--file <path>`, `--format <format>`, `--suppressed` |
-| `open-security explain <id>` | Get AI explanation for a finding | |
-| `open-security fix <id>` | Get AI-suggested fix for a finding | |
-| `open-security review` | Security review staged git changes | |
-| `open-security score` | Show security score (0-100) for latest scan | |
-| `open-security baseline` | Mark current findings as baseline (suppress) | |
-| `open-security init` | Initialize open-security config in current repo | |
-| `open-security serve` | Start the web dashboard | `--port <port>` (default: 19428) |
+| `security scan [path]` | Run security scan on a directory | `--quick`, `--scanner <type>`, `--format <format>`, `--severity <level>`, `--llm`, `--no-cache` |
+| `security findings` | List findings from the latest scan | `--severity <level>`, `--scanner <type>`, `--file <path>`, `--format <format>`, `--suppressed` |
+| `security explain <id>` | Get AI explanation for a finding | |
+| `security fix <id>` | Get AI-suggested fix for a finding | |
+| `security review` | Security review staged git changes | |
+| `security score` | Show security score (0-100) for latest scan | |
+| `security baseline` | Mark current findings as baseline (suppress) | |
+| `security init` | Initialize security config in current repo | |
+| `security serve` | Start the web dashboard | `--port <port>` (default: 19428) |
 
 ### Output Formats
 
@@ -101,15 +101,15 @@ The MCP server exposes 20 tools for AI coding agents to scan repos, query findin
 ### Claude Code
 
 ```bash
-claude mcp add --transport stdio --scope user open-security -- open-security-mcp
+claude mcp add --transport stdio --scope user security -- security-mcp
 ```
 
 ### Codex
 
 ```toml
 # In ~/.codex/config.toml
-[mcp_servers.open-security]
-command = "open-security-mcp"
+[mcp_servers.security]
+command = "security-mcp"
 args = []
 ```
 
@@ -119,8 +119,8 @@ args = []
 // In ~/.gemini/settings.json
 {
   "mcpServers": {
-    "open-security": {
-      "command": "open-security-mcp",
+    "security": {
+      "command": "security-mcp",
       "args": []
     }
   }
@@ -154,7 +154,7 @@ args = []
 
 ## REST API
 
-Default port: `19428`. Start with `open-security serve`.
+Default port: `19428`. Start with `security serve`.
 
 ### Scans
 
@@ -209,10 +209,10 @@ The web dashboard provides a visual interface for browsing scan results, finding
 
 ```bash
 # Start on default port (19428)
-open-security serve
+security serve
 
 # Start on custom port
-open-security serve --port 3000
+security serve --port 3000
 ```
 
 Open `http://localhost:19428` in your browser. The dashboard is served as static files alongside the API.
@@ -222,7 +222,7 @@ Open `http://localhost:19428` in your browser. The dashboard is served as static
 The TypeScript SDK provides a typed client for the REST API.
 
 ```typescript
-import { OpenSecurityClient } from "@hasnaxyz/open-security/sdk";
+import { OpenSecurityClient } from "@hasnaxyz/security/sdk";
 
 const client = new OpenSecurityClient("http://localhost:19428");
 
@@ -267,7 +267,7 @@ const stats = await client.getStats();
 
 ## LLM Integration (Cerebras)
 
-open-security uses [Cerebras](https://cerebras.ai/) for fast LLM-powered analysis. The default model is `llama-4-scout-17b-16e-instruct`.
+security uses [Cerebras](https://cerebras.ai/) for fast LLM-powered analysis. The default model is `llama-4-scout-17b-16e-instruct`.
 
 ### Setup
 
@@ -285,11 +285,11 @@ export CEREBRAS_MODEL="llama-4-scout-17b-16e-instruct"
 
 | Feature | CLI | MCP Tool | API Endpoint |
 |---------|-----|----------|--------------|
-| **Explain** -- plain-language explanation of a finding | `open-security explain <id>` | `explain_finding` | `POST /api/findings/:id/explain` |
-| **Fix** -- suggested code fix with context | `open-security fix <id>` | `suggest_fix` | `POST /api/findings/:id/fix` |
+| **Explain** -- plain-language explanation of a finding | `security explain <id>` | `explain_finding` | `POST /api/findings/:id/explain` |
+| **Fix** -- suggested code fix with context | `security fix <id>` | `suggest_fix` | `POST /api/findings/:id/fix` |
 | **Triage** -- severity re-assessment with reasoning | -- | `triage_finding` | -- |
-| **Analyze** -- exploitability scoring during scan | `open-security scan --llm` | `scan_repo` (with `llm_analyze: true`) | `POST /api/scans` (with `llm_analyze: true`) |
-| **Diff Review** -- security review of git diffs | `open-security review` | `review_diff` | -- |
+| **Analyze** -- exploitability scoring during scan | `security scan --llm` | `scan_repo` (with `llm_analyze: true`) | `POST /api/scans` (with `llm_analyze: true`) |
+| **Diff Review** -- security review of git diffs | `security review` | `review_diff` | -- |
 
 LLM results are cached in the database -- subsequent requests for the same finding return instantly.
 
@@ -342,10 +342,10 @@ All five surfaces (CLI, MCP, API, Dashboard, SDK) share the same SQLite database
 Initialize a config file in your repo:
 
 ```bash
-open-security init
+security init
 ```
 
-This creates `.open-security/config.json`:
+This creates `.security/config.json`:
 
 ```json
 {
@@ -375,8 +375,8 @@ This creates `.open-security/config.json`:
 
 ```bash
 # Clone
-git clone https://github.com/hasnaxyz/open-security.git
-cd open-security
+git clone https://github.com/hasnaxyz/security.git
+cd security
 
 # Install dependencies
 bun install

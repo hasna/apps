@@ -28,7 +28,7 @@ describe("config", () => {
     });
 
     test("merges project config on top of defaults", () => {
-      const configDir = join(tempDir, ".open-security");
+      const configDir = join(tempDir, ".security");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(
         join(configDir, "config.json"),
@@ -43,7 +43,7 @@ describe("config", () => {
     });
 
     test("handles malformed config file gracefully", () => {
-      const configDir = join(tempDir, ".open-security");
+      const configDir = join(tempDir, ".security");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(join(configDir, "config.json"), "not valid json {{{");
 

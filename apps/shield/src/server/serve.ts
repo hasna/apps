@@ -537,7 +537,7 @@ export function startServer(port: number) {
   });
 
   app.listen(port, () => {
-    console.log(`open-security dashboard: http://localhost:${port}`);
+    console.log(`security dashboard: http://localhost:${port}`);
   });
 
   return app;

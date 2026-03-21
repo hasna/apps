@@ -29,7 +29,7 @@ interface SarifResult {
       };
     };
   }>;
-  fingerprints?: { "open-security/fingerprint": string };
+  fingerprints?: { "security/fingerprint": string };
 }
 
 export function reportFindings(findings: Finding[], scan?: Scan): string {
@@ -64,7 +64,7 @@ export function reportFindings(findings: Finding[], scan?: Scan): string {
         },
       ],
       fingerprints: {
-        "open-security/fingerprint": finding.fingerprint,
+        "security/fingerprint": finding.fingerprint,
       },
     };
 
@@ -79,9 +79,9 @@ export function reportFindings(findings: Finding[], scan?: Scan): string {
       {
         tool: {
           driver: {
-            name: "open-security",
+            name: "security",
             version: "0.1.0",
-            informationUri: "https://github.com/hasnaxyz/open-security",
+            informationUri: "https://github.com/hasnaxyz/security",
             rules: Array.from(rulesMap.values()),
           },
         },
