@@ -6,9 +6,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "open-security": "dist/cli/index.js",
-    "open-security-mcp": "dist/mcp/index.js",
-    "open-security-serve": "dist/server/index.js"
+    "open-security": "bin/open-security.sh",
+    "open-security-mcp": "bin/open-security-mcp.sh",
+    "open-security-serve": "bin/open-security-serve.sh"
   },
   "exports": {
     ".": {

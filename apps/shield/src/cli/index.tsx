@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { resolve, basename } from "path";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { execSync } from "child_process";
 import chalk from "chalk";
 
@@ -606,6 +606,88 @@ program
     console.log();
   });
 
+// mcp — install/uninstall MCP server for AI agents
+program
+  .command("mcp")
+  .description("Install/uninstall open-security as MCP server for AI agents")
+  .option("--claude", "Install for Claude Code")
+  .option("--codex", "Install for Codex")
+  .option("--gemini", "Install for Gemini")
+  .option("--all", "Install for all agents")
+  .option("--uninstall", "Uninstall instead of install")
+  .option("--scope <scope>", "Claude Code scope (user/project/local)", "user")
+  .action(async (options) => {
+    const uninstall = options.uninstall ?? false;
+    const targets: string[] = [];
+
+    if (options.all) {
+      targets.push("claude", "codex", "gemini");
+    } else {
+      if (options.claude) targets.push("claude");
+      if (options.codex) targets.push("codex");
+      if (options.gemini) targets.push("gemini");
+    }
+
+    if (targets.length === 0) {
+      console.log(chalk.bold("\n  open-security mcp \u2014 Install MCP server for AI agents\n"));
+      console.log("  Usage:");
+      console.log(chalk.gray("    open-security mcp --claude          Install for Claude Code"));
+      console.log(chalk.gray("    open-security mcp --codex           Install for Codex"));
+      console.log(chalk.gray("    open-security mcp --gemini          Install for Gemini"));
+      console.log(chalk.gray("    open-security mcp --all             Install for all agents"));
+      console.log(chalk.gray("    open-security mcp --all --uninstall Uninstall from all"));
+      console.log(chalk.gray("    open-security mcp --claude --scope project  Install per-project\n"));
+      return;
+    }
+
+    const mcpBin = getMcpBinPath();
+
+    for (const target of targets) {
+      try {
+        if (target === "claude") {
+          if (uninstall) {
+            execSync("claude mcp remove open-security", { stdio: "pipe" });
+            console.log(chalk.green("  Removed from Claude Code"));
+          } else {
+            const scope = options.scope || "user";
+            execSync(
+              `claude mcp add --transport stdio --scope ${scope} open-security -- ${mcpBin}`,
+              { stdio: "pipe" },
+            );
+            console.log(chalk.green(`  Installed for Claude Code (scope: ${scope})`));
+          }
+        } else if (target === "codex") {
+          const configPath = `${process.env.HOME}/.codex/config.toml`;
+          if (uninstall) {
+            removeCodexMcp(configPath);
+            console.log(chalk.green("  Removed from Codex"));
+          } else {
+            addCodexMcp(configPath, mcpBin);
+            console.log(chalk.green("  Installed for Codex"));
+          }
+        } else if (target === "gemini") {
+          const configPath = `${process.env.HOME}/.gemini/settings.json`;
+          if (uninstall) {
+            removeGeminiMcp(configPath);
+            console.log(chalk.green("  Removed from Gemini"));
+          } else {
+            addGeminiMcp(configPath, mcpBin);
+            console.log(chalk.green("  Installed for Gemini"));
+          }
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(chalk.red(`  Failed for ${target}: ${msg}`));
+      }
+    }
+
+    console.log();
+    if (!uninstall) {
+      console.log(chalk.gray("  Restart your AI agent to use open-security MCP tools."));
+      console.log();
+    }
+  });
+
 // serve
 program
   .command("serve")
@@ -620,8 +702,6 @@ program
     );
 
     try {
-      // Dynamic import of server to avoid loading express at startup
-      // Use string variable to prevent static analysis of the import path
       const serverPath = "../server/index.js";
       const server = (await import(serverPath)) as Record<string, unknown>;
       if (typeof server.startServer === "function") {
@@ -644,5 +724,77 @@ program
       process.exit(1);
     }
   });
+
+// --- MCP Install Helpers ---
+
+function getMcpBinPath(): string {
+  try {
+    const resolved = execSync("which open-security-mcp", { encoding: "utf-8" }).trim();
+    if (resolved) return resolved;
+  } catch {}
+
+  try {
+    const bunBin = execSync("bun pm bin -g", { encoding: "utf-8" }).trim();
+    const candidate = `${bunBin}/open-security-mcp`;
+    if (existsSync(candidate)) return candidate;
+  } catch {}
+
+  return "open-security-mcp";
+}
+
+function addCodexMcp(configPath: string, mcpBin: string): void {
+  let content = "";
+  try {
+    content = readFileSync(configPath, "utf-8");
+  } catch {}
+
+  if (content.includes("[mcp_servers.open-security]")) {
+    content = content.replace(
+      /\[mcp_servers\.open-security\][^\[]*/s,
+      `[mcp_servers.open-security]\ncommand = "${mcpBin}"\nargs = []\n\n`,
+    );
+  } else {
+    content += `\n[mcp_servers.open-security]\ncommand = "${mcpBin}"\nargs = []\n`;
+  }
+
+  mkdirSync(configPath.replace(/\/[^/]+$/, ""), { recursive: true });
+  writeFileSync(configPath, content, "utf-8");
+}
+
+function removeCodexMcp(configPath: string): void {
+  let content = "";
+  try {
+    content = readFileSync(configPath, "utf-8");
+  } catch {
+    return;
+  }
+  content = content.replace(/\n?\[mcp_servers\.open-security\][^\[]*/s, "");
+  writeFileSync(configPath, content, "utf-8");
+}
+
+function addGeminiMcp(configPath: string, mcpBin: string): void {
+  mkdirSync(configPath.replace(/\/[^/]+$/, ""), { recursive: true });
+  let config: Record<string, any> = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {}
+
+  if (!config.mcpServers) config.mcpServers = {};
+  config.mcpServers["open-security"] = { command: mcpBin, args: [] };
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
+
+function removeGeminiMcp(configPath: string): void {
+  let config: Record<string, any> = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    return;
+  }
+  if (config.mcpServers?.["open-security"]) {
+    delete config.mcpServers["open-security"];
+  }
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
 
 program.parse();
