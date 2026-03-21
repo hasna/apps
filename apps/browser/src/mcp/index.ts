@@ -178,6 +178,36 @@ server.tool(
 );
 
 server.tool(
+  "browser_session_fork",
+  "Fork a session: create a new session with the same auth state (cookies, storage) and URL as an existing one. Like git branch for browser sessions.",
+  { source_session_id: z.string(), name: z.string().optional() },
+  async ({ source_session_id, name }) => {
+    try {
+      const sourcePage = getSessionPage(source_session_id);
+      const sourceUrl = sourcePage.url();
+
+      // Save source state to a temp name
+      const tempName = `_fork_${Date.now()}`;
+      const { saveStateFromPage } = await import("../lib/storage-state.js");
+      await saveStateFromPage(sourcePage, tempName);
+
+      // Create new session with that state
+      const { session, page } = await createSession({
+        storageState: tempName,
+        startUrl: sourceUrl,
+        name: name ?? `fork-of-${source_session_id.slice(0, 8)}`,
+      });
+
+      // Clean up temp state
+      const { deleteState } = await import("../lib/storage-state.js");
+      deleteState(tempName);
+
+      return json({ forked_session: session, source_url: sourceUrl });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
   "browser_session_timeline",
   "Get chronological action log for a session",
   { session_id: z.string().optional(), limit: z.number().optional().default(50) },
@@ -938,6 +968,64 @@ server.tool(
   }
 );
 
+// ── Response Intercept Tools ──────────────────────────────────────────────────
+
+server.tool(
+  "browser_intercept_response",
+  "Intercept and modify API responses for testing. Mock data, simulate errors, add latency.",
+  {
+    session_id: z.string().optional(),
+    url_pattern: z.string().describe("URL pattern to intercept (e.g. '**/api/users*')"),
+    action: z.enum(["mock", "delay", "error"]).describe("What to do with matched requests"),
+    mock_body: z.string().optional().describe("Response body for mock action"),
+    mock_content_type: z.string().optional().default("application/json"),
+    status_code: z.number().optional().default(200).describe("HTTP status code (for mock/error)"),
+    delay_ms: z.number().optional().default(3000).describe("Delay in ms (for delay action)"),
+  },
+  async ({ session_id, url_pattern, action, mock_body, mock_content_type, status_code, delay_ms }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+
+      await page.route(url_pattern, async (route) => {
+        if (action === "mock") {
+          await route.fulfill({
+            status: status_code,
+            contentType: mock_content_type,
+            body: mock_body ?? "{}",
+          });
+        } else if (action === "error") {
+          await route.fulfill({
+            status: status_code ?? 500,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "Intercepted error", status: status_code }),
+          });
+        } else if (action === "delay") {
+          await new Promise(r => setTimeout(r, delay_ms));
+          await route.continue();
+        }
+      });
+
+      logEvent(sid, "intercept_set", { url_pattern, action, status_code });
+      return json({ intercepted: true, url_pattern, action });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_intercept_clear",
+  "Remove all response intercepts from a session",
+  { session_id: z.string().optional() },
+  async ({ session_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      return json({ cleared: true });
+    } catch (e) { return err(e); }
+  }
+);
+
 // ── Performance Tools ─────────────────────────────────────────────────────────
 
 server.tool(
@@ -980,6 +1068,64 @@ server.tool(
       const { getDeepPerformance } = await import("../lib/deep-performance.js");
       const result = await getDeepPerformance(page);
       return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Accessibility Tools ───────────────────────────────────────────────────────
+
+server.tool(
+  "browser_accessibility_audit",
+  "Run accessibility audit on the page. Injects axe-core and returns violations grouped by severity (critical, serious, moderate, minor).",
+  { session_id: z.string().optional(), selector: z.string().optional().describe("Scope audit to a specific element") },
+  async ({ session_id, selector }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+
+      // Inject axe-core
+      await page.evaluate(`
+        if (!window.axe) {
+          const script = document.createElement('script');
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.2/axe.min.js';
+          document.head.appendChild(script);
+          await new Promise((resolve, reject) => {
+            script.onload = resolve;
+            script.onerror = reject;
+          });
+        }
+      `);
+
+      // Small wait for axe to initialize
+      await new Promise(r => setTimeout(r, 500));
+
+      // Run audit
+      const results = await page.evaluate((sel) => {
+        const opts: any = {};
+        if (sel) opts.include = [sel];
+        return (window as any).axe.run(opts.include ? { include: [sel] } : document).then((r: any) => ({
+          violations: r.violations.map((v: any) => ({
+            id: v.id,
+            impact: v.impact,
+            description: v.description,
+            help: v.help,
+            helpUrl: v.helpUrl,
+            nodes_count: v.nodes.length,
+            selectors: v.nodes.slice(0, 3).map((n: any) => n.target?.[0] ?? ""),
+          })),
+          passes: r.passes.length,
+          violations_count: r.violations.length,
+          incomplete: r.incomplete.length,
+        }));
+      }, selector);
+
+      // Group by impact
+      const byImpact: Record<string, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
+      for (const v of (results as any).violations) {
+        byImpact[v.impact] = (byImpact[v.impact] || 0) + 1;
+      }
+
+      return json({ ...results, by_impact: byImpact, score: Math.max(0, 100 - (results as any).violations_count * 5) });
     } catch (e) { return err(e); }
   }
 );
@@ -1554,6 +1700,61 @@ server.tool(
         logEvent(sid, "vision_find", { query: description, ...result });
         return json(result);
       }
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Wait for network idle ─────────────────────────────────────────────────────
+
+server.tool(
+  "browser_wait_for_idle",
+  "Wait until no network requests are in-flight for a specified duration. Essential for SPAs that load data after navigation.",
+  {
+    session_id: z.string().optional(),
+    idle_time: z.number().optional().default(2000).describe("How long (ms) network must be idle to consider page loaded"),
+    timeout: z.number().optional().default(30000).describe("Max wait time (ms) before giving up"),
+  },
+  async ({ session_id, idle_time, timeout }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+
+      const t0 = Date.now();
+      let lastActivity = Date.now();
+      let pending = 0;
+
+      const onRequest = () => { pending++; lastActivity = Date.now(); };
+      const onResponse = () => { pending = Math.max(0, pending - 1); if (pending === 0) lastActivity = Date.now(); };
+      const onFailed = () => { pending = Math.max(0, pending - 1); if (pending === 0) lastActivity = Date.now(); };
+
+      page.on("request", onRequest);
+      page.on("response", onResponse);
+      page.on("requestfailed", onFailed);
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const check = () => {
+            const now = Date.now();
+            if (now - t0 > timeout) {
+              reject(new Error(`Timeout after ${timeout}ms (${pending} requests still pending)`));
+              return;
+            }
+            if (pending === 0 && now - lastActivity >= idle_time) {
+              resolve();
+              return;
+            }
+            setTimeout(check, 100);
+          };
+          check();
+        });
+      } finally {
+        page.removeListener("request", onRequest);
+        page.removeListener("response", onResponse);
+        page.removeListener("requestfailed", onFailed);
+      }
+
+      const waited_ms = Date.now() - t0;
+      return json({ idle: true, waited_ms, pending_requests: 0 });
     } catch (e) { return err(e); }
   }
 );
@@ -2228,6 +2429,7 @@ server.tool(
           { tool: "browser_forward", description: "Navigate forward in history" },
           { tool: "browser_reload", description: "Reload the current page" },
           { tool: "browser_wait_for_navigation", description: "Wait for URL change after action" },
+          { tool: "browser_wait_for_idle", description: "Wait for network idle (no pending requests)" },
         ],
         Interaction: [
           { tool: "browser_click", description: "Click element by ref or selector" },
@@ -2281,6 +2483,8 @@ server.tool(
           { tool: "browser_network_intercept", description: "Add a network interception rule" },
           { tool: "browser_har_start", description: "Start HAR capture" },
           { tool: "browser_har_stop", description: "Stop HAR capture and get data" },
+          { tool: "browser_intercept_response", description: "Mock/delay/error API responses for testing" },
+          { tool: "browser_intercept_clear", description: "Remove all response intercepts" },
         ],
         Performance: [
           { tool: "browser_performance", description: "Get performance metrics" },
@@ -2363,6 +2567,7 @@ server.tool(
           { tool: "browser_session_untag", description: "Remove a tag from a session" },
           { tool: "browser_session_stats", description: "Get session stats and token usage" },
           { tool: "browser_session_timeline", description: "Get chronological action log" },
+          { tool: "browser_session_fork", description: "Fork a session (same auth state + URL)" },
           { tool: "browser_tab_new", description: "Open a new tab" },
           { tool: "browser_tab_list", description: "List all open tabs" },
           { tool: "browser_tab_switch", description: "Switch to a tab by index" },
@@ -2374,6 +2579,7 @@ server.tool(
           { tool: "browser_help", description: "Show this help (all tools)" },
           { tool: "browser_detect_env", description: "Detect environment (prod/dev/staging/local)" },
           { tool: "browser_performance_deep", description: "Deep performance: resources, third-party, DOM, memory" },
+          { tool: "browser_accessibility_audit", description: "Run axe-core accessibility audit with severity breakdown" },
           { tool: "browser_snapshot_diff", description: "Diff current snapshot vs previous" },
           { tool: "browser_watch_start", description: "Watch page for DOM changes" },
           { tool: "browser_watch_get_changes", description: "Get captured DOM changes" },

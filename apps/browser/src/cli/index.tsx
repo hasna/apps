@@ -100,6 +100,199 @@ program
     await closeSession(session.id);
   });
 
+// ─── audit ───────────────────────────────────────────────────────────────────
+
+program
+  .command("audit <url>")
+  .description("Full site audit: env detection, performance, errors, APIs, data extraction, screenshot")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { engine: string; headed?: boolean; json?: boolean }) => {
+    const t0 = Date.now();
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, captureNetwork: true, captureConsole: true });
+
+    if (!opts.json) console.log(chalk.gray(`Auditing: ${url}\n`));
+
+    await navigate(page, url);
+    await new Promise(r => setTimeout(r, 2000)); // Let page settle
+
+    const title = await page.title();
+    const currentUrl = page.url();
+
+    // Environment detection
+    let env: any = {};
+    try {
+      const { detectEnvironment } = await import("../lib/env-detector.js");
+      env = await detectEnvironment(page);
+    } catch {}
+
+    // Deep performance
+    let perf: any = {};
+    try {
+      const { getDeepPerformance } = await import("../lib/deep-performance.js");
+      perf = await getDeepPerformance(page);
+    } catch {}
+
+    // Console errors
+    const { getConsoleLog } = await import("../db/console-log.js");
+    const errors = getConsoleLog(session.id, "error");
+
+    // API detection
+    let apis: any[] = [];
+    try {
+      const { detectAPIs } = await import("../lib/api-detector.js");
+      apis = detectAPIs(session.id);
+    } catch {}
+
+    // Structured data
+    let structured: any = {};
+    try {
+      const { extractStructuredData } = await import("../lib/structured-extract.js");
+      structured = await extractStructuredData(page);
+    } catch {}
+
+    // Screenshot
+    const screenshot = await takeScreenshot(page, { maxWidth: 1280, quality: 75 });
+
+    const duration = Date.now() - t0;
+
+    const report = {
+      url: currentUrl,
+      title,
+      duration_ms: duration,
+      environment: env,
+      performance: {
+        fcp_ms: perf.web_vitals?.fcp,
+        ttfb_ms: perf.web_vitals?.ttfb,
+        total_resources: perf.resources?.total_resources,
+        total_transfer_kb: perf.resources ? +(perf.resources.total_transfer_bytes / 1024).toFixed(1) : 0,
+        resource_breakdown: perf.resources?.by_type,
+        third_party_count: perf.third_party?.length ?? 0,
+        third_party: perf.third_party,
+        dom_nodes: perf.dom?.node_count,
+        dom_max_depth: perf.dom?.max_depth,
+        memory_mb: perf.memory?.js_heap_used_mb,
+      },
+      errors: { count: errors.length, sample: errors.slice(0, 3).map((e: any) => e.message?.slice(0, 100)) },
+      apis: { count: apis.length, endpoints: apis.map((a: any) => `${a.method} ${a.url}`) },
+      data: {
+        tables: structured.tables?.length ?? 0,
+        lists: structured.lists?.length ?? 0,
+        json_ld: structured.jsonLd?.length ?? 0,
+        open_graph: Object.keys(structured.openGraph ?? {}).length,
+        repeated_elements: structured.repeatedElements?.length ?? 0,
+      },
+      screenshot: screenshot.path,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(chalk.bold(`${title}`));
+      console.log(chalk.blue(`  ${currentUrl}\n`));
+
+      // Environment
+      const envColor = env.env === "prod" ? chalk.green : env.env === "staging" ? chalk.yellow : chalk.cyan;
+      console.log(`  Environment: ${envColor(env.env ?? "unknown")} (${env.confidence ?? "?"} confidence)`);
+
+      // Performance
+      console.log(`  Performance: FCP ${perf.web_vitals?.fcp ? perf.web_vitals.fcp + 'ms' : '?'}, TTFB ${perf.web_vitals?.ttfb ? Math.round(perf.web_vitals.ttfb) + 'ms' : '?'}`);
+      console.log(`  Resources:   ${perf.resources?.total_resources ?? '?'} resources (${report.performance.total_transfer_kb} KB)`);
+      console.log(`  Third-party: ${perf.third_party?.length ?? 0} scripts`);
+      if (perf.third_party?.length > 0) {
+        perf.third_party.slice(0, 5).forEach((tp: any) => {
+          console.log(chalk.gray(`    ${tp.domain} (${tp.category}, ${(tp.total_bytes / 1024).toFixed(1)}KB)`));
+        });
+      }
+      console.log(`  DOM:         ${perf.dom?.node_count ?? '?'} nodes, depth ${perf.dom?.max_depth ?? '?'}`);
+      console.log(`  Memory:      ${perf.memory?.js_heap_used_mb ?? '?'} MB heap`);
+
+      // Errors
+      const errColor = errors.length > 0 ? chalk.red : chalk.green;
+      console.log(`  Errors:      ${errColor(errors.length + ' console errors')}`);
+
+      // APIs
+      console.log(`  APIs:        ${apis.length} JSON endpoints detected`);
+      apis.slice(0, 3).forEach((a: any) => console.log(chalk.gray(`    ${a.method} ${a.url}`)));
+
+      // Data
+      console.log(`  Data:        ${report.data.tables} tables, ${report.data.lists} lists, ${report.data.json_ld} JSON-LD, ${report.data.repeated_elements} repeated elements`);
+
+      console.log(`\n  Screenshot:  ${screenshot.path}`);
+      console.log(chalk.gray(`  Completed in ${duration}ms`));
+    }
+
+    await closeSession(session.id);
+  });
+
+// ─── compare ─────────────────────────────────────────────────────────────────
+
+program
+  .command("compare <url1> <url2>")
+  .description("Compare two URLs: side-by-side screenshots + pixel diff + text diff")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--json", "Output as JSON")
+  .action(async (url1: string, url2: string, opts: { engine: string; json?: boolean }) => {
+    // Create two sessions
+    const [s1, s2] = await Promise.all([
+      createSession({ engine: opts.engine as BrowserEngine, headless: true }),
+      createSession({ engine: opts.engine as BrowserEngine, headless: true }),
+    ]);
+
+    // Navigate both in parallel
+    await Promise.all([
+      navigate(s1.page, url1),
+      navigate(s2.page, url2),
+    ]);
+
+    // Screenshot + text both in parallel
+    const [ss1, ss2, text1, text2] = await Promise.all([
+      takeScreenshot(s1.page, { format: "png" }),
+      takeScreenshot(s2.page, { format: "png" }),
+      getText(s1.page),
+      getText(s2.page),
+    ]);
+
+    // Pixel diff
+    const { diffImages } = await import("../lib/gallery-diff.js");
+    const diff = await diffImages(ss1.path, ss2.path);
+
+    // Simple text diff stats
+    const words1 = text1.split(/\s+/).filter(Boolean);
+    const words2 = text2.split(/\s+/).filter(Boolean);
+    const set1 = new Set(words1);
+    const set2 = new Set(words2);
+    const common = words1.filter(w => set2.has(w)).length;
+    const textSimilarity = words1.length > 0 ? Math.round((common / Math.max(words1.length, words2.length)) * 100) : 0;
+
+    const result = {
+      url1, url2,
+      screenshot1: ss1.path,
+      screenshot2: ss2.path,
+      diff_image: diff.diff_path,
+      pixel_change_percent: +diff.changed_percent.toFixed(2),
+      text_similarity_percent: textSimilarity,
+      text1_length: text1.length,
+      text2_length: text2.length,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(chalk.bold("URL Comparison:\n"));
+      console.log(chalk.blue(`  1: ${url1}`));
+      console.log(chalk.blue(`  2: ${url2}\n`));
+      console.log(`  Pixel diff:     ${diff.changed_percent > 5 ? chalk.red(result.pixel_change_percent + '%') : chalk.green(result.pixel_change_percent + '%')} changed`);
+      console.log(`  Text similarity: ${textSimilarity > 80 ? chalk.green(textSimilarity + '%') : chalk.yellow(textSimilarity + '%')}`);
+      console.log(chalk.gray(`\n  Screenshot 1: ${ss1.path}`));
+      console.log(chalk.gray(`  Screenshot 2: ${ss2.path}`));
+      console.log(chalk.gray(`  Diff image:   ${diff.diff_path}`));
+    }
+
+    await Promise.all([closeSession(s1.session.id), closeSession(s2.session.id)]);
+  });
+
 // ─── screenshot ───────────────────────────────────────────────────────────────
 
 program
@@ -390,6 +583,108 @@ program
     }
   });
 
+// ─── login ──────────────────────────────────────────────────────────────────
+
+program
+  .command("login <url>")
+  .description("Login to a site: detect form, fill credentials from secrets, save auth state")
+  .option("--email <email>", "Email to login with")
+  .option("--save-as <name>", "Name to save storage state as")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { email?: string; saveAs?: string; engine: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    await navigate(page, url);
+
+    // Detect login form
+    const formInfo = await page.evaluate(() => {
+      const emailInput = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input[autocomplete="email"], input[autocomplete="username"]') as HTMLInputElement | null;
+      const passwordInput = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+      const submitBtn = document.querySelector('button[type="submit"], input[type="submit"], button:has(span)') as HTMLElement | null;
+      return {
+        hasEmailInput: !!emailInput,
+        hasPasswordInput: !!passwordInput,
+        hasSubmitButton: !!submitBtn,
+        emailSelector: emailInput ? (emailInput.id ? `#${emailInput.id}` : emailInput.name ? `input[name="${emailInput.name}"]` : 'input[type="email"]') : null,
+        passwordSelector: passwordInput ? (passwordInput.id ? `#${passwordInput.id}` : 'input[type="password"]') : null,
+        submitSelector: submitBtn ? (submitBtn.id ? `#${submitBtn.id}` : 'button[type="submit"]') : null,
+        pageTitle: document.title,
+      };
+    });
+
+    if (!opts.json) {
+      console.log(chalk.gray(`Page: ${formInfo.pageTitle}`));
+      console.log(chalk.gray(`  Email input: ${formInfo.hasEmailInput ? '✓' : '✗'}`));
+      console.log(chalk.gray(`  Password input: ${formInfo.hasPasswordInput ? '✓' : '✗'}`));
+      console.log(chalk.gray(`  Submit button: ${formInfo.hasSubmitButton ? '✓' : '✗'}`));
+    }
+
+    // Try to get credentials from secrets
+    let email = opts.email;
+    let password: string | undefined;
+
+    if (!email) {
+      try {
+        const { getCredentials } = await import("../lib/auth.js");
+        const hostname = new URL(url).hostname;
+        const creds = await getCredentials(hostname);
+        if (creds) {
+          email = creds.email ?? creds.username;
+          password = creds.password;
+          if (!opts.json) console.log(chalk.blue(`  Credentials found for ${hostname}`));
+        }
+      } catch {}
+    }
+
+    // Fill email if we have it and there's an input
+    if (email && formInfo.emailSelector) {
+      await page.fill(formInfo.emailSelector, email);
+      if (!opts.json) console.log(chalk.green(`  ✓ Filled email: ${email}`));
+    }
+
+    // Fill password if we have it
+    if (password && formInfo.passwordSelector) {
+      await page.fill(formInfo.passwordSelector, password);
+      if (!opts.json) console.log(chalk.green(`  ✓ Filled password`));
+    }
+
+    // Submit if we have a button
+    if (formInfo.hasSubmitButton && formInfo.submitSelector) {
+      await page.click(formInfo.submitSelector);
+      if (!opts.json) console.log(chalk.green(`  ✓ Submitted form`));
+
+      // Wait for navigation
+      try {
+        await page.waitForNavigation({ timeout: 10000 });
+      } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    const finalUrl = page.url();
+    const loggedIn = finalUrl !== url;
+
+    // Save storage state
+    let savedAs: string | undefined;
+    if (opts.saveAs || loggedIn) {
+      const name = opts.saveAs ?? new URL(url).hostname.replace(/\./g, "-");
+      try {
+        const { saveStateFromPage } = await import("../lib/storage-state.js");
+        await saveStateFromPage(page, name);
+        savedAs = name;
+        if (!opts.json) console.log(chalk.green(`  ✓ State saved as: ${name}`));
+      } catch {}
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({ session_id: session.id, url: finalUrl, logged_in: loggedIn, form_detected: formInfo.hasEmailInput, saved_as: savedAs }));
+    } else {
+      console.log(loggedIn ? chalk.green(`\n✓ Login successful → ${finalUrl}`) : chalk.yellow(`\n⚠ May need manual steps (magic link, 2FA, etc)`));
+    }
+
+    if (!opts.headed) await closeSession(session.id);
+  });
+
 // ─── install-browser ──────────────────────────────────────────────────────────
 
 program
@@ -410,6 +705,164 @@ program
         console.log(chalk.green("✓ Lightpanda is already available"));
       }
     }
+  });
+
+// ─── daemon ─────────────────────────────────────────────────────────────────
+
+const daemonCmd = program.command("daemon").description("Manage the browser daemon (persistent background sessions)");
+
+daemonCmd
+  .command("start")
+  .description("Start the browser daemon in the background")
+  .option("--port <port>", "Port to listen on", "7030")
+  .action(async (opts: { port: string }) => {
+    const { isDaemonRunning, getDaemonPidFile, getDaemonStatus } = await import("../lib/daemon-client.js");
+    if (isDaemonRunning()) {
+      console.log(chalk.yellow("Daemon is already running."));
+      const status = await getDaemonStatus();
+      console.log(chalk.gray(`  PID: ${status.pid}, Port: ${status.port}, Sessions: ${status.sessions ?? "?"}`));
+      return;
+    }
+
+    const { spawn } = await import("node:child_process");
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { dirname } = await import("node:path");
+
+    const pidFile = getDaemonPidFile();
+    mkdirSync(dirname(pidFile), { recursive: true });
+
+    // Spawn the REST server as a detached background process
+    const child = spawn(process.execPath, [import.meta.dir + "/../server/index.js"], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, BROWSER_SERVER_PORT: opts.port },
+    });
+    child.unref();
+
+    if (child.pid) {
+      writeFileSync(pidFile, String(child.pid));
+      // Wait a moment for server to start
+      await new Promise(r => setTimeout(r, 1500));
+      console.log(chalk.green(`✓ Daemon started`));
+      console.log(chalk.gray(`  PID: ${child.pid}, Port: ${opts.port}`));
+      console.log(chalk.gray(`  Sessions will persist across CLI invocations.`));
+      console.log(chalk.gray(`  Stop with: browser daemon stop`));
+    } else {
+      console.log(chalk.red("Failed to start daemon"));
+    }
+  });
+
+daemonCmd
+  .command("stop")
+  .description("Stop the browser daemon")
+  .action(async () => {
+    const { isDaemonRunning, getDaemonPid, getDaemonPidFile } = await import("../lib/daemon-client.js");
+    const { unlinkSync } = await import("node:fs");
+
+    if (!isDaemonRunning()) {
+      console.log(chalk.gray("Daemon is not running."));
+      return;
+    }
+
+    const pid = getDaemonPid();
+    if (pid) {
+      try { process.kill(pid, "SIGTERM"); } catch {}
+      try { unlinkSync(getDaemonPidFile()); } catch {}
+      console.log(chalk.green(`✓ Daemon stopped (PID: ${pid})`));
+    }
+  });
+
+daemonCmd
+  .command("status")
+  .description("Check daemon status")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const { getDaemonStatus } = await import("../lib/daemon-client.js");
+    const status = await getDaemonStatus();
+
+    if (opts.json) {
+      console.log(JSON.stringify(status, null, 2));
+    } else if (status.running) {
+      console.log(chalk.green("● Daemon running"));
+      console.log(chalk.gray(`  PID: ${status.pid}`));
+      console.log(chalk.gray(`  Port: ${status.port}`));
+      if (status.sessions != null) console.log(chalk.gray(`  Active sessions: ${status.sessions}`));
+      if (status.uptime_ms != null) console.log(chalk.gray(`  Uptime: ${Math.round(status.uptime_ms / 1000)}s`));
+    } else {
+      console.log(chalk.gray("○ Daemon not running"));
+      console.log(chalk.gray(`  Start with: browser daemon start`));
+    }
+  });
+
+// ─── watch ───────────────────────────────────────────────────────────────────
+
+program
+  .command("watch <url>")
+  .description("Monitor a URL for changes — periodic screenshot + diff")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--interval <seconds>", "Check interval in seconds", "30")
+  .option("--threshold <percent>", "Change threshold percent to report", "5")
+  .option("--headed", "Run in headed mode")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { engine: string; interval: string; threshold: string; headed?: boolean; json?: boolean }) => {
+    const intervalMs = parseInt(opts.interval) * 1000;
+    const threshold = parseFloat(opts.threshold);
+
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    console.log(chalk.gray(`Watching: ${url} (every ${opts.interval}s, threshold ${opts.threshold}%)`));
+    console.log(chalk.gray(`Session: ${session.id} — Press Ctrl+C to stop\n`));
+
+    await navigate(page, url);
+    let baselineResult = await takeScreenshot(page, { format: "png" });
+    let baselinePath = baselineResult.path;
+    let checkCount = 0;
+
+    if (!opts.json) console.log(chalk.blue(`[${new Date().toISOString()}] Baseline captured: ${baselinePath}`));
+
+    const check = async () => {
+      checkCount++;
+      try {
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await new Promise(r => setTimeout(r, 2000)); // Wait for render
+        const newResult = await takeScreenshot(page, { format: "png" });
+
+        // Diff
+        const { diffImages } = await import("../lib/gallery-diff.js");
+        const diff = await diffImages(baselinePath, newResult.path);
+
+        const changed = diff.changed_percent > threshold;
+        const timestamp = new Date().toISOString();
+
+        if (opts.json) {
+          console.log(JSON.stringify({ timestamp, check: checkCount, changed_percent: diff.changed_percent, changed, screenshot: newResult.path, diff_path: changed ? diff.diff_path : undefined }));
+        } else if (changed) {
+          console.log(chalk.red(`[${timestamp}] CHANGED: ${diff.changed_percent.toFixed(2)}% (${diff.changed_pixels} pixels)`));
+          console.log(chalk.gray(`  Screenshot: ${newResult.path}`));
+          console.log(chalk.gray(`  Diff: ${diff.diff_path}`));
+          // Update baseline
+          baselinePath = newResult.path;
+        } else {
+          console.log(chalk.green(`[${timestamp}] No change (${diff.changed_percent.toFixed(2)}%)`));
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (opts.json) {
+          console.log(JSON.stringify({ timestamp: new Date().toISOString(), check: checkCount, error: msg }));
+        } else {
+          console.log(chalk.red(`[${new Date().toISOString()}] Error: ${msg}`));
+        }
+      }
+    };
+
+    const timer = setInterval(check, intervalMs);
+
+    // Handle Ctrl+C gracefully
+    process.on("SIGINT", async () => {
+      clearInterval(timer);
+      console.log(chalk.gray(`\nStopping watch. ${checkCount} checks performed.`));
+      await closeSession(session.id);
+      process.exit(0);
+    });
   });
 
 // ─── mcp ─────────────────────────────────────────────────────────────────────

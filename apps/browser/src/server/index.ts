@@ -20,6 +20,7 @@ import { diffImages } from "../lib/gallery-diff.js";
 import type { BrowserEngine } from "../types/index.js";
 
 const PORT = parseInt(process.env["BROWSER_SERVER_PORT"] ?? "7030");
+const startTime = Date.now();
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -76,6 +77,16 @@ const server = Bun.serve({
     }
 
     try {
+      // ── Health ──────────────────────────────────────────────────────────
+      if (path === "/health" && method === "GET") {
+        const activeSessions = listSessions({ status: "active" });
+        return ok({
+          status: "ok",
+          active_sessions: activeSessions.length,
+          uptime_ms: Date.now() - startTime,
+        });
+      }
+
       // ── Sessions ─────────────────────────────────────────────────────────
       if (path === "/api/sessions" && method === "GET") {
         const status = url.searchParams.get("status") as "active" | "closed" | "error" | null;
