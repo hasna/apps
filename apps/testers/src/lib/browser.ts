@@ -2,7 +2,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
 
-export type BrowserEngine = "playwright" | "lightpanda";
+export type BrowserEngine = "playwright" | "lightpanda" | "bun";
 
 interface ViewportSize {
   width: number;
@@ -42,6 +42,25 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
     return launchLightpanda({ viewport: options?.viewport });
   }
 
+  if (engine === "bun") {
+    // Bun.WebView: the session IS the page — wrap it in a Playwright-compatible shim
+    const { isBunWebViewAvailable, BunWebViewSession } = await import("./browser-bun.js");
+    if (!isBunWebViewAvailable()) {
+      throw new BrowserError("Bun.WebView not available. Upgrade to Bun canary: bun upgrade --canary");
+    }
+    const session = new BunWebViewSession({
+      width: options?.viewport?.width ?? 1280,
+      height: options?.viewport?.height ?? 720,
+    });
+    // Return a minimal Browser-like shim — the page IS the session
+    return {
+      newContext: async () => ({ newPage: async () => session as unknown as Page, close: async () => {} }),
+      close: async () => session.close(),
+      contexts: () => [],
+      _bunSession: session,  // attach so getPage can retrieve it
+    } as unknown as Browser;
+  }
+
   // Default: Playwright
   const headless = options?.headless ?? true;
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
@@ -75,6 +94,13 @@ export async function getPage(
     return getLightpandaPage(browser, options);
   }
 
+  // Bun.WebView: the session was attached during launchBrowser — retrieve it directly
+  if (engine === "bun") {
+    const bunSession = (browser as unknown as { _bunSession: unknown })._bunSession;
+    if (bunSession) return bunSession as unknown as Page;
+    throw new BrowserError("Bun.WebView session not found on browser instance");
+  }
+
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
@@ -98,6 +124,12 @@ export async function closeBrowser(browser: Browser, engine?: BrowserEngine): Pr
   if (engine === "lightpanda") {
     const { closeLightpanda } = await import("./browser-lightpanda.js");
     return closeLightpanda(browser);
+  }
+
+  if (engine === "bun") {
+    const bunSession = (browser as unknown as { _bunSession: { close(): Promise<void> } })._bunSession;
+    if (bunSession) await bunSession.close();
+    return;
   }
 
   try {
@@ -215,6 +247,9 @@ export async function launchBrowserEngine(
       throw new BrowserError("Lightpanda not installed. Run: testers install-browser --engine lightpanda");
     }
     return launchLightpanda({ viewport: config.viewport });
+  }
+  if (engine === "bun") {
+    return launchBrowser({ headless: config.headless, viewport: config.viewport, engine: "bun" });
   }
   // Default: playwright chromium
   return chromium.launch({

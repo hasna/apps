@@ -596,7 +596,7 @@ program
   .option("--from-todos", "Import scenarios from todos before running", false)
   .option("--project <id>", "Project ID")
   .option("-b, --background", "Start run in background and return immediately", false)
-  .option("--browser <engine>", "Browser engine: playwright or lightpanda", "playwright")
+  .option("--browser <engine>", "Browser engine: playwright (default), lightpanda (9x faster, no screenshots), or bun (native WKWebView, 11x faster, Bun canary required)", "playwright")
   .option("--env <name>", "Use a named environment for the URL")
   .option("--dry-run", "Print what would run without launching browser", false)
   .option("--retry <n>", "Retry failed scenarios up to n times", "0")
@@ -3010,6 +3010,10 @@ program
     const { isLightpandaAvailable } = await import("../lib/browser-lightpanda.js");
     const lightpandaAvailable = isLightpandaAvailable();
     log((lightpandaAvailable ? chalk.green("✓") : chalk.dim("○")) + ` Lightpanda: ${lightpandaAvailable ? "installed" : "not installed (optional)"}`);
+
+    const { isBunWebViewAvailable } = await import("../lib/browser-bun.js");
+    const bunAvailable = isBunWebViewAvailable();
+    log((bunAvailable ? chalk.green("✓") : chalk.dim("○")) + ` Bun.WebView: ${bunAvailable ? "available (native, ~11x faster)" : "not available — upgrade to Bun canary: bun upgrade --canary (optional)"}`);
 
     if (!allPassed) {
       process.exit(1);

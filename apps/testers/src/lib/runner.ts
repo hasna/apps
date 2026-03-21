@@ -24,7 +24,7 @@ export interface RunOptions {
   projectId?: string;
   apiKey?: string;
   screenshotDir?: string;
-  engine?: "playwright" | "lightpanda";
+  engine?: import("../types/index.js").BrowserEngine;
   personaId?: string;
   personaIds?: string[];  // run with multiple personas for divergence testing
   samples?: number;           // run each scenario N times for flakiness detection
@@ -150,6 +150,11 @@ export async function runSingleScenario(
 
     const scenarioTimeout = scenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
 
+    // Attach listeners BEFORE page.goto() to capture initial page load events
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
+    page.on("pageerror", (err) => { consoleErrors.push(err.message); });
+
     await page.goto(targetUrl, { timeout: Math.min(scenarioTimeout, 30000) });
 
     // Per-step timing: track when each tool call started
@@ -199,7 +204,7 @@ export async function runSingleScenario(
     }), scenarioTimeout, scenario.name);
 
     // Save screenshots to DB (Lightpanda has no rendering — skip silently)
-    if (options.engine !== "lightpanda") {
+    if (options.engine !== "lightpanda" && options.engine !== "bun") {
       for (const ss of agentResult.screenshots) {
         try {
           createScreenshot({
@@ -220,7 +225,7 @@ export async function runSingleScenario(
       }
     }
 
-    const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : "";
+    const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : options.engine === "bun" ? " (Running with Bun.WebView — native, ~11x faster)" : "";
     const updatedResult = updateResult(result.id, {
       status: agentResult.status,
       reasoning: agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || undefined,
