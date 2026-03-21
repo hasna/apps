@@ -193,6 +193,9 @@ export function getDb(): Database {
   if (!spaceColNames.includes("archived_at")) {
     db.exec("ALTER TABLE spaces ADD COLUMN archived_at TEXT");
   }
+  if (!spaceColNames.includes("topic")) {
+    db.exec("ALTER TABLE spaces ADD COLUMN topic TEXT");
+  }
 
   // Add edited_at and pinned_at columns if missing
   const msgCols2 = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];

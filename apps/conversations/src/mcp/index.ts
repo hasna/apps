@@ -938,6 +938,32 @@ server.registerTool("trending_topics", {
 
 // ---- Session Activity Tools ----
 
+server.registerTool("set_space_topic", {
+  description: "Set the current topic/status of a space. Separate from the static description — use this for live status like '🔴 blocked on auth' or '✅ shipping v2'.",
+  inputSchema: {
+    space: z.string().describe("Space name"),
+    topic: z.string().nullable().describe("New topic/status. Pass null to clear."),
+  },
+}, async (args: Record<string, any>) => {
+  const db = (await import("../lib/db.js")).getDb();
+  const existing = db.prepare("SELECT name FROM spaces WHERE name = ?").get(args.space);
+  if (!existing) {
+    return { content: [{ type: "text", text: `Space not found: ${args.space}` }], isError: true };
+  }
+  db.prepare("UPDATE spaces SET topic = ? WHERE name = ?").run(args.topic ?? null, args.space);
+  return { content: [{ type: "text", text: args.topic ? `Topic set: ${args.topic}` : "Topic cleared" }] };
+});
+
+server.registerTool("get_space_topic", {
+  description: "Get the current topic/status of a space.",
+  inputSchema: { space: z.string() },
+}, async (args: Record<string, any>) => {
+  const db = (await import("../lib/db.js")).getDb();
+  const row = db.prepare("SELECT topic FROM spaces WHERE name = ?").get(args.space) as { topic: string | null } | null;
+  if (!row) return { content: [{ type: "text", text: `Space not found: ${args.space}` }], isError: true };
+  return { content: [{ type: "text", text: JSON.stringify({ space: args.space, topic: row.topic }) }] };
+});
+
 server.registerTool("get_session_activity", {
   description: "Get activity metrics for a session: message velocity, unique agents, reply ratio, reaction count, trending status.",
   inputSchema: {
@@ -1513,6 +1539,8 @@ server.registerTool("describe_tools", {
     // Topics
     get_topics: "Extract topics from space or session. Optional: space?, session_id?, limit?",
     trending_topics: "Trending topics across all messages. Optional: hours?, project_id?, top_n?",
+    set_space_topic: "Set current topic/status of a space. Required: space, topic (pass null to clear).",
+    get_space_topic: "Get current topic/status of a space. Required: space.",
     // Session activity
     get_session_activity: "Get activity metrics for a session: velocity, agents, reply ratio, reactions, trending. Required: session_id",
     // Hot conversations
