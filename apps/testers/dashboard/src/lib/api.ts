@@ -1,4 +1,4 @@
-import type { Scenario, Run, Result, Screenshot, Schedule, ApiCheck, ApiCheckResult, Project, Environment } from "../types";
+import type { Scenario, Run, Result, Screenshot, Schedule, ApiCheck, ApiCheckResult, Project, Environment, Persona } from "../types";
 
 const BASE = "/api";
 
@@ -176,3 +176,49 @@ export const updateEnvironment = (id: string, updates: Partial<{
 
 export const deleteEnvironment = (id: string): Promise<void> =>
   fetchJSON<void>(`/environments/${id}`, { method: "DELETE" });
+
+// Coverage
+export const getCoverage = (projectId?: string): Promise<{
+  routes: { path: string; type: "scenario"; scenarioCount: number; scenarios: string[]; lastPassRate: number | null }[];
+  apiRoutes: { path: string; type: "api_check"; checkCount: number }[];
+  totalCovered: number;
+}> => fetchJSON(`/coverage${projectId ? `?projectId=${projectId}` : ""}`);
+
+// Stats
+export const getStats = (days = 30): Promise<{
+  trend: { date: string; passRate: number | null; runs: number }[];
+  last7d: { runs: number; passRate: number | null };
+  apiChecks: { total: number; passRate: number | null };
+}> => fetchJSON(`/stats?days=${days}`);
+
+// Scan Issues
+import type { ScanIssue } from "../types";
+
+export const getScanIssues = (params?: { status?: string; type?: string; projectId?: string; limit?: number }): Promise<ScanIssue[]> => {
+  const qs = params ? "?" + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))).toString() : "";
+  return fetchJSON<ScanIssue[]>(`/scan-issues${qs}`);
+};
+
+export const resolveScanIssue = (id: string): Promise<{ resolved: boolean }> =>
+  fetchJSON<{ resolved: boolean }>(`/scan-issues/${id}/resolve`, { method: "PUT" });
+
+// Personas
+export const getPersonas = (params?: { projectId?: string; globalOnly?: boolean }): Promise<Persona[]> => {
+  const qs = params ? "?" + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))).toString() : "";
+  return fetchJSON<Persona[]>(`/personas${qs}`);
+};
+
+export const createPersona = (input: Partial<Persona>): Promise<Persona> =>
+  fetchJSON<Persona>("/personas", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const updatePersona = (id: string, updates: Partial<Persona> & { version: number }): Promise<Persona> =>
+  fetchJSON<Persona>(`/personas/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(updates),
+  });
+
+export const deletePersona = (id: string): Promise<void> =>
+  fetchJSON<void>(`/personas/${id}`, { method: "DELETE" });

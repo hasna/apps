@@ -25,6 +25,7 @@ import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
 import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
+import { createPersona, getPersona, listPersonas, deletePersona } from "../db/personas.js";
 import { createApiCheck, getApiCheck, listApiChecks, deleteApiCheck } from "../db/api-checks.js";
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
@@ -339,6 +340,7 @@ program
   .option("-l, --limit <n>", "Limit results", "50")
   .option("--offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON", false)
+  .option("--group", "Group scenarios by first tag", false)
   .action((opts) => {
     try {
       const scenarios = listScenarios({
@@ -353,6 +355,19 @@ program
       });
       if (opts.json) {
         log(JSON.stringify(scenarios, null, 2));
+      } else if (opts.group) {
+        // Group by first tag
+        const groups = new Map<string, typeof scenarios>();
+        for (const s of scenarios) {
+          const g = s.tags[0] ?? "Ungrouped";
+          groups.set(g, [...(groups.get(g) ?? []), s]);
+        }
+        for (const [groupName, items] of groups.entries()) {
+          log("");
+          log(chalk.bold(`  ${groupName}`) + chalk.dim(` (${items.length})`));
+          log(chalk.dim("  " + "─".repeat(40)));
+          log(formatScenarioList(items));
+        }
       } else {
         log(formatScenarioList(scenarios));
       }
@@ -589,6 +604,9 @@ program
   .option("--watch-results", "When used with --background, poll and display live results table until run completes", false)
   .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
   .option("--smoke", "Run only smoke-tagged scenarios (fast validation suite, <2 min)", false)
+  .option("--github-comment", "Post pass/fail summary as a GitHub PR comment (requires GITHUB_TOKEN env var)", false)
+  .option("--pr <number>", "GitHub PR number (auto-detected from GITHUB_REF if not provided)")
+  .option("--persona <id>", "Override persona for this run")
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -859,6 +877,18 @@ program
           }
         } else {
           log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
+        }
+
+        // Post GitHub PR comment if requested
+        if (opts.githubComment) {
+          const { postGitHubComment } = await import("../lib/ci.js");
+          const prNumber = opts.pr ? parseInt(opts.pr, 10) : undefined;
+          const posted = await postGitHubComment(run, results, { prNumber });
+          if (posted) {
+            log(chalk.green("  GitHub PR comment posted."));
+          } else if (!process.env["GITHUB_TOKEN"]) {
+            log(chalk.yellow("  --github-comment: GITHUB_TOKEN not set, skipping PR comment."));
+          }
         }
 
         process.exit(getExitCode(run));
@@ -2903,15 +2933,34 @@ apiCmd
   });
 
 apiCmd
-  .command("run <base-url>")
+  .command("run [base-url]")
   .description("Run API checks against a base URL")
   .option("--check <id>", "Run a specific check by ID")
   .option("--project <id>", "Filter by project ID")
+  .option("--env <name>", "Use a named environment's URL as the base URL")
   .option("--parallel <n>", "Parallel requests", "5")
   .option("--json", "Output as JSON", false)
-  .action(async (baseUrl: string, opts) => {
+  .action(async (baseUrlArg: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
+      let baseUrl = baseUrlArg;
+      if (!baseUrl && opts.env) {
+        const env = getEnvironment(opts.env);
+        if (!env) { logError(chalk.red(`Environment not found: ${opts.env}`)); process.exit(1); }
+        baseUrl = env.url;
+        log(chalk.dim(`Using environment: ${env.name} (${env.url})`));
+      }
+      if (!baseUrl) {
+        const defaultEnv = getDefaultEnvironment();
+        if (defaultEnv) {
+          baseUrl = defaultEnv.url;
+          log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+        }
+      }
+      if (!baseUrl) {
+        logError(chalk.red("No base URL provided. Pass a URL argument, use --env <name>, or set a default environment."));
+        process.exit(1);
+      }
       if (opts.check) {
         const check = getApiCheck(opts.check);
         if (!check) { logError(chalk.red(`API check not found: ${opts.check}`)); process.exit(1); }
@@ -2967,6 +3016,334 @@ apiCmd
       }
       deleteApiCheck(id);
       log(chalk.green(`✓ Deleted API check ${chalk.bold(check.name)}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
+  .command("import <spec>")
+  .description("Import API checks from an OpenAPI/Swagger JSON spec file")
+  .option("--project <id>", "Project ID")
+  .option("--dry-run", "Preview what would be created without saving", false)
+  .action(async (spec: string, opts) => {
+    try {
+      const { parseOpenAPISpecAsChecks, importApiChecksFromOpenAPI } = await import("../lib/openapi-import.js");
+      const projectId = resolveProject(opts.project) ?? undefined;
+
+      if (opts.dryRun) {
+        const inputs = parseOpenAPISpecAsChecks(spec);
+        log("");
+        log(chalk.bold(`  Would create ${inputs.length} API checks:`));
+        log("");
+        log(`  ${"Method".padEnd(8)} ${"URL".padEnd(40)} ${"Expected".padEnd(10)} Tags`);
+        log(`  ${"─".repeat(8)} ${"─".repeat(40)} ${"─".repeat(10)} ${"─".repeat(20)}`);
+        for (const c of inputs) {
+          log(`  ${(c.method ?? "GET").padEnd(8)} ${(c.url ?? "").slice(0, 39).padEnd(40)} ${String(c.expectedStatus ?? 200).padEnd(10)} ${(c.tags ?? []).join(", ")}`);
+        }
+        log("");
+        return;
+      }
+
+      const { imported, checks } = importApiChecksFromOpenAPI(spec, projectId);
+      log("");
+      log(chalk.green(`✓ Imported ${imported} API checks from spec:`));
+      log("");
+      log(`  ${"ID".padEnd(10)} ${"Method".padEnd(8)} ${"URL".padEnd(40)} Status`);
+      log(`  ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(40)} ${"─".repeat(6)}`);
+      for (const c of checks) {
+        log(`  ${c.shortId.padEnd(10)} ${c.method.padEnd(8)} ${c.url.slice(0, 39).padEnd(40)} ${c.expectedStatus}`);
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
+  .command("monitor [base-url]")
+  .description("Continuously run API checks and report only changes (new failures/recoveries)")
+  .option("--interval <seconds>", "Poll interval in seconds", "30")
+  .option("--project <id>", "Filter by project ID")
+  .option("--env <name>", "Use a named environment's URL")
+  .action(async (baseUrlArg: string | undefined, opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      let baseUrl = baseUrlArg;
+      if (!baseUrl && opts.env) {
+        const env = getEnvironment(opts.env);
+        if (!env) { logError(chalk.red(`Environment not found: ${opts.env}`)); process.exit(1); }
+        baseUrl = env.url;
+      }
+      if (!baseUrl) {
+        const defaultEnv = getDefaultEnvironment();
+        if (defaultEnv) {
+          baseUrl = defaultEnv.url;
+          log(chalk.dim(`Using default environment: ${defaultEnv.name} (${defaultEnv.url})`));
+        }
+      }
+      if (!baseUrl) { logError(chalk.red("No base URL. Pass a URL, --env, or set a default environment.")); process.exit(1); }
+
+      const intervalMs = parseInt(opts.interval, 10) * 1000;
+      const lastStatus = new Map<string, string>(); // checkId → last status
+      let runCount = 0;
+
+      log("");
+      log(chalk.bold(`  Monitoring API checks against ${chalk.cyan(baseUrl)}`));
+      log(chalk.dim(`  Polling every ${opts.interval}s — press Ctrl+C to stop`));
+      log("");
+
+      const poll = async () => {
+        const checks = listApiChecks({ projectId, enabled: true });
+        if (checks.length === 0) {
+          log(chalk.yellow("  No enabled API checks found."));
+          return;
+        }
+        runCount++;
+        const { results } = await runApiChecksByFilter({ baseUrl: baseUrl!, projectId, parallel: 5 });
+
+        let changed = 0;
+        const now = new Date().toLocaleTimeString();
+        for (const result of results) {
+          const check = checks.find((c) => c.id === result.checkId);
+          const name = check?.name ?? result.checkId;
+          const prev = lastStatus.get(result.checkId);
+          const curr = result.status;
+
+          if (prev !== curr) {
+            changed++;
+            if (!prev) {
+              // First run — only log failures
+              if (curr !== "passed") {
+                const icon = curr === "failed" ? chalk.red("✗") : chalk.yellow("!");
+                log(`  [${now}] ${icon} ${chalk.bold(name)} — ${curr} (${result.responseTimeMs ?? "?"}ms, HTTP ${result.statusCode ?? "?"})`);
+                if (result.assertionsFailed.length > 0) {
+                  for (const f of result.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
+                }
+                if (result.error) log(chalk.red(`      Error: ${result.error}`));
+              }
+            } else if (prev !== "passed" && curr === "passed") {
+              log(`  [${now}] ${chalk.green("✓")} ${chalk.bold(name)} — ${chalk.green("recovered")} (was ${prev})`);
+            } else if (prev === "passed" && curr !== "passed") {
+              const icon = curr === "failed" ? chalk.red("✗") : chalk.yellow("!");
+              log(`  [${now}] ${icon} ${chalk.bold(name)} — ${chalk.red(curr)} (was passing, HTTP ${result.statusCode ?? "?"})`);
+              if (result.assertionsFailed.length > 0) {
+                for (const f of result.assertionsFailed) log(chalk.red(`      ✗ ${f}`));
+              }
+              if (result.error) log(chalk.red(`      Error: ${result.error}`));
+            } else {
+              // status changed between two non-passing states
+              log(`  [${now}] ${chalk.yellow("!")} ${chalk.bold(name)} — ${curr} (was ${prev})`);
+            }
+            lastStatus.set(result.checkId, curr);
+          } else if (!prev) {
+            lastStatus.set(result.checkId, curr);
+          }
+        }
+
+        if (runCount === 1 && changed === 0) {
+          const passing = results.filter((r) => r.status === "passed").length;
+          log(chalk.dim(`  [${now}] Initial run — ${passing}/${results.length} passing, watching for changes…`));
+        } else if (changed === 0 && runCount > 1) {
+          // Silence — no changes
+        }
+      };
+
+      await poll();
+      const interval = setInterval(poll, intervalMs);
+
+      // Keep process alive
+      process.on("SIGINT", () => {
+        clearInterval(interval);
+        log("");
+        log(chalk.dim(`  Stopped monitoring after ${runCount} run(s).`));
+        process.exit(0);
+      });
+
+      // Prevent process from exiting
+      await new Promise(() => {});
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers persona ─────────────────────────────────────────────────────────
+const personaCmd = program.command("persona").description("Manage test personas");
+
+personaCmd
+  .command("list")
+  .description("List personas")
+  .option("--project <id>", "Filter by project ID")
+  .option("--global", "Show only global personas", false)
+  .option("--json", "Output as JSON", false)
+  .action((opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+      const personas = listPersonas({
+        projectId: opts.global ? undefined : projectId,
+        globalOnly: opts.global ? true : undefined,
+      });
+      if (opts.json) {
+        log(JSON.stringify(personas, null, 2));
+        return;
+      }
+      if (personas.length === 0) {
+        log(chalk.dim("No personas found."));
+        return;
+      }
+      log("");
+      log(chalk.bold("  Personas"));
+      log("");
+      log(`  ${"ID".padEnd(10)} ${"Name".padEnd(22)} ${"Role".padEnd(22)} ${"Scope".padEnd(18)} Traits`);
+      log(`  ${"─".repeat(10)} ${"─".repeat(22)} ${"─".repeat(22)} ${"─".repeat(18)} ${"─".repeat(10)}`);
+      for (const p of personas) {
+        const scope = p.projectId ? chalk.dim(`project`) : chalk.blue("Global");
+        log(`  ${p.shortId.padEnd(10)} ${p.name.slice(0, 21).padEnd(22)} ${p.role.slice(0, 21).padEnd(22)} ${scope.toString().padEnd(18)} ${p.traits.length} traits`);
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+personaCmd
+  .command("add")
+  .description("Create a persona interactively")
+  .option("--global", "Create as a global persona (no project scope)", false)
+  .option("--project <id>", "Project ID")
+  .action(async (opts) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
+    try {
+      const name = await ask("Name: ");
+      if (!name.trim()) { logError(chalk.red("Name is required")); rl.close(); process.exit(1); }
+      const role = await ask("Role (e.g. first-time user, admin, power user): ");
+      if (!role.trim()) { logError(chalk.red("Role is required")); rl.close(); process.exit(1); }
+      const description = await ask("Description (optional): ");
+      const instructions = await ask("Instructions — how should this persona behave? (optional): ");
+      const traitsInput = await ask("Traits (comma-separated, e.g. impatient,curious): ");
+      const goalsInput = await ask("Goals (comma-separated): ");
+      rl.close();
+
+      const projectId = opts.global ? undefined : resolveProject(opts.project);
+      const traits = traitsInput.trim() ? traitsInput.split(",").map((t) => t.trim()).filter(Boolean) : [];
+      const goals = goalsInput.trim() ? goalsInput.split(",").map((g) => g.trim()).filter(Boolean) : [];
+
+      const persona = createPersona({
+        name: name.trim(),
+        role: role.trim(),
+        description: description.trim(),
+        instructions: instructions.trim(),
+        traits,
+        goals,
+        projectId,
+      });
+      log("");
+      log(chalk.green(`Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`));
+      log(chalk.dim(`  Role: ${persona.role}`));
+      log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
+    } catch (error) {
+      rl.close();
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+personaCmd
+  .command("show <id>")
+  .description("Show persona details")
+  .action((id: string) => {
+    try {
+      const persona = getPersona(id);
+      if (!persona) { logError(chalk.red(`Persona not found: ${id}`)); process.exit(1); }
+      log("");
+      log(chalk.bold(`  Persona: ${persona.name}`));
+      log(`  ID:           ${chalk.dim(persona.id)}`);
+      log(`  Short ID:     ${persona.shortId}`);
+      log(`  Role:         ${persona.role}`);
+      log(`  Scope:        ${persona.projectId ? `project (${persona.projectId})` : chalk.blue("Global")}`);
+      log(`  Enabled:      ${persona.enabled ? chalk.green("yes") : chalk.red("no")}`);
+      log(`  Description:  ${persona.description || chalk.dim("none")}`);
+      log(`  Instructions: ${persona.instructions || chalk.dim("none")}`);
+      log(`  Traits:       ${persona.traits.length > 0 ? persona.traits.join(", ") : chalk.dim("none")}`);
+      log(`  Goals:        ${persona.goals.length > 0 ? persona.goals.join(", ") : chalk.dim("none")}`);
+      log(`  Version:      ${persona.version}`);
+      log(`  Created:      ${persona.createdAt}`);
+      log(`  Updated:      ${persona.updatedAt}`);
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+personaCmd
+  .command("delete <id>")
+  .description("Delete a persona")
+  .option("-y, --yes", "Skip confirmation prompt", false)
+  .action(async (id: string, opts) => {
+    try {
+      const persona = getPersona(id);
+      if (!persona) { logError(chalk.red(`Persona not found: ${id}`)); process.exit(1); }
+      if (!opts.yes) {
+        process.stdout.write(chalk.yellow(`Delete persona ${persona.shortId} "${persona.name}"? [y/N] `));
+        const answer = await new Promise<string>((resolve) => {
+          let buf = "";
+          process.stdin.setRawMode?.(true);
+          process.stdin.resume();
+          process.stdin.once("data", (chunk) => {
+            buf = chunk.toString().trim().toLowerCase();
+            process.stdin.setRawMode?.(false);
+            process.stdin.pause();
+            process.stdout.write("\n");
+            resolve(buf);
+          });
+        });
+        if (answer !== "y" && answer !== "yes") { log(chalk.dim("Cancelled.")); return; }
+      }
+      const deleted = deletePersona(persona.id);
+      if (deleted) {
+        log(chalk.green(`Deleted persona ${persona.shortId}: ${persona.name}`));
+      } else {
+        logError(chalk.red(`Failed to delete persona: ${id}`));
+        process.exit(1);
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+personaCmd
+  .command("attach <persona-id> <scenario-id>")
+  .description("Attach a persona to a scenario")
+  .action(async (personaId: string, scenarioId: string) => {
+    try {
+      const persona = getPersona(personaId);
+      if (!persona) { logError(chalk.red(`Persona not found: ${personaId}`)); process.exit(1); }
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      updateScenario(scenario.id, { personaId: persona.id } as Parameters<typeof updateScenario>[1], scenario.version);
+      log(chalk.green(`Attached persona '${persona.name}' to scenario ${scenario.shortId}`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+personaCmd
+  .command("detach <scenario-id>")
+  .description("Detach persona from a scenario")
+  .action(async (scenarioId: string) => {
+    try {
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
+      updateScenario(scenario.id, { personaId: null } as Parameters<typeof updateScenario>[1], scenario.version);
+      log(chalk.green(`Detached persona from scenario ${scenario.shortId}`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

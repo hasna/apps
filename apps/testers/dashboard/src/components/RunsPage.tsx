@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import type { Run } from "../types";
 import { getRuns } from "../lib/api";
 import { Spinner } from "./Spinner";
+import { TrendChart } from "./TrendChart";
 
 const statusStyles: Record<string, { color: string; bg: string }> = {
   passed: { color: "var(--green)", bg: "rgba(34, 197, 94, 0.1)" },
@@ -59,6 +60,7 @@ export function RunsPage({ runs: initialRuns, onSelectRun, onRefresh }: { runs: 
 
   return (
     <div>
+      <TrendChart />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Test Runs</h2>
         <button onClick={onRefresh} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>

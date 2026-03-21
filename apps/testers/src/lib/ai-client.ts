@@ -635,7 +635,7 @@ export type StepEventHandler = (event: {
 }) => void;
 
 interface AgentLoopOptions {
-  client: Anthropic;
+  client: Anthropic | { provider: "openai" | "google"; baseUrl: string; apiKey: string };
   page: Page;
   scenario: Scenario;
   screenshotter: Screenshotter;
@@ -643,6 +643,14 @@ interface AgentLoopOptions {
   runId: string;
   maxTurns?: number;
   onStep?: StepEventHandler;
+  persona?: {
+    name: string;
+    role: string;
+    description: string;
+    instructions: string;
+    traits: string[];
+    goals: string[];
+  } | null;
 }
 
 interface AgentLoopResult {
@@ -680,7 +688,20 @@ export async function runAgentLoop(
     runId,
     maxTurns = 30,
     onStep,
+    persona,
   } = options;
+
+  const personaSection = persona ? [
+    "",
+    "## Your Testing Persona",
+    `You are acting as: **${persona.role}** (${persona.name})`,
+    persona.description ? persona.description : "",
+    persona.instructions ? `\nInstructions: ${persona.instructions}` : "",
+    persona.traits.length > 0 ? `Traits: ${persona.traits.join(", ")}` : "",
+    persona.goals.length > 0 ? `Goals: ${persona.goals.join("; ")}` : "",
+    "",
+    "Stay in character throughout the test. Your observations, choices, and priorities should reflect this persona.",
+  ].filter(Boolean).join("\n") : "";
 
   const systemPrompt = [
     "You are an expert QA testing agent. Your job is to thoroughly test web application scenarios.",
@@ -701,7 +722,7 @@ export async function runAgentLoop(
     "- For forms, fill all fields before submitting",
     "- Check for error messages after form submissions",
     "- Verify both positive and negative states",
-  ].join("\n");
+  ].join("\n") + personaSection;
 
   // Build the user message from the scenario
   const userParts: string[] = [
@@ -737,15 +758,28 @@ export async function runAgentLoop(
     { role: "user", content: userMessage },
   ];
 
+  // Determine if we're using a non-Anthropic provider
+  const isOpenAICompat = "provider" in client;
+
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
-      const response = await client.messages.create({
-        model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools: BROWSER_TOOLS,
-        messages,
-      });
+      // Call the appropriate provider
+      const response = isOpenAICompat
+        ? await callOpenAICompatible({
+            baseUrl: (client as { provider: string; baseUrl: string; apiKey: string }).baseUrl,
+            apiKey: (client as { provider: string; baseUrl: string; apiKey: string }).apiKey,
+            model,
+            system: systemPrompt,
+            messages,
+            tools: BROWSER_TOOLS,
+          })
+        : await (client as Anthropic).messages.create({
+            model,
+            max_tokens: 4096,
+            system: systemPrompt,
+            tools: BROWSER_TOOLS,
+            messages,
+          });
 
       // Track token usage
       if (response.usage) {
@@ -864,6 +898,18 @@ export async function runAgentLoop(
 // ─── Client Factory ─────────────────────────────────────────────────────────
 
 /**
+ * Detects the AI provider from a model name.
+ * - "gpt-*" or "o1-*" / "o3-*" → openai
+ * - "gemini-*" → google
+ * - everything else → anthropic (default)
+ */
+export function detectProvider(model: string): "anthropic" | "openai" | "google" {
+  if (model.startsWith("gpt-") || /^o\d/.test(model)) return "openai";
+  if (model.startsWith("gemini-")) return "google";
+  return "anthropic";
+}
+
+/**
  * Creates an Anthropic client instance. Uses the provided API key,
  * or falls back to the ANTHROPIC_API_KEY environment variable.
  */
@@ -875,4 +921,130 @@ export function createClient(apiKey?: string): Anthropic {
     );
   }
   return new Anthropic({ apiKey: key });
+}
+
+// ─── OpenAI-compatible adapter ──────────────────────────────────────────────
+// Used for both OpenAI (api.openai.com) and Google Gemini (OpenAI-compat endpoint).
+// Translates Anthropic-style tool definitions and responses to/from OpenAI format.
+
+function anthropicToolsToOpenAI(tools: Anthropic.Tool[]): unknown[] {
+  return tools.map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
+  }));
+}
+
+interface OpenAIResponse {
+  choices: Array<{
+    message: {
+      role: string;
+      content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }>;
+    };
+    finish_reason: string;
+  }>;
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+/**
+ * Calls an OpenAI-compatible chat completions endpoint and returns a
+ * response shaped like an Anthropic message (content blocks).
+ */
+export async function callOpenAICompatible(options: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  system: string;
+  messages: Anthropic.MessageParam[];
+  tools: Anthropic.Tool[];
+  maxTokens?: number;
+}): Promise<{ content: Anthropic.ContentBlock[]; stop_reason: string; usage: { input_tokens: number; output_tokens: number } }> {
+  const { baseUrl, apiKey, model, system, messages, tools, maxTokens = 4096 } = options;
+
+  // Convert message history (Anthropic format → OpenAI format)
+  const oaiMessages: unknown[] = [{ role: "system", content: system }];
+  for (const msg of messages) {
+    if (typeof msg.content === "string") {
+      oaiMessages.push({ role: msg.role, content: msg.content });
+    } else if (Array.isArray(msg.content)) {
+      // Handle tool results and text blocks
+      for (const block of msg.content as Anthropic.ContentBlockParam[]) {
+        if (block.type === "text") {
+          oaiMessages.push({ role: msg.role, content: (block as Anthropic.TextBlockParam).text });
+        } else if (block.type === "tool_use") {
+          const tb = block as Anthropic.ToolUseBlockParam;
+          oaiMessages.push({
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: tb.id, type: "function", function: { name: tb.name, arguments: JSON.stringify(tb.input) } }],
+          });
+        } else if (block.type === "tool_result") {
+          const trb = block as Anthropic.ToolResultBlockParam;
+          const resultContent = typeof trb.content === "string" ? trb.content : JSON.stringify(trb.content);
+          oaiMessages.push({ role: "tool", tool_call_id: trb.tool_use_id, content: resultContent });
+        }
+      }
+    }
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: oaiMessages, tools: anthropicToolsToOpenAI(tools), max_tokens: maxTokens }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new AIClientError(`OpenAI-compatible API error ${response.status}: ${err.slice(0, 200)}`);
+  }
+
+  const data = await response.json() as OpenAIResponse;
+  const choice = data.choices[0];
+  if (!choice) throw new AIClientError("No choices in OpenAI response");
+
+  // Convert back to Anthropic content block format
+  const content: Anthropic.ContentBlock[] = [];
+  if (choice.message.content) {
+    content.push({ type: "text", text: choice.message.content } as Anthropic.TextBlock);
+  }
+  for (const tc of choice.message.tool_calls ?? []) {
+    content.push({
+      type: "tool_use",
+      id: tc.id,
+      name: tc.function.name,
+      input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })(),
+    } as unknown as Anthropic.ContentBlock);
+  }
+
+  const stopReason = choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
+  const usage = { input_tokens: data.usage?.prompt_tokens ?? 0, output_tokens: data.usage?.completion_tokens ?? 0 };
+
+  return { content, stop_reason: stopReason, usage };
+}
+
+/**
+ * Creates the right client/config for a given model. Returns either an Anthropic
+ * client or a config object for the OpenAI-compatible path.
+ */
+export function createClientForModel(model: string, apiKey?: string): Anthropic | { provider: "openai" | "google"; baseUrl: string; apiKey: string } {
+  const provider = detectProvider(model);
+  if (provider === "openai") {
+    const key = apiKey ?? process.env["OPENAI_API_KEY"];
+    if (!key) throw new AIClientError("No OpenAI API key. Set OPENAI_API_KEY or pass it explicitly.");
+    return { provider: "openai", baseUrl: "https://api.openai.com/v1", apiKey: key };
+  }
+  if (provider === "google") {
+    const key = apiKey ?? process.env["GOOGLE_API_KEY"];
+    if (!key) throw new AIClientError("No Google API key. Set GOOGLE_API_KEY or pass it explicitly.");
+    return { provider: "google", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: key };
+  }
+  return createClient(apiKey);
 }

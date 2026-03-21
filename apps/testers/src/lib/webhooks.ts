@@ -1,5 +1,5 @@
 import { getDatabase, uuid, now } from "../db/database.js";
-import type { Run } from "../types/index.js";
+import type { Run, ApiCheck, ApiCheckResult } from "../types/index.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -196,6 +196,65 @@ export async function dispatchWebhooks(
       }
     } catch {
       // Webhook delivery failed — non-critical, don't throw
+    }
+  }
+}
+
+export interface ApiCheckWebhookPayload {
+  event: "api_check_failed";
+  check: {
+    id: string;
+    name: string;
+    method: string;
+    url: string;
+  };
+  result: {
+    id: string;
+    status: string;
+    statusCode: number | null;
+    responseTimeMs: number | null;
+    assertionsFailed: string[];
+    error: string | null;
+  };
+  timestamp: string;
+}
+
+export async function dispatchApiCheckWebhooks(
+  check: ApiCheck,
+  result: ApiCheckResult,
+): Promise<void> {
+  if (result.status === "passed") return;
+
+  const webhooks = listWebhooks(check.projectId ?? undefined);
+  const payload: ApiCheckWebhookPayload = {
+    event: "api_check_failed",
+    check: { id: check.id, name: check.name, method: check.method, url: check.url },
+    result: {
+      id: result.id,
+      status: result.status,
+      statusCode: result.statusCode,
+      responseTimeMs: result.responseTimeMs,
+      assertionsFailed: result.assertionsFailed,
+      error: result.error,
+    },
+    timestamp: new Date().toISOString(),
+  };
+
+  for (const webhook of webhooks) {
+    if (!webhook.events.includes("api_check_failed") && !webhook.events.includes("failed") && !webhook.events.includes("*")) continue;
+
+    const body = JSON.stringify(payload);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (webhook.secret) headers["X-Testers-Signature"] = signPayload(body, webhook.secret);
+
+    try {
+      const response = await fetch(webhook.url, { method: "POST", headers, body });
+      if (!response.ok) {
+        await new Promise((r) => setTimeout(r, 5000));
+        await fetch(webhook.url, { method: "POST", headers, body });
+      }
+    } catch {
+      // Non-critical — don't throw
     }
   }
 }

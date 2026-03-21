@@ -8,6 +8,9 @@ import { ResultDetailPage } from "./components/ResultDetailPage";
 import { SchedulesPage } from "./components/SchedulesPage";
 import { ApiChecksPage } from "./components/ApiChecksPage";
 import { ProjectsPage } from "./components/ProjectsPage";
+import { ScanIssuesPage } from "./components/ScanIssuesPage";
+import { CoveragePage } from "./components/CoveragePage";
+import { PersonasPage } from "./components/PersonasPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 type Page =
@@ -17,7 +20,10 @@ type Page =
   | { type: "result-detail"; resultId: string }
   | { type: "schedules" }
   | { type: "api-checks" }
-  | { type: "projects" };
+  | { type: "projects" }
+  | { type: "scan-issues" }
+  | { type: "coverage" }
+  | { type: "personas" };
 
 // Context for sharing selected scenario + search ref across pages
 export const AppContext = createContext<{
@@ -165,6 +171,15 @@ export function App() {
             <NavButton active={page.type === "projects"} onClick={() => setPage({ type: "projects" })}>
               Projects
             </NavButton>
+            <NavButton active={page.type === "scan-issues"} onClick={() => setPage({ type: "scan-issues" })}>
+              Scan Issues
+            </NavButton>
+            <NavButton active={page.type === "coverage"} onClick={() => setPage({ type: "coverage" })}>
+              Coverage
+            </NavButton>
+            <NavButton active={page.type === "personas"} onClick={() => setPage({ type: "personas" })}>
+              Personas
+            </NavButton>
           </nav>
           <button
             onClick={() => setIsDark((d) => !d)}
@@ -219,6 +234,15 @@ export function App() {
             )}
             {page.type === "projects" && (
               <ProjectsPage />
+            )}
+            {page.type === "scan-issues" && (
+              <ScanIssuesPage />
+            )}
+            {page.type === "coverage" && (
+              <CoveragePage />
+            )}
+            {page.type === "personas" && (
+              <PersonasPage />
             )}
           </ErrorBoundary>
         </div>

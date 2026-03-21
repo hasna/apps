@@ -3,9 +3,10 @@ import { createRun, getRun, updateRun } from "../db/runs.js";
 import { createResult, updateResult } from "../db/results.js";
 import { createScreenshot } from "../db/screenshots.js";
 import { listScenarios } from "../db/scenarios.js";
+import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
-import { createClient, runAgentLoop, resolveModel } from "./ai-client.js";
+import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
@@ -23,6 +24,7 @@ export interface RunOptions {
   apiKey?: string;
   screenshotDir?: string;
   engine?: "playwright" | "lightpanda";
+  personaId?: string;
 }
 
 export interface RunEvent {
@@ -99,16 +101,22 @@ export async function runSingleScenario(
 ): Promise<Result> {
   const config = loadConfig();
   const model = resolveModel(options.model ?? scenario.model ?? config.defaultModel);
-  const client = createClient(options.apiKey ?? config.anthropicApiKey);
+  const client = createClientForModel(model, options.apiKey ?? config.anthropicApiKey);
   const screenshotter = new Screenshotter({
     baseDir: options.screenshotDir ?? config.screenshots.dir,
   });
+
+  // Resolve persona before creating result so we can store the name
+  const resolvedPersonaId = options.personaId ?? scenario.personaId;
+  const persona = resolvedPersonaId ? getPersona(resolvedPersonaId) : null;
 
   const result = createResult({
     runId,
     scenarioId: scenario.id,
     model,
     stepsTotal: scenario.steps.length || 10,
+    personaId: persona?.id ?? null,
+    personaName: persona?.name ?? null,
   });
 
   emit({ type: "scenario:start", scenarioId: scenario.id, scenarioName: scenario.name, resultId: result.id, runId });
@@ -141,6 +149,14 @@ export async function runSingleScenario(
       model,
       runId,
       maxTurns: 30,
+      persona: persona ? {
+        name: persona.name,
+        role: persona.role,
+        description: persona.description,
+        instructions: persona.instructions,
+        traits: persona.traits,
+        goals: persona.goals,
+      } : null,
       onStep: (stepEvent) => {
         let stepDurationMs: number | undefined;
         if (stepEvent.type === "tool_call") {

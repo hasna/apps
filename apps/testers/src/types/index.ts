@@ -61,6 +61,7 @@ export interface ScenarioRow {
   auth_config: string | null; // JSON
   metadata: string | null; // JSON
   assertions: string; // JSON array
+  persona_id: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -98,6 +99,8 @@ export interface ResultRow {
   cost_cents: number;
   metadata: string | null; // JSON
   created_at: string;
+  persona_id: string | null;
+  persona_name: string | null;
 }
 
 export interface ScreenshotRow {
@@ -190,6 +193,7 @@ export interface Scenario {
   authConfig: AuthConfig | null;
   metadata: Record<string, unknown> | null;
   assertions: Assertion[];
+  personaId: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -227,6 +231,8 @@ export interface Result {
   costCents: number;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  personaId: string | null;
+  personaName: string | null;
 }
 
 export interface Screenshot {
@@ -439,6 +445,7 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     authConfig: row.auth_config ? JSON.parse(row.auth_config) : null,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     assertions: JSON.parse(row.assertions || "[]"),
+    personaId: row.persona_id ?? null,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -480,6 +487,8 @@ export function resultFromRow(row: ResultRow): Result {
     costCents: row.cost_cents,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     createdAt: row.created_at,
+    personaId: row.persona_id ?? null,
+    personaName: row.persona_name ?? null,
   };
 }
 
@@ -731,6 +740,99 @@ export interface CreateFlowInput {
   description?: string;
   scenarioIds: string[];
   projectId?: string;
+}
+
+// ─── Persona Types ────────────────────────────────────────────────────────────
+
+export class PersonaNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Persona not found: ${id}`);
+    this.name = "PersonaNotFoundError";
+  }
+}
+
+export interface PersonaRow {
+  id: string;
+  short_id: string;
+  project_id: string | null;
+  name: string;
+  description: string;
+  role: string;
+  instructions: string;
+  traits: string; // JSON
+  goals: string; // JSON
+  metadata: string | null; // JSON
+  enabled: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Persona {
+  id: string;
+  shortId: string;
+  projectId: string | null; // null = global
+  name: string;
+  description: string;
+  role: string;
+  instructions: string;
+  traits: string[];
+  goals: string[];
+  metadata: Record<string, unknown> | null;
+  enabled: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePersonaInput {
+  name: string;
+  role: string;
+  description?: string;
+  instructions?: string;
+  traits?: string[];
+  goals?: string[];
+  projectId?: string; // omit for global
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdatePersonaInput {
+  name?: string;
+  role?: string;
+  description?: string;
+  instructions?: string;
+  traits?: string[];
+  goals?: string[];
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PersonaFilter {
+  projectId?: string;
+  enabled?: boolean;
+  globalOnly?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function personaFromRow(row: PersonaRow): Persona {
+  return {
+    id: row.id,
+    shortId: row.short_id,
+    projectId: row.project_id,
+    name: row.name,
+    description: row.description,
+    role: row.role,
+    instructions: row.instructions,
+    traits: JSON.parse(row.traits),
+    goals: JSON.parse(row.goals),
+    metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    enabled: row.enabled === 1,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 // ─── API Check Types ──────────────────────────────────────────────────────────

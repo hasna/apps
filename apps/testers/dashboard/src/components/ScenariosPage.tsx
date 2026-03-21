@@ -11,10 +11,60 @@ const priorityColors: Record<string, string> = {
   low: "var(--text-muted)",
 };
 
+// Shared scenario card component used in both flat and grouped views
+function ScenarioCard({ s, isSelected, isChecked, onSelect, onToggle, onDuplicate }: {
+  s: Scenario; isSelected: boolean; isChecked: boolean;
+  onSelect: () => void; onToggle: () => void; onDuplicate: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      style={{
+        background: "var(--bg-card)", border: `1px solid ${isSelected ? "var(--blue)" : "var(--border)"}`,
+        borderRadius: 8, padding: 16, cursor: "pointer", display: "flex", gap: 12, alignItems: "flex-start",
+        outline: isSelected ? "2px solid var(--blue)" : "none", outlineOffset: 1,
+      }}
+    >
+      <input type="checkbox" checked={isChecked} onChange={(e) => { e.stopPropagation(); onToggle(); }} onClick={(e) => e.stopPropagation()} style={{ marginTop: 3, cursor: "pointer", flexShrink: 0 }} />
+      <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+          <span style={{ color: "var(--cyan)", fontFamily: "monospace", fontSize: 13 }}>{s.shortId}</span>
+          <span style={{ fontWeight: 600 }}>{s.name}</span>
+          <span style={{ color: priorityColors[s.priority] ?? "var(--text-muted)", fontSize: 12, border: "1px solid", borderRadius: 4, padding: "1px 6px" }}>{s.priority}</span>
+          <button title="Duplicate scenario" onClick={onDuplicate} style={{ marginLeft: "auto", padding: "2px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 11, flexShrink: 0 }}>
+            ⧉ Duplicate
+          </button>
+        </div>
+        {s.description && <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "4px 0" }}>{s.description}</p>}
+        <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+          {s.tags.map((tag) => <span key={tag} style={{ background: "var(--bg-hover)", color: "var(--text-muted)", padding: "2px 8px", borderRadius: 4, fontSize: 11 }}>{tag}</span>)}
+          {s.steps.length > 0 && <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{s.steps.length} steps</span>}
+          {s.model && <span style={{ color: "var(--text-muted)", fontSize: 11 }}>model: {s.model}</span>}
+          <span style={{ marginLeft: "auto" }}><RunSparkline scenarioId={s.id} /></span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Group scenarios by first tag (or "Ungrouped")
+function groupScenarios(scenarios: Scenario[]): Map<string, Scenario[]> {
+  const map = new Map<string, Scenario[]>();
+  for (const s of scenarios) {
+    const group = s.tags[0] ?? "Ungrouped";
+    const existing = map.get(group) ?? [];
+    existing.push(s);
+    map.set(group, existing);
+  }
+  return map;
+}
+
 export function ScenariosPage({ scenarios, onRefresh, editScenarioId, onEditClose }: { scenarios: Scenario[]; onRefresh: () => void; editScenarioId?: string | null; onEditClose?: () => void }) {
   const { selectedScenarioId, setSelectedScenarioId, searchInputRef } = useContext(AppContext);
   const [search, setSearch] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [grouped, setGrouped] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [bulkTagInput, setBulkTagInput] = useState("");
   const [showTagInput, setShowTagInput] = useState(false);
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
@@ -125,6 +175,13 @@ export function ScenariosPage({ scenarios, onRefresh, editScenarioId, onEditClos
             onChange={(e) => setSearch(e.target.value)}
             style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--text)", fontSize: 12, width: 180, outline: "none" }}
           />
+          <button
+            onClick={() => setGrouped((g) => !g)}
+            title={grouped ? "Switch to flat list" : "Group by first tag"}
+            style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid var(--border)", background: grouped ? "var(--accent)" : "transparent", color: grouped ? "#fff" : "var(--text-muted)", cursor: "pointer", fontSize: 12 }}
+          >
+            {grouped ? "⊞ Grouped" : "⊟ Flat"}
+          </button>
           <button onClick={onRefresh} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>
             Refresh
           </button>
@@ -152,74 +209,33 @@ export function ScenariosPage({ scenarios, onRefresh, editScenarioId, onEditClos
             </span>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {filtered.map((s) => {
-              const isSelected = selectedScenarioId === s.id;
-              const isChecked = checked.has(s.id);
-              return (
-                <div
-                  key={s.id}
-                  onClick={() => setSelectedScenarioId(isSelected ? null : s.id)}
-                  style={{
-                    background: "var(--bg-card)",
-                    border: `1px solid ${isSelected ? "var(--blue)" : "var(--border)"}`,
-                    borderRadius: 8,
-                    padding: 16,
-                    cursor: "pointer",
-                    display: "flex",
-                    gap: 12,
-                    alignItems: "flex-start",
-                    outline: isSelected ? "2px solid var(--blue)" : "none",
-                    outlineOffset: 1,
-                  }}
-                >
-                  {/* Checkbox */}
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={(e) => { e.stopPropagation(); toggleCheck(s.id); }}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginTop: 3, cursor: "pointer", flexShrink: 0 }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                      <span style={{ color: "var(--cyan)", fontFamily: "monospace", fontSize: 13 }}>{s.shortId}</span>
-                      <span style={{ fontWeight: 600 }}>{s.name}</span>
-                      <span style={{ color: priorityColors[s.priority] ?? "var(--text-muted)", fontSize: 12, border: "1px solid", borderRadius: 4, padding: "1px 6px" }}>
-                        {s.priority}
-                      </span>
-                      <button
-                        title="Duplicate scenario"
-                        onClick={(e) => handleDuplicate(s, e)}
-                        style={{ marginLeft: "auto", padding: "2px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 11, flexShrink: 0 }}
-                      >
-                        ⧉ Duplicate
-                      </button>
-                    </div>
-                    {s.description && (
-                      <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "4px 0" }}>{s.description}</p>
+          {grouped
+            ? Array.from(groupScenarios(filtered).entries()).map(([groupName, grpScenarios]) => {
+                const isCollapsed = collapsedGroups.has(groupName);
+                return (
+                  <div key={groupName} style={{ marginBottom: 16 }}>
+                    <button
+                      onClick={() => setCollapsedGroups((prev) => { const n = new Set(prev); if (n.has(groupName)) n.delete(groupName); else n.add(groupName); return n; })}
+                      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 8, cursor: "pointer", color: "var(--text)" }}
+                    >
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{isCollapsed ? "▶" : "▼"}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{groupName}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 10, padding: "1px 7px" }}>{grpScenarios.length}</span>
+                    </button>
+                    {!isCollapsed && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {grpScenarios.map((s) => <ScenarioCard key={s.id} s={s} isSelected={selectedScenarioId === s.id} isChecked={checked.has(s.id)} onSelect={() => setSelectedScenarioId(selectedScenarioId === s.id ? null : s.id)} onToggle={() => toggleCheck(s.id)} onDuplicate={(e) => handleDuplicate(s, e)} />)}
+                      </div>
                     )}
-                    <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
-                      {s.tags.map((tag) => (
-                        <span key={tag} style={{ background: "var(--bg-hover)", color: "var(--text-muted)", padding: "2px 8px", borderRadius: 4, fontSize: 11 }}>
-                          {tag}
-                        </span>
-                      ))}
-                      {s.steps.length > 0 && (
-                        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{s.steps.length} steps</span>
-                      )}
-                      {s.model && (
-                        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>model: {s.model}</span>
-                      )}
-                      <span style={{ marginLeft: "auto" }}>
-                        <RunSparkline scenarioId={s.id} />
-                      </span>
-                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })
+            : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {filtered.map((s) => <ScenarioCard key={s.id} s={s} isSelected={selectedScenarioId === s.id} isChecked={checked.has(s.id)} onSelect={() => setSelectedScenarioId(selectedScenarioId === s.id ? null : s.id)} onToggle={() => toggleCheck(s.id)} onDuplicate={(e) => handleDuplicate(s, e)} />)}
+              </div>
+            )
+          }
         </>
       )}
 

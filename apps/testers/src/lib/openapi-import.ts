@@ -1,6 +1,8 @@
 import { readFileSync } from "fs";
-import type { CreateScenarioInput, ScenarioPriority } from "../types/index.js";
+import type { CreateScenarioInput, ScenarioPriority, HttpMethod } from "../types/index.js";
 import { createScenario } from "../db/scenarios.js";
+import { createApiCheck } from "../db/api-checks.js";
+import type { CreateApiCheckInput } from "../types/index.js";
 
 interface OpenAPISpec {
   openapi?: string;
@@ -125,4 +127,54 @@ export function importFromOpenAPI(
     createScenario({ ...input, projectId })
   );
   return { imported: scenarios.length, scenarios };
+}
+
+export function parseOpenAPISpecAsChecks(filePathOrUrl: string): CreateApiCheckInput[] {
+  let content: string;
+  if (filePathOrUrl.startsWith("http")) {
+    throw new Error("URL fetching not supported yet. Download the spec file first.");
+  }
+  content = readFileSync(filePathOrUrl, "utf-8");
+  const spec = parseSpec(content);
+  if (!spec.openapi && !spec.swagger) {
+    throw new Error("Not a valid OpenAPI 3.x or Swagger 2.0 spec");
+  }
+
+  const checks: CreateApiCheckInput[] = [];
+  const paths = spec.paths ?? {};
+
+  for (const [path, methods] of Object.entries(paths)) {
+    for (const [method, operation] of Object.entries(methods)) {
+      const m = method.toUpperCase();
+      if (!["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"].includes(m)) continue;
+
+      const op = operation as PathItem;
+      const name = op.summary ?? op.operationId ?? `${m} ${path}`;
+      const tags = op.tags ?? [];
+      const responses = op.responses ?? {};
+      const successCodes = Object.keys(responses).filter((c) => c.startsWith("2"));
+      const expectedStatus = successCodes.length > 0 ? parseInt(successCodes[0]!, 10) : 200;
+      const description = op.description ?? `${m} ${path}`;
+
+      checks.push({
+        name,
+        description,
+        method: m as HttpMethod,
+        url: path,
+        expectedStatus,
+        tags: [...tags, method.toLowerCase()],
+      });
+    }
+  }
+
+  return checks;
+}
+
+export function importApiChecksFromOpenAPI(
+  filePathOrUrl: string,
+  projectId?: string,
+): { imported: number; checks: ReturnType<typeof createApiCheck>[] } {
+  const inputs = parseOpenAPISpecAsChecks(filePathOrUrl);
+  const checks = inputs.map((input) => createApiCheck({ ...input, projectId }));
+  return { imported: checks.length, checks };
 }
