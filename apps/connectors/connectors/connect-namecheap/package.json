@@ -1,10 +1,10 @@
 {
-  "name": "@hasna/connect-godaddy",
+  "name": "@hasna/connect-namecheap",
   "version": "0.1.0",
-  "description": "GoDaddy API connector CLI - Manage domains, DNS records, and availability checks",
+  "description": "Namecheap API connector - A TypeScript CLI for managing domains and DNS via the Namecheap XML API",
   "type": "module",
   "bin": {
-    "connect-godaddy": "./bin/index.js"
+    "connect-namecheap": "./bin/index.js"
   },
   "exports": {
     ".": {
@@ -17,16 +17,16 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
-    "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
-    "godaddy",
-    "domains",
-    "dns",
     "api",
     "connector",
+    "namecheap",
+    "domains",
+    "dns",
     "cli",
     "typescript",
     "bun",

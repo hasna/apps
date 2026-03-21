@@ -1,167 +1,71 @@
-import type { BrandsightConfig, OutputFormat } from '../types';
-import { BrandsightApiError } from '../types';
+import type { ConnectorConfig } from '../types';
+import { ConnectorApiError } from '../types';
 
-// GoDaddy/Brandsight API base URLs
-const DEFAULT_BASE_URL = 'https://api.godaddy.com';
-const OTE_BASE_URL = 'https://api.ote-godaddy.com'; // Testing environment
+// Brandsight API base URL
+const API_BASE = 'https://api.brandsight.com/v1';
 
-export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD';
-  params?: Record<string, string | number | boolean | undefined>;
-  body?: Record<string, unknown> | unknown[];
-  headers?: Record<string, string>;
-  format?: OutputFormat;
-}
-
-export class BrandsightClient {
+/**
+ * Low-level HTTP client for the Brandsight REST API.
+ * Handles URL building, Bearer auth, and JSON error checking.
+ */
+export class ConnectorClient {
   private readonly apiKey: string;
-  private readonly apiSecret: string;
-  private readonly customerId?: string;
   private readonly baseUrl: string;
 
-  constructor(config: BrandsightConfig) {
+  constructor(config: ConnectorConfig) {
     if (!config.apiKey) {
       throw new Error('API key is required');
     }
-    if (!config.apiSecret) {
-      throw new Error('API secret is required');
-    }
     this.apiKey = config.apiKey;
-    this.apiSecret = config.apiSecret;
-    this.customerId = config.customerId;
-    this.baseUrl = config.baseUrl || DEFAULT_BASE_URL;
+    this.baseUrl = API_BASE;
   }
 
-  getCustomerId(): string | undefined {
-    return this.customerId;
+  /**
+   * Build a full Brandsight API URL for a given path
+   */
+  buildUrl(path: string): string {
+    return `${this.baseUrl}${path}`;
   }
 
-  private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
-    const url = new URL(`${this.baseUrl}${path}`);
+  /**
+   * Make an authenticated GET request to the Brandsight API.
+   * Returns parsed JSON on success, or { stub: true } when API is unreachable.
+   */
+  async request<T>(path: string): Promise<{ data: T; stub: false } | { data: null; stub: true }> {
+    const url = this.buildUrl(path);
 
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
-          url.searchParams.append(key, String(value));
-        }
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'connect-brandsight/0.1.0',
+        },
+        signal: AbortSignal.timeout(15000),
       });
-    }
 
-    return url.toString();
-  }
-
-  private getAcceptHeader(format: OutputFormat = 'json'): string {
-    return format === 'xml' ? 'application/xml' : 'application/json';
-  }
-
-  async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', params, body, headers = {}, format = 'json' } = options;
-
-    const url = this.buildUrl(path, params);
-
-    // Brandsight/GoDaddy uses sso-key authentication
-    const requestHeaders: Record<string, string> = {
-      'Authorization': `sso-key ${this.apiKey}:${this.apiSecret}`,
-      'Accept': this.getAcceptHeader(format),
-      ...headers,
-    };
-
-    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
-      requestHeaders['Content-Type'] = 'application/json';
-    }
-
-    const fetchOptions: RequestInit = {
-      method,
-      headers: requestHeaders,
-    };
-
-    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
-      fetchOptions.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(url, fetchOptions);
-
-    // Handle HEAD requests (status check)
-    if (method === 'HEAD') {
-      return {
-        active: response.status === 204 || response.status === 200,
-        statusCode: response.status
-      } as T;
-    }
-
-    // Handle 204 No Content
-    if (response.status === 204) {
-      return {} as T;
-    }
-
-    // Handle partial content (pagination)
-    const hasMore = response.status === 206;
-
-    // Parse response
-    let data: unknown;
-    const contentType = response.headers.get('content-type') || '';
-
-    if (contentType.includes('application/json')) {
-      const text = await response.text();
-      if (text) {
-        try {
-          data = JSON.parse(text);
-        } catch {
-          data = text;
-        }
+      if (!response.ok) {
+        throw new ConnectorApiError(
+          `Brandsight API GET ${path} failed with status ${response.status}`,
+          response.status,
+          await response.text()
+        );
       }
-    } else if (contentType.includes('application/xml')) {
-      data = await response.text();
-    } else {
-      const text = await response.text();
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
+
+      const data = (await response.json()) as T;
+      return { data, stub: false };
+    } catch (error) {
+      if (error instanceof ConnectorApiError) throw error;
+      // API unreachable — return stub indicator
+      return { data: null, stub: true };
     }
-
-    // Handle errors
-    if (!response.ok && response.status !== 206) {
-      const errorMessage = typeof data === 'object' && data !== null
-        ? JSON.stringify(data)
-        : String(data || response.statusText);
-      throw new BrandsightApiError(errorMessage, response.status);
-    }
-
-    // Add pagination info if needed
-    if (hasMore && typeof data === 'object' && data !== null) {
-      (data as Record<string, unknown>)._hasMore = true;
-    }
-
-    return data as T;
   }
 
-  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>, format?: OutputFormat): Promise<T> {
-    return this.request<T>(path, { method: 'GET', params, format });
-  }
-
-  async post<T>(path: string, body?: Record<string, unknown> | unknown[], params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'POST', body, params });
-  }
-
-  async put<T>(path: string, body?: Record<string, unknown>, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'PUT', body, params });
-  }
-
-  async patch<T>(path: string, body?: Record<string, unknown>, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'PATCH', body, params });
-  }
-
-  async delete<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'DELETE', params });
-  }
-
-  async head<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'HEAD', params });
-  }
-
-  // Utility to get API key preview (for display/debugging)
+  /**
+   * Get a preview of the API key (for display/debugging)
+   */
   getApiKeyPreview(): string {
     if (this.apiKey.length > 10) {
       return `${this.apiKey.substring(0, 6)}...${this.apiKey.substring(this.apiKey.length - 4)}`;

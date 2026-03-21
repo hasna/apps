@@ -1,34 +1,36 @@
-import type { BrandsightConfig } from '../types';
-import { BrandsightClient } from './client';
-import { DomainsApi } from './domains';
+import type { ConnectorConfig } from '../types';
+import { ConnectorClient } from './client';
+import { MonitoringApi } from './monitoring';
+import { IntelligenceApi } from './intelligence';
 
-export class Brandsight {
-  private readonly client: BrandsightClient;
+/**
+ * Brandsight API Connector class
+ */
+export class Connector {
+  private readonly client: ConnectorClient;
 
   // API modules
-  public readonly domains: DomainsApi;
+  public readonly monitoring: MonitoringApi;
+  public readonly intelligence: IntelligenceApi;
 
-  constructor(config: BrandsightConfig) {
-    this.client = new BrandsightClient(config);
-    this.domains = new DomainsApi(this.client);
+  constructor(config: ConnectorConfig) {
+    this.client = new ConnectorClient(config);
+    this.monitoring = new MonitoringApi(this.client);
+    this.intelligence = new IntelligenceApi(this.client);
   }
 
   /**
-   * Create a Brandsight client from environment variables
-   * Looks for BRANDSIGHT_API_KEY, BRANDSIGHT_API_SECRET, and optionally BRANDSIGHT_CUSTOMER_ID
+   * Create a client from environment variables
+   * Looks for BRANDSIGHT_API_KEY
    */
-  static fromEnv(): Brandsight {
+  static fromEnv(): Connector {
     const apiKey = process.env.BRANDSIGHT_API_KEY;
-    const apiSecret = process.env.BRANDSIGHT_API_SECRET;
-    const customerId = process.env.BRANDSIGHT_CUSTOMER_ID;
 
     if (!apiKey) {
       throw new Error('BRANDSIGHT_API_KEY environment variable is required');
     }
-    if (!apiSecret) {
-      throw new Error('BRANDSIGHT_API_SECRET environment variable is required');
-    }
-    return new Brandsight({ apiKey, apiSecret, customerId });
+
+    return new Connector({ apiKey });
   }
 
   /**
@@ -41,10 +43,12 @@ export class Brandsight {
   /**
    * Get the underlying client for direct API access
    */
-  getClient(): BrandsightClient {
+  getClient(): ConnectorClient {
     return this.client;
   }
 }
 
-export { BrandsightClient } from './client';
-export { DomainsApi } from './domains';
+// Export client and all API classes
+export { ConnectorClient } from './client';
+export { MonitoringApi } from './monitoring';
+export { IntelligenceApi } from './intelligence';

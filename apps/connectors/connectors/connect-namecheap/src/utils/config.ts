@@ -2,18 +2,21 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync
 import { homedir } from 'os';
 import { join } from 'path';
 
-const CONNECTOR_NAME = 'connect-godaddy';
+// Namecheap connector name
+const CONNECTOR_NAME = 'connect-namecheap';
 const DEFAULT_PROFILE = 'default';
 
 export interface ProfileConfig {
   apiKey?: string;
-  apiSecret?: string;
+  username?: string;
+  clientIp?: string;
+  sandbox?: boolean;
 }
 
 // Store for --profile flag override (set by CLI before commands run)
 let profileOverride: string | undefined;
 
-// Config directory: ~/.connectors/connect-godaddy/
+// Config directory: ~/.connectors/{connector-name}/
 const CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
@@ -142,11 +145,11 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 }
 
 // ============================================
-// GoDaddy Credentials
+// API Key Management
 // ============================================
 
 export function getApiKey(): string | undefined {
-  return process.env.GODADDY_API_KEY || loadProfile().apiKey;
+  return process.env.NAMECHEAP_API_KEY || loadProfile().apiKey;
 }
 
 export function setApiKey(apiKey: string): void {
@@ -155,25 +158,34 @@ export function setApiKey(apiKey: string): void {
   saveProfile(config);
 }
 
-export function getApiSecret(): string | undefined {
-  return process.env.GODADDY_API_SECRET || loadProfile().apiSecret;
+export function getUsername(): string | undefined {
+  return process.env.NAMECHEAP_USERNAME || loadProfile().username;
 }
 
-export function setApiSecret(apiSecret: string): void {
+export function setUsername(username: string): void {
   const config = loadProfile();
-  config.apiSecret = apiSecret;
+  config.username = username;
   saveProfile(config);
 }
 
-export function setCredentials(apiKey: string, apiSecret: string): void {
+export function getClientIp(): string | undefined {
+  return process.env.NAMECHEAP_CLIENT_IP || loadProfile().clientIp;
+}
+
+export function setClientIp(clientIp: string): void {
   const config = loadProfile();
-  config.apiKey = apiKey;
-  config.apiSecret = apiSecret;
+  config.clientIp = clientIp;
   saveProfile(config);
 }
 
-export function isAuthenticated(): boolean {
-  return !!(getApiKey() && getApiSecret());
+export function getSandbox(): boolean {
+  return process.env.NAMECHEAP_SANDBOX === 'true' || loadProfile().sandbox === true;
+}
+
+export function setSandbox(sandbox: boolean): void {
+  const config = loadProfile();
+  config.sandbox = sandbox;
+  saveProfile(config);
 }
 
 // ============================================
@@ -186,4 +198,8 @@ export function clearConfig(): void {
 
 export function getConfigDir(): string {
   return CONFIG_DIR;
+}
+
+export function getActiveProfileName(): string {
+  return getCurrentProfile();
 }

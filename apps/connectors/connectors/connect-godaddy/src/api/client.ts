@@ -1,34 +1,29 @@
-import type { ConnectorConfig, OutputFormat } from '../types';
-import { ConnectorApiError, parseApiError } from '../types';
+import type { GoDaddyConfig } from '../types';
+import { GoDaddyApiError, parseApiError } from '../types';
 
-// TODO: Replace with your API's base URL
-const DEFAULT_BASE_URL = 'https://api.example.com';
+const DEFAULT_BASE_URL = 'https://api.godaddy.com';
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   params?: Record<string, string | number | boolean | undefined>;
   body?: Record<string, unknown> | unknown[] | string;
   headers?: Record<string, string>;
-  format?: OutputFormat;
   /** Number of retries for failed requests (default: 3) */
   retries?: number;
   /** Timeout in milliseconds (default: 30000) */
   timeout?: number;
 }
 
-export class ConnectorClient {
+export class GoDaddyClient {
   private readonly apiKey: string;
-  private readonly apiSecret?: string;
+  private readonly apiSecret: string;
   private readonly baseUrl: string;
 
-  constructor(config: ConnectorConfig) {
-    // Support both 'apiKey' and 'token' for flexibility
-    // Also support 'accessToken' for OAuth2
-    const key = config.apiKey || config.token || config.accessToken;
-    if (!key) {
-      throw new Error('API key, token, or accessToken is required');
+  constructor(config: GoDaddyConfig) {
+    if (!config.apiKey || !config.apiSecret) {
+      throw new Error('Both apiKey and apiSecret are required for GoDaddy API authentication');
     }
-    this.apiKey = key;
+    this.apiKey = config.apiKey;
     this.apiSecret = config.apiSecret;
     this.baseUrl = config.baseUrl || DEFAULT_BASE_URL;
   }
@@ -47,44 +42,25 @@ export class ConnectorClient {
     return url.toString();
   }
 
-  /**
-   * Sleep for a given number of milliseconds
-   */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Calculate delay for exponential backoff
-   */
   private getRetryDelay(attempt: number, baseDelay: number = 1000): number {
-    // Exponential backoff with jitter: base * 2^attempt + random(0-1000)ms
     return baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
   }
 
-  /**
-   * Check if error is retryable
-   */
   private isRetryableStatus(status: number): boolean {
-    // Retry on rate limit (429) and server errors (5xx)
     return status === 429 || (status >= 500 && status < 600);
   }
 
-  /**
-   * Make an authenticated request to the API
-   * TODO: Adjust authentication method for your API:
-   * - Bearer token: Authorization: Bearer <token>
-   * - API Key header: X-API-Key: <key>
-   * - Basic auth: Authorization: Basic <base64(key:secret)>
-   */
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {}, retries = 3, timeout = 30000 } = options;
 
     const url = this.buildUrl(path, params);
 
-    // TODO: Adjust authentication header for your API
     const requestHeaders: Record<string, string> = {
-      'Authorization': `Bearer ${this.apiKey}`,
+      'Authorization': `sso-key ${this.apiKey}:${this.apiSecret}`,
       'Accept': 'application/json',
       ...headers,
     };
@@ -107,7 +83,6 @@ export class ConnectorClient {
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        // Create abort controller for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -143,9 +118,7 @@ export class ConnectorClient {
 
         // Handle errors
         if (!response.ok) {
-          // Check if we should retry
           if (this.isRetryableStatus(response.status) && attempt < retries) {
-            // Check for Retry-After header
             const retryAfter = response.headers.get('retry-after');
             const delay = retryAfter
               ? parseInt(retryAfter, 10) * 1000
@@ -162,13 +135,11 @@ export class ConnectorClient {
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
 
-        // Handle timeout errors
         if (lastError.name === 'AbortError') {
           lastError = new Error(`Request timeout after ${timeout}ms`);
         }
 
-        // Retry on network errors
-        if (attempt < retries && !(err instanceof ConnectorApiError)) {
+        if (attempt < retries && !(err instanceof GoDaddyApiError)) {
           await this.sleep(this.getRetryDelay(attempt));
           continue;
         }
@@ -177,8 +148,7 @@ export class ConnectorClient {
       }
     }
 
-    // Should not reach here, but just in case
-    throw lastError || new ConnectorApiError('Request failed', lastStatus);
+    throw lastError || new GoDaddyApiError('Request failed', lastStatus);
   }
 
   async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
@@ -189,7 +159,7 @@ export class ConnectorClient {
     return this.request<T>(path, { method: 'POST', body: body as Record<string, unknown>, params });
   }
 
-  async put<T>(path: string, body?: Record<string, unknown> | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  async put<T>(path: string, body?: Record<string, unknown> | unknown[] | object, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
     return this.request<T>(path, { method: 'PUT', body: body as Record<string, unknown>, params });
   }
 
@@ -201,13 +171,10 @@ export class ConnectorClient {
     return this.request<T>(path, { method: 'DELETE', params });
   }
 
-  /**
-   * Get a preview of the API key (for display/debugging)
-   */
-  getApiKeyPreview(): string {
+  getCredentialPreview(): string {
     if (this.apiKey.length > 10) {
-      return `${this.apiKey.substring(0, 6)}...${this.apiKey.substring(this.apiKey.length - 4)}`;
+      return `Key: ${this.apiKey.substring(0, 6)}...`;
     }
-    return '***';
+    return 'Key: ***';
   }
 }

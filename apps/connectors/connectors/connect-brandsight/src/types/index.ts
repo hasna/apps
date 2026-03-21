@@ -1,197 +1,82 @@
-// Brandsight/GoDaddy Domain API Types
+// Brandsight Connector Types
 
 // ============================================
 // Configuration
 // ============================================
 
-export interface BrandsightConfig {
+export interface ConnectorConfig {
   apiKey: string;
-  apiSecret: string;
-  customerId?: string;
-  baseUrl?: string;
 }
 
 // ============================================
 // Common Types
 // ============================================
 
-export type OutputFormat = 'json' | 'xml';
-export type OptimizeFor = 'SPEED' | 'ACCURACY';
-export type CheckType = 'REGISTRATION' | 'RENEWAL' | 'TRANSFER';
-
-export interface PaginatedResponse<T> {
-  data: T[];
-  page: number;
-  hasMore: boolean;
-}
+export type OutputFormat = 'json' | 'pretty';
 
 // ============================================
-// Domain Availability Types
+// Monitoring Types
 // ============================================
 
-export interface DomainAvailabilityParams {
+export interface BrandAlert {
   domain: string;
-  period?: number; // 1-10 years
-  checkType?: CheckType;
-  optimizeFor?: OptimizeFor;
+  type: 'typosquat' | 'homoglyph' | 'keyword' | 'tld_variation';
+  registered_at: string;
 }
 
-export interface DomainAvailabilityResponse {
-  available: boolean;
+export interface BrandMonitorResult {
+  brand: string;
+  alerts: BrandAlert[];
+  stub: boolean;
+}
+
+export interface SimilarDomain {
   domain: string;
-  definitive: boolean;
-  price?: number;
-  currency?: string;
-  period?: number;
+  similar: string[];
+  stub: boolean;
 }
 
-export interface BulkAvailabilityResponse {
-  domains: DomainAvailabilityResponse[];
-  errors?: DomainAvailabilityError[];
+// ============================================
+// Intelligence Types
+// ============================================
+
+export interface WhoisRecord {
+  registrant: string;
+  date: string;
+  changes: string[];
 }
 
-export interface DomainAvailabilityError {
-  code: string;
+export interface WhoisHistoryResult {
   domain: string;
-  message: string;
-  path: string;
-  status: number;
+  history: WhoisRecord[];
+  stub: boolean;
 }
 
-// ============================================
-// Domain Purchase Types
-// ============================================
-
-export interface Contact {
-  addressMailing: Address;
-  email: string;
-  fax?: string;
-  jobTitle?: string;
-  nameFirst: string;
-  nameLast: string;
-  nameMiddle?: string;
-  organization?: string;
-  phone: string;
-}
-
-export interface Address {
-  address1: string;
-  address2?: string;
-  city: string;
-  country: string;
-  postalCode: string;
-  state: string;
-}
-
-export interface Consent {
-  agreedAt: string;
-  agreedBy: string;
-  agreementKeys: string[];
-}
-
-export interface DomainPurchaseRequest {
+export interface ThreatAssessment {
   domain: string;
-  consent: Consent;
-  contactAdmin?: Contact;
-  contactBilling?: Contact;
-  contactRegistrant: Contact;
-  contactTech?: Contact;
-  nameServers?: string[];
-  period?: number;
-  privacy?: boolean;
-  renewAuto?: boolean;
-}
-
-export interface DomainPurchaseResponse {
-  domain: string;
-  orderId: number;
-  itemCount: number;
-  total: number;
-  currency: string;
-}
-
-// ============================================
-// Domain Info Types
-// ============================================
-
-export interface DomainInfo {
-  domain: string;
-  domainId: number;
-  status: string;
-  expires: string;
-  expirationProtected: boolean;
-  holdRegistrar: boolean;
-  locked: boolean;
-  privacy: boolean;
-  renewAuto: boolean;
-  renewable: boolean;
-  transferProtected: boolean;
-  createdAt: string;
-  nameServers: string[];
-  contactAdmin?: Contact;
-  contactBilling?: Contact;
-  contactRegistrant?: Contact;
-  contactTech?: Contact;
-}
-
-// ============================================
-// Agreement Types
-// ============================================
-
-export interface Agreement {
-  agreementKey: string;
-  content: string;
-  title: string;
-  url?: string;
-}
-
-export interface AgreementParams {
-  tlds: string[];
-  privacy?: boolean;
-  forTransfer?: boolean;
-}
-
-// ============================================
-// Action Types
-// ============================================
-
-export interface DomainAction {
-  type: string;
-  status: string;
-  createdAt: string;
-  modifiedAt: string;
-}
-
-// ============================================
-// TLD Suggestions
-// ============================================
-
-export interface TldSuggestion {
-  domain: string;
-  available: boolean;
-  price?: number;
-  currency?: string;
+  risk_level: 'low' | 'medium' | 'high' | 'critical';
+  threats: string[];
+  recommendation: string;
+  stub: boolean;
 }
 
 // ============================================
 // API Error Types
 // ============================================
 
-export interface BrandsightError {
+export interface ApiErrorDetail {
   code: string;
   message: string;
-  field?: string;
-  path?: string;
 }
 
-export class BrandsightApiError extends Error {
+export class ConnectorApiError extends Error {
   public readonly statusCode: number;
-  public readonly errors?: BrandsightError[];
+  public readonly responseBody?: string;
 
-  constructor(message: string, statusCode: number, errors?: BrandsightError[]) {
+  constructor(message: string, statusCode: number, responseBody?: string) {
     super(message);
-    this.name = 'BrandsightApiError';
+    this.name = 'ConnectorApiError';
     this.statusCode = statusCode;
-    this.errors = errors;
+    this.responseBody = responseBody;
   }
 }

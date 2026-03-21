@@ -1,5 +1,5 @@
-// Brandsight Connector API
-// A TypeScript wrapper for the Brandsight REST API
+// Namecheap Connector API
+// A TypeScript wrapper for the Namecheap XML API
 
 export { Connector } from './api';
 export * from './types';
@@ -7,14 +7,20 @@ export * from './types';
 // Re-export individual API classes for advanced usage
 export {
   ConnectorClient,
-  MonitoringApi,
-  IntelligenceApi,
+  DomainsApi,
+  DnsApi,
 } from './api';
 
 // Export config utilities
 export {
   getApiKey,
   setApiKey,
+  getUsername,
+  setUsername,
+  getClientIp,
+  setClientIp,
+  getSandbox,
+  setSandbox,
   getCurrentProfile,
   setCurrentProfile,
   listProfiles,

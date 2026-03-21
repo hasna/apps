@@ -1,7 +1,7 @@
 {
   "name": "@hasna/connect-brandsight",
   "version": "0.1.0",
-  "description": "Brandsight/GoDaddy Domain API connector CLI - A TypeScript wrapper for domain management",
+  "description": "Brandsight API connector - A TypeScript CLI for brand monitoring, domain intelligence, and threat detection",
   "type": "module",
   "bin": {
     "connect-brandsight": "./bin/index.js"
@@ -18,19 +18,17 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build",
-    "release": "bun run ./scripts/publish.ts",
-    "release:patch": "bun run ./scripts/publish.ts patch",
-    "release:minor": "bun run ./scripts/publish.ts minor",
-    "release:major": "bun run ./scripts/publish.ts major",
-    "release:dry": "bun run ./scripts/publish.ts --dry-run"
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
   },
   "keywords": [
-    "brandsight",
-    "godaddy",
-    "domain",
     "api",
     "connector",
+    "brandsight",
+    "brand-monitoring",
+    "domain-intelligence",
+    "threat-detection",
+    "whois",
     "cli",
     "typescript",
     "bun",

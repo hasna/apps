@@ -1,51 +1,76 @@
-import type { ConnectorConfig } from '../types';
-import { ConnectorClient } from './client';
-import { ExampleApi } from './example';
+import type { GoDaddyConfig } from '../types';
+import { GoDaddyClient } from './client';
+import { DomainsApi } from './domains';
+import { DnsApi } from './dns';
+import {
+  getApiKey,
+  getApiSecret,
+} from '../utils/config';
 
-/**
- * Main Connector class
- * TODO: Rename to your API name (e.g., Perplexity, Twitter, etc.)
- */
-export class Connector {
-  private readonly client: ConnectorClient;
+export class GoDaddy {
+  private readonly client: GoDaddyClient;
 
-  // API modules - add more as needed
-  public readonly example: ExampleApi;
+  // API modules
+  public readonly domains: DomainsApi;
+  public readonly dns: DnsApi;
 
-  constructor(config: ConnectorConfig) {
-    this.client = new ConnectorClient(config);
-    this.example = new ExampleApi(this.client);
+  constructor(config: GoDaddyConfig) {
+    this.client = new GoDaddyClient(config);
+    this.domains = new DomainsApi(this.client);
+    this.dns = new DnsApi(this.client);
   }
 
   /**
-   * Create a client from environment variables
-   * TODO: Update env var names for your API
-   * Looks for CONNECTOR_API_KEY and optionally CONNECTOR_API_SECRET
+   * Create a GoDaddy client from config file or environment variables
+   * Priority: env vars > config file
    */
-  static fromEnv(): Connector {
-    const apiKey = process.env.CONNECTOR_API_KEY;
-    const apiSecret = process.env.CONNECTOR_API_SECRET;
+  static create(): GoDaddy {
+    const apiKey = getApiKey();
+    const apiSecret = getApiSecret();
 
-    if (!apiKey) {
-      throw new Error('CONNECTOR_API_KEY environment variable is required');
+    if (!apiKey || !apiSecret) {
+      throw new Error(
+        'GoDaddy credentials not configured. ' +
+        'Set GODADDY_API_KEY and GODADDY_API_SECRET environment variables, ' +
+        'or run "connect-godaddy config set-credentials <key> <secret>"'
+      );
     }
-    return new Connector({ apiKey, apiSecret });
+
+    return new GoDaddy({ apiKey, apiSecret });
   }
 
   /**
-   * Get a preview of the API key (for debugging)
+   * Create a GoDaddy client from environment variables only
    */
-  getApiKeyPreview(): string {
-    return this.client.getApiKeyPreview();
+  static fromEnv(): GoDaddy {
+    const apiKey = process.env.GODADDY_API_KEY;
+    const apiSecret = process.env.GODADDY_API_SECRET;
+
+    if (!apiKey || !apiSecret) {
+      throw new Error(
+        'GODADDY_API_KEY and GODADDY_API_SECRET environment variables are required'
+      );
+    }
+
+    return new GoDaddy({ apiKey, apiSecret });
+  }
+
+  /**
+   * Get a preview of the credentials (for debugging)
+   */
+  getCredentialPreview(): string {
+    return this.client.getCredentialPreview();
   }
 
   /**
    * Get the underlying client for direct API access
    */
-  getClient(): ConnectorClient {
+  getClient(): GoDaddyClient {
     return this.client;
   }
 }
 
-export { ConnectorClient } from './client';
-export { ExampleApi } from './example';
+// Export the client and all API modules
+export { GoDaddyClient } from './client';
+export { DomainsApi } from './domains';
+export { DnsApi } from './dns';
