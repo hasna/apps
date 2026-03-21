@@ -1,0 +1,75 @@
+{
+  "name": "@hasna/crawl",
+  "version": "0.1.0",
+  "description": "AI-powered web crawler — self-hosted Firecrawl alternative. Crawl, extract, render JS, search. CLI + MCP + REST API + Dashboard.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "crawl": "dist/cli/index.js",
+    "crawl-mcp": "dist/mcp/index.js",
+    "crawl-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external playwright --external playwright-core && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external playwright --external playwright-core && bun build src/server/index.ts --outdir dist/server --target bun --external playwright --external playwright-core && bun build src/index.ts --outdir dist --target bun --external playwright --external playwright-core && tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/server/index.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "crawler",
+    "web-scraper",
+    "firecrawl",
+    "mcp",
+    "ai",
+    "coding-agent",
+    "claude",
+    "cli",
+    "dashboard",
+    "playwright",
+    "extraction"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/open-crawl.git"
+  },
+  "homepage": "https://github.com/hasna/open-crawl",
+  "bugs": {
+    "url": "https://github.com/hasna/open-crawl/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.50.0"
+  }
+}
