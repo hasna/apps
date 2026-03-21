@@ -39,7 +39,7 @@ export async function gatherAll(
 export async function mergeAndWriteJSONL(
   results: GatherResult[],
   outputPath?: string
-): Promise<{ path: string; totalExamples: number }> {
+): Promise<{ path: string; totalExamples: number; duplicatesRemoved: number }> {
   const defaultDir = join(homedir(), ".brains", "datasets");
   await mkdir(defaultDir, { recursive: true });
 
@@ -47,9 +47,22 @@ export async function mergeAndWriteJSONL(
   const finalPath = outputPath ?? join(defaultDir, `training-${timestamp}.jsonl`);
 
   const allExamples: TrainingExample[] = results.flatMap((r) => r.examples);
-  const jsonl = allExamples.map((ex) => JSON.stringify(ex)).join("\n");
+
+  // Deduplicate by serialized message content
+  const seen = new Set<string>();
+  const dedupedExamples: TrainingExample[] = [];
+  for (const ex of allExamples) {
+    const key = JSON.stringify(ex.messages);
+    if (!seen.has(key)) {
+      seen.add(key);
+      dedupedExamples.push(ex);
+    }
+  }
+
+  const duplicatesRemoved = allExamples.length - dedupedExamples.length;
+  const jsonl = dedupedExamples.map((ex) => JSON.stringify(ex)).join("\n");
 
   await writeFile(finalPath, jsonl, "utf-8");
 
-  return { path: finalPath, totalExamples: allExamples.length };
+  return { path: finalPath, totalExamples: dedupedExamples.length, duplicatesRemoved };
 }

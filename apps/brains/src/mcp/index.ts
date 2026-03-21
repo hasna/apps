@@ -8,13 +8,17 @@ import {
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { homedir } from "os";
-import { eq } from "drizzle-orm";
-import { getDb, fineTunedModels } from "../db/index.js";
+import { eq, desc } from "drizzle-orm";
+import { getDb, fineTunedModels, trainingDatasets } from "../db/index.js";
 import { OpenAIProvider } from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { gatherFromTodos } from "../lib/gatherers/todos.js";
+import { gatherFromMementos } from "../lib/gatherers/mementos.js";
+import { gatherFromConversations } from "../lib/gatherers/conversations.js";
+import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
+import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
 
 // --- helpers ---
 
@@ -78,14 +82,14 @@ export function createMcpServer() {
             },
             dataset_path: {
               type: "string",
-              description: "Absolute path to the JSONL training file",
+              description: "Absolute path to the JSONL training file (auto-detects latest if omitted)",
             },
             name: {
               type: "string",
               description: "Optional friendly name for this model",
             },
           },
-          required: ["provider", "base_model", "dataset_path"],
+          required: ["provider", "base_model"],
         },
       },
       {
@@ -201,19 +205,31 @@ export function createMcpServer() {
       }
 
       case "start_finetune": {
-        const {
-          provider,
-          base_model,
-          dataset_path,
-          name: modelName,
-        } = args as {
-          provider: "openai" | "thinker-labs";
-          base_model: string;
-          dataset_path: string;
-          name?: string;
-        };
+        const parsed = McpFinetuneStartSchema.safeParse(args);
+        if (!parsed.success) {
+          return { content: [{ type: "text", text: parsed.error.issues.map(i => i.message).join("; ") }], isError: true };
+        }
+        const { provider, base_model, dataset_path, name: modelName } = parsed.data;
 
-        const resolvedPath = resolve(dataset_path);
+        let resolvedPath: string;
+        if (dataset_path) {
+          resolvedPath = resolve(dataset_path);
+        } else {
+          const db = getDb();
+          const [latest] = await db
+            .select()
+            .from(trainingDatasets)
+            .orderBy(desc(trainingDatasets.createdAt))
+            .limit(1);
+          if (!latest?.filePath) {
+            return {
+              content: [{ type: "text", text: "No datasets found. Run gather_training_data first." }],
+              isError: true,
+            };
+          }
+          resolvedPath = latest.filePath;
+        }
+
         if (!existsSync(resolvedPath)) {
           return {
             content: [
@@ -260,10 +276,11 @@ export function createMcpServer() {
       }
 
       case "get_finetune_status": {
-        const { job_id, provider } = args as {
-          job_id: string;
-          provider: "openai" | "thinker-labs";
-        };
+        const parsed = McpFinetuneStatusSchema.safeParse(args);
+        if (!parsed.success) {
+          return { content: [{ type: "text", text: parsed.error.issues.map(i => i.message).join("; ") }], isError: true };
+        }
+        const { job_id, provider } = parsed.data;
 
         const p = getProvider(provider);
         const result = await p.getFineTuneStatus(job_id);
@@ -314,15 +331,11 @@ export function createMcpServer() {
       }
 
       case "gather_training_data": {
-        const {
-          sources,
-          limit,
-          output_dir,
-        } = args as {
-          sources: string[];
-          limit?: number;
-          output_dir?: string;
-        };
+        const parsed = McpGatherSchema.safeParse(args);
+        if (!parsed.success) {
+          return { content: [{ type: "text", text: parsed.error.issues.map(i => i.message).join("; ") }], isError: true };
+        }
+        const { sources, limit, output_dir } = parsed.data;
 
         const { mkdirSync, writeFileSync } = await import("fs");
         const { join } = await import("path");
@@ -339,8 +352,16 @@ export function createMcpServer() {
           if (source === "todos") {
             const result = await gatherFromTodos({ limit });
             examples = result.examples;
+          } else if (source === "mementos") {
+            const result = await gatherFromMementos({ limit });
+            examples = result.examples;
+          } else if (source === "conversations") {
+            const result = await gatherFromConversations({ limit });
+            examples = result.examples;
+          } else if (source === "sessions") {
+            const result = await gatherFromSessions({ limit });
+            examples = result.examples;
           } else {
-            // Other sources (mementos, conversations, sessions) are stubs for now
             examples = [];
           }
 
