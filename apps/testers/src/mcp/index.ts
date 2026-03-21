@@ -238,8 +238,10 @@ server.tool(
     headed: z.boolean().optional().describe("Run browser in headed mode"),
     parallel: z.number().optional().describe("Number of parallel workers"),
     personaId: z.string().optional().describe("Override persona ID for this run"),
+    samples: z.number().int().min(1).max(20).optional().describe("Run each scenario N times for flakiness detection (default 1)"),
+    flakinessThreshold: z.number().min(0).max(1).optional().describe("Pass rate below which scenario is marked flaky (default 0.95)"),
   },
-  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId }) => {
+  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold }) => {
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
@@ -254,7 +256,7 @@ server.tool(
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId });
+      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);

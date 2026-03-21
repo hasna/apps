@@ -340,6 +340,7 @@ interface ToolContext {
   runId: string;
   scenarioSlug: string;
   stepNumber: number;
+  a11y?: boolean | { level?: "A" | "AA" | "AAA" };
 }
 
 interface ScreenshotResult {
@@ -379,15 +380,48 @@ export async function executeTool(
           stepNumber: context.stepNumber,
           action: "navigate",
         });
+
+        // Optional a11y scan after navigation
+        let a11yNote = "";
+        if (context.a11y) {
+          try {
+            const { scanPageA11y } = await import("./scanners/a11y.js");
+            const level = typeof context.a11y === "object" ? (context.a11y.level ?? "AA") : "AA";
+            const violations = await scanPageA11y(page, { wcagLevel: level as "A" | "AA" | "AAA" });
+            if (violations.length > 0) {
+              const critical = violations.filter((v) => v.impact === "critical").length;
+              const serious = violations.filter((v) => v.impact === "serious").length;
+              a11yNote = ` [a11y: ${violations.length} violations — ${critical} critical, ${serious} serious]`;
+            }
+          } catch { /* a11y scan is non-blocking */ }
+        }
+
         return {
-          result: `Navigated to ${url}`,
+          result: `Navigated to ${url}${a11yNote}`,
           screenshot,
         };
       }
 
       case "click": {
         const selector = toolInput.selector as string;
-        await page.click(selector);
+        try {
+          await page.click(selector);
+        } catch (clickErr) {
+          // Attempt self-healing if selector not found
+          const errMsg = clickErr instanceof Error ? clickErr.message : String(clickErr);
+          if (errMsg.includes("not found") || errMsg.includes("No element") || errMsg.includes("waiting for selector")) {
+            const { healSelector } = await import("./healer.js").catch(() => ({ healSelector: null }));
+            if (healSelector) {
+              const heal = await healSelector({ page, failedSelector: selector, intent: `click the element matching "${selector}"` });
+              if (heal.healed && heal.newSelector) {
+                await page.click(heal.newSelector);
+                const screenshot = await screenshotter.capture(page, { runId: context.runId, scenarioSlug: context.scenarioSlug, stepNumber: context.stepNumber, action: "click" });
+                return { result: `Clicked element: ${heal.newSelector} [healed from "${selector}" — ${heal.reasoning}]`, screenshot };
+              }
+            }
+          }
+          throw clickErr;
+        }
         const screenshot = await screenshotter.capture(page, {
           runId: context.runId,
           scenarioSlug: context.scenarioSlug,
@@ -403,7 +437,22 @@ export async function executeTool(
       case "fill": {
         const selector = toolInput.selector as string;
         const value = toolInput.value as string;
-        await page.fill(selector, value);
+        try {
+          await page.fill(selector, value);
+        } catch (fillErr) {
+          const errMsg = fillErr instanceof Error ? fillErr.message : String(fillErr);
+          if (errMsg.includes("not found") || errMsg.includes("No element") || errMsg.includes("waiting for selector")) {
+            const { healSelector } = await import("./healer.js").catch(() => ({ healSelector: null }));
+            if (healSelector) {
+              const heal = await healSelector({ page, failedSelector: selector, intent: `fill the input field "${selector}" with "${value}"` });
+              if (heal.healed && heal.newSelector) {
+                await page.fill(heal.newSelector, value);
+                return { result: `Filled "${heal.newSelector}" with value [healed from "${selector}"]` };
+              }
+            }
+          }
+          throw fillErr;
+        }
         return {
           result: `Filled "${selector}" with value`,
         };
@@ -651,6 +700,7 @@ interface AgentLoopOptions {
     traits: string[];
     goals: string[];
   } | null;
+  a11y?: boolean | { level?: "A" | "AA" | "AAA" };
 }
 
 interface AgentLoopResult {
@@ -689,6 +739,7 @@ export async function runAgentLoop(
     maxTurns = 30,
     onStep,
     persona,
+    a11y,
   } = options;
 
   const personaSection = persona ? [
@@ -836,7 +887,7 @@ export async function runAgentLoop(
           screenshotter,
           toolBlock.name,
           toolInput,
-          { runId, scenarioSlug, stepNumber },
+          { runId, scenarioSlug, stepNumber, a11y },
         );
 
         // Emit tool result event

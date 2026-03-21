@@ -1,4 +1,5 @@
 import type { Scenario, Run, Result } from "../types/index.js";
+import { runEvalScenario } from "./eval-runner.js";
 import { createRun, getRun, updateRun } from "../db/runs.js";
 import { createResult, updateResult } from "../db/results.js";
 import { createScreenshot } from "../db/screenshots.js";
@@ -25,6 +26,11 @@ export interface RunOptions {
   screenshotDir?: string;
   engine?: "playwright" | "lightpanda";
   personaId?: string;
+  personaIds?: string[];  // run with multiple personas for divergence testing
+  samples?: number;           // run each scenario N times for flakiness detection
+  flakinessThreshold?: number; // pass rate below this = "flaky" (default 0.95)
+  a11y?: boolean | { level?: "A" | "AA" | "AAA" }; // enable axe-core a11y scan after each navigation
+  selfHeal?: boolean;    // override config.selfHeal for this run
 }
 
 export interface RunEvent {
@@ -99,7 +105,15 @@ export async function runSingleScenario(
   runId: string,
   options: RunOptions
 ): Promise<Result> {
+  // Dispatch eval scenarios to the eval runner
+  const scenarioType = (scenario as Scenario & { scenarioType?: string }).scenarioType ?? "browser";
+  if (scenarioType === "eval") {
+    return runEvalScenario(scenario, { runId, baseUrl: options.url });
+  }
+
   const config = loadConfig();
+  // Allow per-run override of self-healing
+  if (options.selfHeal !== undefined) config.selfHeal = options.selfHeal;
   const model = resolveModel(options.model ?? scenario.model ?? config.defaultModel);
   const client = createClientForModel(model, options.apiKey ?? config.anthropicApiKey);
   const screenshotter = new Screenshotter({
@@ -149,6 +163,7 @@ export async function runSingleScenario(
       model,
       runId,
       maxTurns: 30,
+      a11y: options.a11y,
       persona: persona ? {
         name: persona.name,
         role: persona.role,
@@ -241,6 +256,8 @@ export async function runBatch(
   const config = loadConfig();
   const model = resolveModel(options.model ?? config.defaultModel);
   const parallel = options.parallel ?? 1;
+  const samples = options.samples ?? 1;
+  const flakinessThreshold = options.flakinessThreshold ?? 0.95;
 
   const run = createRun({
     url: options.url,
@@ -248,6 +265,8 @@ export async function runBatch(
     headed: options.headed,
     parallel,
     projectId: options.projectId,
+    samples,
+    flakinessThreshold,
   });
 
   updateRun(run.id, { status: "running", total: scenarios.length });
@@ -307,8 +326,39 @@ export async function runBatch(
         result = await runSingleScenario(scenario, run.id, options);
         attempt++;
       }
+
+      // Multi-sample flakiness detection
+      if (samples > 1) {
+        const sampleResults = [result];
+        for (let s = 1; s < samples; s++) {
+          emit({ type: "scenario:start", scenarioId: scenario.id, scenarioName: scenario.name, runId: run.id });
+          const sampleResult = await runSingleScenario(scenario, run.id, options);
+          sampleResults.push(sampleResult);
+        }
+        const passCount = sampleResults.filter((r) => r.status === "passed").length;
+        const passRate = passCount / samples;
+        if (passCount > 0 && passCount < samples && passRate < flakinessThreshold) {
+          // Flaky: passed some but not all samples
+          result = updateResult(result.id, {
+            status: "flaky",
+            reasoning: `Flaky: ${passCount}/${samples} samples passed (${Math.round(passRate * 100)}% pass rate, threshold ${Math.round(flakinessThreshold * 100)}%)`,
+            metadata: { samples, passCount, passRate, sampleResultIds: sampleResults.map((r) => r.id) },
+          });
+        } else if (passCount === 0) {
+          // All failed — keep as failed but add sample info
+          result = updateResult(result.id, {
+            metadata: { samples, passCount, passRate, sampleResultIds: sampleResults.map((r) => r.id) },
+          });
+        } else if (passCount === samples) {
+          // All passed — keep as passed but add sample info
+          result = updateResult(result.id, {
+            metadata: { samples, passCount, passRate, sampleResultIds: sampleResults.map((r) => r.id) },
+          });
+        }
+      }
+
       results.push(result);
-      if (result.status === "failed" || result.status === "error") {
+      if (result.status === "failed" || result.status === "error" || result.status === "flaky") {
         failedScenarioIds.add(scenario.id);
       }
     }
@@ -343,6 +393,20 @@ export async function runBatch(
       running.push(processNext());
     }
     await Promise.all(running);
+  }
+
+  // Persona divergence testing: if personaIds has multiple entries, run each scenario
+  // under each additional persona and collect divergence results.
+  let divergenceResults: Result[] = [];
+  if (options.personaIds && options.personaIds.length > 1) {
+    const additionalPersonaIds = options.personaIds.slice(1);
+    for (const personaId of additionalPersonaIds) {
+      for (const scenario of sortedScenarios) {
+        const personaResult = await runSingleScenario(scenario, run.id, { ...options, personaId });
+        divergenceResults.push(personaResult);
+        results.push(personaResult);
+      }
+    }
   }
 
   // Finalize run

@@ -600,13 +600,17 @@ program
   .option("--env <name>", "Use a named environment for the URL")
   .option("--dry-run", "Print what would run without launching browser", false)
   .option("--retry <n>", "Retry failed scenarios up to n times", "0")
+  .option("--samples <n>", "Run each scenario N times and report flakiness (pass rate)", "1")
+  .option("--flakiness-threshold <n>", "Pass rate threshold below which a scenario is marked flaky (0-1)", "0.95")
+  .option("--a11y [level]", "Run axe-core WCAG accessibility scan after each navigation (level: A, AA, AAA — default AA)")
+  .option("--self-heal", "Enable AI-powered selector repair when elements can't be found (requires judgeModel or ANTHROPIC_API_KEY)", false)
   .option("--verbose", "Show per-step timing and full tool results", false)
   .option("--watch-results", "When used with --background, poll and display live results table until run completes", false)
   .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
   .option("--smoke", "Run only smoke-tagged scenarios (fast validation suite, <2 min)", false)
   .option("--github-comment", "Post pass/fail summary as a GitHub PR comment (requires GITHUB_TOKEN env var)", false)
   .option("--pr <number>", "GitHub PR number (auto-detected from GITHUB_REF if not provided)")
-  .option("--persona <id>", "Override persona for this run")
+  .option("--persona <id>", "Override persona for this run (comma-separated IDs for divergence testing)")
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -864,6 +868,10 @@ program
           retry: parseInt(opts.retry ?? "0", 10),
           projectId,
           engine: opts.browser,
+          samples: parseInt(opts.samples ?? "1", 10),
+          flakinessThreshold: parseFloat(opts.flakinessThreshold ?? "0.95"),
+          a11y: opts.a11y ? (typeof opts.a11y === "string" ? { level: opts.a11y as "A" | "AA" | "AAA" } : true) : undefined,
+          selfHeal: opts.selfHeal || undefined,
         });
 
         if (opts.json || opts.output) {
@@ -903,6 +911,10 @@ program
       }
 
       // Run by filter
+      // Parse persona IDs: support comma-separated list for divergence testing
+      const personaIdList: string[] | undefined = opts.persona
+        ? opts.persona.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : undefined;
       const { run, results } = await runByFilter({
         url,
         tags: opts.tag.length > 0 ? opts.tag : undefined,
@@ -915,6 +927,12 @@ program
         retry: parseInt(opts.retry ?? "0", 10),
         projectId,
         engine: opts.browser,
+        samples: parseInt(opts.samples ?? "1", 10),
+        flakinessThreshold: parseFloat(opts.flakinessThreshold ?? "0.95"),
+        a11y: opts.a11y ? (typeof opts.a11y === "string" ? { level: opts.a11y as "A" | "AA" | "AAA" } : true) : undefined,
+        selfHeal: opts.selfHeal || undefined,
+        personaId: personaIdList?.[0],
+        personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
       });
 
       if (opts.json || opts.output) {
@@ -1941,12 +1959,38 @@ program
 
 program
   .command("report [run-id]")
-  .description("Generate HTML test report")
+  .description("Generate HTML test report or compliance snapshot")
   .option("--latest", "Use most recent run", false)
   .option("-o, --output <file>", "Output file path", "report.html")
   .option("--open", "Open the report in the browser after generating", false)
-  .action((runId: string | undefined, opts) => {
+  .option("--compliance", "Generate a compliance snapshot (EU AI Act / SOC2 style)", false)
+  .option("--days <n>", "Days to cover in compliance report", "30")
+  .option("--project <id>", "Project ID for compliance report")
+  .option("--format <fmt>", "Compliance report format: json or markdown", "markdown")
+  .action(async (runId: string | undefined, opts) => {
     try {
+      // Compliance report mode
+      if (opts.compliance) {
+        const { generateComplianceReport } = await import("../lib/compliance-report.js");
+        const projectId = resolveProject(opts.project);
+        const format = (opts.format === "json" ? "json" : "markdown") as "json" | "markdown";
+        const content = await generateComplianceReport({
+          projectId,
+          days: parseInt(opts.days, 10),
+          format,
+        });
+
+        if (opts.output && opts.output !== "report.html") {
+          writeFileSync(opts.output, content, "utf-8");
+          const absPath = resolve(opts.output);
+          log(chalk.green(`Compliance report written to ${absPath}`));
+        } else {
+          log(content);
+        }
+        return;
+      }
+
+      // HTML report mode
       let html: string;
       if (opts.latest || !runId) {
         html = generateLatestReport();
@@ -2381,6 +2425,66 @@ program
     }
   });
 
+// ─── testers generate <url> ─────────────────────────────────────────────────
+
+program
+  .command("generate <url>")
+  .description("Crawl app and synthesize test scenarios using AI (any provider)")
+  .option("--max <n>", "Max scenarios to generate", "10")
+  .option("--max-pages <n>", "Max pages to crawl", "10")
+  .option("--focus <topic>", "Focus on specific area e.g. 'auth flows', 'checkout'")
+  .option("--persona <desc>", "Persona perspective e.g. 'first-time user'")
+  .option("--model <model>", "AI model (claude-haiku, gpt-4o-mini, gemini-2.0-flash, etc.)")
+  .option("--save", "Persist generated scenarios to DB", false)
+  .option("--project <id>", "Project ID")
+  .option("--headed", "Run browser in headed mode", false)
+  .option("--json", "Output as JSON", false)
+  .action(async (url: string, opts) => {
+    try {
+      const { generateScenarios } = await import("../lib/generator.js");
+      const projectId = resolveProject(opts.project) ?? undefined;
+
+      log(chalk.dim(`  Crawling ${url} and generating scenarios...`));
+
+      const result = await generateScenarios({
+        url,
+        maxScenarios: parseInt(opts.max, 10),
+        maxPages: parseInt(opts.maxPages, 10),
+        focus: opts.focus,
+        persona: opts.persona,
+        model: opts.model,
+        headed: opts.headed,
+        projectId,
+        save: opts.save,
+      });
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      log("");
+      log(chalk.bold(`  Generated ${result.scenarios.length} scenarios`) + chalk.dim(` via ${result.provider}/${result.model} — ${result.pagesDiscovered} pages crawled`));
+      log("");
+      log(`  ${"Priority".padEnd(10)} ${"Name".padEnd(40)} ${"Steps".padEnd(7)} Tags`);
+      log(`  ${"─".repeat(10)} ${"─".repeat(40)} ${"─".repeat(7)} ${"─".repeat(20)}`);
+      for (const s of result.scenarios) {
+        const priority = s.priority ?? "medium";
+        const priorityColor = priority === "critical" ? chalk.red : priority === "high" ? chalk.yellow : chalk.dim;
+        log(`  ${priorityColor(priority.padEnd(10))} ${s.name.slice(0, 39).padEnd(40)} ${String(s.steps?.length ?? 0).padEnd(7)} ${(s.tags ?? []).join(", ")}`);
+      }
+      log("");
+      if (opts.save) {
+        log(chalk.green(`  ✓ ${result.scenarios.length} scenarios saved to database`));
+      } else {
+        log(chalk.dim(`  Use --save to persist to database, or --json to export`));
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
 // ─── testers record <url> ──────────────────────────────────────────────────
 
 program
@@ -2718,6 +2822,127 @@ scanCmd
       log(chalk.green(`Resolved scan issue: ${id}`));
     } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
   });
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("a11y <url>")
+    .description("WCAG accessibility scan — catches violations in authenticated/dynamic states")
+    .option("-p, --page <path>", "Page path to visit (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option("--level <level>", "WCAG level: A, AA, or AAA (default AA)", "AA")
+).action(async (url: string, opts) => {
+  try {
+    const { scanA11y } = await import("../lib/scanners/a11y.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const result = await scanA11y({ url, pages: opts.page, wcagLevel: opts.level as "A" | "AA" | "AAA", headed: opts.headed, timeoutMs: parseInt(opts.timeout ?? "15000") });
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+    printScanResult(result, opts.json);
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("injection <url>")
+    .description("Probe AI endpoints for prompt injection vulnerabilities (OWASP LLM Top 10 #1)")
+    .option("--endpoint <path>", "AI endpoint path to probe (default: /api/chat)", "/api/chat")
+    .option("--input-field <path>", "JSON path for input field (default: messages[0].content)", "messages[0].content")
+    .option("--output-field <path>", "JSON path for response extraction")
+    .option("--category <cat>", "Payload category filter: extraction|role_override|jailbreak|data_exfil|indirect (repeatable)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+).action(async (url: string, opts) => {
+  try {
+    const { scanInjection } = await import("../lib/scanners/injection.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+
+    log(chalk.bold(`  Injection probe: ${url}`));
+    log(chalk.dim(`  Endpoint: ${opts.endpoint}  |  Payload categories: ${opts.category.length > 0 ? opts.category.join(", ") : "all"}`));
+    log("");
+
+    const result = await scanInjection({
+      url,
+      endpoint: opts.endpoint,
+      inputField: opts.inputField,
+      outputField: opts.outputField,
+      payloadCategories: opts.category.length > 0 ? opts.category as ("extraction" | "role_override" | "jailbreak" | "data_exfil" | "indirect")[] : undefined,
+      timeoutMs: parseInt(opts.timeout ?? "15000"),
+      headed: opts.headed,
+    });
+
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+
+    if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+
+    log(chalk.bold(`  Results: ${result.payloadsTested} payloads tested in ${(result.durationMs / 1000).toFixed(1)}s`));
+    log("");
+    for (const f of result.findings) {
+      const icon = f.vulnerabilityDetected
+        ? (f.severity === "critical" ? chalk.bgRed.white(` ${f.severity.toUpperCase()} `) : chalk.red(`[${f.severity}]`))
+        : chalk.green("  ✓  ");
+      log(`  ${icon} ${f.description} (${f.category})`);
+      if (f.vulnerabilityDetected) {
+        log(chalk.dim(`        Response: ${f.response.slice(0, 100)}`));
+        log(chalk.dim(`        Judge: ${f.judgeReason}`));
+      }
+    }
+    log("");
+    if (result.vulnerableCount > 0) {
+      log(chalk.red(`  ⚠ ${result.vulnerableCount} potential vulnerabilities detected`));
+      process.exit(1);
+    } else {
+      log(chalk.green(`  ✓ No injection vulnerabilities detected`));
+    }
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
+
+SCAN_COMMON_OPTIONS(
+  scanCmd
+    .command("pii <url>")
+    .description("Scan AI API endpoint responses for PII and data leaks")
+    .option("--endpoint <path>", "API endpoint path (default: /api/chat)", "/api/chat")
+    .option("--seed <values>", "Comma-separated known PII values to watch for (e.g. 'user@example.com,555-1234')")
+    .option("--input-field <path>", "JSON path to inject prompt (e.g. messages[0].content)")
+    .option("--timeout <ms>", "Request timeout in ms", "15000")
+).action(async (url: string, opts) => {
+  try {
+    const { scanPiiEndpoint } = await import("../lib/scanners/pii-scanner.js");
+    const { upsertScanIssue } = await import("../db/scan-issues.js");
+    const seedPii = opts.seed ? (opts.seed as string).split(",").map((s: string) => s.trim()).filter(Boolean) : undefined;
+
+    log(chalk.dim(`Scanning ${url}${opts.endpoint} for PII leaks...`));
+    const result = await scanPiiEndpoint({
+      url,
+      endpoint: opts.endpoint,
+      inputField: opts.inputField,
+      seedPii,
+      timeoutMs: parseInt(opts.timeout, 10),
+    });
+
+    result.issues.forEach((i) => upsertScanIssue(i, opts.project));
+
+    if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+
+    log("");
+    log(chalk.bold("  PII Leak Scan Results"));
+    log(chalk.dim("  ──────────────────────────────────────────────────"));
+
+    if (result.issues.length === 0) {
+      log(chalk.green("  ✓ No PII detected in AI responses"));
+    } else {
+      log(chalk.red(`  ${result.issues.length} PII issue(s) detected:`));
+      log("");
+      for (const issue of result.issues) {
+        const sev = issue.severity === "critical" ? chalk.bgRed.white(` ${issue.severity} `) :
+                    issue.severity === "high"     ? chalk.red(issue.severity) :
+                    issue.severity === "medium"   ? chalk.yellow(issue.severity) : chalk.dim(issue.severity);
+        log(`  ${sev}  ${issue.message}`);
+        if (issue.detail && typeof issue.detail === "object" && (issue.detail as Record<string,unknown>)["context"]) {
+          log(chalk.dim(`          Context: ${(issue.detail as Record<string,unknown>)["context"]}`));
+        }
+      }
+      log("");
+      if (result.issues.some((i) => i.severity === "critical" || i.severity === "high")) process.exit(1);
+    }
+    log("");
+  } catch (e) { logError(chalk.red(e instanceof Error ? e.message : String(e))); process.exit(1); }
+});
 
 function printScanResult(result: { url: string; pages: string[]; issues: { type: string; severity: string; pageUrl: string; message: string }[]; durationMs: number }, asJson: boolean) {
   if (asJson) { log(JSON.stringify(result, null, 2)); return; }
@@ -3063,6 +3288,57 @@ apiCmd
   });
 
 apiCmd
+  .command("profile <url>")
+  .description("Hit an AI endpoint and display its LLM latency and cost profile")
+  .option("--method <method>", "HTTP method", "POST")
+  .option("--header <header>", "Request header (repeatable, format: 'Key: Value')", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+  .option("--body <json>", "Request body (JSON string)")
+  .option("--timeout <ms>", "Request timeout in ms", "30000")
+  .option("--json", "Output as JSON", false)
+  .action(async (url: string, opts) => {
+    try {
+      const { profileAIEndpoint, isAIEndpoint } = await import("../lib/ai-profiler.js");
+      const headers: Record<string, string> = {};
+      for (const h of (opts.header as string[])) {
+        const colonIdx = h.indexOf(":");
+        if (colonIdx > 0) {
+          headers[h.slice(0, colonIdx).trim()] = h.slice(colonIdx + 1).trim();
+        }
+      }
+      log(chalk.dim(`Profiling AI endpoint: ${url} ...`));
+      const profile = await profileAIEndpoint(url, {
+        method: opts.method,
+        headers,
+        body: opts.body,
+        timeoutMs: parseInt(opts.timeout, 10),
+      });
+      if (opts.json) { log(JSON.stringify(profile, null, 2)); return; }
+      const isAI = isAIEndpoint(url);
+      log("");
+      log(chalk.bold("  LLM Endpoint Profile"));
+      log(chalk.dim("  ─────────────────────────────────────────"));
+      log(`  Endpoint:       ${profile.endpoint}`);
+      log(`  Status code:    ${profile.statusCode}`);
+      log(`  Total time:     ${chalk.cyan(`${profile.totalMs}ms`)}`);
+      if (profile.ttftMs !== null) log(`  TTFT:           ${chalk.cyan(`${profile.ttftMs}ms`)} (time to first token)`);
+      log(`  AI endpoint:    ${isAI ? chalk.green("yes") : chalk.yellow("no (not detected as AI)")}`);
+      log(`  Model:          ${profile.model ?? chalk.dim("unknown")}`);
+      log(`  Provider:       ${profile.provider ?? chalk.dim("unknown")}`);
+      log(`  Input tokens:   ${profile.inputTokens ?? chalk.dim("unknown")}`);
+      log(`  Output tokens:  ${profile.outputTokens ?? chalk.dim("unknown")}`);
+      if (profile.estimatedCostCents !== null) {
+        log(`  Est. cost:      ${chalk.yellow(`$${(profile.estimatedCostCents / 100).toFixed(6)}`)} (${profile.estimatedCostCents.toFixed(4)} cents)`);
+      } else {
+        log(`  Est. cost:      ${chalk.dim("unknown (model not in pricing table)")}`);
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+apiCmd
   .command("monitor [base-url]")
   .description("Continuously run API checks and report only changes (new failures/recoveries)")
   .option("--interval <seconds>", "Poll interval in seconds", "30")
@@ -3350,14 +3626,327 @@ personaCmd
     }
   });
 
+// ─── testers persona diff <p1> <p2> ──────────────────────────────────────────
+
+personaCmd
+  .command("diff <persona1> <persona2>")
+  .description("Run a scenario under 2 personas and show behavioral differences")
+  .requiredOption("--url <url>", "Base URL to run against")
+  .option("--scenario <id>", "Scenario ID (runs all scenarios if omitted)")
+  .option("--model <model>", "AI model to use")
+  .option("--json", "Output as JSON", false)
+  .action(async (persona1: string, persona2: string, opts) => {
+    try {
+      const p1 = getPersona(persona1);
+      if (!p1) { logError(chalk.red(`Persona not found: ${persona1}`)); process.exit(1); }
+      const p2 = getPersona(persona2);
+      if (!p2) { logError(chalk.red(`Persona not found: ${persona2}`)); process.exit(1); }
+
+      log(chalk.dim(`Running scenarios under personas: ${p1.name} vs ${p2.name} ...`));
+
+      const { runByFilter } = await import("../lib/runner.js");
+      const { diffPersonaResults, formatDivergenceTerminal } = await import("../lib/persona-diff.js");
+
+      // Run under persona 1
+      const result1 = await runByFilter({
+        url: opts.url,
+        scenarioIds: opts.scenario ? [opts.scenario] : undefined,
+        model: opts.model,
+        personaId: p1.id,
+      });
+
+      // Run under persona 2
+      const result2 = await runByFilter({
+        url: opts.url,
+        scenarioIds: opts.scenario ? [opts.scenario] : undefined,
+        model: opts.model,
+        personaId: p2.id,
+      });
+
+      const allResults = [...result1.results, ...result2.results];
+      const scenarios = listScenarios({});
+
+      const divergences = diffPersonaResults(allResults, scenarios.map((s) => ({ id: s.id, name: s.name })));
+
+      if (opts.json) {
+        log(JSON.stringify(divergences, null, 2));
+        return;
+      }
+
+      log(formatDivergenceTerminal(divergences));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers convert <file> ──────────────────────────────────────────────────
+
+program
+  .command("convert <file>")
+  .description("Convert a recorded browser session (rrweb/HAR) into a test scenario")
+  .option("--format <format>", "Session format: rrweb, har, or testers (auto-detected if omitted)")
+  .option("--name <name>", "Scenario name")
+  .option("--model <model>", "AI model for step synthesis")
+  .option("--save", "Save the scenario to the database", false)
+  .option("--project <id>", "Project ID (when --save)")
+  .option("--json", "Output as JSON", false)
+  .action(async (file: string, opts) => {
+    try {
+      const { convertSessionFile, detectSessionFormat } = await import("../lib/session-converter.js");
+      const format = opts.format ?? detectSessionFormat(file);
+      const scenario = await convertSessionFile(file, format, {
+        name: opts.name,
+        model: opts.model,
+      });
+
+      if (opts.json) {
+        log(JSON.stringify(scenario, null, 2));
+        return;
+      }
+
+      log(chalk.bold(`\n  Converted scenario: ${scenario.name}`));
+      log(`  Description: ${scenario.description}`);
+      log(`  Steps: ${scenario.steps.length}`);
+      if (scenario.targetPath) log(`  Target path: ${scenario.targetPath}`);
+      log(`  Tags: ${scenario.tags.join(", ")}`);
+      log("");
+      for (let i = 0; i < scenario.steps.length; i++) {
+        log(`  ${chalk.dim(`${i + 1}.`)} ${scenario.steps[i]}`);
+      }
+
+      if (opts.save) {
+        const projectId = resolveProject(opts.project);
+        const saved = createScenario({
+          name: scenario.name,
+          description: scenario.description,
+          steps: scenario.steps,
+          tags: scenario.tags,
+          targetPath: scenario.targetPath,
+          priority: "medium" as ScenarioPriority,
+          projectId,
+        });
+        log(chalk.green(`\nSaved as scenario ${chalk.bold(saved.shortId)}: ${saved.name}`));
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers eval ────────────────────────────────────────────────────────────
+
+const evalCmd = program.command("eval").description("Run AI evaluation pipelines (RAG quality, factual, faithfulness)");
+
+evalCmd
+  .command("rag <url>")
+  .description("Run RAG quality evaluation — faithfulness, factual completeness, and hallucination detection")
+  .option("--endpoint <path>", "API endpoint path to query (default: /api/chat)", "/api/chat")
+  .option("--docs <path>", "Path to JSON file with RAG test cases [{question, sourceDocs, expectedFacts?, forbiddenClaims?}]")
+  .option("--method <method>", "HTTP method", "POST")
+  .option("--input-field <path>", "JSON path to inject question, e.g. messages[0].content")
+  .option("--output-field <path>", "JSON path to extract answer, e.g. choices[0].message.content")
+  .option("--json", "Output results as JSON", false)
+  .action(async (url: string, opts) => {
+    try {
+      const { runRagEval } = await import("../lib/eval-runner.js");
+      const { createRun, updateRun } = await import("../db/runs.js");
+
+      let ragTestCases: unknown[] = [];
+      if (opts.docs) {
+        try {
+          const raw = readFileSync(opts.docs, "utf-8");
+          ragTestCases = JSON.parse(raw) as unknown[];
+        } catch {
+          logError(chalk.red(`Failed to read docs file: ${opts.docs}`));
+          process.exit(1);
+        }
+      }
+
+      if (ragTestCases.length === 0) {
+        logError(chalk.red("No RAG test cases provided. Use --docs <path.json> to load test cases."));
+        process.exit(1);
+      }
+
+      log(chalk.dim(`Running RAG eval against ${url}${opts.endpoint} with ${ragTestCases.length} test case(s)...`));
+
+      // Create a temporary scenario and run
+      const scenario = createScenario({
+        name: `RAG eval — ${url}`,
+        description: "RAG quality evaluation",
+        steps: [],
+        tags: ["rag", "eval"],
+        metadata: {
+          rag: {
+            endpoint: opts.endpoint,
+            method: opts.method,
+            inputField: opts.inputField,
+            outputField: opts.outputField,
+            baseUrl: url,
+            ragTestCases,
+          },
+        },
+      });
+
+      const run = createRun({ scenarioId: scenario.id, model: "rag-eval" });
+      await updateRun(run.id, { status: "running" });
+
+      const result = await runRagEval(scenario, { runId: run.id, baseUrl: url });
+      await updateRun(run.id, { status: result.status === "passed" ? "passed" : "failed" });
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      const ragResult = result.metadata as import("../lib/eval-runner.js").RagEvalResult | null;
+      if (!ragResult) { logError(chalk.red("No RAG result data")); process.exit(1); }
+
+      log("");
+      log(chalk.bold("  RAG Quality Evaluation Results"));
+      log(chalk.dim("  ─────────────────────────────────────────────────────"));
+      log(`  Total cases:          ${chalk.bold(String(ragResult.totalCases))}`);
+      log(`  Passed:               ${ragResult.passedCases === ragResult.totalCases ? chalk.green(String(ragResult.passedCases)) : chalk.red(String(ragResult.passedCases))}`);
+      log(`  Avg faithfulness:     ${chalk.cyan(`${(ragResult.avgFaithfulnessScore * 100).toFixed(0)}%`)}`);
+      log(`  Avg factual score:    ${chalk.cyan(`${(ragResult.avgFactualCompletenessScore * 100).toFixed(0)}%`)}`);
+      log(`  Forbidden violations: ${ragResult.totalForbiddenViolations > 0 ? chalk.red(String(ragResult.totalForbiddenViolations)) : chalk.green("0")}`);
+      log(`  Duration:             ${ragResult.durationMs}ms`);
+      log(`  Tokens used:          ${ragResult.tokensUsed}`);
+      log("");
+      for (const [i, c] of ragResult.caseResults.entries()) {
+        const icon = c.passed ? chalk.green("✓") : chalk.red("✗");
+        log(`  ${icon} Case ${i + 1}: ${c.question.slice(0, 60)}`);
+        if (c.error) { log(chalk.red(`      Error: ${c.error}`)); continue; }
+        log(`    Faithfulness: ${(c.faithfulnessScore * 100).toFixed(0)}%  Factual: ${(c.factualCompletenessScore * 100).toFixed(0)}%${c.forbiddenClaimViolations.length > 0 ? chalk.red(`  Violations: ${c.forbiddenClaimViolations.join(", ")}`) : ""}`);
+      }
+      log("");
+      if (!ragResult.passed) process.exit(1);
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers golden ──────────────────────────────────────────────────────────
+
+const goldenCmd = program.command("golden").description("Manage golden answer checks for hallucination detection");
+
+goldenCmd
+  .command("add")
+  .description("Add a golden answer check interactively")
+  .option("--project <id>", "Project ID")
+  .action(async (opts) => {
+    try {
+      const { createGoldenAnswer } = await import("../db/golden-answers.js");
+      const ask = (prompt: string): Promise<string> => {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        return new Promise((resolve) => rl.question(prompt, (ans) => { rl.close(); resolve(ans.trim()); }));
+      };
+
+      const question = await ask("Question (what this endpoint should answer): ");
+      if (!question) { logError(chalk.red("Question is required")); process.exit(1); }
+
+      const goldenAnswer = await ask("Expected / golden answer: ");
+      if (!goldenAnswer) { logError(chalk.red("Golden answer is required")); process.exit(1); }
+
+      const endpoint = await ask("Endpoint (path or full URL): ");
+      if (!endpoint) { logError(chalk.red("Endpoint is required")); process.exit(1); }
+
+      const judgeModel = await ask("Judge model (leave blank for auto): ");
+      const projectId = resolveProject(opts.project);
+
+      const golden = createGoldenAnswer({
+        question,
+        goldenAnswer,
+        endpoint,
+        judgeModel: judgeModel || undefined,
+        projectId,
+      });
+
+      log(chalk.green(`\nCreated golden answer check ${chalk.bold(golden.shortId)}`));
+      log(`  Endpoint: ${golden.endpoint}`);
+      log(`  Question: ${golden.question.slice(0, 60)}`);
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+goldenCmd
+  .command("list")
+  .description("List golden answer checks")
+  .option("--project <id>", "Filter by project ID")
+  .option("--json", "Output as JSON", false)
+  .action(async (opts) => {
+    try {
+      const { listGoldenAnswers } = await import("../db/golden-answers.js");
+      const projectId = resolveProject(opts.project);
+      const goldens = listGoldenAnswers({ projectId });
+
+      if (opts.json) { log(JSON.stringify(goldens, null, 2)); return; }
+
+      if (goldens.length === 0) { log(chalk.dim("No golden answer checks found.")); return; }
+
+      log(chalk.bold(`\n  Golden Answer Checks (${goldens.length})`));
+      log(chalk.dim("  ─────────────────────────────────────────────────────"));
+      for (const g of goldens) {
+        const status = g.enabled ? chalk.green("enabled") : chalk.dim("disabled");
+        log(`  ${g.shortId}  ${status}  ${chalk.bold(g.endpoint)}  ${g.question.slice(0, 50)}`);
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+goldenCmd
+  .command("run <base-url>")
+  .description("Run all golden answer checks and report results")
+  .option("--project <id>", "Filter by project ID")
+  .option("--model <model>", "Judge model to use")
+  .option("--json", "Output as JSON", false)
+  .action(async (baseUrl: string, opts) => {
+    try {
+      const { runGoldenMonitor } = await import("../lib/golden-monitor.js");
+      const projectId = resolveProject(opts.project);
+
+      log(chalk.dim(`Running golden answer checks against ${baseUrl} ...`));
+
+      const result = await runGoldenMonitor({
+        baseUrl,
+        projectId,
+        judgeModel: opts.model,
+      });
+
+      if (opts.json) { log(JSON.stringify(result, null, 2)); return; }
+
+      log(chalk.bold("\n  Golden Answer Monitor Results"));
+      log(chalk.dim("  ─────────────────────────────────────────"));
+      log(`  Checked: ${result.checked}`);
+      log(`  Passed:  ${result.passed === result.checked ? chalk.green(String(result.passed)) : chalk.yellow(String(result.passed))}`);
+      log(`  Drifted: ${result.drifted > 0 ? chalk.red(String(result.drifted)) : chalk.green("0")}`);
+      log("");
+      if (result.drifted > 0) {
+        log(chalk.yellow("  Warning: Drift detected in one or more golden checks."));
+        log(chalk.yellow("  This may indicate hallucination or response degradation."));
+        log("");
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
 // Apply global flags before any action runs
 program.hook("preAction", () => {
   const opts = program.opts();
   QUIET = opts.quiet === true;
-  NO_COLOR = opts.color === false || process.env["FORCE_COLOR"] === "0";
+  NO_COLOR = opts.color === false || process.env["NO_COLOR"] !== undefined || process.env["FORCE_COLOR"] === "0";
   if (NO_COLOR) {
     // Disable chalk colors globally
     process.env["FORCE_COLOR"] = "0";
+    process.env["NO_COLOR"] = "1";
   }
 });
 

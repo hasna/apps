@@ -354,6 +354,55 @@ ALTER TABLE scenarios ADD COLUMN persona_id TEXT REFERENCES personas(id) ON DELE
 ALTER TABLE results ADD COLUMN persona_id TEXT REFERENCES personas(id) ON DELETE SET NULL;
 ALTER TABLE results ADD COLUMN persona_name TEXT;
   `,
+
+  // Migration 18: Add scenario type (browser | eval | api | pipeline)
+  `
+ALTER TABLE scenarios ADD COLUMN scenario_type TEXT NOT NULL DEFAULT 'browser' CHECK(scenario_type IN ('browser','eval','api','pipeline'));
+  `,
+
+  // Migration 19: Flakiness tracking on runs
+  `
+ALTER TABLE runs ADD COLUMN samples INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE runs ADD COLUMN flakiness_threshold REAL NOT NULL DEFAULT 0.95;
+  `,
+
+  // Migration 20: metadata column for api_check_results (stores llmProfile, piiDetections, etc.)
+  `
+ALTER TABLE api_check_results ADD COLUMN metadata TEXT DEFAULT '{}';
+  `,
+
+  // Migration 21: Golden answer tracking for hallucination guardrail monitoring
+  `
+CREATE TABLE IF NOT EXISTS golden_answers (
+  id TEXT PRIMARY KEY,
+  short_id TEXT NOT NULL UNIQUE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  golden_answer TEXT NOT NULL,
+  constraints TEXT NOT NULL DEFAULT '[]',
+  endpoint TEXT NOT NULL,
+  judge_model TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS golden_check_results (
+  id TEXT PRIMARY KEY,
+  golden_id TEXT NOT NULL REFERENCES golden_answers(id) ON DELETE CASCADE,
+  response TEXT NOT NULL,
+  similarity_score REAL,
+  passed INTEGER NOT NULL DEFAULT 0,
+  drift_detected INTEGER NOT NULL DEFAULT 0,
+  judge_model TEXT,
+  provider TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_golden_project ON golden_answers(project_id);
+CREATE INDEX IF NOT EXISTS idx_golden_enabled ON golden_answers(enabled);
+CREATE INDEX IF NOT EXISTS idx_golden_results_golden ON golden_check_results(golden_id);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
