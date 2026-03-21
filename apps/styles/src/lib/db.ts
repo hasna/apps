@@ -1,11 +1,22 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 import { mkdirSync, existsSync } from "fs";
 
 export const DB_PATH = join(homedir(), ".styles", "styles.db");
 
 let _db: Database | null = null;
+let _dbPath: string = DB_PATH;
+
+export function resetDb(): void {
+  if (_db) { try { _db.close(); } catch { /* ignore */ } }
+  _db = null;
+}
+
+export function setDbPath(path: string): void {
+  resetDb();
+  _dbPath = path;
+}
 
 export function getDb(): Database {
   if (_db) return _db;
@@ -14,12 +25,12 @@ export function getDb(): Database {
 }
 
 export function initDb(): Database {
-  const dir = join(homedir(), ".styles");
+  const dir = dirname(_dbPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 
-  const db = new Database(DB_PATH, { create: true });
+  const db = new Database(_dbPath, { create: true });
 
   // Enable WAL mode for better concurrent read performance
   db.exec("PRAGMA journal_mode=WAL");
@@ -88,6 +99,20 @@ export function initDb(): Database {
       message TEXT NOT NULL,
       severity TEXT NOT NULL DEFAULT 'warning',
       auto_task_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS extracted_style_kits (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      tokens TEXT NOT NULL,
+      raw TEXT,
+      screenshot TEXT,
+      tags TEXT DEFAULT '[]',
+      notes TEXT,
+      extracted_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
     );
   `);
 
