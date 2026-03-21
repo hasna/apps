@@ -1011,6 +1011,84 @@ server.registerTool("get_reactions", {
   return { content: [{ type: "text", text: JSON.stringify(reactions) }] };
 });
 
+server.registerTool("summarize_space", {
+  description: "Get a structured catch-up summary of a space for a time window — participants, topics, key messages, blockers, activity counts. No LLM required.",
+  inputSchema: {
+    space: z.string().describe("Space name"),
+    since: z.string().optional().describe("ISO 8601 timestamp — only include messages after this. Defaults to 24h ago."),
+    limit: z.coerce.number().optional().describe("Max messages to analyze (default: 100)"),
+  },
+}, async (args: Record<string, any>) => {
+  const { space, since, limit } = args;
+  const sinceTs = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const db = (await import("../lib/db.js")).getDb();
+
+  // Count messages in window
+  const total = (db.prepare(
+    "SELECT COUNT(*) as c FROM messages WHERE space = ? AND created_at >= ?"
+  ).get(space, sinceTs) as { c: number }).c;
+
+  if (total === 0) {
+    return { content: [{ type: "text", text: `No messages in #${space} since ${sinceTs.slice(0, 10)}.` }] };
+  }
+
+  // Get summary using existing getConversationSummary but filtered by since
+  const rows = db.prepare(
+    `SELECT * FROM messages WHERE space = ? AND created_at >= ? ORDER BY created_at DESC LIMIT ?`
+  ).all(space, sinceTs, limit ?? 100) as Record<string, unknown>[];
+
+  // Participants
+  const agents = new Set<string>();
+  const agentCounts: Record<string, number> = {};
+  const blockers: Array<{id: number; from: string; content: string; created_at: string}> = [];
+  const mentions: Record<string, number> = {};
+
+  for (const m of rows) {
+    const from = m.from_agent as string;
+    agents.add(from);
+    agentCounts[from] = (agentCounts[from] ?? 0) + 1;
+    if (m.blocking) {
+      blockers.push({ id: m.id as number, from, content: (m.content as string).slice(0, 150), created_at: m.created_at as string });
+    }
+    // Count @mentions
+    const mentionedAgents = (m.content as string).match(/@([a-zA-Z0-9_-]+)/g) ?? [];
+    for (const mention of mentionedAgents) {
+      const a = mention.slice(1).toLowerCase();
+      mentions[a] = (mentions[a] ?? 0) + 1;
+    }
+  }
+
+  const parts = [
+    `Space: #${space} | Since: ${sinceTs.slice(0, 10)} | ${total} messages (showing ${rows.length})`,
+    `\nParticipants (${agents.size}): ${Object.entries(agentCounts).sort((a, b) => b[1] - a[1]).map(([n, c]) => `${n}(${c})`).join(", ")}`,
+  ];
+
+  if (Object.keys(mentions).length > 0) {
+    const topMentions = Object.entries(mentions).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    parts.push(`Most mentioned: ${topMentions.map(([n, c]) => `@${n}(${c})`).join(", ")}`);
+  }
+
+  if (blockers.length > 0) {
+    parts.push(`\n⛔ ${blockers.length} blocking message(s):`);
+    for (const b of blockers.slice(0, 5)) {
+      parts.push(`  • [#${b.id}] ${b.from}: ${b.content}${b.content.length > 150 ? "..." : ""}`);
+    }
+  }
+
+  // Recent key messages (high priority or replies)
+  const highPri = rows.filter((m) => m.priority === "high" || m.priority === "urgent").slice(0, 5);
+  if (highPri.length > 0) {
+    parts.push(`\n🔴 High priority (${highPri.length}):`);
+    for (const m of highPri) {
+      parts.push(`  • [${m.priority}] ${m.from_agent}: ${(m.content as string).slice(0, 100)}`);
+    }
+  }
+
+  parts.push(`\nLast message: ${(rows[0]?.created_at as string)?.slice(0, 16) ?? "?"}`);
+
+  return { content: [{ type: "text", text: parts.join("\n") }] };
+});
+
 server.registerTool("get_reaction_summary", {
   description: "Get emoji reaction counts and agent lists for a message.",
   inputSchema: {
