@@ -268,6 +268,7 @@ export interface Task {
   spawned_from_session: string | null;
   assigned_by: string | null; // agent_id who created/assigned this task
   assigned_from_project: string | null; // project_id the assigning agent was in
+  task_type: string | null; // bug, feature, chore, improvement, docs, test, security, or custom
   cost_tokens: number;
   cost_usd: number;
   delegated_from: string | null;
@@ -340,6 +341,7 @@ export interface CreateTaskInput {
   spawned_from_session?: string;
   assigned_by?: string;
   assigned_from_project?: string;
+  task_type?: string;
 }
 
 export interface UpdateTaskInput {
@@ -358,6 +360,7 @@ export interface UpdateTaskInput {
   approved_by?: string;
   recurrence_rule?: string | null;
   version: number; // required for optimistic locking
+  task_type?: string | null;
 }
 
 export interface TaskFilter {
@@ -373,6 +376,7 @@ export interface TaskFilter {
   tags?: string[];
   has_recurrence?: boolean;
   include_subtasks?: boolean;
+  task_type?: string | string[];
   limit?: number;
   offset?: number;
   /** Opaque cursor from a prior list_tasks response — stable pagination that survives concurrent mutations */
@@ -462,6 +466,7 @@ export interface TaskRow {
   spawned_from_session: string | null;
   assigned_by: string | null;
   assigned_from_project: string | null;
+  task_type: string | null;
   cost_tokens: number;
   cost_usd: number;
   delegated_from: string | null;

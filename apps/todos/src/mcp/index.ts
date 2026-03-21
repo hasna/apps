@@ -276,6 +276,7 @@ server.tool(
     reason: z.string().optional().describe("Why this task exists — context for agents picking it up"),
     spawned_from_session: z.string().optional().describe("Session ID that created this task (for tracing task lineage)"),
     assigned_from_project: z.string().optional().describe("Override: project ID the assigning agent is working from. Auto-detected from agent focus if omitted."),
+    task_type: z.string().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or any custom string"),
   },
   async (params) => {
     try {
@@ -329,6 +330,7 @@ server.tool(
     has_recurrence: z.boolean().optional(),
     due_today: z.boolean().optional(),
     overdue: z.boolean().optional(),
+    task_type: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by task type: bug, feature, chore, improvement, docs, test, security, or custom"),
     limit: z.number().optional(),
     offset: z.number().optional(),
     summary_only: z.boolean().optional().describe("When true, return only id, short_id, title, status, priority — minimal tokens for navigation"),
@@ -466,11 +468,15 @@ server.tool(
     metadata: z.record(z.unknown()).optional(),
     plan_id: z.string().optional(),
     task_list_id: z.string().optional(),
+    task_type: z.string().nullable().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or custom. null to clear."),
   },
   async ({ id, ...rest }) => {
     try {
       const resolvedId = resolveId(id);
-      const task = updateTask(resolvedId, rest);
+      const resolved = { ...rest } as Record<string, unknown>;
+      if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id as string, "task_lists");
+      if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id as string, "plans");
+      const task = updateTask(resolvedId, resolved as unknown as Parameters<typeof updateTask>[1]);
       return { content: [{ type: "text" as const, text: `updated: ${formatTask(task)}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1472,6 +1478,40 @@ server.tool(
           text: `Agent renamed: ${agent.name} -> ${updated.name}\nID: ${updated.id}`,
         }],
       };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// update_agent
+if (shouldRegisterTool("update_agent")) {
+server.tool(
+  "update_agent",
+  "Update an agent's description, role, title, or other metadata. Resolve by id or name.",
+  {
+    id: z.string().optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    role: z.string().optional(),
+    title: z.string().optional(),
+    level: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    permissions: z.array(z.string()).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  },
+  async ({ id, name, ...updates }) => {
+    try {
+      if (!id && !name) {
+        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+      }
+      const agent = id ? getAgent(id) : getAgentByName(name!);
+      if (!agent) {
+        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+      }
+      const updated = updateAgent(agent.id, updates);
+      return { content: [{ type: "text" as const, text: `Agent updated: ${updated.name} (${updated.id.slice(0, 8)})` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -3744,6 +3784,26 @@ server.tool(
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
+  },
+);
+}
+
+if (shouldRegisterTool("get_file_heat_map")) {
+server.tool(
+  "get_file_heat_map",
+  "Aggregate file edit frequency across all tasks and agents. Returns hottest files with edit count, unique agents, and last edit. Hot files = high coordination risk, good candidates for extra test coverage.",
+  {
+    limit: z.number().optional().describe("Max files to return (default: 20)"),
+    project_id: z.string().optional().describe("Filter to a specific project"),
+    min_edits: z.number().optional().describe("Minimum edit count to include (default: 1)"),
+  },
+  async ({ limit, project_id, min_edits }) => {
+    try {
+      const { getFileHeatMap } = require("../db/task-files.js") as any;
+      const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+      const results = getFileHeatMap({ limit, project_id: resolvedProjectId, min_edits });
+      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
 }

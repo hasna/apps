@@ -576,8 +576,10 @@ const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN started_at TEXT;
   INSERT OR IGNORE INTO _migrations (id) VALUES (34);
   `,
-  // Migration 35: Cost tracking + delegation + retry + SLA + context snapshots + traces + budgets
+  // Migration 35: task_type + cost tracking + delegation + retry + SLA + context snapshots + traces + budgets
   `
+  ALTER TABLE tasks ADD COLUMN task_type TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type);
   ALTER TABLE tasks ADD COLUMN cost_tokens INTEGER DEFAULT 0;
   ALTER TABLE tasks ADD COLUMN cost_usd REAL DEFAULT 0;
   ALTER TABLE tasks ADD COLUMN delegated_from TEXT;
@@ -851,6 +853,7 @@ function ensureSchema(db: Database): void {
   ensureColumn("tasks", "assigned_by", "TEXT");
   ensureColumn("tasks", "assigned_from_project", "TEXT");
   ensureColumn("tasks", "started_at", "TEXT");
+  ensureColumn("tasks", "task_type", "TEXT");
   ensureColumn("tasks", "cost_tokens", "INTEGER DEFAULT 0");
   ensureColumn("tasks", "cost_usd", "REAL DEFAULT 0");
   ensureColumn("tasks", "delegated_from", "TEXT");
@@ -1003,6 +1006,18 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     if (shortIdRows.length === 1) {
       return shortIdRows[0]!.id;
     }
+  }
+
+  // For task_lists table, also try matching on slug (e.g. "todos-open-mementos")
+  if (table === "task_lists") {
+    const slugRow = db.query("SELECT id FROM task_lists WHERE slug = ?").get(partialId) as { id: string } | null;
+    if (slugRow) return slugRow.id;
+  }
+
+  // For projects table, also try matching on name (case-insensitive)
+  if (table === "projects") {
+    const nameRow = db.query("SELECT id FROM projects WHERE lower(name) = ?").get(partialId.toLowerCase()) as { id: string } | null;
+    if (nameRow) return nameRow.id;
   }
 
   return null;
