@@ -23,6 +23,17 @@ export function onDbInit(cb: () => void): void {
 }
 
 export function getDb(): Database {
+  if (_db) {
+    // Verify the connection is still alive
+    try {
+      _db.exec("SELECT 1");
+    } catch {
+      // Stale handle — reset and reconnect
+      try { _db.close(); } catch {}
+      _db = null;
+      _initialized = false;
+    }
+  }
   if (_db) return _db;
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });

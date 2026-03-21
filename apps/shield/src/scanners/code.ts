@@ -195,6 +195,9 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
     const lineText = lines[i];
     const lineNum = i + 1;
 
+    // Skip lines with security-ignore suppression comment
+    if (lineText.includes("security-ignore")) continue;
+
     // Skip comment-only lines
     const trimmed = lineText.trim();
     if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;

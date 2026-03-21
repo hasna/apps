@@ -1,5 +1,5 @@
 import * as path from "path";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import {
   type Scanner,
   type FindingInput,
@@ -24,8 +24,9 @@ function parseGitLog(scanPath: string, maxCount: number): GitDiffEntry[] {
   const entries: GitDiffEntry[] = [];
 
   try {
-    const output = execSync(
-      `git log --all --diff-filter=A -p --format="COMMIT:%H %ae %ai" --max-count=${maxCount}`,
+    const output = execFileSync(
+      "git",
+      ["log", "--all", "--diff-filter=A", "-p", `--format=COMMIT:%H %ae %ai`, `--max-count=${maxCount}`],
       { cwd: scanPath, maxBuffer: 50 * 1024 * 1024, encoding: "utf-8" },
     );
 
@@ -114,7 +115,7 @@ function detectRemovedSecrets(scanPath: string, findings: FindingInput[]): Findi
     let stillPresent = false;
 
     try {
-      const currentContent = execSync(`git show HEAD:${finding.file}`, {
+      const currentContent = execFileSync("git", ["show", `HEAD:${finding.file}`], {
         cwd: scanPath,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
@@ -153,7 +154,7 @@ export const gitHistoryScanner: Scanner = {
   async scan(scanPath: string, _options?: ScannerRunOptions): Promise<FindingInput[]> {
     // Check if this is a git repository
     try {
-      execSync("git rev-parse --is-inside-work-tree", { cwd: scanPath, encoding: "utf-8" });
+      execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: scanPath, encoding: "utf-8" });
     } catch {
       return [];
     }

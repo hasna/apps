@@ -70,9 +70,17 @@ export function startServer(port: number) {
   const app = express();
   app.use(express.json({ limit: "10mb" }));
 
-  // CORS for dashboard
+  // CORS — restrict to configured origins (defaults to localhost)
+  const allowedOrigins = (process.env.SECURITY_CORS_ORIGIN || `http://localhost:${port}`).split(",");
   app.use((req: Request, res: Response, next: NextFunction) => {
-    res.header("Access-Control-Allow-Origin", "*");
+    const origin = req.headers.origin as string | undefined;
+    if (origin && allowedOrigins.some(o => o.trim() === origin || o.trim() === "*")) {
+      res.header("Access-Control-Allow-Origin", origin);
+    } else if (allowedOrigins.includes("*")) {
+      res.header("Access-Control-Allow-Origin", "*");
+    } else {
+      res.header("Access-Control-Allow-Origin", allowedOrigins[0]);
+    }
     res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") {
@@ -81,6 +89,30 @@ export function startServer(port: number) {
     }
     next();
   });
+
+  // Simple in-memory rate limiter for AI/LLM endpoints
+  const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+  const RATE_LIMIT_MAX = 10; // 10 requests per minute per IP
+
+  function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip);
+
+    if (!entry || now > entry.resetAt) {
+      rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      return next();
+    }
+
+    if (entry.count >= RATE_LIMIT_MAX) {
+      res.status(429).json({ error: "Rate limit exceeded. Try again later." });
+      return;
+    }
+
+    entry.count++;
+    return next();
+  }
 
   // --- Scans ---
 
@@ -243,7 +275,7 @@ export function startServer(port: number) {
   });
 
   // POST /api/findings/:id/explain — trigger LLM explanation
-  app.post("/api/findings/:id/explain", async (req: Request, res: Response) => {
+  app.post("/api/findings/:id/explain", rateLimitMiddleware, async (req: Request, res: Response) => {
     try {
       const finding = getFinding(req.params.id);
       if (!finding) {
@@ -278,7 +310,7 @@ export function startServer(port: number) {
   });
 
   // POST /api/findings/:id/fix — trigger LLM fix suggestion
-  app.post("/api/findings/:id/fix", async (req: Request, res: Response) => {
+  app.post("/api/findings/:id/fix", rateLimitMiddleware, async (req: Request, res: Response) => {
     try {
       const finding = getFinding(req.params.id);
       if (!finding) {

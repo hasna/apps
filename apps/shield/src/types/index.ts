@@ -175,7 +175,7 @@ export const DEFAULT_CONFIG: ConfigFile = {
   enabled_scanners: Object.values(ScannerType),
   severity_threshold: Severity.Info,
   output_format: ReportFormat.Terminal,
-  ignore_patterns: ["node_modules", ".git", "dist", "build", "vendor", "__pycache__"],
+  ignore_patterns: ["node_modules", ".git", "dist", "build", "vendor", "__pycache__", "*.test.ts", "*.test.js", "*.test.tsx", "*.test.jsx", "*.spec.ts", "*.spec.js", "__tests__", "test/fixtures", "tests/fixtures"],
   auto_fix: false,
   llm_analyze: false,
 };

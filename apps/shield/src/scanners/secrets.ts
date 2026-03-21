@@ -45,7 +45,13 @@ export function walkDirectory(
     for (const entry of entries) {
       const fullPath = path.join(currentDir, entry.name);
 
-      if (ignorePatterns.some((pattern) => entry.name === pattern || fullPath.includes(`/${pattern}/`))) {
+      if (ignorePatterns.some((pattern) => {
+        if (pattern.startsWith("*.")) {
+          // Glob extension match: *.test.ts matches foo.test.ts
+          return entry.name.endsWith(pattern.slice(1));
+        }
+        return entry.name === pattern || fullPath.includes(`/${pattern}/`);
+      })) {
         continue;
       }
 
@@ -222,6 +228,9 @@ export function scanFile(filePath: string, content: string): FindingInput[] {
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
     const lineNum = i + 1;
+
+    // Skip lines with security-ignore suppression comment
+    if (lineText.includes("security-ignore")) continue;
 
     for (const sp of SECRET_PATTERNS) {
       sp.pattern.lastIndex = 0;
