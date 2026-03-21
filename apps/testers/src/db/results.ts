@@ -11,14 +11,16 @@ export function createResult(input: {
   scenarioId: string;
   model: string;
   stepsTotal: number;
+  personaId?: string | null;
+  personaName?: string | null;
 }): Result {
   const db = getDatabase();
   const id = uuid();
   const timestamp = now();
 
   db.query(`
-    INSERT INTO results (id, run_id, scenario_id, status, reasoning, error, steps_completed, steps_total, duration_ms, model, tokens_used, cost_cents, metadata, created_at)
-    VALUES (?, ?, ?, 'skipped', NULL, NULL, 0, ?, 0, ?, 0, 0, '{}', ?)
+    INSERT INTO results (id, run_id, scenario_id, status, reasoning, error, steps_completed, steps_total, duration_ms, model, tokens_used, cost_cents, metadata, created_at, persona_id, persona_name)
+    VALUES (?, ?, ?, 'skipped', NULL, NULL, 0, ?, 0, ?, 0, 0, '{}', ?, ?, ?)
   `).run(
     id,
     input.runId,
@@ -26,6 +28,8 @@ export function createResult(input: {
     input.stepsTotal,
     input.model,
     timestamp,
+    input.personaId ?? null,
+    input.personaName ?? null,
   );
 
   return getResult(id)!;

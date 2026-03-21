@@ -320,6 +320,40 @@ ALTER TABLE projects ADD COLUMN base_url TEXT;
 ALTER TABLE projects ADD COLUMN port INTEGER;
 ALTER TABLE projects ADD COLUMN settings TEXT DEFAULT '{}';
   `,
+
+  // Migration 15: Personas table
+  `
+CREATE TABLE IF NOT EXISTS personas (
+  id TEXT PRIMARY KEY,
+  short_id TEXT NOT NULL UNIQUE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL,
+  instructions TEXT NOT NULL DEFAULT '',
+  traits TEXT NOT NULL DEFAULT '[]',
+  goals TEXT NOT NULL DEFAULT '[]',
+  metadata TEXT DEFAULT '{}',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_personas_project ON personas(project_id);
+CREATE INDEX IF NOT EXISTS idx_personas_enabled ON personas(enabled);
+  `,
+
+  // Migration 16: Add persona_id to scenarios
+  `
+ALTER TABLE scenarios ADD COLUMN persona_id TEXT REFERENCES personas(id) ON DELETE SET NULL;
+  `,
+
+  // Migration 17: Add persona_id and persona_name to results
+  `
+ALTER TABLE results ADD COLUMN persona_id TEXT REFERENCES personas(id) ON DELETE SET NULL;
+ALTER TABLE results ADD COLUMN persona_name TEXT;
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -387,6 +421,7 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM api_check_results");
   database.exec("DELETE FROM api_checks");
   database.exec("DELETE FROM runs");
+  database.exec("DELETE FROM personas");
   database.exec("DELETE FROM scenarios");
   database.exec("DELETE FROM agents");
   database.exec("DELETE FROM scan_issues");
