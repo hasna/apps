@@ -1,0 +1,28 @@
+{
+  "name": "@hasnaxyz/open-security-sdk",
+  "version": "0.1.0",
+  "description": "REST client SDK for open-security server",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
+    "./schemas": { "import": "./dist/schemas.js", "types": "./dist/schemas.d.ts" }
+  },
+  "scripts": {
+    "build": "bun build src/index.ts src/schemas.ts --outdir dist --target node",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.12",
+    "typescript": "^5.8.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "Apache-2.0"
+}

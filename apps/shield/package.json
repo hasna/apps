@@ -1,0 +1,84 @@
+{
+  "name": "@hasnaxyz/open-security",
+  "version": "0.1.0",
+  "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "open-security": "dist/cli/index.js",
+    "open-security-mcp": "dist/mcp/index.js",
+    "open-security-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./sdk": {
+      "import": "./sdk/dist/index.js",
+      "types": "./sdk/dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun run build:lib && bun run build:cli && bun run build:mcp && bun run build:server && bun run build:dashboard",
+    "build:lib": "bun build src/index.ts --outdir dist --target node",
+    "build:cli": "bun build src/cli/index.tsx --outfile dist/cli/index.js --target node",
+    "build:mcp": "bun build src/mcp/index.ts --outfile dist/mcp/index.js --target node",
+    "build:server": "bun build src/server/index.ts --outfile dist/server/index.js --target node",
+    "build:dashboard": "cd dashboard && bun run build",
+    "dev:cli": "bun run src/cli/index.tsx",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/server/index.ts",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src/",
+    "clean": "rm -rf dist dashboard/dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "better-sqlite3": "^11.8.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "express": "^5.1.0",
+    "ink": "^5.2.0",
+    "openai": "^4.86.2",
+    "react": "^19.1.0",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/bun": "^1.2.12",
+    "@types/express": "^5.0.2",
+    "@types/react": "^19.1.2",
+    "typescript": "^5.8.3"
+  },
+  "files": [
+    "dist",
+    "dashboard/dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/open-security"
+  },
+  "keywords": [
+    "security",
+    "scanner",
+    "vulnerability",
+    "ai",
+    "mcp",
+    "cerebras",
+    "llm",
+    "owasp",
+    "secrets",
+    "cve"
+  ]
+}

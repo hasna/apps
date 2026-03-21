@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dashboard/dist/
+sdk/dist/
+*.db
+*.db-wal
+*.db-shm
+.env
+.secrets/
+.open-security/
+*.log
+.DS_Store
+coverage/
+tmp/
