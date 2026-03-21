@@ -20,6 +20,8 @@ export type {
   SearchResult,
   SearchOptions,
   ExportFormat,
+  BrandingResult,
+  BrowserAction,
 } from "./types/index.js";
 
 // Database — Crawls
@@ -71,6 +73,7 @@ export { extractPdfText, isPdf } from "./lib/pdf.js";
 // Lib — AI
 export {
   extractWithAI,
+  extractWithPrompt,
   summarizePage,
   classifyPage,
   checkAiProviders,
@@ -78,6 +81,15 @@ export {
 
 // Lib — Export
 export { exportCrawl, exportPage } from "./lib/export.js";
+
+// Lib — DOCX
+export { extractDocxText, isDocx } from "./lib/docx.js";
+
+// Lib — Branding
+export { extractBranding } from "./lib/branding.js";
+
+// Lib — Web Search
+export { searchWeb } from "./lib/search-web.js";
 
 // Lib — Crawler (main entry points)
 export { crawlUrl, startCrawl, batchCrawl, recrawl } from "./lib/crawler.js";

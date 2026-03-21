@@ -75,6 +75,61 @@ END;`,
 );
 
 CREATE INDEX idx_page_versions_page ON page_versions(page_id);`,
+
+  // Migration 4 — Webhooks
+  `CREATE TABLE webhooks (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  events TEXT NOT NULL DEFAULT '["crawl.completed"]',
+  secret TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_triggered_at TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  webhook_id TEXT NOT NULL,
+  event TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  http_status INTEGER,
+  response_body TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TEXT,
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
+  FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_deliveries_webhook ON webhook_deliveries(webhook_id);
+CREATE INDEX idx_deliveries_status ON webhook_deliveries(status, next_retry_at);`,
+
+  // Migration 5 — API keys and usage tracking
+  `CREATE TABLE api_keys (
+  id TEXT PRIMARY KEY,
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL,
+  name TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  expires_at TEXT
+);
+
+CREATE TABLE usage_events (
+  id TEXT PRIMARY KEY,
+  api_key_id TEXT,
+  event_type TEXT NOT NULL,
+  credits INTEGER NOT NULL DEFAULT 1,
+  crawl_id TEXT,
+  page_id TEXT,
+  metadata TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_usage_api_key ON usage_events(api_key_id, created_at);
+CREATE INDEX idx_usage_type ON usage_events(event_type, created_at);`,
 ];
 
 export function runMigrations(db: Database): void {

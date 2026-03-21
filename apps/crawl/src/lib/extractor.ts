@@ -423,16 +423,33 @@ function countWords(text: string): number {
   return trimmed.split(/\s+/).length;
 }
 
+// ─── Navigation strip ─────────────────────────────────────────────────────────
+
+function stripNavigationElements(html: string): string {
+  const patterns: RegExp[] = [
+    /<nav[\s\S]*?<\/nav>/gi,
+    /<header[\s\S]*?<\/header>/gi,
+    /<footer[\s\S]*?<\/footer>/gi,
+    /<aside[\s\S]*?<\/aside>/gi,
+    /<[^>]+\s(?:class|id)=["'][^"']*(?:sidebar|menu|nav|breadcrumb|banner|cookie|popup|modal|overlay|advertisement|ad-|ads-)[^"']*["'][^>]*>[\s\S]*?<\/[a-z]+>/gi,
+  ];
+  let result = html;
+  for (const p of patterns) result = result.replace(p, "");
+  return result;
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export function extractContent(html: string, baseUrl: string): ExtractedContent {
+export function extractContent(html: string, baseUrl: string, onlyMainContent?: boolean): ExtractedContent {
+  // Strip navigation/chrome elements when onlyMainContent is true (default)
+  const processedHtml = (onlyMainContent !== false) ? stripNavigationElements(html) : html;
   const title = extractTitle(html);
   const description = extractDescription(html);
-  const text = extractText(html);
-  const markdown = htmlToMarkdown(html, baseUrl);
+  const text = extractText(processedHtml);
+  const markdown = htmlToMarkdown(processedHtml, baseUrl);
   const links = extractLinks(html, baseUrl);
   const images = extractImages(html, baseUrl);
-  const headings = extractHeadings(html);
+  const headings = extractHeadings(processedHtml);
   const metadata = extractMetadata(html, baseUrl);
   const wordCount = countWords(text);
 

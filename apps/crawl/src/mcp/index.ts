@@ -7,6 +7,7 @@ import { getPage, listPages, searchPages } from "../db/pages.js";
 import { getConfig, setConfig } from "../lib/config.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import type { ExportFormat } from "../types/index.js";
+import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries } from "../db/webhooks.js";
 
 // These modules exist at runtime but are not yet implemented.
 // Using dynamic imports with .catch fallbacks so TypeScript infers `any` at call sites.
@@ -15,9 +16,13 @@ const { startCrawl, crawlUrl, batchCrawl, recrawl } = await import("../lib/crawl
   startCrawl: null as any, crawlUrl: null as any, batchCrawl: null as any, recrawl: null as any,
 }));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { extractWithAI } = await import("../lib/ai.js").catch(() => ({ extractWithAI: null as any }));
+const { extractWithAI, extractWithPrompt } = await import("../lib/ai.js").catch(() => ({ extractWithAI: null as any, extractWithPrompt: null as any }));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { exportCrawl } = await import("../lib/export.js").catch(() => ({ exportCrawl: null as any }));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { extractBranding } = await import("../lib/branding.js").catch(() => ({ extractBranding: null as any }));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { searchWeb } = await import("../lib/search-web.js").catch(() => ({ searchWeb: null as any }));
 
 // ─── Server Setup ────────────────────────────────────────────────────────────
 
@@ -41,8 +46,21 @@ server.tool(
       .describe(
         'JSON schema string for AI-powered structured extraction, e.g. {"price": "number"}'
       ),
+    actions: z
+      .array(z.object({
+        type: z.string(),
+        selector: z.string().optional(),
+        text: z.string().optional(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        ms: z.number().optional(),
+        timeout: z.number().optional(),
+      }))
+      .optional()
+      .describe("Pre-scrape browser actions (click, type, scroll, wait, waitForSelector)"),
   },
-  async ({ url, render, screenshot, extract_schema }) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async ({ url, render, screenshot, extract_schema, actions }: any) => {
     try {
       const extractSchema = extract_schema ? JSON.parse(extract_schema) : undefined;
       // crawlUrl returns a Page-like object from the runtime crawler module
@@ -50,6 +68,7 @@ server.tool(
         render,
         screenshot,
         extractSchema,
+        actions,
       })) as {
         url: string;
         title: string | null;
@@ -106,13 +125,27 @@ server.tool(
     depth: z.number().default(2).describe("Crawl depth (default 2)"),
     max_pages: z.number().default(50).describe("Maximum pages to crawl (default 50)"),
     render: z.boolean().optional().describe("Use Playwright JS rendering"),
+    actions: z
+      .array(z.object({
+        type: z.string(),
+        selector: z.string().optional(),
+        text: z.string().optional(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        ms: z.number().optional(),
+        timeout: z.number().optional(),
+      }))
+      .optional()
+      .describe("Pre-scrape browser actions to run on each page"),
   },
-  async ({ url, depth, max_pages, render }) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async ({ url, depth, max_pages, render, actions }: any) => {
     try {
       const result = (await startCrawl(url, {
         depth,
         maxPages: max_pages,
         render,
+        actions,
       })) as { id: string; status: string; pagesCrawled: number };
 
       const crawl = getCrawl(result.id);
@@ -440,19 +473,45 @@ server.tool(
 
 server.tool(
   "extract_data",
-  "AI-powered structured data extraction from a URL using a JSON schema",
+  "AI-powered structured data extraction from a URL using a JSON schema or free-text prompt",
   {
     url: z.string().describe("URL to extract data from"),
     schema: z
       .string()
+      .optional()
       .describe(
         'JSON schema describing fields to extract, e.g. {"price": "number", "title": "string"}'
       ),
+    prompt: z
+      .string()
+      .optional()
+      .describe("Free-text prompt for extraction, e.g. 'What is the main product price?'"),
   },
-  async ({ url, schema }) => {
+  async ({ url, schema, prompt }) => {
     try {
+      // First fetch the page text
+      const { fetchPage } = await import("../lib/fetcher.js");
+      const fetched = await fetchPage(url);
+      const { extractContent } = await import("../lib/extractor.js");
+      const extracted = extractContent(fetched.html, url);
+      const text = extracted.text;
+
+      if (prompt) {
+        const answer = await extractWithPrompt(text, prompt);
+        return {
+          content: [{ type: "text" as const, text: answer }],
+        };
+      }
+
+      if (!schema) {
+        return {
+          content: [{ type: "text" as const, text: "Error: either 'schema' or 'prompt' must be provided" }],
+          isError: true,
+        };
+      }
+
       const parsedSchema = JSON.parse(schema);
-      const result = (await extractWithAI(url, parsedSchema)) as unknown;
+      const result = (await extractWithAI(text, parsedSchema)) as unknown;
 
       return {
         content: [
@@ -620,6 +679,28 @@ server.tool(
   }
 );
 
+// ─── Tool: map_site ──────────────────────────────────────────────────────────
+
+server.tool(
+  "map_site",
+  "Quickly discover all URLs on a website without crawling content. Uses sitemap + link extraction.",
+  {
+    url: z.string().describe("Website URL to map"),
+    limit: z.number().optional().describe("Max URLs to return (default: 1000)"),
+    search: z.string().optional().describe("Filter URLs containing this string"),
+    allowSubdomains: z.boolean().optional(),
+  },
+  async ({ url, limit, search, allowSubdomains }) => {
+    try {
+      const { mapSite } = await import("../lib/crawler.js");
+      const urls = await mapSite(url, { limit, search, allowSubdomains });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ urls, count: urls.length }, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: String(err) }], isError: true };
+    }
+  }
+);
+
 // ─── Tool: get_stats ─────────────────────────────────────────────────────────
 
 server.tool(
@@ -649,6 +730,178 @@ server.tool(
       return { content: [{ type: "text" as const, text: JSON.stringify({ id: result.id, status: result.status, pagesCrawled: result.pagesCrawled }, null, 2) }] };
     } catch (err) {
       return { content: [{ type: "text" as const, text: String(err) }], isError: true };
+    }
+  }
+);
+
+// ─── Tool: register_webhook ──────────────────────────────────────────────────
+
+server.tool(
+  "register_webhook",
+  "Register a webhook endpoint to receive crawl events",
+  {
+    url: z.string().describe("The endpoint URL to send webhook events to"),
+    events: z
+      .array(z.string())
+      .optional()
+      .describe("Array of events to subscribe to (default: [\"crawl.completed\"])"),
+    secret: z
+      .string()
+      .optional()
+      .describe("HMAC secret for request signing (X-Crawl-Signature header)"),
+  },
+  ({ url, events, secret }) => {
+    try {
+      const webhook = createWebhook({
+        url,
+        events: events as Parameters<typeof createWebhook>[0]["events"],
+        secret,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(webhook, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool: list_webhooks ─────────────────────────────────────────────────────
+
+server.tool(
+  "list_webhooks",
+  "List all registered webhook endpoints",
+  {},
+  () => {
+    try {
+      const webhooks = listWebhooks();
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(webhooks, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool: delete_webhook ─────────────────────────────────────────────────────
+
+server.tool(
+  "delete_webhook",
+  "Delete a registered webhook endpoint",
+  {
+    id: z.string().describe("Webhook ID to delete"),
+  },
+  ({ id }) => {
+    try {
+      const webhook = getWebhook(id);
+      if (!webhook) {
+        return {
+          content: [{ type: "text" as const, text: `Webhook not found: ${id}` }],
+          isError: true,
+        };
+      }
+      const deleted = deleteWebhook(id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ deleted, id, url: webhook.url }, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool: get_webhook_deliveries ─────────────────────────────────────────────
+
+server.tool(
+  "get_webhook_deliveries",
+  "Get delivery history for a webhook endpoint",
+  {
+    id: z.string().describe("Webhook ID"),
+    limit: z.number().optional().describe("Maximum number of deliveries to return (default 50)"),
+  },
+  ({ id, limit }) => {
+    try {
+      const webhook = getWebhook(id);
+      if (!webhook) {
+        return {
+          content: [{ type: "text" as const, text: `Webhook not found: ${id}` }],
+          isError: true,
+        };
+      }
+      const deliveries = listDeliveries(id, limit ?? 50);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(deliveries, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool: extract_branding ──────────────────────────────────────────────────
+
+server.tool(
+  "extract_branding",
+  "Extract branding information (logo, favicon, colors, fonts, theme color) from a webpage",
+  {
+    url: z.string().describe("URL to extract branding from"),
+  },
+  async ({ url }) => {
+    try {
+      const { fetchPage } = await import("../lib/fetcher.js");
+      const fetched = await fetchPage(url);
+      const branding = extractBranding(fetched.html, url);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(branding, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool: search_web ────────────────────────────────────────────────────────
+
+server.tool(
+  "search_web",
+  "Search the web using Exa and return results (requires EXA_API_KEY)",
+  {
+    query: z.string().describe("Search query"),
+    limit: z.number().optional().describe("Number of results to return (default 10)"),
+    scrape: z.boolean().optional().describe("Also crawl and store each result URL"),
+  },
+  async ({ query, limit, scrape }) => {
+    try {
+      const results = await searchWeb(query, { limit, scrape });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
     }
   }
 );

@@ -1,7 +1,13 @@
 #!/usr/bin/env bun
-import { listCrawls, getCrawl } from "../db/crawls.js";
+import { listCrawls, getCrawl, createCrawl } from "../db/crawls.js";
 import { listPages, getPage, searchPages } from "../db/pages.js";
 import { getConfig } from "../lib/config.js";
+import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries, createDelivery } from "../db/webhooks.js";
+import { deliverWebhook, retryFailedDeliveries } from "../lib/webhooks.js";
+import { validateApiKey, extractBearerToken } from "../lib/api-auth.js";
+import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
+import { getUsageSummary, getRecentEvents } from "../db/usage.js";
+import type { ApiKey } from "../types/index.js";
 
 const PORT = parseInt(process.env.PORT ?? "19700", 10);
 
@@ -67,7 +73,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </main>
   <script>
     async function load() {
-      const [crawls] = await Promise.all([fetch('/api/crawls').then(r => r.json())]);
+      const [crawls] = await Promise.all([fetch('/v1/crawls').then(r => r.json())]);
       const completed = crawls.filter(c => c.status === 'completed').length;
       const running = crawls.filter(c => c.status === 'running').length;
       const totalPages = crawls.reduce((s, c) => s + (c.pagesCrawled || 0), 0);
@@ -79,7 +85,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       \`;
       document.getElementById('crawls-body').innerHTML = crawls.slice(0, 50).map(c => \`
         <tr>
-          <td><a href="/api/crawls/\${c.id}">\${c.url}</a></td>
+          <td><a href="/v1/crawls/\${c.id}">\${c.url}</a></td>
           <td><span class="badge \${c.status}">\${c.status}</span></td>
           <td>\${c.pagesCrawled ?? 0}</td>
           <td>\${c.depth}</td>
@@ -92,10 +98,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     async function doSearch() {
       const q = document.getElementById('q').value.trim();
       if (!q) { document.getElementById('results').innerHTML = ''; return; }
-      const data = await fetch(\`/api/search?q=\${encodeURIComponent(q)}&limit=10\`).then(r => r.json());
+      const data = await fetch(\`/v1/search?q=\${encodeURIComponent(q)}&limit=10\`).then(r => r.json());
       document.getElementById('results').innerHTML = data.map(r => \`
         <div class="result">
-          <a href="/api/pages/\${r.page.id}">\${r.page.title || r.page.url}</a>
+          <a href="/v1/pages/\${r.page.id}">\${r.page.title || r.page.url}</a>
           <p>\${r.page.url}</p>
           <p>\${r.snippet}</p>
         </div>
@@ -106,10 +112,38 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-function json(data: unknown, status = 200) {
+// ─── In-memory sliding window rate limiter ────────────────────────────────────
+
+const rateLimitWindows = new Map<string, { count: number; windowStart: number }>();
+
+function checkRateLimit(key: string, limitPerMinute: number): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const window = rateLimitWindows.get(key) ?? { count: 0, windowStart: now };
+
+  // Reset window if expired
+  if (now - window.windowStart > 60_000) {
+    window.count = 0;
+    window.windowStart = now;
+  }
+
+  window.count++;
+  rateLimitWindows.set(key, window);
+
+  const resetAt = window.windowStart + 60_000;
+  const remaining = Math.max(0, limitPerMinute - window.count);
+  return { allowed: window.count <= limitPerMinute, remaining, resetAt };
+}
+
+// ─── Response helpers ─────────────────────────────────────────────────────────
+
+function json(data: unknown, status = 200, extraHeaders?: Record<string, string>) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Version": "1",
+      ...extraHeaders,
+    },
   });
 }
 
@@ -121,47 +155,156 @@ function badRequest(msg: string) {
   return json({ error: msg }, 400);
 }
 
+function checkAuth(req: Request): { apiKey: ApiKey | null; unauthorized: boolean } {
+  const config = getConfig();
+  if (!config.requireAuth) return { apiKey: null, unauthorized: false };
+  const token = extractBearerToken(req);
+  if (!token) return { apiKey: null, unauthorized: true };
+  const key = validateApiKey(token);
+  if (!key) return { apiKey: null, unauthorized: true };
+  return { apiKey: key, unauthorized: false };
+}
+
 Bun.serve({
   port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
-    const path = url.pathname;
+    const rawPath = url.pathname;
     const method = req.method;
 
-    // Dashboard
-    if (path === "/" || path === "/dashboard") {
+    // Dashboard — serve on /dashboard
+    if (rawPath === "/dashboard") {
       return new Response(DASHBOARD_HTML, {
         headers: { "Content-Type": "text/html" },
       });
     }
 
-    // GET /api/crawls
-    if (path === "/api/crawls" && method === "GET") {
+    // Root — JSON info endpoint or dashboard redirect
+    if (rawPath === "/") {
+      const acceptHeader = req.headers.get("accept") ?? "";
+      if (acceptHeader.includes("application/json")) {
+        return json({
+          name: "open-crawl",
+          version: "0.2.0",
+          apiVersion: "v1",
+          port: PORT,
+        });
+      }
+      return new Response(DASHBOARD_HTML, {
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+
+    // Normalize path: /v1/* is the canonical form, /api/* is an alias
+    const path = rawPath.startsWith("/v1/") ? rawPath : rawPath.replace(/^\/api\//, "/v1/");
+
+    // Auth enforcement on API routes
+    if (path.startsWith("/v1/")) {
+      const { apiKey, unauthorized } = checkAuth(req);
+      if (unauthorized) return json({ error: "Unauthorized. Provide a valid API key in Authorization: Bearer <key>" }, 401);
+
+      // Rate limiting — applied after auth
+      const config = getConfig();
+      const rlLimit = config.rateLimit ?? 60;
+      const rlKey = apiKey?.id ?? req.headers.get("x-forwarded-for") ?? "anonymous";
+      const rl = checkRateLimit(rlKey, rlLimit);
+
+      if (!rl.allowed) {
+        return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(Math.ceil((rl.resetAt - Date.now()) / 1000)),
+            "X-RateLimit-Limit": String(rlLimit),
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": String(Math.ceil(rl.resetAt / 1000)),
+            "X-API-Version": "1",
+          },
+        });
+      }
+    }
+
+    // POST /v1/keys — create API key
+    if (path === "/v1/keys" && method === "POST") {
+      try {
+        const body = await req.json() as { name?: string; expiresAt?: string };
+        const { apiKey, rawKey } = createApiKey({ name: body.name, expiresAt: body.expiresAt });
+        return json({ key: rawKey, id: apiKey.id, prefix: apiKey.keyPrefix }, 201);
+      } catch (err) {
+        return json({ error: String(err) }, 500);
+      }
+    }
+
+    // GET /v1/keys — list API keys
+    if (path === "/v1/keys" && method === "GET") {
+      const keys = listApiKeys().map(({ keyHash: _kh, ...rest }) => rest);
+      return json(keys);
+    }
+
+    // DELETE /v1/keys/:id — revoke API key
+    const keyDeleteMatch = path.match(/^\/v1\/keys\/([^/]+)$/);
+    if (keyDeleteMatch && method === "DELETE") {
+      const revoked = revokeApiKey(keyDeleteMatch[1] as string);
+      if (!revoked) return notFound("API key not found");
+      return json({ revoked: true });
+    }
+
+    // GET /v1/usage — usage summary
+    if (path === "/v1/usage" && method === "GET") {
+      const apiKeyId = url.searchParams.get("api_key_id") ?? undefined;
+      const sinceParam = url.searchParams.get("since");
+      const since = sinceParam ? new Date(sinceParam) : undefined;
+      return json(getUsageSummary({ apiKeyId, since }));
+    }
+
+    // GET /v1/usage/events — recent usage events
+    if (path === "/v1/usage/events" && method === "GET") {
+      const apiKeyId = url.searchParams.get("api_key_id") ?? undefined;
+      const limit = parseInt(url.searchParams.get("limit") ?? "50");
+      return json(getRecentEvents({ apiKeyId, limit }));
+    }
+
+    // GET /v1/crawls — list crawls
+    if (path === "/v1/crawls" && method === "GET") {
       const status = url.searchParams.get("status") ?? undefined;
       const limit = parseInt(url.searchParams.get("limit") ?? "50");
       const offset = parseInt(url.searchParams.get("offset") ?? "0");
       return json(listCrawls({ status, limit, offset }));
     }
 
-    // POST /api/crawls
-    if (path === "/api/crawls" && method === "POST") {
+    // POST /v1/crawls — start a crawl (sync or async)
+    if (path === "/v1/crawls" && method === "POST") {
       try {
-        const body = await req.json() as { url?: string; depth?: number; maxPages?: number };
+        const body = await req.json() as { url?: string; depth?: number; maxPages?: number; async?: boolean };
         if (!body.url) return badRequest("url is required");
+
         const { startCrawl } = await import("../lib/crawler.js");
-        const crawl = await startCrawl({
-          url: body.url,
-          depth: body.depth,
-          maxPages: body.maxPages,
-        });
-        return json(crawl, 201);
+
+        if (body.async) {
+          // Create the crawl record first synchronously
+          const crawl = createCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages });
+          // Fire crawl in background — don't await
+          startCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages }).catch(() => {});
+          return json(crawl, 202); // 202 Accepted
+        } else {
+          const crawl = await startCrawl({ url: body.url, depth: body.depth, maxPages: body.maxPages });
+          return json(crawl, 201);
+        }
       } catch (err) {
         return json({ error: String(err) }, 500);
       }
     }
 
-    // GET /api/crawls/:id
-    const crawlMatch = path.match(/^\/api\/crawls\/([^/]+)$/);
+    // GET /v1/jobs — alias for GET /v1/crawls (shows all crawls including running)
+    if (path === "/v1/jobs" && method === "GET") {
+      const status = url.searchParams.get("status") ?? undefined;
+      const limit = parseInt(url.searchParams.get("limit") ?? "50");
+      const offset = parseInt(url.searchParams.get("offset") ?? "0");
+      return json(listCrawls({ status, limit, offset }));
+    }
+
+    // GET /v1/crawls/:id
+    const crawlMatch = path.match(/^\/v1\/crawls\/([^/]+)$/);
     if (crawlMatch && method === "GET") {
       const crawl = getCrawl(crawlMatch[1] as string);
       if (!crawl) return notFound("Crawl not found");
@@ -169,8 +312,8 @@ Bun.serve({
       return json({ ...crawl, pages });
     }
 
-    // GET /api/crawls/:id/pages
-    const crawlPagesMatch = path.match(/^\/api\/crawls\/([^/]+)\/pages$/);
+    // GET /v1/crawls/:id/pages
+    const crawlPagesMatch = path.match(/^\/v1\/crawls\/([^/]+)\/pages$/);
     if (crawlPagesMatch && method === "GET") {
       const crawl = getCrawl(crawlPagesMatch[1] as string);
       if (!crawl) return notFound("Crawl not found");
@@ -179,16 +322,16 @@ Bun.serve({
       return json(listPages(crawl.id, { limit, offset }));
     }
 
-    // GET /api/pages/:id
-    const pageMatch = path.match(/^\/api\/pages\/([^/]+)$/);
+    // GET /v1/pages/:id
+    const pageMatch = path.match(/^\/v1\/pages\/([^/]+)$/);
     if (pageMatch && method === "GET") {
       const page = getPage(pageMatch[1] as string);
       if (!page) return notFound("Page not found");
       return json(page);
     }
 
-    // GET /api/search
-    if (path === "/api/search" && method === "GET") {
+    // GET /v1/search
+    if (path === "/v1/search" && method === "GET") {
       const q = url.searchParams.get("q");
       if (!q) return badRequest("q is required");
       const domain = url.searchParams.get("domain") ?? undefined;
@@ -197,23 +340,159 @@ Bun.serve({
       return json(searchPages(q, { domain, crawlId, limit }));
     }
 
-    // GET /api/export/:crawlId
-    const exportMatch = path.match(/^\/api\/export\/([^/]+)$/);
+    // GET /v1/export/:crawlId
+    const exportMatch = path.match(/^\/v1\/export\/([^/]+)$/);
     if (exportMatch && method === "GET") {
       const format = (url.searchParams.get("format") ?? "json") as "json" | "md" | "csv";
       try {
         const { exportCrawl } = await import("../lib/export.js");
         const content = await exportCrawl(exportMatch[1] as string, format);
         const contentType = format === "json" ? "application/json" : format === "csv" ? "text/csv" : "text/markdown";
-        return new Response(content, { headers: { "Content-Type": contentType } });
+        return new Response(content, {
+          headers: {
+            "Content-Type": contentType,
+            "X-API-Version": "1",
+          },
+        });
       } catch (err) {
         return json({ error: String(err) }, 500);
       }
     }
 
-    // GET /api/config
-    if (path === "/api/config" && method === "GET") {
+    // GET /v1/config
+    if (path === "/v1/config" && method === "GET") {
       return json(getConfig());
+    }
+
+    // POST /v1/batch — batch scrape multiple URLs (always async)
+    if (path === "/v1/batch" && method === "POST") {
+      try {
+        const body = await req.json() as { urls?: string[]; options?: Record<string, unknown> };
+        if (!body.urls?.length) return badRequest("urls array is required");
+
+        const { batchCrawl } = await import("../lib/crawler.js");
+
+        // Always async — fire and return job ID
+        const crawl = createCrawl({ url: body.urls[0] as string, maxPages: body.urls.length });
+        batchCrawl(body.urls, body.options as Parameters<typeof batchCrawl>[1]).catch(() => {});
+
+        return json({ jobId: crawl.id, urlCount: body.urls.length, status: "queued" }, 202);
+      } catch (err) {
+        return json({ error: String(err) }, 500);
+      }
+    }
+
+    // GET /v1/batch/:id — alias to GET /v1/crawls/:id
+    const batchGetMatch = path.match(/^\/v1\/batch\/([^/]+)$/);
+    if (batchGetMatch && method === "GET") {
+      const crawl = getCrawl(batchGetMatch[1] as string);
+      if (!crawl) return notFound("Crawl not found");
+      const pages = listPages(crawl.id, { limit: 20 });
+      return json({ ...crawl, pages });
+    }
+
+    // POST /v1/map — discover all URLs on a website
+    if (path === "/v1/map" && method === "POST") {
+      try {
+        const body = await req.json() as { url?: string; limit?: number; search?: string; allowSubdomains?: boolean };
+        if (!body.url) return badRequest("url is required");
+
+        const { mapSite } = await import("../lib/crawler.js");
+        const urls = await mapSite(body.url, {
+          limit: body.limit ?? 1000,
+          search: body.search,
+          allowSubdomains: body.allowSubdomains,
+        });
+        return json({ urls, count: urls.length });
+      } catch (err) {
+        return json({ error: String(err) }, 500);
+      }
+    }
+
+    // GET /v1/webhooks
+    if (path === "/v1/webhooks" && method === "GET") {
+      return json(listWebhooks());
+    }
+
+    // POST /v1/webhooks
+    if (path === "/v1/webhooks" && method === "POST") {
+      try {
+        const body = await req.json() as { url?: string; events?: string[]; secret?: string };
+        if (!body.url) return badRequest("url is required");
+        const webhook = createWebhook({
+          url: body.url,
+          events: body.events as Parameters<typeof createWebhook>[0]["events"],
+          secret: body.secret,
+        });
+        return json(webhook, 201);
+      } catch (err) {
+        return json({ error: String(err) }, 500);
+      }
+    }
+
+    // POST /v1/webhooks/retry — retry all failed pending deliveries
+    if (path === "/v1/webhooks/retry" && method === "POST") {
+      try {
+        const retried = await retryFailedDeliveries();
+        return json({ retried });
+      } catch (err) {
+        return json({ error: String(err) }, 500);
+      }
+    }
+
+    // GET /v1/webhooks/:id
+    const webhookMatch = path.match(/^\/v1\/webhooks\/([^/]+)$/);
+    if (webhookMatch && method === "GET") {
+      const webhook = getWebhook(webhookMatch[1] as string);
+      if (!webhook) return notFound("Webhook not found");
+      return json(webhook);
+    }
+
+    // DELETE /v1/webhooks/:id
+    if (webhookMatch && method === "DELETE") {
+      const webhook = getWebhook(webhookMatch[1] as string);
+      if (!webhook) return notFound("Webhook not found");
+      deleteWebhook(webhookMatch[1] as string);
+      return json({ deleted: true, id: webhookMatch[1] });
+    }
+
+    // POST /v1/webhooks/:id/test
+    const webhookTestMatch = path.match(/^\/v1\/webhooks\/([^/]+)\/test$/);
+    if (webhookTestMatch && method === "POST") {
+      try {
+        const webhookId = webhookTestMatch[1] as string;
+        const webhook = getWebhook(webhookId);
+        if (!webhook) return notFound("Webhook not found");
+        const payload = JSON.stringify({
+          crawlId: "test",
+          url: "https://example.com",
+          pagesCrawled: 1,
+          status: "completed",
+          event: "crawl.completed",
+          timestamp: new Date().toISOString(),
+        });
+        const delivery = createDelivery({ webhookId, event: "crawl.completed", payload });
+        const success = await deliverWebhook(delivery.id);
+        const { getDelivery } = await import("../db/webhooks.js");
+        const updated = getDelivery(delivery.id);
+        return json({
+          success,
+          httpStatus: updated?.httpStatus ?? null,
+          responseBody: updated?.responseBody ?? null,
+        });
+      } catch (err) {
+        return json({ error: String(err) }, 500);
+      }
+    }
+
+    // GET /v1/webhooks/:id/deliveries
+    const webhookDeliveriesMatch = path.match(/^\/v1\/webhooks\/([^/]+)\/deliveries$/);
+    if (webhookDeliveriesMatch && method === "GET") {
+      const webhookId = webhookDeliveriesMatch[1] as string;
+      const webhook = getWebhook(webhookId);
+      if (!webhook) return notFound("Webhook not found");
+      const limit = parseInt(url.searchParams.get("limit") ?? "50");
+      return json(listDeliveries(webhookId, limit));
     }
 
     return notFound();

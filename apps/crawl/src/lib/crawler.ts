@@ -3,11 +3,14 @@ import type {
   CrawlOptions,
   CreateCrawlInput,
   Page,
+  BrowserAction,
 } from "../types/index.js";
 import { fetchPage } from "./fetcher.js";
 import { extractContent } from "./extractor.js";
+import { fetchSitemap } from "./sitemap.js";
 import { fetchRobotsTxt } from "./robots.js";
 import { isPdf, extractPdfText } from "./pdf.js";
+import { isDocx, extractDocxText } from "./docx.js";
 import { getConfig } from "./config.js";
 import { createCrawl, getCrawl, updateCrawl } from "../db/crawls.js";
 import {
@@ -18,6 +21,7 @@ import {
   updatePage,
 } from "../db/pages.js";
 import { diffTexts } from "./diff.js";
+import { fireWebhook } from "./webhooks.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -29,12 +33,13 @@ function extractDomain(url: string): string {
   }
 }
 
-function isSameDomain(url: string, domain: string): boolean {
+function isAllowedDomain(linkUrl: string, rootDomain: string, allowSubdomains?: boolean): boolean {
   try {
-    return new URL(url).hostname === domain;
-  } catch {
+    const hostname = new URL(linkUrl).hostname;
+    if (hostname === rootDomain) return true;
+    if (allowSubdomains && hostname.endsWith("." + rootDomain)) return true;
     return false;
-  }
+  } catch { return false; }
 }
 
 function normalizeUrl(url: string): string {
@@ -49,17 +54,38 @@ function normalizeUrl(url: string): string {
   }
 }
 
+function dedupeUrl(url: string, ignoreQueryParameters?: boolean): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    if (ignoreQueryParameters) { u.search = ""; }
+    return u.toString();
+  } catch { return url; }
+}
+
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function renderWithPlaywright(url: string): Promise<string> {
+async function renderWithPlaywright(url: string, actions?: BrowserAction[]): Promise<string> {
   try {
     const { chromium } = await import("playwright");
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+
+      if (actions && actions.length > 0) {
+        for (const action of actions) {
+          if (action.type === "click") await page.click(action.selector).catch(() => {});
+          else if (action.type === "type") await page.fill(action.selector, action.text).catch(() => {});
+          else if (action.type === "scroll") await page.evaluate(({ x, y }: { x?: number; y?: number }) => window.scrollTo(x ?? 0, y ?? 0), { x: action.x, y: action.y }).catch(() => {});
+          else if (action.type === "wait") await new Promise(r => setTimeout(r, action.ms));
+          else if (action.type === "waitForSelector") await page.waitForSelector(action.selector, { timeout: action.timeout ?? 5000 }).catch(() => {});
+          // "screenshot" action is a no-op in this context (screenshots are captured separately)
+        }
+      }
+
       const html = await page.content();
       return html;
     } finally {
@@ -138,14 +164,25 @@ export async function crawlUrl(
   const config = getConfig();
   const normalizedUrl = normalizeUrl(url);
 
-  // Use Playwright renderer if requested
+  // Check cache
+  const maxAge = options?.maxAge ?? config.defaultMaxAge ?? 0;
+  if (maxAge > 0) {
+    const existing = getPageByUrl(crawlId, normalizedUrl);
+    if (existing) {
+      const age = Date.now() - new Date(existing.crawledAt).getTime();
+      if (age < maxAge) return existing; // cache hit
+    }
+  }
+
+  // Use Playwright renderer if requested or if actions are provided
   let html: string;
   let statusCode = 200;
   let contentType = "text/html";
   let byteSize = 0;
 
-  if (options?.render ?? config.defaultRender) {
-    html = await renderWithPlaywright(normalizedUrl);
+  const hasActions = options?.actions && options.actions.length > 0;
+  if ((options?.render ?? config.defaultRender) || hasActions) {
+    html = await renderWithPlaywright(normalizedUrl, options?.actions);
     byteSize = Buffer.byteLength(html, "utf-8");
   } else {
     const fetchOptions = {
@@ -154,6 +191,8 @@ export async function crawlUrl(
       timeout: options?.timeout,
       userAgent: options?.userAgent,
       delay: options?.delay,
+      proxy: options?.proxy ?? config.defaultProxy,
+      skipTlsVerification: options?.skipTlsVerification,
     };
     const result = await fetchPage(normalizedUrl, fetchOptions);
     html = result.html;
@@ -176,16 +215,25 @@ export async function crawlUrl(
       textContent = "";
       markdownContent = "";
     }
+  } else if (isDocx(contentType)) {
+    try {
+      const docxResult = await extractDocxText(Buffer.from(html, "binary").buffer);
+      textContent = docxResult.text;
+      markdownContent = docxResult.text;
+      title = `Word Document (${docxResult.paragraphCount} paragraphs)`;
+    } catch {
+      textContent = ""; markdownContent = "";
+    }
   } else {
-    const extracted = extractContent(html, normalizedUrl);
+    const extracted = extractContent(html, normalizedUrl, options?.onlyMainContent);
     textContent = extracted.text;
     markdownContent = extracted.markdown;
     title = extracted.title ?? undefined;
   }
 
-  const extracted = isPdf(contentType)
+  const extracted = (isPdf(contentType) || isDocx(contentType))
     ? null
-    : extractContent(html, normalizedUrl);
+    : extractContent(html, normalizedUrl, options?.onlyMainContent);
 
   const pageInput = {
     crawlId,
@@ -203,6 +251,20 @@ export async function crawlUrl(
   };
 
   const page = createPage(pageInput);
+
+  // Record crawl_page usage — fire and forget, must never block crawling
+  import("../db/usage.js").then(({ recordUsage }) => {
+    recordUsage({ eventType: "crawl_page", crawlId, pageId: page.id });
+  }).catch(() => {});
+
+  // Fire page.crawled webhook — must not break the crawl
+  fireWebhook("page.crawled", {
+    crawlId,
+    pageId: page.id,
+    url: page.url,
+    statusCode: page.statusCode,
+    title: page.title,
+  }).catch(() => {});
 
   // Capture screenshot if requested
   if (options?.screenshot) {
@@ -236,6 +298,7 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
   // Create the crawl record (starts as 'pending', we immediately set to 'running')
   const crawl = createCrawl({ ...input, depth: maxDepth, maxPages });
   updateCrawl(crawl.id, { status: "running" });
+  fireWebhook("crawl.started", { crawlId: crawl.id, url: input.url }).catch(() => {});
 
   const domain = extractDomain(input.url);
   const visited = new Set<string>();
@@ -248,6 +311,8 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
     robotsChecker = robots.isAllowed.bind(robots);
   }
 
+  const crawlOptions = options;
+
   try {
     // BFS queue: [url, depth]
     const queue: Array<[string, number]> = [[normalizeUrl(input.url), 0]];
@@ -257,11 +322,13 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
       const batch = queue.splice(0, maxConcurrent);
       const promises = batch.map(async ([url, depth]) => {
         const normalized = normalizeUrl(url);
-        if (visited.has(normalized)) return [];
-        if (!isSameDomain(normalized, domain)) return [];
+        const deduped = dedupeUrl(normalized, crawlOptions?.ignoreQueryParameters);
+        if (visited.has(deduped)) return [];
+        const domainOk = crawlOptions?.allowExternalLinks || isAllowedDomain(normalized, domain, crawlOptions?.allowSubdomains);
+        if (!domainOk) return [];
         if (robotsChecker && !robotsChecker(normalized)) return [];
 
-        visited.add(normalized);
+        visited.add(deduped);
 
         // Skip if already crawled in this crawl
         const existing = getPageByUrl(crawl.id, normalized);
@@ -277,10 +344,12 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
           const links = page.metadata?.links ?? [];
           for (const link of links) {
             const linkNorm = normalizeUrl(link.href);
+            const linkDeduped = dedupeUrl(linkNorm, crawlOptions?.ignoreQueryParameters);
+            const linkDomainOk = crawlOptions?.allowExternalLinks || isAllowedDomain(linkNorm, domain, crawlOptions?.allowSubdomains);
             if (
               linkNorm &&
-              !visited.has(linkNorm) &&
-              isSameDomain(linkNorm, domain) &&
+              !visited.has(linkDeduped) &&
+              linkDomainOk &&
               shouldCrawlUrl(linkNorm)
             ) {
               // include filter — URL must match at least one pattern if include is set
@@ -309,7 +378,8 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
       for (const newLinks of results) {
         for (const entry of newLinks) {
           const [url] = entry;
-          if (!visited.has(normalizeUrl(url)) && pageCount + queue.length < maxPages) {
+          const entryDeduped = dedupeUrl(normalizeUrl(url), crawlOptions?.ignoreQueryParameters);
+          if (!visited.has(entryDeduped) && pageCount + queue.length < maxPages) {
             queue.push(entry);
           }
         }
@@ -322,12 +392,14 @@ export async function startCrawl(input: CreateCrawlInput): Promise<Crawl> {
       completedAt,
       pagesCrawled: pageCount,
     });
+    fireWebhook("crawl.completed", { crawlId: crawl.id, url: input.url, pagesCrawled: pageCount }).catch(() => {});
   } catch (err) {
     updateCrawl(crawl.id, {
       status: "failed",
       completedAt: new Date().toISOString(),
       errorMessage: err instanceof Error ? err.message : String(err),
     });
+    fireWebhook("crawl.failed", { crawlId: crawl.id, url: input.url, error: String(err) }).catch(() => {});
   }
 
   return getCrawl(crawl.id)!;
@@ -395,7 +467,8 @@ export async function resumeCrawl(crawlId: string): Promise<Crawl> {
 
   // Get already-visited URLs
   const existingPages = listPages(crawlId, { limit: 10000 });
-  const visited = new Set(existingPages.map(p => normalizeUrl(p.url)));
+  const resumeOptions = crawl.options;
+  const visited = new Set(existingPages.map(p => dedupeUrl(normalizeUrl(p.url), resumeOptions?.ignoreQueryParameters)));
 
   // Reset status to running
   updateCrawl(crawlId, { status: "running", updatedAt: new Date().toISOString() });
@@ -413,8 +486,9 @@ export async function resumeCrawl(crawlId: string): Promise<Crawl> {
       if (!item) break;
       const { url: currentUrl, depth } = item;
       const normalized = normalizeUrl(currentUrl);
-      if (visited.has(normalized)) continue;
-      visited.add(normalized);
+      const deduped = dedupeUrl(normalized, resumeOptions?.ignoreQueryParameters);
+      if (visited.has(deduped)) continue;
+      visited.add(deduped);
 
       try {
         await sleep(options.delay ?? config.defaultDelay);
@@ -425,7 +499,8 @@ export async function resumeCrawl(crawlId: string): Promise<Crawl> {
         if (depth < crawl.depth && page.metadata?.links) {
           const domain = extractDomain(crawl.url);
           for (const link of page.metadata.links) {
-            if (link.href && isSameDomain(link.href, domain) && !visited.has(normalizeUrl(link.href)) && shouldCrawlUrl(link.href)) {
+            const linkDeduped = dedupeUrl(normalizeUrl(link.href), resumeOptions?.ignoreQueryParameters);
+            if (link.href && isAllowedDomain(link.href, domain, resumeOptions?.allowSubdomains) && !visited.has(linkDeduped) && shouldCrawlUrl(link.href)) {
               queue.push({ url: link.href, depth: depth + 1 });
             }
           }
@@ -445,6 +520,62 @@ export async function resumeCrawl(crawlId: string): Promise<Crawl> {
   }
 
   return getCrawl(crawlId)!;
+}
+
+// ─── mapSite ──────────────────────────────────────────────────────────────────
+
+export async function mapSite(
+  url: string,
+  options?: { limit?: number; search?: string; allowSubdomains?: boolean }
+): Promise<string[]> {
+  const limit = options?.limit ?? 1000;
+  const rootDomain = extractDomain(url);
+  const allUrls = new Set<string>();
+
+  // 1. Try fetching sitemap first
+  try {
+    const sitemapUrl = new URL("/sitemap.xml", url).toString();
+    const entries = await fetchSitemap(sitemapUrl);
+    for (const entry of entries) {
+      if (isAllowedDomain(entry.url, rootDomain, options?.allowSubdomains)) {
+        allUrls.add(normalizeUrl(entry.url));
+      }
+    }
+  } catch {
+    // sitemap fetch failed — continue with homepage links only
+  }
+
+  // 2. Fetch the homepage and extract all links
+  try {
+    const result = await fetchPage(url);
+    if (result.html) {
+      const { extractContent: extract } = await import("./extractor.js");
+      const extracted = extract(result.html, url);
+      for (const link of extracted.links) {
+        if (
+          link.href &&
+          shouldCrawlUrl(link.href) &&
+          isAllowedDomain(link.href, rootDomain, options?.allowSubdomains)
+        ) {
+          allUrls.add(normalizeUrl(link.href));
+        }
+      }
+    }
+  } catch {
+    // homepage fetch failed — continue with sitemap results only
+  }
+
+  // 3. Filter by search pattern if provided
+  let results = Array.from(allUrls);
+  if (options?.search) {
+    const pattern = options.search;
+    results = results.filter(u => u.includes(pattern));
+  }
+
+  // 4. Cap at limit and sort
+  results = results.slice(0, limit).sort();
+
+  return results;
 }
 
 // ─── recrawl ──────────────────────────────────────────────────────────────────

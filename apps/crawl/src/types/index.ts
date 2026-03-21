@@ -2,6 +2,16 @@
 
 export type CrawlStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
+// ─── Browser Action Types ─────────────────────────────────────────────────────
+
+export type BrowserAction =
+  | { type: "click"; selector: string }
+  | { type: "type"; selector: string; text: string }
+  | { type: "scroll"; x?: number; y?: number }
+  | { type: "wait"; ms: number }
+  | { type: "waitForSelector"; selector: string; timeout?: number }
+  | { type: "screenshot" };
+
 export interface CrawlOptions {
   depth?: number;
   maxPages?: number;
@@ -18,6 +28,14 @@ export interface CrawlOptions {
   include?: string[];   // URL patterns to include (e.g. ["/blog", "/docs"])
   exclude?: string[];   // URL patterns to exclude (e.g. ["/admin", ".pdf"])
   onProgress?: (info: { url: string; pageNumber: number; total?: number }) => void;
+  ignoreQueryParameters?: boolean;
+  allowSubdomains?: boolean;
+  allowExternalLinks?: boolean;
+  onlyMainContent?: boolean; // default true
+  maxAge?: number; // ms — return cached page if crawled within this window
+  proxy?: string;
+  skipTlsVerification?: boolean;
+  actions?: BrowserAction[]; // pre-scrape browser actions (requires Playwright)
 }
 
 export interface Crawl {
@@ -101,6 +119,8 @@ export interface FetchOptions {
   maxRedirects?: number;
   userAgent?: string;
   delay?: number;
+  proxy?: string;
+  skipTlsVerification?: boolean;
 }
 
 export interface FetchResult {
@@ -149,6 +169,20 @@ export interface CrawlConfig {
   aiProvider: AiProvider;
   screenshotViewport: { width: number; height: number };
   dbPath?: string;
+  defaultMaxAge?: number; // 0 = disabled
+  defaultProxy?: string;
+  requireAuth?: boolean; // default false — require API key on /api/ and /v1/ routes
+  rateLimit?: number; // default 60 — max requests per minute per API key (or IP if no auth)
+}
+
+// ─── Branding Types ───────────────────────────────────────────────────────────
+
+export interface BrandingResult {
+  logo: string | null;
+  favicon: string | null;
+  themeColor: string | null;
+  fonts: string[];
+  colors: string[];
 }
 
 // ─── Search Types ────────────────────────────────────────────────────────────
@@ -178,4 +212,67 @@ export interface PageVersion {
   textContent: string | null;
   crawledAt: string;
   diffSummary: string | null;
+}
+
+// ─── Webhook Types ────────────────────────────────────────────────────────────
+
+export type WebhookEvent = "crawl.started" | "crawl.completed" | "crawl.failed" | "page.crawled";
+
+export interface Webhook {
+  id: string;
+  url: string;
+  events: WebhookEvent[];
+  secret: string | null;
+  active: boolean;
+  createdAt: string;
+  lastTriggeredAt: string | null;
+  failureCount: number;
+}
+
+// ─── API Key Types ────────────────────────────────────────────────────────────
+
+export interface ApiKey {
+  id: string;
+  keyHash: string;
+  keyPrefix: string;
+  name: string | null;
+  active: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+}
+
+// ─── Usage Types ─────────────────────────────────────────────────────────────
+
+export type UsageEventType = "crawl_page" | "map_url" | "search_result" | "ai_extraction" | "screenshot";
+
+export interface UsageEvent {
+  id: string;
+  apiKeyId: string | null;
+  eventType: UsageEventType;
+  credits: number;
+  crawlId: string | null;
+  pageId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface UsageSummary {
+  totalCredits: number;
+  byType: Record<string, { count: number; credits: number }>;
+  period: { from: string; to: string };
+}
+
+export interface WebhookDelivery {
+  id: string;
+  webhookId: string;
+  event: WebhookEvent;
+  payload: string;
+  status: "pending" | "delivered" | "failed";
+  httpStatus: number | null;
+  responseBody: string | null;
+  attemptCount: number;
+  nextRetryAt: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
 }

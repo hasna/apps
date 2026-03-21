@@ -9,14 +9,19 @@ import { getConfig, setConfig, resetConfig, getConfigPath } from "../lib/config.
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import { diffTexts } from "../lib/diff.js";
 import type { ExportFormat } from "../types/index.js";
+import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries, createDelivery } from "../db/webhooks.js";
+import { deliverWebhook } from "../lib/webhooks.js";
+import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
+import { getUsageSummary } from "../db/usage.js";
 
 // These modules exist at runtime but are not yet written; typed as any to avoid type errors.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { startCrawl, batchCrawl, recrawl, resumeCrawl } = await import("../lib/crawler.js").catch(() => ({
+const { startCrawl, batchCrawl, recrawl, resumeCrawl, mapSite } = await import("../lib/crawler.js").catch(() => ({
   startCrawl: null as any,
   batchCrawl: null as any,
   recrawl: null as any,
   resumeCrawl: null as any,
+  mapSite: null as any,
 }));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { checkAiProviders } = await import("../lib/ai.js").catch(() => ({
@@ -47,6 +52,15 @@ program
   .option("--extract <schema>", "AI extraction schema (JSON string)")
   .option("--include <pattern>", "only follow URLs matching this pattern (repeatable)")
   .option("--exclude <pattern>", "skip URLs matching this pattern (repeatable)")
+  .option("--ignore-query-params", "treat URLs differing only in query string as the same")
+  .option("--allow-subdomains", "also crawl subdomains of the root domain")
+  .option("--allow-external", "follow links to external domains")
+  .option("--no-main-content", "disable main-content stripping (include navs, headers, footers)")
+  .option("--max-age <ms>", "return cached page if crawled within this window (ms)")
+  .option("--proxy <url>", "HTTP/HTTPS proxy URL")
+  .option("--skip-tls", "disable TLS certificate verification")
+  .option("--actions <json>", "pre-scrape browser actions JSON array")
+  .option("--prompt <text>", "run AI prompt against first page after crawl")
   .option("--json", "output as JSON")
   .action(async (url: string, opts: {
     depth: string;
@@ -57,6 +71,15 @@ program
     extract?: string;
     include?: string | string[];
     exclude?: string | string[];
+    ignoreQueryParams?: boolean;
+    allowSubdomains?: boolean;
+    allowExternal?: boolean;
+    mainContent?: boolean; // commander negates --no-main-content to mainContent=false
+    maxAge?: string;
+    proxy?: string;
+    skipTls?: boolean;
+    actions?: string;
+    prompt?: string;
     json?: boolean;
   }) => {
     try {
@@ -82,6 +105,14 @@ program
           delay,
           include: opts.include ? [opts.include].flat() : undefined,
           exclude: opts.exclude ? [opts.exclude].flat() : undefined,
+          ignoreQueryParameters: opts.ignoreQueryParams,
+          allowSubdomains: opts.allowSubdomains,
+          allowExternalLinks: opts.allowExternal,
+          onlyMainContent: opts.mainContent !== false ? true : false,
+          maxAge: opts.maxAge ? parseInt(opts.maxAge, 10) : undefined,
+          proxy: opts.proxy,
+          skipTlsVerification: opts.skipTls,
+          actions: opts.actions ? JSON.parse(opts.actions) : undefined,
           onProgress: opts.json ? undefined : ({ url: pageUrl, pageNumber }: { url: string; pageNumber: number }) => {
             process.stderr.write(chalk.gray(`  [${pageNumber}] ${pageUrl.slice(0, 90)}\n`));
           },
@@ -103,6 +134,16 @@ program
       process.stderr.write(`  ${chalk.bold("ID:")}     ${chalk.cyan(crawl.id)}\n`);
       process.stderr.write(`  ${chalk.bold("Status:")} ${formatStatus(crawl.status)}\n`);
       process.stderr.write(`  ${chalk.bold("Pages:")}  ${chalk.white(String(crawl.pagesCrawled))}\n`);
+
+      // If --prompt is provided, run AI extraction on the first page
+      if (opts.prompt) {
+        const firstPages = listPages(crawl.id, { limit: 1 });
+        if (firstPages[0]?.textContent) {
+          const { extractWithPrompt } = await import("../lib/ai.js");
+          const answer = await extractWithPrompt(firstPages[0].textContent, opts.prompt);
+          process.stdout.write(answer + "\n");
+        }
+      }
 
       const pages = listPages(crawl.id, { limit: 5 });
       if (pages.length > 0) {
@@ -172,8 +213,9 @@ program
   .action((opts: { json?: boolean }) => {
     try {
       const s = getGlobalStats();
+      const usage = getUsageSummary();
       if (opts.json) {
-        process.stdout.write(JSON.stringify(s, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ ...s, usage }, null, 2) + "\n");
         return;
       }
       process.stderr.write(chalk.bold("open-crawl stats\n") + chalk.gray("─".repeat(50)) + "\n");
@@ -186,6 +228,13 @@ program
         process.stderr.write("\n" + chalk.bold("Top domains:\n"));
         for (const d of s.topDomains) {
           process.stderr.write(`  ${chalk.blue((d.domain ?? "unknown").padEnd(40))} ${chalk.gray(String(d.pages) + " crawls")}\n`);
+        }
+      }
+      process.stderr.write("\n" + chalk.bold("Credits used:\n"));
+      process.stderr.write(`  ${chalk.cyan("Total credits:".padEnd(25))} ${chalk.white(String(usage.totalCredits))}\n`);
+      if (Object.keys(usage.byType).length > 0) {
+        for (const [type, info] of Object.entries(usage.byType)) {
+          process.stderr.write(`  ${chalk.cyan(type.padEnd(25))} ${chalk.white(String(info.credits))} credits (${info.count} events)\n`);
         }
       }
     } catch (err) {
@@ -530,6 +579,47 @@ program
       for (const entry of entries) {
         process.stdout.write(entry.url + "\n");
       }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── map <url> ────────────────────────────────────────────────────────────────
+
+program
+  .command("map <url>")
+  .description("Discover all URLs on a site without crawling content")
+  .option("--limit <n>", "max URLs to return", "1000")
+  .option("--search <pattern>", "filter URLs containing this string")
+  .option("--allow-subdomains", "include subdomains")
+  .option("--json", "output as JSON")
+  .action(async (url: string, opts: {
+    limit: string;
+    search?: string;
+    allowSubdomains?: boolean;
+    json?: boolean;
+  }) => {
+    try {
+      if (!opts.json) {
+        process.stderr.write(chalk.cyan(`Mapping ${url}...\n`));
+      }
+
+      const urls = await mapSite(url, {
+        limit: parseInt(opts.limit, 10),
+        search: opts.search,
+        allowSubdomains: opts.allowSubdomains,
+      });
+
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(urls, null, 2) + "\n");
+        return;
+      }
+
+      for (const u of urls) {
+        process.stdout.write(u + "\n");
+      }
+      process.stderr.write(chalk.gray(`\n${urls.length} URL(s) found\n`));
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
       process.exit(1);
@@ -947,6 +1037,339 @@ program
       }
     }
   );
+
+// ─── webhook ─────────────────────────────────────────────────────────────────
+
+const webhookCmd = program.command("webhook").description("Manage webhooks");
+
+webhookCmd
+  .command("add <url>")
+  .description("Register a webhook endpoint")
+  .option("--events <events>", "comma-separated events (default: crawl.completed)", "crawl.completed")
+  .option("--secret <secret>", "HMAC signing secret")
+  .option("--json", "output as JSON")
+  .action(async (url: string, opts: { events: string; secret?: string; json?: boolean }) => {
+    try {
+      const events = opts.events.split(",").map(e => e.trim()) as Parameters<typeof createWebhook>[0]["events"];
+      const webhook = createWebhook({ url, events, secret: opts.secret });
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(webhook, null, 2) + "\n");
+        return;
+      }
+      process.stderr.write(
+        chalk.green(`✓ Webhook created: ${chalk.cyan(webhook.id.slice(0, 8))} → ${chalk.blue(url)} [events: ${events?.join(", ")}]\n`)
+      );
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command("list")
+  .description("List all registered webhooks")
+  .option("--json", "output as JSON")
+  .action((opts: { json?: boolean }) => {
+    try {
+      const webhooks = listWebhooks();
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(webhooks, null, 2) + "\n");
+        return;
+      }
+      if (webhooks.length === 0) {
+        process.stderr.write(chalk.gray("No webhooks registered.\n"));
+        return;
+      }
+      process.stderr.write(chalk.bold(`${webhooks.length} webhook(s):\n\n`));
+      process.stderr.write(
+        chalk.gray(
+          `  ${"ID".padEnd(8)}  ${"URL".padEnd(50)}  ${"Events".padEnd(30)}  ${"Active".padEnd(6)}  ${"Failures".padEnd(8)}  Last triggered\n`
+        )
+      );
+      process.stderr.write(chalk.gray("  " + "─".repeat(120) + "\n"));
+      for (const w of webhooks) {
+        const activeStr = w.active ? chalk.green("yes") : chalk.red("no");
+        const failStr = w.failureCount > 0 ? chalk.yellow(String(w.failureCount)) : chalk.gray("0");
+        const lastStr = w.lastTriggeredAt ? chalk.gray(w.lastTriggeredAt.slice(0, 19)) : chalk.gray("never");
+        process.stderr.write(
+          `  ${chalk.cyan(w.id.slice(0, 8))}  ` +
+          `${chalk.blue(w.url.slice(0, 50).padEnd(50))}  ` +
+          `${w.events.join(",").slice(0, 30).padEnd(30)}  ` +
+          `${activeStr.padEnd(6)}  ` +
+          `${failStr.padEnd(8)}  ` +
+          `${lastStr}\n`
+        );
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command("delete <webhook-id>")
+  .description("Remove a webhook")
+  .action((id: string) => {
+    try {
+      const deleted = deleteWebhook(id);
+      if (!deleted) {
+        process.stderr.write(chalk.red(`Webhook not found: ${id}\n`));
+        process.exit(1);
+      }
+      process.stderr.write(chalk.green(`✓ Deleted webhook ${chalk.cyan(id.slice(0, 8))}\n`));
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command("test <webhook-id>")
+  .description("Send a test event to a webhook endpoint")
+  .option("--json", "output as JSON")
+  .action(async (id: string, opts: { json?: boolean }) => {
+    try {
+      const webhook = getWebhook(id);
+      if (!webhook) {
+        process.stderr.write(chalk.red(`Webhook not found: ${id}\n`));
+        process.exit(1);
+      }
+      const payload = JSON.stringify({
+        crawlId: "test",
+        url: "https://example.com",
+        pagesCrawled: 1,
+        status: "completed",
+        event: "crawl.completed",
+        timestamp: new Date().toISOString(),
+      });
+      const delivery = createDelivery({ webhookId: id, event: "crawl.completed", payload });
+      const success = await deliverWebhook(delivery.id);
+      const { getDelivery } = await import("../db/webhooks.js");
+      const updated = getDelivery(delivery.id);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ success, httpStatus: updated?.httpStatus, responseBody: updated?.responseBody }) + "\n");
+        return;
+      }
+      if (success) {
+        process.stderr.write(chalk.green(`✓ Test delivery succeeded`) + chalk.gray(` (HTTP ${updated?.httpStatus})\n`));
+      } else {
+        process.stderr.write(chalk.red(`✗ Test delivery failed`) + chalk.gray(` (HTTP ${updated?.httpStatus ?? "none"})\n`));
+        if (updated?.responseBody) {
+          process.stderr.write(chalk.gray(`  Response: ${updated.responseBody.slice(0, 200)}\n`));
+        }
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+webhookCmd
+  .command("deliveries <webhook-id>")
+  .description("Show delivery history for a webhook")
+  .option("--limit <n>", "max deliveries to show", "20")
+  .option("--json", "output as JSON")
+  .action((id: string, opts: { limit: string; json?: boolean }) => {
+    try {
+      const webhook = getWebhook(id);
+      if (!webhook) {
+        process.stderr.write(chalk.red(`Webhook not found: ${id}\n`));
+        process.exit(1);
+      }
+      const deliveries = listDeliveries(id, parseInt(opts.limit, 10));
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(deliveries, null, 2) + "\n");
+        return;
+      }
+      if (deliveries.length === 0) {
+        process.stderr.write(chalk.gray("No deliveries found.\n"));
+        return;
+      }
+      process.stderr.write(chalk.bold(`${deliveries.length} delivery/deliveries for webhook ${chalk.cyan(id.slice(0, 8))}:\n\n`));
+      for (const d of deliveries) {
+        const statusFn =
+          d.status === "delivered" ? chalk.green :
+          d.status === "failed"    ? chalk.red    :
+                                     chalk.yellow;
+        const statusStr = statusFn(d.status.padEnd(10));
+        const httpStr = d.httpStatus ? chalk.gray(`HTTP ${d.httpStatus}`) : chalk.gray("no response");
+        process.stderr.write(
+          `  ${statusStr}  attempts=${d.attemptCount}  ${httpStr}  ${chalk.gray(d.createdAt.slice(0, 19))}\n`
+        );
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── api-key ──────────────────────────────────────────────────────────────────
+
+const apiKeyCmd = program.command("api-key").description("Manage API keys");
+
+apiKeyCmd
+  .command("create")
+  .description("Create a new API key")
+  .option("--name <name>", "descriptive name for the key")
+  .option("--expires <duration>", "expiry duration (e.g. 30d, 7d, 1y)")
+  .option("--json", "output as JSON")
+  .action((opts: { name?: string; expires?: string; json?: boolean }) => {
+    try {
+      let expiresAt: string | undefined;
+      if (opts.expires) {
+        const match = opts.expires.match(/^(\d+)(d|y)$/);
+        if (!match) {
+          process.stderr.write(chalk.red(`Invalid expires format: ${opts.expires}. Use e.g. 30d, 7d, 1y\n`));
+          process.exit(1);
+        }
+        const amount = parseInt(match[1] as string, 10);
+        const unit = match[2] as string;
+        const ms = unit === "y" ? amount * 365 * 86400000 : amount * 86400000;
+        expiresAt = new Date(Date.now() + ms).toISOString();
+      }
+
+      const { apiKey, rawKey } = createApiKey({ name: opts.name, expiresAt });
+
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ key: rawKey, id: apiKey.id, prefix: apiKey.keyPrefix }) + "\n");
+        return;
+      }
+
+      process.stderr.write(chalk.green("✓ API key created\n"));
+      process.stderr.write(chalk.yellow("⚠  Save this key — it won't be shown again\n\n"));
+      process.stderr.write(`  ${chalk.bold("Key:")}    ${chalk.cyan(rawKey)}\n`);
+      process.stderr.write(`  ${chalk.bold("ID:")}     ${chalk.gray(apiKey.id)}\n`);
+      process.stderr.write(`  ${chalk.bold("Prefix:")} ${chalk.gray(apiKey.keyPrefix)}\n`);
+      if (apiKey.name) process.stderr.write(`  ${chalk.bold("Name:")}   ${chalk.white(apiKey.name)}\n`);
+      if (apiKey.expiresAt) process.stderr.write(`  ${chalk.bold("Expires:")} ${chalk.white(apiKey.expiresAt)}\n`);
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+apiKeyCmd
+  .command("list")
+  .description("List all API keys")
+  .option("--json", "output as JSON")
+  .action((opts: { json?: boolean }) => {
+    try {
+      const keys = listApiKeys();
+      if (opts.json) {
+        // Never return key hash
+        process.stdout.write(JSON.stringify(keys.map(({ keyHash: _kh, ...rest }) => rest), null, 2) + "\n");
+        return;
+      }
+      if (keys.length === 0) {
+        process.stderr.write(chalk.gray("No API keys found.\n"));
+        return;
+      }
+      process.stderr.write(chalk.bold(`${keys.length} API key(s):\n\n`));
+      for (const key of keys) {
+        const status = key.active ? chalk.green("active") : chalk.red("revoked");
+        const expired = key.expiresAt && new Date(key.expiresAt) < new Date();
+        process.stderr.write(
+          `  ${chalk.cyan(key.id.slice(0, 8))}  ` +
+          `${chalk.gray(key.keyPrefix + "...")}  ` +
+          `${status}${expired ? chalk.yellow(" (expired)") : ""}` +
+          (key.name ? chalk.gray(`  — ${key.name}`) : "") +
+          "\n"
+        );
+        if (key.lastUsedAt) {
+          process.stderr.write(chalk.gray(`           Last used: ${key.lastUsedAt}\n`));
+        }
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+apiKeyCmd
+  .command("revoke <id>")
+  .description("Revoke an API key")
+  .option("--json", "output as JSON")
+  .action((id: string, opts: { json?: boolean }) => {
+    try {
+      const revoked = revokeApiKey(id);
+      if (!revoked) {
+        process.stderr.write(chalk.red(`API key not found: ${id}\n`));
+        process.exit(1);
+      }
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ revoked: true, id }) + "\n");
+        return;
+      }
+      process.stderr.write(chalk.green(`✓ Revoked API key ${id.slice(0, 8)}\n`));
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── brand <url> ─────────────────────────────────────────────────────────────
+
+program
+  .command("brand <url>")
+  .description("Extract branding (logo, colors, fonts) from a webpage")
+  .option("--json", "output as JSON")
+  .action(async (url: string, opts: { json?: boolean }) => {
+    try {
+      const { fetchPage } = await import("../lib/fetcher.js");
+      const { extractBranding } = await import("../lib/branding.js");
+      const result = await fetchPage(url);
+      const branding = extractBranding(result.html, url);
+      if (opts.json) { process.stdout.write(JSON.stringify(branding, null, 2) + "\n"); return; }
+      process.stderr.write(chalk.bold("Branding\n") + chalk.gray("─".repeat(40)) + "\n");
+      if (branding.favicon) process.stderr.write(`  ${chalk.cyan("Favicon:")}    ${branding.favicon}\n`);
+      if (branding.logo)    process.stderr.write(`  ${chalk.cyan("Logo:")}       ${branding.logo}\n`);
+      if (branding.themeColor) process.stderr.write(`  ${chalk.cyan("Color:")}      ${branding.themeColor}\n`);
+      if (branding.fonts.length) process.stderr.write(`  ${chalk.cyan("Fonts:")}      ${branding.fonts.join(", ")}\n`);
+      if (branding.colors.length) process.stderr.write(`  ${chalk.cyan("CSS colors:")} ${branding.colors.slice(0, 5).join(" ")}\n`);
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── search-web <query> ───────────────────────────────────────────────────────
+
+program
+  .command("search-web <query>")
+  .description("Search the web using Exa and optionally scrape results")
+  .option("--limit <n>", "number of results", "10")
+  .option("--scrape", "also crawl each result URL")
+  .option("--json", "output as JSON")
+  .action(async (query: string, opts: { limit: string; scrape?: boolean; json?: boolean }) => {
+    try {
+      const { searchWeb } = await import("../lib/search-web.js");
+      if (!opts.json) {
+        process.stderr.write(chalk.cyan(`Searching: ${query}\n`));
+      }
+      const results = await searchWeb(query, {
+        limit: parseInt(opts.limit, 10),
+        scrape: opts.scrape,
+      });
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(results, null, 2) + "\n");
+        return;
+      }
+      if (results.length === 0) {
+        process.stderr.write(chalk.gray("No results found.\n"));
+        return;
+      }
+      process.stderr.write(chalk.bold(`${results.length} result(s):\n\n`));
+      for (const r of results) {
+        process.stderr.write(`  ${chalk.blue(r.url)}\n`);
+        process.stderr.write(`  ${chalk.bold(r.title)}\n`);
+        if (r.snippet) process.stderr.write(`  ${chalk.gray(r.snippet.slice(0, 120))}\n`);
+        process.stderr.write("\n");
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

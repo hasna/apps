@@ -153,7 +153,12 @@ Return only the JSON object, no explanation, no markdown fences.`;
   const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
   try {
-    return JSON.parse(cleaned) as T;
+    const result = JSON.parse(cleaned) as T;
+    // Record ai_extraction usage — fire and forget, must never block extraction
+    import("../db/usage.js").then(({ recordUsage }) => {
+      recordUsage({ eventType: "ai_extraction" });
+    }).catch(() => {});
+    return result;
   } catch {
     throw new Error(`AI returned invalid JSON: ${cleaned.slice(0, 200)}`);
   }
@@ -171,6 +176,17 @@ export async function summarizePage(
   const userPrompt = text.slice(0, 8000);
 
   return callWithFallback(provider, systemPrompt, userPrompt, options?.model);
+}
+
+export async function extractWithPrompt(
+  text: string,
+  prompt: string,
+  options?: AiExtractionOptions
+): Promise<string> {
+  const provider = resolveProvider(options);
+  const systemPrompt = "You are a data extraction assistant. Answer questions about the provided webpage content concisely and accurately.";
+  const userMessage = `Webpage content:\n\n${text.slice(0, 12000)}\n\n---\n\nTask: ${prompt}`;
+  return callWithFallback(provider, systemPrompt, userMessage, options?.model);
 }
 
 export async function classifyPage(

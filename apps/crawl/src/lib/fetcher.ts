@@ -63,6 +63,10 @@ export async function fetchPage(
   const maxRedirects = options.maxRedirects ?? 10;
   const delay = options.delay;
 
+  // Proxy: use option, then env var fallback, then config fallback
+  const proxy = options.proxy ?? process.env["CRAWL_PROXY"] ?? config.defaultProxy;
+  const skipTls = options.skipTlsVerification ?? false;
+
   const domain = extractDomain(url);
 
   // Apply per-domain rate limiting
@@ -100,13 +104,19 @@ export async function fetchPage(
       let redirectCount = 0;
       let response: Response;
 
+      // Build extra fetch options for proxy and TLS
+      const extraFetchOptions: Record<string, unknown> = {};
+      if (proxy) extraFetchOptions["proxy"] = proxy;
+      if (skipTls) extraFetchOptions["tls"] = { rejectUnauthorized: false };
+
       // Manual redirect following to track final URL
       while (true) {
         response = await fetch(currentUrl, {
           headers: requestHeaders,
           redirect: "manual",
           signal: controller.signal,
-        });
+          ...extraFetchOptions,
+        } as RequestInit);
 
         if (
           (response.status === 301 ||
