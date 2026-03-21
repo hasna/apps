@@ -122,21 +122,32 @@ export function decrypt(ciphertext: string, iv: string): string {
   return decrypted;
 }
 
-export function encryptFile(sourcePath: string, entityId: string): string {
-  const key = requireVault();
+/**
+ * Store a file attachment (PLAIN, not encrypted) so agents can access it directly.
+ * Text values in the DB are encrypted; file attachments are plain for agent access.
+ * Returns the destination path.
+ */
+export function storeFile(sourcePath: string, entityId: string): string {
   if (!existsSync(DOCUMENTS_DIR)) mkdirSync(DOCUMENTS_DIR, { recursive: true });
+  const ext = sourcePath.split(".").pop() || "bin";
+  const destPath = join(DOCUMENTS_DIR, `${entityId}.${ext}`);
   const data = readFileSync(sourcePath);
-  const iv = randomBytes(16);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  const destPath = join(DOCUMENTS_DIR, `${entityId}.enc`);
-  // Write: iv (16 bytes) + authTag (16 bytes) + encrypted data
-  const output = Buffer.concat([iv, authTag, encrypted]);
-  writeFileSync(destPath, output);
+  writeFileSync(destPath, data);
   return destPath;
 }
 
+/**
+ * Get the file path for a document attachment. Returns null if no file exists.
+ */
+export function getDocumentFilePath(entityId: string): string | null {
+  if (!existsSync(DOCUMENTS_DIR)) return null;
+  const { readdirSync } = require("node:fs") as typeof import("node:fs");
+  const files = readdirSync(DOCUMENTS_DIR);
+  const match = files.find((f: string) => f.startsWith(`${entityId}.`) && !f.endsWith(".enc"));
+  return match ? join(DOCUMENTS_DIR, match) : null;
+}
+
+// Legacy encrypted file support (for any files encrypted before v0.6.3)
 export function decryptFile(encPath: string): Buffer {
   const key = requireVault();
   const data = readFileSync(encPath);

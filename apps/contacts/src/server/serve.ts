@@ -268,6 +268,29 @@ async function handleExport(req: Request): Promise<Response> {
   });
 }
 
+// ─── /api/documents/:id/file — serve plain document attachments ───────────────
+
+function handleDocumentFiles(req: Request, segments: string[]): Response {
+  const docId = segments[2]; // /api/documents/:id
+  const sub = segments[3];   // /api/documents/:id/file
+
+  if (!docId) return apiError("Document ID required");
+  if (req.method !== "GET") return apiError("Method not allowed", 405);
+
+  if (sub === "file") {
+    const db = getDatabase();
+    const row = db.query(`SELECT encrypted_file_path FROM contact_documents WHERE id = ?`).get(docId) as { encrypted_file_path: string | null } | null;
+    if (!row?.encrypted_file_path || !existsSync(row.encrypted_file_path)) {
+      return new Response("No file attachment", { status: 404 });
+    }
+    return new Response(Bun.file(row.encrypted_file_path), {
+      headers: { "Cache-Control": "public, max-age=3600" },
+    });
+  }
+
+  return apiError("Use /api/documents/:id/file to get the attachment", 400);
+}
+
 // ─── /api/images ─────────────────────────────────────────────────────────────
 
 async function handleImages(req: Request, _url: URL, segments: string[]): Promise<Response> {
@@ -384,6 +407,9 @@ export function startServer(port: number): void {
               break;
             case "images":
               response = await handleImages(req, url, segments);
+              break;
+            case "documents":
+              response = handleDocumentFiles(req, segments);
               break;
             default:
               response = apiError("Not found", 404);

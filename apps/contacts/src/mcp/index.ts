@@ -1670,10 +1670,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: "vault_lock", description: "Lock the vault, clearing the encryption key from memory.", inputSchema: { type: "object", properties: {} } },
     { name: "vault_status", description: "Check vault initialization and lock status.", inputSchema: { type: "object", properties: {} } },
     // Documents
-    { name: "add_document", description: "Store an encrypted document for a contact (passport, tax_id, medical_record, etc.). Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, doc_type: { type: "string", enum: [...DOCUMENT_TYPES] }, label: { type: "string" }, value: { type: "string", description: "Plaintext value (will be encrypted)" }, file_path: { type: "string", description: "Optional file to encrypt and attach" }, metadata: { type: "object" }, expires_at: { type: "string" } }, required: ["contact_id", "doc_type", "value"] } },
-    { name: "list_documents", description: "List documents for a contact (metadata only — no decryption needed).", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
-    { name: "get_document", description: "Get a document with decrypted value. Vault must be unlocked.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
-    { name: "delete_document", description: "Delete a document and its encrypted file.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
+    { name: "add_document", description: "Store a document for a contact (passport, tax_id, medical_record, etc.). Text values are encrypted; file attachments are stored plain so agents can read them. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, doc_type: { type: "string", enum: [...DOCUMENT_TYPES] }, label: { type: "string" }, value: { type: "string", description: "Plaintext value (will be encrypted in DB)" }, file_path: { type: "string", description: "File to attach — stored PLAIN in ~/.contacts/documents/ for agent access" }, metadata: { type: "object" }, expires_at: { type: "string" } }, required: ["contact_id", "doc_type", "value"] } },
+    { name: "list_documents", description: "List documents for a contact (metadata only — no decryption needed). Returns file_path for attachments so agents can read them directly.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "get_document", description: "Get a document with decrypted value and file_path. Vault must be unlocked for the text value; file is always accessible.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
+    { name: "get_document_file", description: "Get the plain file path for a document attachment. Agents can read this file directly — it is NOT encrypted. Returns null if no file attached.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
+    { name: "delete_document", description: "Delete a document and its file attachment.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
     // Document scanner
     { name: "scan_document", description: "Scan a document image using AI vision (OpenAI GPT-4o) to extract structured data. Optionally auto-save to vault.", inputSchema: { type: "object", properties: { image: { type: "string", description: "File path or base64 image data" }, doc_type: { type: "string", description: "Hint: passport, national_id, drivers_license, etc." }, contact_id: { type: "string", description: "Contact to associate scanned document with" }, auto_save: { type: "boolean", description: "Automatically save extracted data as a vault document" } }, required: ["image"] } },
     // Health data
@@ -3491,6 +3492,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "get_document": {
         const doc = getDocument(a.document_id as string);
         return { content: [{ type: "text", text: JSON.stringify(doc, null, 2) }] };
+      }
+
+      case "get_document_file": {
+        const db = getDatabase();
+        const row = db.query(`SELECT encrypted_file_path FROM contact_documents WHERE id = ?`).get(a.document_id as string) as { encrypted_file_path: string | null } | null;
+        if (!row) return { content: [{ type: "text", text: JSON.stringify({ error: "Document not found" }) }], isError: true };
+        const filePath = row.encrypted_file_path;
+        return { content: [{ type: "text", text: JSON.stringify({ document_id: a.document_id, file_path: filePath, has_file: !!filePath }) }] };
       }
 
       case "delete_document": {

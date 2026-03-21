@@ -388,7 +388,7 @@ export { findOrCreateContact } from "./db/contacts.js";
 export { saveImage, getImagePath, getImageAsBase64, deleteImage, listImages, getImagesDir } from "./lib/images.js";
 
 // Vault (CON-00085)
-export { initVault, unlockVault, lockVault, isVaultUnlocked, isVaultInitialized, encrypt, decrypt, encryptFile, decryptFile, requireVault, getDocumentsDir } from "./lib/vault.js";
+export { initVault, unlockVault, lockVault, isVaultUnlocked, isVaultInitialized, encrypt, decrypt, storeFile, getDocumentFilePath, decryptFile, requireVault, getDocumentsDir } from "./lib/vault.js";
 
 // Documents (CON-00085)
 export { addDocument, getDocument, listDocuments, deleteDocument, DOCUMENT_TYPES } from "./db/documents.js";

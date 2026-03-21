@@ -1,5 +1,5 @@
 import { getDatabase, uuid, now } from "./database.js";
-import { encrypt, decrypt, encryptFile, decryptFile, requireVault, getDocumentsDir } from "../lib/vault.js";
+import { encrypt, decrypt, storeFile, getDocumentFilePath, requireVault, getDocumentsDir } from "../lib/vault.js";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -20,6 +20,7 @@ export interface ContactDocument {
   label: string | null;
   value: string; // decrypted
   has_file: boolean;
+  file_path: string | null; // plain file path for agent access
   metadata: Record<string, unknown>;
   expires_at: string | null;
   created_at: string;
@@ -40,7 +41,7 @@ export interface CreateDocumentInput {
   doc_type: DocumentType;
   label?: string;
   value: string; // plaintext — will be encrypted
-  file_path?: string; // optional file to encrypt and attach
+  file_path?: string; // optional file to attach (stored plain for agent access)
   metadata?: Record<string, unknown>;
   expires_at?: string;
 }
@@ -50,12 +51,12 @@ export function addDocument(input: CreateDocumentInput, db?: Database): ContactD
   const _db = db || getDatabase();
   const id = uuid();
   const { ciphertext, iv } = encrypt(input.value);
-  let encFilePath: string | null = null;
+  let filePath: string | null = null;
   if (input.file_path) {
-    encFilePath = encryptFile(input.file_path, id);
+    filePath = storeFile(input.file_path, id);
   }
   _db.query(`INSERT INTO contact_documents (id, contact_id, doc_type, label, encrypted_value, iv, encrypted_file_path, metadata, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, input.contact_id, input.doc_type, input.label ?? null, ciphertext, iv, encFilePath, JSON.stringify(input.metadata || {}), input.expires_at ?? null, now(), now());
+    .run(id, input.contact_id, input.doc_type, input.label ?? null, ciphertext, iv, filePath, JSON.stringify(input.metadata || {}), input.expires_at ?? null, now(), now());
   return getDocument(id, _db);
 }
 
@@ -95,6 +96,7 @@ function rowToDoc(row: Record<string, unknown>): ContactDocument {
     label: row.label as string | null,
     value: decrypt(row.encrypted_value as string, row.iv as string),
     has_file: !!(row.encrypted_file_path),
+    file_path: (row.encrypted_file_path as string | null), // plain file path for agent access
     metadata: JSON.parse((row.metadata as string) || "{}"),
     expires_at: row.expires_at as string | null,
     created_at: row.created_at as string,
