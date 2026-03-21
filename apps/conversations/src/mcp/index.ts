@@ -321,6 +321,34 @@ server.registerTool("list_spaces", {
   };
 });
 
+server.registerTool("broadcast", {
+  description: "Send the same message to multiple spaces at once. Useful for status updates, bug reports, or announcements that need to go to several spaces.",
+  inputSchema: {
+    spaces: z.array(z.string()).describe("List of space names to send to"),
+    content: z.string().describe("Message content"),
+    from: z.string().optional().describe("Sender agent name"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+  },
+}, async (args: Record<string, any>) => {
+  const { spaces, content, from: fromParam, priority } = args;
+  const from = resolveIdentity(fromParam);
+  const results: Array<{ space: string; id: number }> = [];
+  const errors: string[] = [];
+
+  for (const space of (spaces as string[])) {
+    try {
+      const msg = sendMessage({ from, to: space, content, space, priority });
+      results.push({ space, id: msg.id });
+    } catch (e) {
+      errors.push(`${space}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ sent: results, errors, total: results.length }) }],
+  };
+});
+
 server.registerTool("list_unread_counts", {
   description: "Get unread message counts per space without fetching message content. Use this at session start to triage which spaces need attention before calling read_messages.",
   inputSchema: {
