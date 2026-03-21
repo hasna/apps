@@ -188,6 +188,38 @@ function runMigrations(db: Database): void {
         CREATE INDEX IF NOT EXISTS idx_gallery_created ON gallery_entries(created_at);
       `,
     },
+    {
+      version: 3,
+      sql: `
+        -- Session lock/claim for multi-agent ownership
+        ALTER TABLE sessions ADD COLUMN locked_by TEXT;
+        ALTER TABLE sessions ADD COLUMN locked_at TEXT;
+      `,
+    },
+    {
+      version: 4,
+      sql: `
+        CREATE TABLE IF NOT EXISTS session_events (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL,
+          details TEXT DEFAULT '{}',
+          timestamp TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, timestamp);
+      `,
+    },
+    {
+      version: 5,
+      sql: `
+        CREATE TABLE IF NOT EXISTS session_tags (
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          tag TEXT NOT NULL,
+          PRIMARY KEY (session_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag);
+      `,
+    },
   ];
 
   for (const m of migrations) {

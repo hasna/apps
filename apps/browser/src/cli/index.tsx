@@ -33,21 +33,69 @@ program
   .option("--engine <engine>", "Browser engine: playwright|cdp|lightpanda|auto", "auto")
   .option("--screenshot", "Take a screenshot after navigation")
   .option("--extract", "Extract page text after navigation")
-  .option("--headless", "Run in headless mode (default: true)", true)
-  .action(async (url: string, opts: { engine: string; screenshot?: boolean; extract?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: true });
-    console.log(chalk.gray(`Session: ${session.id} (${session.engine})`));
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { engine: string; screenshot?: boolean; extract?: boolean; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     await navigate(page, url);
     const title = await page.title();
-    console.log(chalk.green(`✓ Navigated to: ${url}`));
-    console.log(chalk.blue(`  Title: ${title}`));
+    let screenshotPath: string | undefined;
     if (opts.screenshot) {
       const result = await takeScreenshot(page);
-      console.log(chalk.blue(`  Screenshot: ${result.path}`));
+      screenshotPath = result.path;
     }
+    let text: string | undefined;
     if (opts.extract) {
-      const text = await getText(page);
-      console.log(chalk.white(`\n${text.slice(0, 500)}...`));
+      text = await getText(page);
+    }
+    if (opts.json) {
+      const output: Record<string, unknown> = { session_id: session.id, engine: session.engine, url, title };
+      if (screenshotPath) output.screenshot = screenshotPath;
+      if (text) output.text = text.slice(0, 500);
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      console.log(chalk.gray(`Session: ${session.id} (${session.engine})`));
+      console.log(chalk.green(`✓ Navigated to: ${url}`));
+      console.log(chalk.blue(`  Title: ${title}`));
+      if (screenshotPath) console.log(chalk.blue(`  Screenshot: ${screenshotPath}`));
+      if (text) console.log(chalk.white(`\n${text.slice(0, 500)}...`));
+    }
+    await closeSession(session.id);
+  });
+
+// ─── check ───────────────────────────────────────────────────────────────────
+
+program
+  .command("check <url>")
+  .description("One-liner page health check: navigate, screenshot, extract info, check errors")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { engine: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    await navigate(page, url);
+    const title = await page.title();
+    const currentUrl = page.url();
+    const text = await getText(page);
+    const links = await getLinks(page);
+    const result = await takeScreenshot(page);
+
+    const summary = {
+      url: currentUrl,
+      title,
+      text_length: text.length,
+      links_count: links.length,
+      screenshot: result.path,
+      screenshot_size_kb: +(result.size_bytes / 1024).toFixed(1),
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(summary, null, 2));
+    } else {
+      console.log(chalk.green(`✓ ${title}`));
+      console.log(chalk.blue(`  URL: ${currentUrl}`));
+      console.log(chalk.gray(`  Text: ${text.length} chars, Links: ${links.length}`));
+      console.log(chalk.gray(`  Screenshot: ${result.path} (${summary.screenshot_size_kb} KB)`));
     }
     await closeSession(session.id);
   });
@@ -61,8 +109,9 @@ program
   .option("--selector <selector>", "CSS selector for element screenshot")
   .option("--full-page", "Capture full page")
   .option("--format <format>", "Image format: png|jpeg|webp", "png")
-  .action(async (url: string, opts: { engine: string; selector?: string; fullPage?: boolean; format: string }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: true });
+  .option("--headed", "Run in headed (visible) mode")
+  .action(async (url: string, opts: { engine: string; selector?: string; fullPage?: boolean; format: string; headed?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     await navigate(page, url);
     const result = await takeScreenshot(page, {
       selector: opts.selector,
@@ -82,11 +131,15 @@ program
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--selector <selector>", "CSS selector")
   .option("--format <format>", "Format: text|html|links|table|structured", "text")
-  .action(async (url: string, opts: { engine: string; selector?: string; format: string }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: true });
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { engine: string; selector?: string; format: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     await navigate(page, url);
     const result = await extract(page, { format: opts.format as "text" | "links" | "html" | "table" | "structured", selector: opts.selector });
-    if (opts.format === "links" && result.links) {
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (opts.format === "links" && result.links) {
       result.links.forEach((l) => console.log(l));
     } else if (opts.format === "table" && result.table) {
       result.table.forEach((row) => console.log(row.join("\t")));
@@ -102,8 +155,9 @@ program
   .command("eval <url> <script>")
   .description("Run JavaScript in a page context")
   .option("--engine <engine>", "Browser engine", "auto")
-  .action(async (url: string, script: string, opts: { engine: string }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: true });
+  .option("--headed", "Run in headed (visible) mode")
+  .action(async (url: string, script: string, opts: { engine: string; headed?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     await navigate(page, url);
     const result = await page.evaluate(script);
     console.log(JSON.stringify(result, null, 2));
@@ -146,8 +200,9 @@ sessionCmd
   .description("Create a new browser session")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--url <url>", "Start URL")
-  .action(async (opts: { engine: string; url?: string }) => {
-    const { session } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url });
+  .option("--headed", "Run in headed (visible) mode")
+  .action(async (opts: { engine: string; url?: string; headed?: boolean }) => {
+    const { session } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url, headless: !opts.headed });
     console.log(chalk.green(`✓ Session created`));
     console.log(JSON.stringify(session, null, 2));
   });
@@ -156,9 +211,12 @@ sessionCmd
   .command("list")
   .description("List all sessions")
   .option("--status <status>", "Filter by status")
-  .action((opts: { status?: string }) => {
+  .option("--json", "Output as JSON")
+  .action((opts: { status?: string; json?: boolean }) => {
     const sessions = listSessions(opts.status ? { status: opts.status as "active" | "closed" | "error" } : undefined);
-    if (sessions.length === 0) {
+    if (opts.json) {
+      console.log(JSON.stringify(sessions, null, 2));
+    } else if (sessions.length === 0) {
       console.log(chalk.gray("No sessions found"));
     } else {
       sessions.forEach((s) => console.log(`${s.id} [${s.status}] ${s.engine} ${s.start_url ?? ""}`));
@@ -182,8 +240,9 @@ recordCmd
   .description("Start recording actions in a new session")
   .option("--url <url>", "Start URL")
   .option("--engine <engine>", "Browser engine", "auto")
-  .action(async (name: string, opts: { url?: string; engine: string }) => {
-    const { session } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url });
+  .option("--headed", "Run in headed (visible) mode")
+  .action(async (name: string, opts: { url?: string; engine: string; headed?: boolean }) => {
+    const { session } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url, headless: !opts.headed });
     const recording = startRecording(session.id, name, opts.url);
     console.log(chalk.green(`✓ Recording started`));
     console.log(`  Recording ID: ${recording.id}`);
@@ -204,8 +263,9 @@ recordCmd
   .description("Replay a recording in a new session")
   .option("--url <url>", "Override start URL")
   .option("--engine <engine>", "Browser engine", "auto")
-  .action(async (id: string, opts: { url?: string; engine: string }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url });
+  .option("--headed", "Run in headed (visible) mode")
+  .action(async (id: string, opts: { url?: string; engine: string; headed?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url, headless: !opts.headed });
     const result = await replayRecording(id, page);
     console.log(result.success ? chalk.green("✓ Replay complete") : chalk.red("✗ Replay had errors"));
     console.log(`  Steps: ${result.steps_executed} executed, ${result.steps_failed} failed`);

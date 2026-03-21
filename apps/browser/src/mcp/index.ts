@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
 
-import { createSession, closeSession, getSession, listSessions, getSessionPage, getSessionByName, renameSession, setSessionPage, getTokenBudget, getSessionBunView, isBunSession } from "../lib/session.js";
+import { createSession, closeSession, getSession, listSessions, getSessionPage, getSessionByName, renameSession, setSessionPage, getTokenBudget, getSessionBunView, isBunSession, getActiveSessionForAgent, getDefaultSession, countActiveSessions, isAutoGallery } from "../lib/session.js";
 import { navigate, click, type as typeText, fill, scroll, hover, selectOption, checkBox, uploadFile, goBack, goForward, reload, waitForSelector, pressKey, clickText, fillForm, waitForText, watchPage, getWatchChanges, stopWatch, clickRef, typeRef, fillRef, selectRef, checkRef, hoverRef } from "../lib/actions.js";
 import { getText, getHTML, getLinks, getTitle, getUrl, extract, extractStructured, extractTable, getAriaSnapshot, findElements, elementExists, getPageInfo } from "../lib/extractor.js";
 import { takeScreenshot, generatePDF } from "../lib/screenshot.js";
@@ -28,6 +28,7 @@ import { diffImages } from "../lib/gallery-diff.js";
 import { takeSnapshot as takeSnapshotFn, diffSnapshots, getLastSnapshot, setLastSnapshot } from "../lib/snapshot.js";
 import { persistFile } from "../lib/files-integration.js";
 import { listRecordings, getRecording } from "../db/recordings.js";
+import { logEvent, getTimeline } from "../db/timeline.js";
 import { newTab, listTabs, switchTab, closeTab } from "../lib/tabs.js";
 import { getDialogs, handleDialog } from "../lib/dialogs.js";
 import { saveProfile, loadProfile, applyProfile, listProfiles as listProfilesFn, deleteProfile } from "../lib/profiles.js";
@@ -55,6 +56,35 @@ function err(e: unknown) {
   };
 }
 
+/** Like err() but attempts to capture a screenshot for context. */
+async function errWithScreenshot(e: unknown, sessionId?: string) {
+  const msg = e instanceof Error ? e.message : String(e);
+  const code = e instanceof BrowserError ? e.code : "ERROR";
+  let screenshot_path: string | undefined;
+  if (sessionId) {
+    try {
+      const sid = resolveSessionId(sessionId);
+      const page = getSessionPage(sid);
+      const result = await takeScreenshot(page, { maxWidth: 800, quality: 50, track: false, thumbnail: false });
+      screenshot_path = result.path;
+    } catch {}
+  }
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ error: msg, code, error_screenshot: screenshot_path }) }],
+    isError: true as const,
+  };
+}
+
+/** Resolve session_id: use explicit value, or auto-select the single active session. */
+function resolveSessionId(sessionId?: string): string {
+  if (sessionId) return sessionId;
+  const def = getDefaultSession();
+  if (def) return def.session.id;
+  const count = countActiveSessions();
+  if (count === 0) throw new BrowserError("No active sessions. Create one with browser_session_create first.", "NO_SESSION");
+  throw new BrowserError(`${count} active sessions — specify session_id to choose one.`, "AMBIGUOUS_SESSION");
+}
+
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 const server = new McpServer({
@@ -66,7 +96,7 @@ const server = new McpServer({
 
 server.tool(
   "browser_session_create",
-  "Create a new browser session with the specified engine",
+  "Create a new browser session. If agent_id is set and already has an active session, returns the existing one (use force_new to override). If session_id is omitted on other tools, the single active session is auto-selected.",
   {
     engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "auto"]).optional().default("auto"),
     use_case: z.string().optional(),
@@ -77,9 +107,17 @@ server.tool(
     viewport_width: z.number().optional().default(1280),
     viewport_height: z.number().optional().default(720),
     stealth: z.boolean().optional().default(false),
+    auto_gallery: z.boolean().optional().default(false),
+    force_new: z.boolean().optional().default(false).describe("Force create a new session even if agent already has one"),
+    tags: z.array(z.string()).optional(),
   },
-  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth }) => {
+  async ({ engine, use_case, project_id, agent_id, start_url, headless, viewport_width, viewport_height, stealth, auto_gallery, force_new, tags }) => {
     try {
+      // Auto-reuse: if agent already has an active session, return it
+      if (agent_id && !force_new) {
+        const existing = getActiveSessionForAgent(agent_id);
+        if (existing) return json({ session: existing.session, reused: true });
+      }
       const { session } = await createSession({
         engine: engine as BrowserEngine,
         useCase: use_case as UseCase | undefined,
@@ -89,18 +127,29 @@ server.tool(
         headless,
         viewport: { width: viewport_width, height: viewport_height },
         stealth,
+        autoGallery: auto_gallery,
       });
-      return json({ session });
+      // Apply tags if provided
+      if (tags?.length) {
+        const { addSessionTag } = await import("../db/sessions.js");
+        for (const tag of tags) addSessionTag(session.id, tag);
+      }
+      logEvent(session.id, "session_created", { engine: session.engine });
+      return json({ session, reused: false });
     } catch (e) { return err(e); }
   }
 );
 
 server.tool(
   "browser_session_list",
-  "List all browser sessions",
-  { status: z.enum(["active", "closed", "error"]).optional(), project_id: z.string().optional() },
-  async ({ status, project_id }) => {
+  "List all browser sessions. Optionally filter by tag.",
+  { status: z.enum(["active", "closed", "error"]).optional(), project_id: z.string().optional(), tag: z.string().optional() },
+  async ({ status, project_id, tag }) => {
     try {
+      if (tag) {
+        const { listSessionsByTag } = await import("../db/sessions.js");
+        return json({ sessions: listSessionsByTag(tag) });
+      }
       return json({ sessions: listSessions({ status, projectId: project_id }) });
     } catch (e) { return err(e); }
   }
@@ -109,16 +158,30 @@ server.tool(
 server.tool(
   "browser_session_close",
   "Close a browser session",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const session = await closeSession(session_id);
-      networkLogCleanup.get(session_id)?.();
-      consoleCaptureCleanup.get(session_id)?.();
-      networkLogCleanup.delete(session_id);
-      consoleCaptureCleanup.delete(session_id);
-      harCaptures.delete(session_id);
+      const sid = resolveSessionId(session_id);
+      const session = await closeSession(sid);
+      networkLogCleanup.get(sid)?.();
+      consoleCaptureCleanup.get(sid)?.();
+      networkLogCleanup.delete(sid);
+      consoleCaptureCleanup.delete(sid);
+      harCaptures.delete(sid);
       return json({ session });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_session_timeline",
+  "Get chronological action log for a session",
+  { session_id: z.string().optional(), limit: z.number().optional().default(50) },
+  async ({ session_id, limit }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const events = getTimeline(sid, limit);
+      return json({ events, count: events.length });
     } catch (e) { return err(e); }
   }
 );
@@ -129,7 +192,7 @@ server.tool(
   "browser_navigate",
   "Navigate to a URL. Auto-detects redirects, auto-names session, returns compact refs + thumbnail.",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     url: z.string(),
     timeout: z.number().optional().default(30000),
     auto_snapshot: z.boolean().optional().default(true),
@@ -137,10 +200,11 @@ server.tool(
   },
   async ({ session_id, url, timeout, auto_snapshot, auto_thumbnail }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       // Bun.WebView fast path — sequential to avoid concurrent evaluate() errors
-      if (isBunSession(session_id)) {
-        const bunView = getSessionBunView(session_id)!;
+      if (isBunSession(sid)) {
+        const bunView = getSessionBunView(sid)!;
         await bunView.goto(url, { timeout });
         // Extra settle time for page JS to finish (Bun.WebView evaluate is not re-entrant)
         await new Promise(r => setTimeout(r, 500));
@@ -169,10 +233,10 @@ server.tool(
 
       // Auto-name session if it has no name
       try {
-        const session = getSession(session_id);
+        const session = getSession(sid);
         if (!session.name) {
           const hostname = new URL(current_url).hostname;
-          renameSession(session_id, hostname);
+          renameSession(sid, hostname);
         }
       } catch {}
 
@@ -195,37 +259,48 @@ server.tool(
         } catch {}
       }
 
+      // Auto-gallery: save screenshot to gallery on every navigation
+      if (isAutoGallery(sid)) {
+        try {
+          const ss = await takeScreenshot(page, { maxWidth: 1280, quality: 70, thumbnail: true });
+          const { createEntry } = await import("../db/gallery.js");
+          createEntry({ session_id: sid, url: current_url, title, path: ss.path, thumbnail_path: ss.thumbnail_path, format: "webp", width: ss.width, height: ss.height, original_size_bytes: ss.original_size_bytes, compressed_size_bytes: ss.compressed_size_bytes, compression_ratio: ss.compression_ratio, tags: [], is_favorite: false });
+        } catch {}
+      }
+
       // Short settle for Bun before snapshot evaluate calls
-      if (isBunSession(session_id) && auto_snapshot) {
+      if (isBunSession(sid) && auto_snapshot) {
         await new Promise(r => setTimeout(r, 200));
       }
 
       // Auto-snapshot with compact refs (≤30 elements)
       if (auto_snapshot) {
         try {
-          const snap = await takeSnapshotFn(page, session_id);
-          setLastSnapshot(session_id, snap);
+          const snap = await takeSnapshotFn(page, sid);
+          setLastSnapshot(sid, snap);
           const refEntries = Object.entries(snap.refs).slice(0, 30);
           result.snapshot_refs = refEntries
             .map(([ref, info]) => `${info.role}:${info.name.slice(0, 50)} [${ref}]`)
             .join(", ");
           result.interactive_count = snap.interactive_count;
-          result.has_errors = getConsoleLog(session_id, "error").length > 0;
+          result.has_errors = getConsoleLog(sid, "error").length > 0;
         } catch {}
       }
 
+      logEvent(sid, "navigate", { url, title, current_url });
       return json(result);
-    } catch (e) { return err(e); }
+    } catch (e) { return errWithScreenshot(e, session_id); }
   }
 );
 
 server.tool(
   "browser_back",
   "Navigate back in browser history",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await goBack(page);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
@@ -235,10 +310,11 @@ server.tool(
 server.tool(
   "browser_forward",
   "Navigate forward in browser history",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await goForward(page);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
@@ -248,10 +324,11 @@ server.tool(
 server.tool(
   "browser_reload",
   "Reload the current page",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await reload(page);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
@@ -263,47 +340,54 @@ server.tool(
 server.tool(
   "browser_click",
   "Click an element by ref (from snapshot) or CSS selector. Prefer ref for reliability.",
-  { session_id: z.string(), selector: z.string().optional(), ref: z.string().optional(), button: z.enum(["left", "right", "middle"]).optional(), timeout: z.number().optional() },
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), button: z.enum(["left", "right", "middle"]).optional(), timeout: z.number().optional() },
   async ({ session_id, selector, ref, button, timeout }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       if (ref) {
-        await clickRef(page, session_id, ref, { timeout });
+        await clickRef(page, sid, ref, { timeout });
+        logEvent(sid, "click", { selector: ref, method: "ref" });
         return json({ clicked: ref, method: "ref" });
       }
       if (!selector) return err(new Error("Either ref or selector is required"));
       await click(page, selector, { button, timeout });
+      logEvent(sid, "click", { selector, method: "selector" });
       return json({ clicked: selector, method: "selector" });
-    } catch (e) { return err(e); }
+    } catch (e) { return errWithScreenshot(e, session_id); }
   }
 );
 
 server.tool(
   "browser_type",
   "Type text into an element by ref or selector. Prefer ref.",
-  { session_id: z.string(), selector: z.string().optional(), ref: z.string().optional(), text: z.string(), clear: z.boolean().optional().default(false), delay: z.number().optional() },
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), text: z.string(), clear: z.boolean().optional().default(false), delay: z.number().optional() },
   async ({ session_id, selector, ref, text, clear, delay }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       if (ref) {
-        await typeRef(page, session_id, ref, text, { clear, delay });
+        await typeRef(page, sid, ref, text, { clear, delay });
+        logEvent(sid, "type", { selector: ref, text: text.slice(0, 100) });
         return json({ typed: text, ref, method: "ref" });
       }
       if (!selector) return err(new Error("Either ref or selector is required"));
       await typeText(page, selector, text, { clear, delay });
+      logEvent(sid, "type", { selector, text: text.slice(0, 100) });
       return json({ typed: text, selector, method: "selector" });
-    } catch (e) { return err(e); }
+    } catch (e) { return errWithScreenshot(e, session_id); }
   }
 );
 
 server.tool(
   "browser_hover",
   "Hover over an element by ref or selector",
-  { session_id: z.string(), selector: z.string().optional(), ref: z.string().optional() },
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional() },
   async ({ session_id, selector, ref }) => {
     try {
-      const page = getSessionPage(session_id);
-      if (ref) { await hoverRef(page, session_id, ref); return json({ hovered: ref, method: "ref" }); }
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      if (ref) { await hoverRef(page, sid, ref); return json({ hovered: ref, method: "ref" }); }
       if (!selector) return err(new Error("Either ref or selector is required"));
       await hover(page, selector);
       return json({ hovered: selector, method: "selector" });
@@ -314,10 +398,11 @@ server.tool(
 server.tool(
   "browser_scroll",
   "Scroll the page",
-  { session_id: z.string(), direction: z.enum(["up", "down", "left", "right"]).optional().default("down"), amount: z.number().optional().default(300) },
+  { session_id: z.string().optional(), direction: z.enum(["up", "down", "left", "right"]).optional().default("down"), amount: z.number().optional().default(300) },
   async ({ session_id, direction, amount }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await scroll(page, direction, amount);
       return json({ scrolled: direction, amount });
     } catch (e) { return err(e); }
@@ -327,11 +412,12 @@ server.tool(
 server.tool(
   "browser_select",
   "Select a dropdown option by ref or selector",
-  { session_id: z.string(), selector: z.string().optional(), ref: z.string().optional(), value: z.string() },
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), value: z.string() },
   async ({ session_id, selector, ref, value }) => {
     try {
-      const page = getSessionPage(session_id);
-      if (ref) { const selected = await selectRef(page, session_id, ref, value); return json({ selected, method: "ref" }); }
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      if (ref) { const selected = await selectRef(page, sid, ref, value); return json({ selected, method: "ref" }); }
       if (!selector) return err(new Error("Either ref or selector is required"));
       const selected = await selectOption(page, selector, value);
       return json({ selected, method: "selector" });
@@ -342,11 +428,12 @@ server.tool(
 server.tool(
   "browser_toggle",
   "Check or uncheck a checkbox by ref or selector",
-  { session_id: z.string(), selector: z.string().optional(), ref: z.string().optional(), checked: z.boolean() },
+  { session_id: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), checked: z.boolean() },
   async ({ session_id, selector, ref, checked }) => {
     try {
-      const page = getSessionPage(session_id);
-      if (ref) { await checkRef(page, session_id, ref, checked); return json({ checked, ref, method: "ref" }); }
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      if (ref) { await checkRef(page, sid, ref, checked); return json({ checked, ref, method: "ref" }); }
       if (!selector) return err(new Error("Either ref or selector is required"));
       await checkBox(page, selector, checked);
       return json({ checked, selector, method: "selector" });
@@ -357,10 +444,11 @@ server.tool(
 server.tool(
   "browser_upload",
   "Upload a file to an input element",
-  { session_id: z.string(), selector: z.string(), file_path: z.string() },
+  { session_id: z.string().optional(), selector: z.string(), file_path: z.string() },
   async ({ session_id, selector, file_path }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await uploadFile(page, selector, file_path);
       return json({ uploaded: file_path, selector });
     } catch (e) { return err(e); }
@@ -370,10 +458,11 @@ server.tool(
 server.tool(
   "browser_press_key",
   "Press a keyboard key",
-  { session_id: z.string(), key: z.string() },
+  { session_id: z.string().optional(), key: z.string() },
   async ({ session_id, key }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await pressKey(page, key);
       return json({ pressed: key });
     } catch (e) { return err(e); }
@@ -383,10 +472,11 @@ server.tool(
 server.tool(
   "browser_wait",
   "Wait for a selector to appear",
-  { session_id: z.string(), selector: z.string(), state: z.enum(["attached", "detached", "visible", "hidden"]).optional(), timeout: z.number().optional() },
+  { session_id: z.string().optional(), selector: z.string(), state: z.enum(["attached", "detached", "visible", "hidden"]).optional(), timeout: z.number().optional() },
   async ({ session_id, selector, state, timeout }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await waitForSelector(page, selector, { state, timeout });
       return json({ ready: selector });
     } catch (e) { return err(e); }
@@ -398,10 +488,11 @@ server.tool(
 server.tool(
   "browser_get_text",
   "Get text content from the page or a selector",
-  { session_id: z.string(), selector: z.string().optional() },
+  { session_id: z.string().optional(), selector: z.string().optional() },
   async ({ session_id, selector }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       return json({ text: await getText(page, selector) });
     } catch (e) { return err(e); }
   }
@@ -410,10 +501,11 @@ server.tool(
 server.tool(
   "browser_get_html",
   "Get HTML content from the page or a selector",
-  { session_id: z.string(), selector: z.string().optional() },
+  { session_id: z.string().optional(), selector: z.string().optional() },
   async ({ session_id, selector }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       return json({ html: await getHTML(page, selector) });
     } catch (e) { return err(e); }
   }
@@ -422,10 +514,11 @@ server.tool(
 server.tool(
   "browser_get_links",
   "Get all links from the current page",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const links = await getLinks(page);
       return json({ links, count: links.length });
     } catch (e) { return err(e); }
@@ -436,14 +529,15 @@ server.tool(
   "browser_extract",
   "Extract content from the page in a specified format",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     format: z.enum(["text", "html", "links", "table", "structured"]).optional().default("text"),
     selector: z.string().optional(),
     schema: z.record(z.string()).optional(),
   },
   async ({ session_id, format, selector, schema }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const result = await extract(page, { format, selector, schema });
       return json(result);
     } catch (e) { return err(e); }
@@ -453,10 +547,11 @@ server.tool(
 server.tool(
   "browser_find",
   "Find elements matching a selector and return their text",
-  { session_id: z.string(), selector: z.string() },
+  { session_id: z.string().optional(), selector: z.string() },
   async ({ session_id, selector }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const elements = await findElements(page, selector);
       const texts = await Promise.all(elements.map((el) => el.textContent()));
       return json({ count: elements.length, texts });
@@ -468,16 +563,17 @@ server.tool(
   "browser_snapshot",
   "Get accessibility snapshot with element refs (@e0, @e1...). Use compact=true (default) for token-efficient output. Use refs in browser_click, browser_type, etc.",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     compact: z.boolean().optional().default(true),
     max_refs: z.number().optional().default(50),
     full_tree: z.boolean().optional().default(false),
   },
   async ({ session_id, compact, max_refs, full_tree }) => {
     try {
-      const page = getSessionPage(session_id);
-      const result = await takeSnapshotFn(page, session_id);
-      setLastSnapshot(session_id, result);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const result = await takeSnapshotFn(page, sid);
+      setLastSnapshot(sid, result);
 
       // Limit refs to max_refs
       const refEntries = Object.entries(result.refs).slice(0, max_refs);
@@ -511,24 +607,25 @@ server.tool(
   "browser_screenshot",
   "Take a screenshot. Use annotate=true to overlay numbered labels on interactive elements for visual+ref workflows.",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     selector: z.string().optional(),
     full_page: z.boolean().optional().default(false),
     format: z.enum(["png", "jpeg", "webp"]).optional().default("webp"),
-    quality: z.number().optional(),
-    max_width: z.number().optional().default(1280),
+    quality: z.number().optional().default(60),
+    max_width: z.number().optional().default(800),
     compress: z.boolean().optional().default(true),
     thumbnail: z.boolean().optional().default(true),
     annotate: z.boolean().optional().default(false),
   },
   async ({ session_id, selector, full_page, format, quality, max_width, compress, thumbnail, annotate }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
 
       // Annotated screenshot path
       if (annotate && !selector && !full_page) {
         const { annotateScreenshot } = await import("../lib/annotate.js");
-        const annotated = await annotateScreenshot(page, session_id);
+        const annotated = await annotateScreenshot(page, sid);
         const base64 = annotated.buffer.toString("base64");
         return json({
           base64: base64.length > 50000 ? undefined : base64,
@@ -547,15 +644,18 @@ server.tool(
       try {
         const buf = Buffer.from(result.base64, "base64");
         const filename = result.path.split("/").pop() ?? `screenshot.${format ?? "webp"}`;
-        const dl = saveToDownloads(buf, filename, { sessionId: session_id, type: "screenshot", sourceUrl: page.url() });
+        const dl = saveToDownloads(buf, filename, { sessionId: sid, type: "screenshot", sourceUrl: page.url() });
         (result as any).download_id = dl.id;
       } catch { /* non-fatal */ }
-      // Smart base64 truncation: if > 50KB chars, return thumbnail only
-      if (result.base64.length > 50000) {
+      // Token estimate before truncation
+      (result as any).estimated_tokens = Math.ceil(result.base64.length / 4);
+      // Smart base64 truncation: if > 20KB chars, return thumbnail only
+      if (result.base64.length > 20000) {
         (result as any).base64_truncated = true;
         (result as any).full_image_path = result.path;
         result.base64 = result.thumbnail_base64 ?? "";
       }
+      logEvent(sid, "screenshot", { path: result.path });
       return json(result);
     } catch (e) { return err(e); }
   }
@@ -565,20 +665,21 @@ server.tool(
   "browser_pdf",
   "Generate a PDF of the current page",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     format: z.enum(["A4", "Letter", "A3", "A5"]).optional().default("A4"),
     landscape: z.boolean().optional().default(false),
     print_background: z.boolean().optional().default(true),
   },
   async ({ session_id, format, landscape, print_background }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const result = await generatePDF(page, { format, landscape, printBackground: print_background });
       // Auto-save to downloads
       try {
         const buf = Buffer.from(result.base64, "base64");
         const filename = result.path.split("/").pop() ?? "document.pdf";
-        const dl = saveToDownloads(buf, filename, { sessionId: session_id, type: "pdf", sourceUrl: page.url() });
+        const dl = saveToDownloads(buf, filename, { sessionId: sid, type: "pdf", sourceUrl: page.url() });
         (result as any).download_id = dl.id;
       } catch { /* non-fatal */ }
       return json(result);
@@ -591,13 +692,14 @@ server.tool(
 server.tool(
   "browser_evaluate",
   "Execute JavaScript in the page context",
-  { session_id: z.string(), script: z.string() },
+  { session_id: z.string().optional(), script: z.string() },
   async ({ session_id, script }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const result = await page.evaluate(script);
       return json({ result });
-    } catch (e) { return err(e); }
+    } catch (e) { return errWithScreenshot(e, session_id); }
   }
 );
 
@@ -606,10 +708,11 @@ server.tool(
 server.tool(
   "browser_cookies_get",
   "Get cookies from the current session",
-  { session_id: z.string(), name: z.string().optional(), domain: z.string().optional() },
+  { session_id: z.string().optional(), name: z.string().optional(), domain: z.string().optional() },
   async ({ session_id, name, domain }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       return json({ cookies: await getCookies(page, { name, domain }) });
     } catch (e) { return err(e); }
   }
@@ -619,7 +722,7 @@ server.tool(
   "browser_cookies_set",
   "Set a cookie in the current session",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     name: z.string(),
     value: z.string(),
     domain: z.string().optional(),
@@ -630,7 +733,8 @@ server.tool(
   },
   async ({ session_id, name, value, domain, path, expires, http_only, secure }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await setCookie(page, {
         name, value,
         domain: domain ?? new URL(page.url()).hostname,
@@ -648,10 +752,11 @@ server.tool(
 server.tool(
   "browser_cookies_clear",
   "Clear cookies from the current session",
-  { session_id: z.string(), name: z.string().optional(), domain: z.string().optional() },
+  { session_id: z.string().optional(), name: z.string().optional(), domain: z.string().optional() },
   async ({ session_id, name, domain }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await clearCookies(page, name || domain ? { name, domain } : undefined);
       return json({ cleared: true });
     } catch (e) { return err(e); }
@@ -661,10 +766,11 @@ server.tool(
 server.tool(
   "browser_storage_get",
   "Get localStorage or sessionStorage values",
-  { session_id: z.string(), key: z.string().optional(), storage_type: z.enum(["local", "session"]).optional().default("local") },
+  { session_id: z.string().optional(), key: z.string().optional(), storage_type: z.enum(["local", "session"]).optional().default("local") },
   async ({ session_id, key, storage_type }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const value = storage_type === "session"
         ? await getSessionStorage(page, key)
         : await getLocalStorage(page, key);
@@ -676,10 +782,11 @@ server.tool(
 server.tool(
   "browser_storage_set",
   "Set a localStorage or sessionStorage value",
-  { session_id: z.string(), key: z.string(), value: z.string(), storage_type: z.enum(["local", "session"]).optional().default("local") },
+  { session_id: z.string().optional(), key: z.string(), value: z.string(), storage_type: z.enum(["local", "session"]).optional().default("local") },
   async ({ session_id, key, value, storage_type }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       if (storage_type === "session") {
         await setSessionStorage(page, key, value);
       } else {
@@ -695,16 +802,17 @@ server.tool(
 server.tool(
   "browser_network_log",
   "Get captured network requests for a session",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
+      const sid = resolveSessionId(session_id);
       // Start logging if not already
-      if (!networkLogCleanup.has(session_id)) {
-        const page = getSessionPage(session_id);
-        const cleanup = enableNetworkLogging(page, session_id);
-        networkLogCleanup.set(session_id, cleanup);
+      if (!networkLogCleanup.has(sid)) {
+        const page = getSessionPage(sid);
+        const cleanup = enableNetworkLogging(page, sid);
+        networkLogCleanup.set(sid, cleanup);
       }
-      const log = getNetworkLog(session_id);
+      const log = getNetworkLog(sid);
       return json({ requests: log, count: log.length });
     } catch (e) { return err(e); }
   }
@@ -714,7 +822,7 @@ server.tool(
   "browser_network_intercept",
   "Add a network interception rule",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     pattern: z.string(),
     action: z.enum(["block", "modify", "log"]),
     response_status: z.number().optional(),
@@ -722,7 +830,8 @@ server.tool(
   },
   async ({ session_id, pattern, action, response_status, response_body }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await addInterceptRule(page, {
         pattern,
         action,
@@ -738,12 +847,13 @@ server.tool(
 server.tool(
   "browser_har_start",
   "Start HAR capture for a session",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const capture = startHAR(page);
-      harCaptures.set(session_id, capture);
+      harCaptures.set(sid, capture);
       return json({ started: true });
     } catch (e) { return err(e); }
   }
@@ -752,18 +862,19 @@ server.tool(
 server.tool(
   "browser_har_stop",
   "Stop HAR capture and return the HAR data",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const capture = harCaptures.get(session_id);
+      const sid = resolveSessionId(session_id);
+      const capture = harCaptures.get(sid);
       if (!capture) return err(new Error("No active HAR capture for this session"));
       const har = capture.stop();
-      harCaptures.delete(session_id);
+      harCaptures.delete(sid);
       // Auto-save HAR to downloads
       let download_id: string | undefined;
       try {
         const harBuf = Buffer.from(JSON.stringify(har, null, 2));
-        const dl = saveToDownloads(harBuf, `capture-${Date.now()}.har`, { sessionId: session_id, type: "har" });
+        const dl = saveToDownloads(harBuf, `capture-${Date.now()}.har`, { sessionId: sid, type: "har" });
         download_id = dl.id;
       } catch { /* non-fatal */ }
       return json({ har, entry_count: har.log.entries.length, download_id });
@@ -776,10 +887,11 @@ server.tool(
 server.tool(
   "browser_performance",
   "Get performance metrics for the current page",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const metrics = await getPerformanceMetrics(page);
       return json({ metrics });
     } catch (e) { return err(e); }
@@ -791,15 +903,16 @@ server.tool(
 server.tool(
   "browser_console_log",
   "Get captured console messages for a session",
-  { session_id: z.string(), level: z.enum(["log", "warn", "error", "debug", "info"]).optional() },
+  { session_id: z.string().optional(), level: z.enum(["log", "warn", "error", "debug", "info"]).optional() },
   async ({ session_id, level }) => {
     try {
-      if (!consoleCaptureCleanup.has(session_id)) {
-        const page = getSessionPage(session_id);
-        const cleanup = enableConsoleCapture(page, session_id);
-        consoleCaptureCleanup.set(session_id, cleanup);
+      const sid = resolveSessionId(session_id);
+      if (!consoleCaptureCleanup.has(sid)) {
+        const page = getSessionPage(sid);
+        const cleanup = enableConsoleCapture(page, sid);
+        consoleCaptureCleanup.set(sid, cleanup);
       }
-      const messages = getConsoleLog(session_id, level as import("../types/index.js").ConsoleLevel | undefined);
+      const messages = getConsoleLog(sid, level as import("../types/index.js").ConsoleLevel | undefined);
       return json({ messages, count: messages.length });
     } catch (e) { return err(e); }
   }
@@ -810,11 +923,12 @@ server.tool(
 server.tool(
   "browser_record_start",
   "Start recording actions in a session",
-  { session_id: z.string(), name: z.string(), project_id: z.string().optional() },
+  { session_id: z.string().optional(), name: z.string(), project_id: z.string().optional() },
   async ({ session_id, name }) => {
     try {
-      const page = getSessionPage(session_id);
-      const recording = startRecording(session_id, name, page.url());
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const recording = startRecording(sid, name, page.url());
       return json({ recording_id: recording.id, name: recording.name });
     } catch (e) { return err(e); }
   }
@@ -853,10 +967,11 @@ server.tool(
 server.tool(
   "browser_record_replay",
   "Replay a recorded sequence in a session",
-  { session_id: z.string(), recording_id: z.string() },
+  { session_id: z.string().optional(), recording_id: z.string() },
   async ({ session_id, recording_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const result = await replayRecording(recording_id, page);
       return json(result);
     } catch (e) { return err(e); }
@@ -909,7 +1024,7 @@ server.tool(
   {
     name: z.string(),
     description: z.string().optional(),
-    session_id: z.string().optional(),
+    session_id: z.string().optional().optional(),
     project_id: z.string().optional(),
     working_dir: z.string().optional(),
   },
@@ -974,10 +1089,11 @@ server.tool(
 server.tool(
   "browser_scroll_and_screenshot",
   "Scroll the page and take a screenshot in one call. Saves 3 separate tool calls.",
-  { session_id: z.string(), direction: z.enum(["up", "down", "left", "right"]).optional().default("down"), amount: z.number().optional().default(500), wait_ms: z.number().optional().default(300) },
+  { session_id: z.string().optional(), direction: z.enum(["up", "down", "left", "right"]).optional().default("down"), amount: z.number().optional().default(500), wait_ms: z.number().optional().default(300) },
   async ({ session_id, direction, amount, wait_ms }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await scroll(page, direction, amount);
       await new Promise((r) => setTimeout(r, wait_ms));
       const result = await takeScreenshot(page, { maxWidth: 1280, track: true });
@@ -997,10 +1113,11 @@ server.tool(
 server.tool(
   "browser_wait_for_navigation",
   "Wait for URL change after a click or action. Returns the new URL and title.",
-  { session_id: z.string(), timeout: z.number().optional().default(30000), url_pattern: z.string().optional() },
+  { session_id: z.string().optional(), timeout: z.number().optional().default(30000), url_pattern: z.string().optional() },
   async ({ session_id, timeout, url_pattern }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const start = Date.now();
       if (url_pattern) {
         await page.waitForURL(url_pattern, { timeout });
@@ -1030,10 +1147,80 @@ server.tool(
 server.tool(
   "browser_session_rename",
   "Rename a browser session",
-  { session_id: z.string(), name: z.string() },
+  { session_id: z.string().optional(), name: z.string() },
   async ({ session_id, name }) => {
     try {
-      return json({ session: renameSession(session_id, name) });
+      const sid = resolveSessionId(session_id);
+      return json({ session: renameSession(sid, name) });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Session Lock/Claim ────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_session_lock",
+  "Lock a session so only the specified agent can use it",
+  { session_id: z.string().optional(), agent_id: z.string() },
+  async ({ session_id, agent_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const { lockSession } = await import("../db/sessions.js");
+      return json({ session: lockSession(sid, agent_id) });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_session_unlock",
+  "Unlock a session",
+  { session_id: z.string().optional(), agent_id: z.string().optional() },
+  async ({ session_id, agent_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const { unlockSession } = await import("../db/sessions.js");
+      return json({ session: unlockSession(sid, agent_id) });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_session_transfer",
+  "Transfer session ownership to another agent",
+  { session_id: z.string().optional(), to_agent_id: z.string() },
+  async ({ session_id, to_agent_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const { transferSession } = await import("../db/sessions.js");
+      return json({ session: transferSession(sid, to_agent_id) });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Session Tagging ──────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_session_tag",
+  "Add a tag to a session for categorization (e.g. qa, scraping, monitoring)",
+  { session_id: z.string().optional(), tag: z.string() },
+  async ({ session_id, tag }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const { addSessionTag } = await import("../db/sessions.js");
+      return json({ tags: addSessionTag(sid, tag) });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_session_untag",
+  "Remove a tag from a session",
+  { session_id: z.string().optional(), tag: z.string() },
+  async ({ session_id, tag }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const { removeSessionTag } = await import("../db/sessions.js");
+      return json({ tags: removeSessionTag(sid, tag) });
     } catch (e) { return err(e); }
   }
 );
@@ -1043,10 +1230,11 @@ server.tool(
 server.tool(
   "browser_click_text",
   "Click an element by its visible text content",
-  { session_id: z.string(), text: z.string(), exact: z.boolean().optional().default(false), timeout: z.number().optional() },
+  { session_id: z.string().optional(), text: z.string(), exact: z.boolean().optional().default(false), timeout: z.number().optional() },
   async ({ session_id, text, exact, timeout }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       await clickText(page, text, { exact, timeout });
       return json({ clicked: text });
     } catch (e) { return err(e); }
@@ -1059,16 +1247,17 @@ server.tool(
   "browser_fill_form",
   "Fill multiple form fields in one call. Fields map: { selector: value }. Handles text, checkboxes, selects.",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     fields: z.record(z.union([z.string(), z.boolean()])),
     submit_selector: z.string().optional(),
   },
   async ({ session_id, fields, submit_selector }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const result = await fillForm(page, fields, submit_selector);
       return json(result);
-    } catch (e) { return err(e); }
+    } catch (e) { return errWithScreenshot(e, session_id); }
   }
 );
 
@@ -1077,10 +1266,11 @@ server.tool(
 server.tool(
   "browser_wait_for_text",
   "Wait until specific text appears on the page",
-  { session_id: z.string(), text: z.string(), timeout: z.number().optional().default(10000), exact: z.boolean().optional().default(false) },
+  { session_id: z.string().optional(), text: z.string(), timeout: z.number().optional().default(10000), exact: z.boolean().optional().default(false) },
   async ({ session_id, text, timeout, exact }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const start = Date.now();
       await waitForText(page, text, { timeout, exact });
       return json({ found: true, elapsed_ms: Date.now() - start });
@@ -1093,10 +1283,11 @@ server.tool(
 server.tool(
   "browser_element_exists",
   "Check if a selector exists on the page (no throw, returns boolean)",
-  { session_id: z.string(), selector: z.string(), check_visible: z.boolean().optional().default(false) },
+  { session_id: z.string().optional(), selector: z.string(), check_visible: z.boolean().optional().default(false) },
   async ({ session_id, selector, check_visible }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       return json(await elementExists(page, selector, { visible: check_visible }));
     } catch (e) { return err(e); }
   }
@@ -1107,13 +1298,14 @@ server.tool(
 server.tool(
   "browser_get_page_info",
   "Get a full page summary in one call: url, title, meta tags, link/image/form counts, text length",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const info = await getPageInfo(page);
       // Enrich with console error status if logging is active
-      const errors = getConsoleLog(session_id, "error");
+      const errors = getConsoleLog(sid, "error");
       info.has_console_errors = errors.length > 0;
       return json(info);
     } catch (e) { return err(e); }
@@ -1125,10 +1317,11 @@ server.tool(
 server.tool(
   "browser_has_errors",
   "Quick check: does the session have any console errors?",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const errors = getConsoleLog(session_id, "error");
+      const sid = resolveSessionId(session_id);
+      const errors = getConsoleLog(sid, "error");
       return json({ has_errors: errors.length > 0, error_count: errors.length, errors });
     } catch (e) { return err(e); }
   }
@@ -1137,11 +1330,12 @@ server.tool(
 server.tool(
   "browser_clear_errors",
   "Clear console error log for a session",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
+      const sid = resolveSessionId(session_id);
       const { clearConsoleLog } = await import("../db/console-log.js");
-      clearConsoleLog(session_id);
+      clearConsoleLog(sid);
       return json({ cleared: true });
     } catch (e) { return err(e); }
   }
@@ -1154,10 +1348,11 @@ const activeWatchHandles = new Map<string, ReturnType<typeof watchPage>>();
 server.tool(
   "browser_watch_start",
   "Start watching a page for DOM changes",
-  { session_id: z.string(), selector: z.string().optional(), interval_ms: z.number().optional().default(500), max_changes: z.number().optional().default(50) },
+  { session_id: z.string().optional(), selector: z.string().optional(), interval_ms: z.number().optional().default(500), max_changes: z.number().optional().default(50) },
   async ({ session_id, selector, interval_ms, max_changes }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const handle = watchPage(page, { selector, intervalMs: interval_ms, maxChanges: max_changes });
       activeWatchHandles.set(handle.id, handle);
       return json({ watch_id: handle.id });
@@ -1197,7 +1392,7 @@ server.tool(
   "List screenshot gallery entries with optional filters",
   {
     project_id: z.string().optional(),
-    session_id: z.string().optional(),
+    session_id: z.string().optional().optional(),
     tag: z.string().optional(),
     is_favorite: z.boolean().optional(),
     date_from: z.string().optional(),
@@ -1319,7 +1514,7 @@ server.tool(
 server.tool(
   "browser_downloads_list",
   "List all files in the downloads folder",
-  { session_id: z.string().optional() },
+  { session_id: z.string().optional().optional() },
   async ({ session_id }) => {
     try {
       return json({ downloads: listDownloads(session_id), count: listDownloads(session_id).length });
@@ -1330,7 +1525,7 @@ server.tool(
 server.tool(
   "browser_downloads_get",
   "Get a downloaded file by id, returning base64 content and metadata",
-  { id: z.string(), session_id: z.string().optional() },
+  { id: z.string(), session_id: z.string().optional().optional() },
   async ({ id, session_id }) => {
     try {
       const file = getDownload(id, session_id);
@@ -1344,7 +1539,7 @@ server.tool(
 server.tool(
   "browser_downloads_delete",
   "Delete a downloaded file by id",
-  { id: z.string(), session_id: z.string().optional() },
+  { id: z.string(), session_id: z.string().optional().optional() },
   async ({ id, session_id }) => {
     try {
       const deleted = deleteDownload(id, session_id);
@@ -1367,7 +1562,7 @@ server.tool(
 server.tool(
   "browser_downloads_export",
   "Copy a downloaded file to a target path",
-  { id: z.string(), target_path: z.string(), session_id: z.string().optional() },
+  { id: z.string(), target_path: z.string(), session_id: z.string().optional().optional() },
   async ({ id, target_path, session_id }) => {
     try {
       const finalPath = exportToPath(id, target_path, session_id);
@@ -1400,13 +1595,14 @@ server.tool(
 server.tool(
   "browser_snapshot_diff",
   "Take a new accessibility snapshot and diff it against the last snapshot for this session. Shows added/removed/modified interactive elements.",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
-      const before = getLastSnapshot(session_id);
-      const after = await takeSnapshotFn(page, session_id);
-      setLastSnapshot(session_id, after);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const before = getLastSnapshot(sid);
+      const after = await takeSnapshotFn(page, sid);
+      setLastSnapshot(sid, after);
 
       if (!before) {
         return json({
@@ -1436,13 +1632,14 @@ server.tool(
 server.tool(
   "browser_session_stats",
   "Get session info and estimated token usage (based on network log, console log, and gallery entry sizes).",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const session = getSession(session_id);
-      const networkLog = getNetworkLog(session_id);
-      const consoleLog = getConsoleLog(session_id);
-      const galleryEntries = listEntries({ sessionId: session_id, limit: 1000 });
+      const sid = resolveSessionId(session_id);
+      const session = getSession(sid);
+      const networkLog = getNetworkLog(sid);
+      const consoleLog = getConsoleLog(sid);
+      const galleryEntries = listEntries({ sessionId: sid, limit: 1000 });
 
       // Estimate token usage from data sizes (rough: 1 token ~ 4 chars)
       let totalChars = 0;
@@ -1463,7 +1660,7 @@ server.tool(
       }
 
       const estimatedTokens = Math.ceil(totalChars / 4);
-      const tokenBudget = getTokenBudget(session_id);
+      const tokenBudget = getTokenBudget(sid);
 
       return json({
         session,
@@ -1483,10 +1680,11 @@ server.tool(
 server.tool(
   "browser_tab_new",
   "Open a new tab in the session's browser context, optionally navigating to a URL",
-  { session_id: z.string(), url: z.string().optional() },
+  { session_id: z.string().optional(), url: z.string().optional() },
   async ({ session_id, url }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const tab = await newTab(page, url);
       return json(tab);
     } catch (e) { return err(e); }
@@ -1496,10 +1694,11 @@ server.tool(
 server.tool(
   "browser_tab_list",
   "List all open tabs in the session's browser context",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const tabs = await listTabs(page);
       return json({ tabs, count: tabs.length });
     } catch (e) { return err(e); }
@@ -1509,12 +1708,13 @@ server.tool(
 server.tool(
   "browser_tab_switch",
   "Switch to a different tab by index. Updates the session's active page.",
-  { session_id: z.string(), tab_id: z.number() },
+  { session_id: z.string().optional(), tab_id: z.number() },
   async ({ session_id, tab_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const result = await switchTab(page, tab_id);
-      setSessionPage(session_id, result.page);
+      setSessionPage(sid, result.page);
       return json(result.tab);
     } catch (e) { return err(e); }
   }
@@ -1523,17 +1723,18 @@ server.tool(
 server.tool(
   "browser_tab_close",
   "Close a tab by index. Cannot close the last tab.",
-  { session_id: z.string(), tab_id: z.number() },
+  { session_id: z.string().optional(), tab_id: z.number() },
   async ({ session_id, tab_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       // Get context reference before closing (in case the active page is the one being closed)
       const context = page.context();
       const result = await closeTab(page, tab_id);
       const remainingPages = context.pages();
       const newActivePage = remainingPages[result.active_tab.index];
       if (newActivePage) {
-        setSessionPage(session_id, newActivePage);
+        setSessionPage(sid, newActivePage);
       }
       return json(result);
     } catch (e) { return err(e); }
@@ -1545,10 +1746,11 @@ server.tool(
 server.tool(
   "browser_handle_dialog",
   "Accept or dismiss a pending dialog (alert, confirm, prompt). Handles the oldest pending dialog.",
-  { session_id: z.string(), action: z.enum(["accept", "dismiss"]), prompt_text: z.string().optional() },
+  { session_id: z.string().optional(), action: z.enum(["accept", "dismiss"]), prompt_text: z.string().optional() },
   async ({ session_id, action, prompt_text }) => {
     try {
-      const result = await handleDialog(session_id, action, prompt_text);
+      const sid = resolveSessionId(session_id);
+      const result = await handleDialog(sid, action, prompt_text);
       if (!result.handled) return err(new Error("No pending dialogs for this session"));
       return json(result);
     } catch (e) { return err(e); }
@@ -1558,10 +1760,11 @@ server.tool(
 server.tool(
   "browser_get_dialogs",
   "Get all pending dialogs for a session",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const dialogs = getDialogs(session_id);
+      const sid = resolveSessionId(session_id);
+      const dialogs = getDialogs(sid);
       return json({ dialogs, count: dialogs.length });
     } catch (e) { return err(e); }
   }
@@ -1572,10 +1775,11 @@ server.tool(
 server.tool(
   "browser_profile_save",
   "Save cookies + localStorage from the current session as a named profile",
-  { session_id: z.string(), name: z.string() },
+  { session_id: z.string().optional(), name: z.string() },
   async ({ session_id, name }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const info = await saveProfile(page, name);
       return json(info);
     } catch (e) { return err(e); }
@@ -1585,12 +1789,13 @@ server.tool(
 server.tool(
   "browser_profile_load",
   "Load a saved profile and apply cookies + localStorage to the current session",
-  { session_id: z.string().optional(), name: z.string() },
+  { session_id: z.string().optional().optional(), name: z.string() },
   async ({ session_id, name }) => {
     try {
       const profileData = loadProfile(name);
       if (session_id) {
-        const page = getSessionPage(session_id);
+        const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
         const applied = await applyProfile(page, profileData);
         return json({ ...applied, profile: name });
       }
@@ -1741,7 +1946,13 @@ server.tool(
           { tool: "browser_session_close", description: "Close a session" },
           { tool: "browser_session_get_by_name", description: "Get session by name" },
           { tool: "browser_session_rename", description: "Rename a session" },
+          { tool: "browser_session_lock", description: "Lock a session for an agent" },
+          { tool: "browser_session_unlock", description: "Unlock a session" },
+          { tool: "browser_session_transfer", description: "Transfer session to another agent" },
+          { tool: "browser_session_tag", description: "Add a tag to a session" },
+          { tool: "browser_session_untag", description: "Remove a tag from a session" },
           { tool: "browser_session_stats", description: "Get session stats and token usage" },
+          { tool: "browser_session_timeline", description: "Get chronological action log" },
           { tool: "browser_tab_new", description: "Open a new tab" },
           { tool: "browser_tab_list", description: "List all open tabs" },
           { tool: "browser_tab_switch", description: "Switch to a tab by index" },
@@ -1792,7 +2003,7 @@ server.tool(
   "browser_scroll_to_element",
   "Scroll an element into view (by ref or selector) then optionally take a screenshot of it. Replaces scroll + wait + screenshot pattern.",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     selector: z.string().optional(),
     ref: z.string().optional(),
     screenshot: z.boolean().optional().default(true),
@@ -1800,11 +2011,12 @@ server.tool(
   },
   async ({ session_id, selector, ref, screenshot: doScreenshot, wait_ms }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       let locator;
       if (ref) {
         const { getRefLocator } = await import("../lib/snapshot.js");
-        locator = getRefLocator(page, session_id, ref);
+        locator = getRefLocator(page, sid, ref);
       } else if (selector) {
         locator = page.locator(selector).first();
       } else {
@@ -1838,12 +2050,13 @@ server.tool(
 server.tool(
   "browser_check",
   "RECOMMENDED FIRST CALL: one-shot page summary — url, title, errors, performance, thumbnail, refs. Replaces 4+ separate tool calls.",
-  { session_id: z.string() },
+  { session_id: z.string().optional() },
   async ({ session_id }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const info = await getPageInfo(page);
-      const errors = getConsoleLog(session_id, "error");
+      const errors = getConsoleLog(sid, "error");
       info.has_console_errors = errors.length > 0;
       let perf = {};
       try { perf = await getPerformanceMetrics(page); } catch {}
@@ -1855,8 +2068,8 @@ server.tool(
       let snapshot_refs = "";
       let interactive_count = 0;
       try {
-        const snap = await takeSnapshotFn(page, session_id);
-        setLastSnapshot(session_id, snap);
+        const snap = await takeSnapshotFn(page, sid);
+        setLastSnapshot(sid, snap);
         interactive_count = snap.interactive_count;
         snapshot_refs = Object.entries(snap.refs).slice(0, 30)
           .map(([ref, i]) => `${i.role}:${i.name.slice(0, 50)} [${ref}]`)
@@ -1873,10 +2086,11 @@ server.tool(
 server.tool(
   "browser_secrets_login",
   "Login to a service using credentials from open-secrets vault or ~/.secrets. One call replaces 10+ tool calls.",
-  { session_id: z.string(), service: z.string(), login_url: z.string().optional(), save_profile: z.boolean().optional().default(true) },
+  { session_id: z.string().optional(), service: z.string(), login_url: z.string().optional(), save_profile: z.boolean().optional().default(true) },
   async ({ session_id, service, login_url, save_profile }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const { getCredentials, loginWithCredentials } = await import("../lib/auth.js");
       const creds = await getCredentials(service);
       if (!creds) return err(new Error(`No credentials found for '${service}'. Add them: secrets set ${service}_email yourlogin && secrets set ${service}_password yourpass`));
@@ -1893,10 +2107,11 @@ server.tool(
 server.tool(
   "browser_remember",
   "Store page facts in open-mementos for future recall. Agents skip re-scraping on repeat visits.",
-  { session_id: z.string(), facts: z.record(z.unknown()), tags: z.array(z.string()).optional() },
+  { session_id: z.string().optional(), facts: z.record(z.unknown()), tags: z.array(z.string()).optional() },
   async ({ session_id, facts, tags }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const { rememberPage } = await import("../lib/page-memory.js");
       const url = page.url();
       await rememberPage(url, facts, tags);
@@ -1923,13 +2138,14 @@ server.tool(
 server.tool(
   "browser_session_announce",
   "Announce to other agents via open-conversations what this session is browsing.",
-  { session_id: z.string(), message: z.string().optional() },
+  { session_id: z.string().optional(), message: z.string().optional() },
   async ({ session_id, message }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const { announceNavigation } = await import("../lib/coordination.js");
       const url = page.url();
-      await announceNavigation(url, session_id);
+      await announceNavigation(url, sid);
       return json({ announced: true, url, message });
     } catch (e) { return err(e); }
   }
@@ -1993,10 +2209,11 @@ server.tool(
 server.tool(
   "browser_skill_run",
   "Run a pre-built browser skill (login, extract-pricing, extract-nav-links, monitor-price, get-metadata). One call replaces 5–15 tool calls.",
-  { session_id: z.string(), skill: z.string(), params: z.record(z.unknown()).optional().default({}) },
+  { session_id: z.string().optional(), skill: z.string(), params: z.record(z.unknown()).optional().default({}) },
   async ({ session_id, skill, params }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const { runBrowserSkill } = await import("../lib/skills-runner.js");
       return json(await runBrowserSkill(skill, params, page as any));
     } catch (e) { return err(e); }
@@ -2021,7 +2238,7 @@ server.tool(
   "browser_batch",
   "Execute multiple browser actions in one call. Returns final snapshot. Eliminates 80% of round trips for multi-step flows.",
   {
-    session_id: z.string(),
+    session_id: z.string().optional(),
     actions: z.array(z.object({
       tool: z.string(),
       args: z.record(z.unknown()).optional().default({}),
@@ -2030,13 +2247,14 @@ server.tool(
   async ({ session_id, actions }) => {
     try {
       const results: Array<{ tool: string; success: boolean; result?: unknown; error?: string }> = [];
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const t0 = Date.now();
 
       for (const action of actions) {
         try {
           const toolName = action.tool.replace(/^browser_/, "");
-          const args = { session_id, ...(action.args as Record<string, unknown>) } as any;
+          const args = { session_id: sid, ...(action.args as Record<string, unknown>) } as any;
 
           switch (toolName) {
             case "navigate":
@@ -2044,12 +2262,12 @@ server.tool(
               results.push({ tool: action.tool, success: true, result: { url: page.url() } });
               break;
             case "click":
-              if (args.ref) { const { clickRef } = await import("../lib/actions.js"); await clickRef(page as any, session_id, args.ref as string); }
+              if (args.ref) { const { clickRef } = await import("../lib/actions.js"); await clickRef(page as any, sid, args.ref as string); }
               else if (args.selector) await page.click(args.selector as string);
               results.push({ tool: action.tool, success: true });
               break;
             case "type":
-              if (args.ref && args.text) { const { typeRef } = await import("../lib/actions.js"); await typeRef(page as any, session_id, args.ref as string, args.text as string); }
+              if (args.ref && args.text) { const { typeRef } = await import("../lib/actions.js"); await typeRef(page as any, sid, args.ref as string, args.text as string); }
               else if (args.selector && args.text) await page.fill(args.selector as string, args.text as string);
               results.push({ tool: action.tool, success: true });
               break;
@@ -2084,7 +2302,7 @@ server.tool(
       // Get final snapshot
       let final_snapshot: Record<string, unknown> = {};
       try {
-        const snap = await takeSnapshotFn(page, session_id);
+        const snap = await takeSnapshotFn(page, sid);
         final_snapshot = {
           refs: Object.fromEntries(Object.entries(snap.refs).slice(0, 20)),
           interactive_count: snap.interactive_count,
@@ -2172,12 +2390,13 @@ server.tool("browser_watch_delete", "Delete a URL watcher.", { watch_id: z.strin
 server.tool(
   "browser_task",
   "Execute a natural language browser task autonomously using Claude Haiku. Returns result + steps taken.",
-  { session_id: z.string(), task: z.string(), max_steps: z.number().optional().default(10), model: z.string().optional() },
+  { session_id: z.string().optional(), task: z.string(), max_steps: z.number().optional().default(10), model: z.string().optional() },
   async ({ session_id, task, max_steps, model }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const { executeBrowserTask } = await import("../lib/ai-task.js");
-      return json(await executeBrowserTask(page as any, task, { maxSteps: max_steps, model, sessionId: session_id }));
+      return json(await executeBrowserTask(page as any, task, { maxSteps: max_steps, model, sessionId: sid }));
     } catch (e) { return err(e); }
   }
 );
@@ -2185,10 +2404,11 @@ server.tool(
 server.tool(
   "browser_assert",
   "Assert page conditions in one call. Conditions: 'url contains X', 'text:\"Y\" is visible', 'element:\"#id\" exists', 'count:\"a\" > 10', 'title contains Z'. Chain with AND.",
-  { session_id: z.string(), condition: z.string() },
+  { session_id: z.string().optional(), condition: z.string() },
   async ({ session_id, condition }) => {
     try {
-      const page = getSessionPage(session_id);
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
       const checks: Array<{ assertion: string; result: boolean }> = [];
       let passed = true;
 

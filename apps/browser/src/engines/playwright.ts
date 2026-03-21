@@ -72,7 +72,7 @@ export class BrowserPool {
     this.options = options;
   }
 
-  async acquire(): Promise<Browser> {
+  async acquire(headless: boolean = true): Promise<Browser> {
     const available = this.pool.find((e) => !e.inUse);
     if (available) {
       available.inUse = true;
@@ -80,7 +80,7 @@ export class BrowserPool {
     }
 
     if (this.pool.length < this.maxSize) {
-      const browser = await launchPlaywright(this.options);
+      const browser = await launchPlaywright({ ...this.options, headless });
       this.pool.push({ browser, inUse: true, createdAt: Date.now() });
       return browser;
     }

@@ -76,6 +76,7 @@ export interface SessionOptions {
   captureNetwork?: boolean;  // default: true — auto-enable network logging
   captureConsole?: boolean;  // default: true — auto-enable console capture
   stealth?: boolean;         // default: false — apply anti-detection patches
+  autoGallery?: boolean;       // default: false — auto-save screenshot to gallery on every navigate
 }
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────

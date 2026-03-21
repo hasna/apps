@@ -2,8 +2,8 @@ import type { Browser, Page } from "playwright";
 import type { Session, SessionOptions, SessionStatus } from "../types/index.js";
 import { BrowserEngine, UseCase } from "../types/index.js";
 import { SessionNotFoundError, BrowserError } from "../types/index.js";
-import { createSession as dbCreateSession, getSession as dbGetSession, listSessions as dbListSessions, closeSession as dbCloseSession, updateSessionStatus, getSessionByName as dbGetSessionByName, renameSession as dbRenameSession } from "../db/sessions.js";
-import { launchPlaywright, getPage as getPlaywrightPage, closeBrowser as closePlaywrightBrowser } from "../engines/playwright.js";
+import { createSession as dbCreateSession, getSession as dbGetSession, listSessions as dbListSessions, closeSession as dbCloseSession, updateSessionStatus, getSessionByName as dbGetSessionByName, renameSession as dbRenameSession, getActiveSessionForAgent as dbGetActiveSessionForAgent, getDefaultActiveSession as dbGetDefaultActiveSession, countActiveSessions as dbCountActiveSessions } from "../db/sessions.js";
+import { launchPlaywright, getPage as getPlaywrightPage, closeBrowser as closePlaywrightBrowser, BrowserPool } from "../engines/playwright.js";
 import { connectLightpanda } from "../engines/lightpanda.js";
 import { BunWebViewSession, isBunWebViewAvailable } from "../engines/bun-webview.js";
 import { selectEngine } from "../engines/selector.js";
@@ -21,9 +21,29 @@ interface SessionHandle {
   engine: BrowserEngine;
   cleanups: Array<() => void>;
   tokenBudget: { total: number; used: number };
+  lastActivity: number;              // Date.now() timestamp for TTL
+  autoGallery: boolean;
 }
 
 const handles = new Map<string, SessionHandle>();
+
+// ─── Shared browser pool ──────────────────────────────────────────────────────
+const pool = new BrowserPool(5); // Up to 5 concurrent browsers
+
+// ─── Session TTL — auto-close stale sessions ────────────────────────────────
+const SESSION_TTL_MS = (parseInt(process.env["SESSION_TTL_MINUTES"] ?? "10", 10)) * 60_000;
+
+const ttlInterval = setInterval(async () => {
+  const now = Date.now();
+  for (const [id, handle] of handles) {
+    if (now - handle.lastActivity > SESSION_TTL_MS) {
+      try { await closeSession(id); } catch {}
+    }
+  }
+}, 60_000); // Check every 60 seconds
+
+// Don't keep the process alive just for TTL cleanup
+if (ttlInterval.unref) ttlInterval.unref();
 
 // ─── Bun.WebView → Playwright-compatible proxy ───────────────────────────────
 // Wraps BunWebViewSession to satisfy the Page interface expected by the rest of the codebase.
@@ -73,12 +93,8 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     const context = await browser.newContext({ viewport: opts.viewport ?? { width: 1280, height: 720 } });
     page = await context.newPage();
   } else {
-    // playwright or cdp both use Playwright under the hood
-    browser = await launchPlaywright({
-      headless: opts.headless ?? true,
-      viewport: opts.viewport,
-      userAgent: opts.userAgent,
-    });
+    // playwright or cdp both use Playwright under the hood — use shared pool
+    browser = await pool.acquire(opts.headless ?? true);
     page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
   }
 
@@ -127,7 +143,7 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     }
   }
 
-  handles.set(session.id, { browser, bunView, page, engine: bunView ? "bun" : resolvedEngine, cleanups, tokenBudget: { total: 0, used: 0 } });
+  handles.set(session.id, { browser, bunView, page, engine: bunView ? "bun" : resolvedEngine, cleanups, tokenBudget: { total: 0, used: 0 }, lastActivity: Date.now(), autoGallery: opts.autoGallery ?? false });
 
   if (opts.startUrl) {
     try {
@@ -162,6 +178,7 @@ export function getSessionPage(sessionId: string): Page {
     handles.delete(sessionId);
     throw new SessionNotFoundError(sessionId);
   }
+  handle.lastActivity = Date.now();
   return handle.page;
 }
 
@@ -206,7 +223,7 @@ export async function closeSession(sessionId: string): Promise<Session> {
       try { await handle.bunView.close(); } catch {}
     } else {
       try { await handle.page.context().close(); } catch {}
-      try { if (handle.browser) await closePlaywrightBrowser(handle.browser); } catch {}
+      if (handle.browser) pool.release(handle.browser);
     }
     handles.delete(sessionId);
   }
@@ -229,7 +246,10 @@ export async function closeAllSessions(): Promise<void> {
   for (const [id] of handles) {
     await closeSession(id).catch(() => {});
   }
+  await pool.destroyAll();
 }
+
+export { pool as browserPool };
 
 export function getSessionByName(name: string) {
   return dbGetSessionByName(name);
@@ -242,4 +262,47 @@ export function renameSession(id: string, name: string) {
 export function getTokenBudget(sessionId: string): { total: number; used: number } | null {
   const handle = handles.get(sessionId);
   return handle ? handle.tokenBudget : null;
+}
+
+// ─── Auto-reuse: find existing active session for an agent ───────────────────
+
+export function getActiveSessionForAgent(agentId: string): CreateSessionResult | null {
+  const session = dbGetActiveSessionForAgent(agentId);
+  if (!session) return null;
+  const handle = handles.get(session.id);
+  if (!handle) return null;
+  // Verify page is still alive
+  try {
+    if (handle.bunView) void handle.bunView.url();
+    else handle.page.url();
+  } catch {
+    handles.delete(session.id);
+    return null;
+  }
+  return { session, page: handle.page };
+}
+
+// ─── Auto-select: return single active session or null ──────────────────────
+
+export function getDefaultSession(): CreateSessionResult | null {
+  const session = dbGetDefaultActiveSession();
+  if (!session) return null;
+  const handle = handles.get(session.id);
+  if (!handle) return null;
+  try {
+    if (handle.bunView) void handle.bunView.url();
+    else handle.page.url();
+  } catch {
+    handles.delete(session.id);
+    return null;
+  }
+  return { session, page: handle.page };
+}
+
+export function isAutoGallery(sessionId: string): boolean {
+  return handles.get(sessionId)?.autoGallery ?? false;
+}
+
+export function countActiveSessions(): number {
+  return dbCountActiveSessions();
 }
