@@ -250,6 +250,18 @@ export function getDb(): Database {
     db.exec("ALTER TABLE agent_presence ADD COLUMN project_id TEXT");
   }
 
+  // Per-agent space message read receipts
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_read_receipts (
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      agent TEXT NOT NULL,
+      read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      PRIMARY KEY (message_id, agent)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_read_receipts_message ON message_read_receipts(message_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_read_receipts_agent ON message_read_receipts(agent)");
+
   // Message mentions table — @agent notifications
   db.exec(`
     CREATE TABLE IF NOT EXISTS message_mentions (

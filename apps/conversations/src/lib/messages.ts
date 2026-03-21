@@ -750,3 +750,56 @@ export function markUnreadByIds(ids: number[]): number {
   ).run(...ids);
   return result.changes;
 }
+
+// ── Per-agent read receipts ───────────────────────────────────────────────────
+
+export interface ReadReceipt {
+  message_id: number;
+  agent: string;
+  read_at: string;
+}
+
+/** Record that an agent has read a specific message. */
+export function recordReadReceipt(messageId: number, agent: string): void {
+  const db = getDb();
+  db.prepare(
+    `INSERT OR REPLACE INTO message_read_receipts (message_id, agent, read_at)
+     VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`
+  ).run(messageId, agent.toLowerCase());
+}
+
+/** Record read receipts for all messages in a batch. */
+export function recordReadReceiptsBatch(messageIds: number[], agent: string): void {
+  if (!messageIds.length || !agent) return;
+  const db = getDb();
+  const stmt = db.prepare(
+    `INSERT OR REPLACE INTO message_read_receipts (message_id, agent, read_at)
+     VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`
+  );
+  for (const id of messageIds) {
+    stmt.run(id, agent.toLowerCase());
+  }
+}
+
+/** Get all read receipts for a specific message. */
+export function getReadReceipts(messageId: number): ReadReceipt[] {
+  const db = getDb();
+  return db.prepare(
+    "SELECT * FROM message_read_receipts WHERE message_id = ? ORDER BY read_at ASC"
+  ).all(messageId) as ReadReceipt[];
+}
+
+/** Get read status summary for a space message: who has read it and who hasn't. */
+export function getMessageReadStatus(
+  messageId: number,
+  space: string
+): { receipts: ReadReceipt[]; unread_by: string[] } {
+  const db = getDb();
+  const receipts = getReadReceipts(messageId);
+  const readers = new Set(receipts.map((r) => r.agent));
+  const members = db.prepare(
+    "SELECT agent FROM space_members WHERE space = ?"
+  ).all(space) as { agent: string }[];
+  const unread_by = members.map((m) => m.agent).filter((a) => !readers.has(a));
+  return { receipts, unread_by };
+}

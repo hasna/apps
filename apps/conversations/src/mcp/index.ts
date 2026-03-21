@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds } from "../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSpaceRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers, getThreadReplies, listUnreadCounts, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus } from "../lib/messages.js";
 import { listSessions, getSessionActivity } from "../lib/sessions.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../lib/spaces.js";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../lib/projects.js";
@@ -321,6 +321,32 @@ server.registerTool("list_spaces", {
   };
 });
 
+server.registerTool("read_receipts", {
+  description: "Get per-agent read receipts for a message. Shows who has read it and (for space messages) who hasn't.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+    space: z.string().optional().describe("Space name — if provided, also returns list of members who haven't read yet"),
+  },
+}, async (args: Record<string, any>) => {
+  const receipts = getReadReceipts(args.message_id);
+  if (args.space) {
+    const status = getMessageReadStatus(args.message_id, args.space);
+    return { content: [{ type: "text", text: JSON.stringify(status) }] };
+  }
+  return { content: [{ type: "text", text: JSON.stringify({ receipts, count: receipts.length }) }] };
+});
+
+server.registerTool("mark_read_receipt", {
+  description: "Manually record that an agent has read a specific message.",
+  inputSchema: {
+    message_id: z.coerce.number(),
+    agent: z.string(),
+  },
+}, async (args: Record<string, any>) => {
+  recordReadReceipt(args.message_id, args.agent);
+  return { content: [{ type: "text", text: `✓ Marked message #${args.message_id} as read by ${args.agent}` }] };
+});
+
 server.registerTool("broadcast", {
   description: "Send the same message to multiple spaces at once. Useful for status updates, bug reports, or announcements that need to go to several spaces.",
   inputSchema: {
@@ -432,6 +458,7 @@ server.registerTool("read_space", {
   description: "Read messages from a space.",
   inputSchema: {
     space: z.string(),
+    from: z.string().optional().describe("Agent reading the space — used for per-agent read receipts"),
     since: z.string().optional(),
     limit: z.coerce.number().optional(),
     mark_read: z.coerce.boolean().optional(),
@@ -441,11 +468,17 @@ server.registerTool("read_space", {
     latest: z.coerce.number().optional().describe("Return the N most recent messages, newest first"),
   },
 }, async (args: Record<string, any>) => {
-  const { space, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
+  const { space, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
   const messages = readMessages({ space, since, limit, max_content_length, threads_only, include_reply_counts, latest });
 
   if (mark_read !== false && messages.length > 0) {
     markReadByIds(messages.map((m) => m.id));
+  }
+
+  // Record per-agent read receipts for all space messages
+  if (fromParam && messages.length > 0) {
+    const agent = resolveIdentity(fromParam);
+    recordReadReceiptsBatch(messages.map((m) => m.id), agent);
   }
 
   return {
