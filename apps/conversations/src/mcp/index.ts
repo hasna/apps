@@ -347,6 +347,25 @@ server.registerTool("mark_read_receipt", {
   return { content: [{ type: "text", text: `✓ Marked message #${args.message_id} as read by ${args.agent}` }] };
 });
 
+// react/unreact — ergonomic aliases for add_reaction/remove_reaction
+server.registerTool("react", {
+  description: "Add an emoji reaction (alias for add_reaction). Quick acknowledgment without a full reply.",
+  inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
+}, async (args: Record<string, any>) => {
+  const agent = resolveIdentity(args.from);
+  const reaction = addReaction(args.message_id, agent, args.emoji);
+  return { content: [{ type: "text", text: JSON.stringify(reaction) }] };
+});
+
+server.registerTool("unreact", {
+  description: "Remove an emoji reaction (alias for remove_reaction).",
+  inputSchema: { message_id: z.coerce.number(), emoji: z.string(), from: z.string().optional() },
+}, async (args: Record<string, any>) => {
+  const agent = resolveIdentity(args.from);
+  const removed = removeReaction(args.message_id, agent, args.emoji);
+  return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
+});
+
 server.registerTool("broadcast", {
   description: "Send the same message to multiple spaces at once. Useful for status updates, bug reports, or announcements that need to go to several spaces.",
   inputSchema: {
