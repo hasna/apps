@@ -954,6 +954,36 @@ server.tool(
   }
 );
 
+server.tool(
+  "browser_detect_env",
+  "Detect if the current page is running in production, development, staging, or local environment. Analyzes URL, meta tags, source maps, analytics SDKs, and more.",
+  { session_id: z.string().optional() },
+  async ({ session_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const { detectEnvironment } = await import("../lib/env-detector.js");
+      const result = await detectEnvironment(page);
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_performance_deep",
+  "Deep performance analysis: Web Vitals, resource breakdown by type, largest resources, third-party scripts with categories, DOM complexity, memory usage.",
+  { session_id: z.string().optional() },
+  async ({ session_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const { getDeepPerformance } = await import("../lib/deep-performance.js");
+      const result = await getDeepPerformance(page);
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
 // ── Console Tools ─────────────────────────────────────────────────────────────
 
 server.tool(
@@ -1041,6 +1071,63 @@ server.tool(
   async ({ project_id }) => {
     try {
       return json({ recordings: listRecordings(project_id) });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Workflow Tools ─────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_workflow_save",
+  "Save a recording as a reusable workflow with self-healing replay",
+  { recording_id: z.string(), name: z.string(), description: z.string().optional() },
+  async ({ recording_id, name, description }) => {
+    try {
+      const { saveWorkflowFromRecording } = await import("../lib/workflows.js");
+      return json(saveWorkflowFromRecording(recording_id, name, description));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_workflow_list",
+  "List all saved workflows",
+  {},
+  async () => {
+    try {
+      const { listWorkflows } = await import("../lib/workflows.js");
+      const workflows = listWorkflows();
+      return json({ workflows: workflows.map(w => ({ ...w, steps: `${w.steps.length} steps` })), count: workflows.length });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_workflow_run",
+  "Run a saved workflow with self-healing. If selectors changed, auto-adapts and reports what was healed.",
+  { session_id: z.string().optional(), name: z.string() },
+  async ({ session_id, name }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const { getWorkflowByName, runWorkflow } = await import("../lib/workflows.js");
+      const workflow = getWorkflowByName(name);
+      if (!workflow) return err(new Error(`Workflow '${name}' not found`));
+      const result = await runWorkflow(workflow, page);
+      logEvent(sid, "workflow_run", { name, ...result });
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_workflow_delete",
+  "Delete a saved workflow",
+  { name: z.string() },
+  async ({ name }) => {
+    try {
+      const { deleteWorkflow } = await import("../lib/workflows.js");
+      return json({ deleted: deleteWorkflow(name) });
     } catch (e) { return err(e); }
   }
 );
@@ -2038,6 +2125,94 @@ server.tool(
   }
 );
 
+// ── Data Extraction Tools ────────────────────────────────────────────────────
+
+server.tool(
+  "browser_detect_apis",
+  "Scan network traffic for JSON API endpoints. Returns discovered endpoints with methods, status codes, and URLs.",
+  { session_id: z.string().optional() },
+  async ({ session_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const { detectAPIs } = await import("../lib/api-detector.js");
+      const apis = detectAPIs(sid);
+      return json({ apis, count: apis.length });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_extract_structured",
+  "Extract structured data from page: tables, lists, JSON-LD, Open Graph, meta tags, and repeated elements (cards/items).",
+  { session_id: z.string().optional() },
+  async ({ session_id }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const { extractStructuredData } = await import("../lib/structured-extract.js");
+      const data = await extractStructuredData(page);
+      return json({
+        tables: data.tables.length,
+        lists: data.lists.length,
+        json_ld: data.jsonLd.length,
+        open_graph: Object.keys(data.openGraph).length,
+        meta_tags: Object.keys(data.metaTags).length,
+        repeated_elements: data.repeatedElements.length,
+        data,
+      });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_dataset_save",
+  "Save extracted data as a named dataset for later use",
+  { name: z.string(), data: z.array(z.record(z.unknown())), source_url: z.string().optional() },
+  async ({ name, data, source_url }) => {
+    try {
+      const { saveDataset } = await import("../lib/datasets.js");
+      const dataset = saveDataset({ name, rows: data, sourceUrl: source_url });
+      return json({ id: dataset.id, name: dataset.name, row_count: dataset.row_count });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_dataset_list",
+  "List all saved datasets",
+  {},
+  async () => {
+    try {
+      const { listDatasets } = await import("../lib/datasets.js");
+      return json({ datasets: listDatasets() });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_dataset_export",
+  "Export a dataset as JSON or CSV file",
+  { name: z.string(), format: z.enum(["json", "csv"]).optional().default("json") },
+  async ({ name, format }) => {
+    try {
+      const { exportDataset } = await import("../lib/datasets.js");
+      return json(exportDataset(name, format));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_dataset_delete",
+  "Delete a saved dataset",
+  { name: z.string() },
+  async ({ name }) => {
+    try {
+      const { deleteDataset } = await import("../lib/datasets.js");
+      return json({ deleted: deleteDataset(name) });
+    } catch (e) { return err(e); }
+  }
+);
+
 // ── Meta: browser_help ────────────────────────────────────────────────────────
 
 server.tool(
@@ -2130,6 +2305,20 @@ server.tool(
           { tool: "browser_auth_list", description: "List all saved auth flows" },
           { tool: "browser_auth_delete", description: "Delete a saved auth flow" },
         ],
+        Workflows: [
+          { tool: "browser_workflow_save", description: "Save a recording as a reusable workflow" },
+          { tool: "browser_workflow_list", description: "List all saved workflows" },
+          { tool: "browser_workflow_run", description: "Run a workflow with self-healing replay" },
+          { tool: "browser_workflow_delete", description: "Delete a saved workflow" },
+        ],
+        Data: [
+          { tool: "browser_extract_structured", description: "Extract tables, lists, JSON-LD, Open Graph, meta tags, repeated elements" },
+          { tool: "browser_detect_apis", description: "Scan network traffic for JSON API endpoints" },
+          { tool: "browser_dataset_save", description: "Save extracted data as a named dataset" },
+          { tool: "browser_dataset_list", description: "List all saved datasets" },
+          { tool: "browser_dataset_export", description: "Export dataset as JSON or CSV" },
+          { tool: "browser_dataset_delete", description: "Delete a saved dataset" },
+        ],
         Crawl: [
           { tool: "browser_crawl", description: "Crawl a URL recursively" },
         ],
@@ -2183,6 +2372,8 @@ server.tool(
           { tool: "browser_check", description: "RECOMMENDED: One-call page summary with diagnostics" },
           { tool: "browser_version", description: "Show running binary version and tool count" },
           { tool: "browser_help", description: "Show this help (all tools)" },
+          { tool: "browser_detect_env", description: "Detect environment (prod/dev/staging/local)" },
+          { tool: "browser_performance_deep", description: "Deep performance: resources, third-party, DOM, memory" },
           { tool: "browser_snapshot_diff", description: "Diff current snapshot vs previous" },
           { tool: "browser_watch_start", description: "Watch page for DOM changes" },
           { tool: "browser_watch_get_changes", description: "Get captured DOM changes" },

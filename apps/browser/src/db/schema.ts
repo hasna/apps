@@ -237,6 +237,54 @@ function runMigrations(db: Database): void {
         CREATE INDEX IF NOT EXISTS idx_auth_flows_name ON auth_flows(name);
       `,
     },
+    {
+      version: 7,
+      sql: `
+        CREATE TABLE IF NOT EXISTS workflows (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          steps TEXT NOT NULL DEFAULT '[]',
+          start_url TEXT,
+          last_run TEXT,
+          last_heal TEXT,
+          heal_count INTEGER DEFAULT 0,
+          run_count INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+      `,
+    },
+    {
+      version: 8,
+      sql: `
+        CREATE TABLE IF NOT EXISTS datasets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          source_url TEXT,
+          source_type TEXT NOT NULL DEFAULT 'page',
+          data TEXT NOT NULL DEFAULT '[]',
+          schema TEXT,
+          row_count INTEGER DEFAULT 0,
+          last_refresh TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS api_endpoints (
+          id TEXT PRIMARY KEY,
+          session_id TEXT,
+          url TEXT NOT NULL,
+          method TEXT DEFAULT 'GET',
+          response_schema TEXT,
+          sample_response TEXT,
+          status_code INTEGER,
+          content_type TEXT,
+          discovered_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_endpoints_session ON api_endpoints(session_id);
+      `,
+    },
   ];
 
   for (const m of migrations) {
