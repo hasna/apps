@@ -6,28 +6,25 @@ import { gatherFromMementos } from "./mementos.js";
 import { gatherFromConversations } from "./conversations.js";
 import { gatherFromSessions } from "./sessions.js";
 import type { GatherResult, GathererOptions, TrainingExample } from "./types.js";
+import { getGatherer, getRegisteredSources } from "./registry.js";
 
 export * from "./types.js";
+export * from "./protocol.js";
+export * from "./registry.js";
 export { gatherFromTodos, gatherFromMementos, gatherFromConversations, gatherFromSessions };
-
-const ALL_SOURCES = ["todos", "mementos", "conversations", "sessions"] as const;
-type Source = (typeof ALL_SOURCES)[number];
 
 export async function gatherAll(
   sources: string[],
   options: GathererOptions = {}
 ): Promise<GatherResult[]> {
-  const targets = sources.includes("all") ? [...ALL_SOURCES] : (sources as Source[]);
+  // "all" expands to every registered source
+  const targets = sources.includes("all") ? getRegisteredSources() : sources;
 
   const results = await Promise.allSettled(
     targets.map((source) => {
-      switch (source) {
-        case "todos": return gatherFromTodos(options);
-        case "mementos": return gatherFromMementos(options);
-        case "conversations": return gatherFromConversations(options);
-        case "sessions": return gatherFromSessions(options);
-        default: return Promise.resolve({ source, examples: [], count: 0 } as GatherResult);
-      }
+      const fn = getGatherer(source);
+      if (!fn) return Promise.resolve({ source, examples: [], count: 0 } as GatherResult);
+      return fn(options);
     })
   );
 
