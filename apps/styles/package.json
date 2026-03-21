@@ -24,7 +24,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external playwright && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun --external playwright && bun build ./src/index.ts --outdir ./dist --target bun --external playwright && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
@@ -64,6 +64,7 @@
     "ink-select-input": "^6.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
+    "playwright": "^1.58.2",
     "react": "^18.2.0",
     "zod": "^4.3.6"
   },
