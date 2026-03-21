@@ -1122,4 +1122,39 @@ goalCmd
     console.log()
   })
 
+// Top-level remove/uninstall — delegates to budget/project/goal/pricing remove
+program
+  .command('remove <type> <id>')
+  .alias('rm')
+  .description('Remove a record. Type: budget | project | goal | pricing')
+  .action((type: string, id: string) => {
+    const db = openDatabase()
+    try {
+      switch (type.toLowerCase()) {
+        case 'budget':
+          deleteBudget(db, id)
+          console.log(chalk.green(`✓ Budget ${id} removed`))
+          break
+        case 'project':
+          deleteProject(db, id)
+          console.log(chalk.green(`✓ Project ${id} removed`))
+          break
+        case 'goal':
+          deleteGoal(db, id)
+          console.log(chalk.green(`✓ Goal ${id} removed`))
+          break
+        case 'pricing':
+          deleteModelPricing(db, id)
+          console.log(chalk.green(`✓ Pricing entry ${id} removed`))
+          break
+        default:
+          console.error(chalk.red(`Unknown type: ${type}. Use: budget | project | goal | pricing`))
+          process.exit(1)
+      }
+    } catch (e) {
+      console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`))
+      process.exit(1)
+    }
+  })
+
 program.parse()
