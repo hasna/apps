@@ -111,16 +111,18 @@ export function getStaleContacts(threshold = 40, db?: Database): Array<{ contact
   // Simple heuristic: contacts with missing key fields
   const rows = _db
     .query(
-      `SELECT c.id as contact_id, c.display_name,
-        (CASE WHEN c.job_title IS NOT NULL THEN 15 ELSE 0 END +
-         CASE WHEN c.company_id IS NOT NULL THEN 15 ELSE 0 END +
-         CASE WHEN c.last_contacted_at IS NOT NULL THEN 20 ELSE 0 END +
-         CASE WHEN EXISTS(SELECT 1 FROM emails WHERE contact_id=c.id) THEN 20 ELSE 0 END +
-         CASE WHEN EXISTS(SELECT 1 FROM phones WHERE contact_id=c.id) THEN 15 ELSE 0 END +
-         CASE WHEN c.notes IS NOT NULL THEN 10 ELSE 0 END +
-         CASE WHEN EXISTS(SELECT 1 FROM contact_tags WHERE contact_id=c.id) THEN 5 ELSE 0 END
-        ) as score
-      FROM contacts c WHERE c.archived=0 HAVING score < ? ORDER BY score ASC LIMIT 100`,
+      `SELECT * FROM (
+        SELECT c.id as contact_id, c.display_name,
+          (CASE WHEN c.job_title IS NOT NULL THEN 15 ELSE 0 END +
+           CASE WHEN c.company_id IS NOT NULL THEN 15 ELSE 0 END +
+           CASE WHEN c.last_contacted_at IS NOT NULL THEN 20 ELSE 0 END +
+           CASE WHEN EXISTS(SELECT 1 FROM emails WHERE contact_id=c.id) THEN 20 ELSE 0 END +
+           CASE WHEN EXISTS(SELECT 1 FROM phones WHERE contact_id=c.id) THEN 15 ELSE 0 END +
+           CASE WHEN c.notes IS NOT NULL THEN 10 ELSE 0 END +
+           CASE WHEN EXISTS(SELECT 1 FROM contact_tags WHERE contact_id=c.id) THEN 5 ELSE 0 END
+          ) as score
+        FROM contacts c WHERE c.archived=0
+      ) WHERE score < ? ORDER BY score ASC LIMIT 100`,
     )
     .all(threshold) as Array<{ contact_id: string; display_name: string; score: number }>;
   return rows;
