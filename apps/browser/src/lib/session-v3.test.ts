@@ -54,11 +54,11 @@ afterEach(() => {
   delete process.env["BROWSER_DATA_DIR"];
 });
 
-describe("auto-logging on session", () => {
+describe("auto-logging on session (playwright engine — bun engine doesn't support Playwright network interception)", () => {
   it("captures network requests from initial navigation", async () => {
     const { createSession, closeSession } = await import("./session.js");
-    const { session } = await createSession({ startUrl: TEST_URL, headless: true });
-    // Wait for listeners to fire
+    // Force playwright engine — bun engine doesn't support route-based network logging
+    const { session } = await createSession({ engine: "playwright", startUrl: TEST_URL, headless: true });
     await new Promise(r => setTimeout(r, 200));
     const log = getNetworkLog(session.id);
     expect(log.length).toBeGreaterThan(0);
@@ -68,7 +68,7 @@ describe("auto-logging on session", () => {
 
   it("captures console messages from initial page", async () => {
     const { createSession, closeSession } = await import("./session.js");
-    const { session } = await createSession({ startUrl: TEST_URL, headless: true });
+    const { session } = await createSession({ engine: "playwright", startUrl: TEST_URL, headless: true });
     await new Promise(r => setTimeout(r, 200));
     const messages = getConsoleLog(session.id);
     expect(messages.length).toBeGreaterThan(0);
@@ -77,7 +77,7 @@ describe("auto-logging on session", () => {
 
   it("auto-names session from URL hostname", async () => {
     const { createSession, closeSession } = await import("./session.js");
-    const { session } = await createSession({ startUrl: TEST_URL, headless: true });
+    const { session } = await createSession({ engine: "playwright", startUrl: TEST_URL, headless: true });
     expect(session.name).toBe(`localhost`);
     await closeSession(session.id);
   });

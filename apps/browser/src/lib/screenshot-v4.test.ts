@@ -93,8 +93,9 @@ describe("start_url session — screenshot works immediately after creation", ()
     await closeSession(session.id);
   });
 
-  it("network log captures initial load from start_url", async () => {
+  it("network log captures initial load from start_url (playwright engine)", async () => {
     const { session } = await createSession({
+      engine: "playwright", // Bun.WebView doesn't support Playwright network listeners
       startUrl: TEST_URL,
       headless: true,
     });

@@ -55,6 +55,13 @@ const INTERACTIVE_ROLES = [
 // ─── Core snapshot function ───────────────────────────────────────────────────
 
 export async function takeSnapshot(page: Page, sessionId?: string): Promise<SnapshotResult> {
+  // Detect Bun.WebView sessions — use DOM-based snapshot instead of Playwright ARIA API
+  const isBunView = typeof (page as any).getNativeView === "function" ||
+                    typeof (page as any).bunView !== "undefined";
+  if (isBunView) {
+    return takeBunSnapshot(page as any, sessionId);
+  }
+
   // 1. Get the ARIA snapshot (YAML-like tree from Playwright)
   let ariaTree: string;
   try {
@@ -252,4 +259,79 @@ export function diffSnapshots(before: SnapshotResult, after: SnapshotResult): Sn
   const title_changed = before.tree !== after.tree && (added.length > 0 || removed.length > 0 || modified.length > 0);
 
   return { added, removed, modified, url_changed, title_changed };
+}
+
+// ─── Bun.WebView DOM-based snapshot ──────────────────────────────────────────
+// Uses evaluate() to walk the DOM since Bun.WebView doesn't have Playwright's
+// accessibility APIs (locator, ariaSnapshot, getByRole, etc.)
+
+export async function takeBunSnapshot(page: any, sessionId?: string): Promise<SnapshotResult> {
+  const refs: Record<string, RefInfo> = {};
+  const refMap = new Map<string, CachedRef>();
+  let refCounter = 0;
+  const lines: string[] = [];
+
+  try {
+    // Get page structure via evaluate
+    const elements = await page.evaluate(`
+      (() => {
+        const SELECTOR = 'a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=checkbox], [role=combobox], [role=menuitem], [role=tab], [role=option]';
+        const els = Array.from(document.querySelectorAll(SELECTOR));
+        return els.slice(0, 100).map(el => {
+          const tag = el.tagName.toLowerCase();
+          const inputType = el.getAttribute('type') ?? '';
+          let role = el.getAttribute('role') || (['a'].includes(tag) ? 'link' : ['button'].includes(tag) ? 'button' : ['input'].includes(tag) ? (inputType === 'checkbox' ? 'checkbox' : inputType === 'radio' ? 'radio' : 'textbox') : ['select'].includes(tag) ? 'combobox' : ['textarea'].includes(tag) ? 'textbox' : tag);
+          const name = (el.getAttribute('aria-label') || el.textContent?.trim() || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('value') || el.id || '').slice(0, 80);
+          const enabled = !el.disabled && !el.getAttribute('disabled');
+          const style = window.getComputedStyle(el);
+          const visible = style.display !== 'none' && style.visibility !== 'hidden' && el.offsetWidth > 0;
+          const checked = el.type === 'checkbox' || el.type === 'radio' ? el.checked : undefined;
+          const value = ['input', 'select', 'textarea'].includes(tag) && el.type !== 'checkbox' && el.type !== 'radio' ? el.value : undefined;
+          const selector = el.id ? '#' + el.id : (el.getAttribute('aria-label') ? '[aria-label="' + el.getAttribute('aria-label') + '"]' : tag);
+          return { role, name, enabled, visible, checked, value, selector };
+        }).filter(e => e.visible && e.name);
+      })()
+    `) as Array<{ role: string; name: string; enabled: boolean; visible: boolean; checked?: boolean; value?: string; selector: string }>;
+
+    // Get page title for tree header
+    const pageTitle = await page.evaluate("document.title") as string;
+    const pageUrl = typeof page.url === "function" ? page.url() : "";
+    lines.push(`# ${pageTitle || "Page"} (${pageUrl})`);
+
+    for (const el of elements) {
+      if (!el.name) continue;
+      const ref = `@e${refCounter}`;
+      refCounter++;
+
+      refs[ref] = {
+        role: el.role,
+        name: el.name,
+        visible: el.visible,
+        enabled: el.enabled,
+        value: el.value,
+        checked: el.checked,
+      };
+
+      refMap.set(ref, { role: el.role, name: el.name, locatorSelector: el.selector });
+
+      const extras: string[] = [];
+      if (el.checked !== undefined) extras.push(`checked=${el.checked}`);
+      if (!el.enabled) extras.push("disabled");
+      if (el.value && el.value !== el.name) extras.push(`value="${el.value.slice(0, 30)}"`);
+      const extrasStr = extras.length ? ` (${extras.join(", ")})` : "";
+      lines.push(`${el.role} "${el.name}" [${ref}]${extrasStr}`);
+    }
+  } catch (err) {
+    lines.push(`# (snapshot error: ${err instanceof Error ? err.message : String(err)})`);
+  }
+
+  if (sessionId) {
+    sessionRefMaps.set(sessionId, refMap);
+  }
+
+  return {
+    tree: lines.join("\n"),
+    refs,
+    interactive_count: refCounter,
+  };
 }

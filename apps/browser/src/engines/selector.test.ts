@@ -1,19 +1,25 @@
 import { describe, it, expect, mock } from "bun:test";
 import { selectEngine, isEngineAvailable, inferUseCase } from "./selector.js";
 import { UseCase } from "../types/index.js";
+import { isBunWebViewAvailable } from "./bun-webview.js";
+
+const bunAvailable = isBunWebViewAvailable();
 
 describe("engine selector", () => {
   describe("selectEngine", () => {
-    it("returns playwright for form fill", () => {
+    it("returns playwright for form fill (bun doesn't support multi-tab/upload)", () => {
       expect(selectEngine(UseCase.FORM_FILL)).toBe("playwright");
     });
 
-    it("returns playwright for screenshot", () => {
-      expect(selectEngine(UseCase.SCREENSHOT)).toBe("playwright");
+    it("returns bun or playwright for screenshot depending on availability", () => {
+      const engine = selectEngine(UseCase.SCREENSHOT);
+      expect(["bun", "playwright"]).toContain(engine);
+      if (bunAvailable) expect(engine).toBe("bun");
     });
 
-    it("returns playwright for SPA navigate", () => {
-      expect(selectEngine(UseCase.SPA_NAVIGATE)).toBe("playwright");
+    it("returns bun or playwright for SPA navigate depending on availability", () => {
+      const engine = selectEngine(UseCase.SPA_NAVIGATE);
+      expect(["bun", "playwright"]).toContain(engine);
     });
 
     it("returns playwright for auth flow", () => {
@@ -40,10 +46,11 @@ describe("engine selector", () => {
       expect(selectEngine(UseCase.COVERAGE)).toBe("cdp");
     });
 
-    it("prefers lightpanda for scrape if available, falls back to playwright", () => {
-      // Whether lightpanda is available or not, we get a valid engine
+    it("prefers bun for scrape if available, falls back to lightpanda or playwright", () => {
       const engine = selectEngine(UseCase.SCRAPE);
-      expect(["lightpanda", "playwright"]).toContain(engine);
+      // Priority: bun > lightpanda > playwright
+      expect(["bun", "lightpanda", "playwright"]).toContain(engine);
+      if (bunAvailable) expect(engine).toBe("bun");
     });
 
     it("explicit engine overrides use case", () => {

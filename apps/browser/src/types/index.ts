@@ -1,6 +1,6 @@
 // ─── Engine Types ────────────────────────────────────────────────────────────
 
-export type BrowserEngine = "playwright" | "cdp" | "lightpanda" | "auto";
+export type BrowserEngine = "playwright" | "cdp" | "lightpanda" | "bun" | "auto";
 
 export enum UseCase {
   SCRAPE = "scrape",

@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8")) as { version: string };
 
-import { createSession, closeSession, getSession, listSessions, getSessionPage, getSessionByName, renameSession, setSessionPage, getTokenBudget } from "../lib/session.js";
+import { createSession, closeSession, getSession, listSessions, getSessionPage, getSessionByName, renameSession, setSessionPage, getTokenBudget, getSessionBunView, isBunSession } from "../lib/session.js";
 import { navigate, click, type as typeText, fill, scroll, hover, selectOption, checkBox, uploadFile, goBack, goForward, reload, waitForSelector, pressKey, clickText, fillForm, waitForText, watchPage, getWatchChanges, stopWatch, clickRef, typeRef, fillRef, selectRef, checkRef, hoverRef } from "../lib/actions.js";
 import { getText, getHTML, getLinks, getTitle, getUrl, extract, extractStructured, extractTable, getAriaSnapshot, findElements, elementExists, getPageInfo } from "../lib/extractor.js";
 import { takeScreenshot, generatePDF } from "../lib/screenshot.js";
@@ -68,7 +68,7 @@ server.tool(
   "browser_session_create",
   "Create a new browser session with the specified engine",
   {
-    engine: z.enum(["playwright", "cdp", "lightpanda", "auto"]).optional().default("auto"),
+    engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "auto"]).optional().default("auto"),
     use_case: z.string().optional(),
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
@@ -138,7 +138,16 @@ server.tool(
   async ({ session_id, url, timeout, auto_snapshot, auto_thumbnail }) => {
     try {
       const page = getSessionPage(session_id);
-      await navigate(page, url, timeout);
+      // Bun.WebView fast path — sequential to avoid concurrent evaluate() errors
+      if (isBunSession(session_id)) {
+        const bunView = getSessionBunView(session_id)!;
+        await bunView.goto(url, { timeout });
+        // Extra settle time for page JS to finish (Bun.WebView evaluate is not re-entrant)
+        await new Promise(r => setTimeout(r, 500));
+      } else {
+        await navigate(page, url, timeout);
+      }
+      // Use property access for Bun (no evaluate call), page.title()/url() for Playwright
       const title = await getTitle(page);
       const current_url = await getUrl(page);
 
@@ -175,12 +184,20 @@ server.tool(
         ...(redirect_type ? { redirect_type } : {}),
       };
 
+      // For Bun.WebView: thumbnail and snapshot must be sequential (no concurrent evaluate())
+      // For Playwright: they can run in parallel (but we keep sequential for simplicity)
+
       // Auto-thumbnail (small, token-efficient)
       if (auto_thumbnail) {
         try {
           const ss = await takeScreenshot(page, { maxWidth: 400, quality: 60, track: false, thumbnail: false });
           result.thumbnail_base64 = ss.base64.length > 50000 ? "" : ss.base64;
         } catch {}
+      }
+
+      // Short settle for Bun before snapshot evaluate calls
+      if (isBunSession(session_id) && auto_snapshot) {
+        await new Promise(r => setTimeout(r, 200));
       }
 
       // Auto-snapshot with compact refs (≤30 elements)
@@ -868,7 +885,7 @@ server.tool(
     max_pages: z.number().optional().default(50),
     same_domain: z.boolean().optional().default(true),
     project_id: z.string().optional(),
-    engine: z.enum(["playwright", "cdp", "lightpanda", "auto"]).optional().default("auto"),
+    engine: z.enum(["playwright", "cdp", "lightpanda", "bun", "auto"]).optional().default("auto"),
   },
   async ({ url, max_depth, max_pages, same_domain, project_id, engine }) => {
     try {

@@ -35,10 +35,22 @@ export async function getLinks(page: Page, baseUrl?: string): Promise<string[]> 
 }
 
 export async function getTitle(page: Page): Promise<string> {
+  // BunWebViewSession: use native view.title property to avoid concurrent evaluate()
+  if (typeof (page as any).getNativeView === "function") {
+    const nativeView = (page as any).getNativeView();
+    const t = nativeView?.title;
+    return (typeof t === "string" && t) ? t : "";
+  }
   return page.title();
 }
 
 export async function getUrl(page: Page): Promise<string> {
+  // BunWebViewSession: use native view.url property
+  if (typeof (page as any).getNativeView === "function") {
+    const nativeView = (page as any).getNativeView();
+    const u = nativeView?.url;
+    return typeof u === "string" ? u : "";
+  }
   return page.url();
 }
 

@@ -72,10 +72,22 @@ export async function takeScreenshot(
     };
 
     let rawBuffer: Buffer;
+    // Check if this is a BunWebViewSession (has screenshot() returning Uint8Array)
+    const isBunView = typeof (page as any).getNativeView === "function";
     if (opts?.selector) {
-      const el = await page.$(opts.selector);
-      if (!el) throw new BrowserError(`Element not found: ${opts.selector}`, "ELEMENT_NOT_FOUND");
-      rawBuffer = await el.screenshot(rawOpts) as Buffer;
+      if (isBunView) {
+        // Bun.WebView doesn't support element screenshots — take full page and note it
+        const uint8 = await (page as any).screenshot();
+        rawBuffer = Buffer.from(uint8 instanceof Uint8Array ? uint8 : await uint8);
+      } else {
+        const el = await page.$(opts.selector);
+        if (!el) throw new BrowserError(`Element not found: ${opts.selector}`, "ELEMENT_NOT_FOUND");
+        rawBuffer = await el.screenshot(rawOpts) as Buffer;
+      }
+    } else if (isBunView) {
+      // Bun.WebView path — screenshot() returns Uint8Array, convert to Buffer
+      const uint8 = await (page as any).screenshot();
+      rawBuffer = Buffer.from(uint8 instanceof Uint8Array ? uint8 : await uint8);
     } else {
       rawBuffer = await page.screenshot(rawOpts) as Buffer;
     }

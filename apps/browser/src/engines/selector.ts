@@ -1,23 +1,28 @@
 import type { BrowserEngine } from "../types/index.js";
 import { UseCase } from "../types/index.js";
 import { isLightpandaAvailable } from "./lightpanda.js";
+import { isBunWebViewAvailable } from "./bun-webview.js";
 
 // ─── Engine Decision Table ────────────────────────────────────────────────────
 //
-// lightpanda → fast static tasks (no/minimal JS needed)
+// bun        → native zero-dep (WKWebView/Chrome), fastest for basic tasks
+// lightpanda → fast static tasks (no/minimal JS needed), fallback when no bun
 // cdp        → low-level DevTools tasks (network, perf, coverage, injection)
-// playwright → full automation (forms, SPAs, screenshots, auth, multi-tab)
+// playwright → full automation (forms, SPAs, auth, multi-tab, file upload)
 
 const ENGINE_MAP: Record<UseCase, BrowserEngine> = {
-  [UseCase.SCRAPE]:          "lightpanda",
-  [UseCase.EXTRACT_LINKS]:   "lightpanda",
-  [UseCase.STATUS_CHECK]:    "lightpanda",
+  // Tasks where Bun.WebView is ideal (fast, zero-dep, built-in stealth)
+  [UseCase.SCRAPE]:          "bun",
+  [UseCase.EXTRACT_LINKS]:   "bun",
+  [UseCase.STATUS_CHECK]:    "bun",
+  [UseCase.SCREENSHOT]:      "bun",
+  [UseCase.SPA_NAVIGATE]:    "bun",
+  // Tasks requiring full Playwright capabilities
   [UseCase.FORM_FILL]:       "playwright",
-  [UseCase.SPA_NAVIGATE]:    "playwright",
-  [UseCase.SCREENSHOT]:      "playwright",
   [UseCase.AUTH_FLOW]:       "playwright",
   [UseCase.MULTI_TAB]:       "playwright",
   [UseCase.RECORD_REPLAY]:   "playwright",
+  // CDP for low-level DevTools
   [UseCase.NETWORK_MONITOR]: "cdp",
   [UseCase.HAR_CAPTURE]:     "cdp",
   [UseCase.PERF_PROFILE]:    "cdp",
@@ -27,8 +32,8 @@ const ENGINE_MAP: Record<UseCase, BrowserEngine> = {
 
 /**
  * Select the optimal engine for a given use case.
- * If explicit engine is provided, it takes precedence (unless "auto").
- * Falls back to playwright if the preferred engine is not available.
+ * Priority: bun (if available) > lightpanda > playwright
+ * Explicit engine always wins unless "auto".
  */
 export function selectEngine(
   useCase: UseCase,
@@ -38,9 +43,18 @@ export function selectEngine(
 
   const preferred = ENGINE_MAP[useCase];
 
-  // Check availability
+  // Bun engine: use when available (canary+), fastest for read-only tasks
+  if (preferred === "bun") {
+    if (isBunWebViewAvailable()) return "bun";
+    // Bun not available — fall back to lightpanda for static, playwright for interactive
+    if (useCase === UseCase.SCRAPE || useCase === UseCase.EXTRACT_LINKS || useCase === UseCase.STATUS_CHECK) {
+      return isLightpandaAvailable() ? "lightpanda" : "playwright";
+    }
+    return "playwright";
+  }
+
+  // Lightpanda fallback check
   if (preferred === "lightpanda" && !isLightpandaAvailable()) {
-    // Fall back to playwright for static tasks
     return "playwright";
   }
 
@@ -52,8 +66,9 @@ export function selectEngine(
  */
 export function isEngineAvailable(engine: BrowserEngine): boolean {
   if (engine === "auto") return true;
-  if (engine === "playwright") return true; // always available if installed
-  if (engine === "cdp") return true; // available via Playwright CDP session
+  if (engine === "bun") return isBunWebViewAvailable();
+  if (engine === "playwright") return true;
+  if (engine === "cdp") return true;
   if (engine === "lightpanda") return isLightpandaAvailable();
   return false;
 }
