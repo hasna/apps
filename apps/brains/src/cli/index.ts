@@ -605,4 +605,42 @@ collectionsCmd
     }
   });
 
+// ── remove/uninstall ─────────────────────────────────────────────────────────
+
+program
+  .command("remove <id>")
+  .alias("rm")
+  .alias("uninstall")
+  .description("Remove a fine-tuned model or training job by ID")
+  .option("--type <type>", "Type: model | job (default: auto-detect)")
+  .action(async (id: string, opts) => {
+    const db = getDb();
+    try {
+      const type = opts.type?.toLowerCase();
+      if (type === "job" || (!type && !type)) {
+        // Try to delete as training job first if no type specified
+        const job = db.select().from(trainingJobs).where(eq(trainingJobs.id, id)).get();
+        if (job || type === "job") {
+          if (!job) { printError(`Job not found: ${id}`); process.exit(1); }
+          db.delete(trainingJobs).where(eq(trainingJobs.id, id)).run();
+          printSuccess(`Training job ${id} removed`);
+          return;
+        }
+      }
+      if (type === "model" || !type) {
+        const model = db.select().from(fineTunedModels).where(eq(fineTunedModels.id, id)).get();
+        if (model) {
+          db.delete(fineTunedModels).where(eq(fineTunedModels.id, id)).run();
+          printSuccess(`Model ${id} removed`);
+          return;
+        }
+      }
+      printError(`Not found: ${id}. Use --type model|job`);
+      process.exit(1);
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
 program.parse();
