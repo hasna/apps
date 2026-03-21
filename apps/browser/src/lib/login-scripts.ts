@@ -397,6 +397,16 @@ async function runConnectorStep(step: ScriptStep, vars: Record<string, string>):
   }
 }
 
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'");
+}
+
 function runExtractStep(step: ScriptStep, vars: Record<string, string>): void {
   const saveTo = step.save_as ?? "extracted";
 
@@ -406,7 +416,8 @@ function runExtractStep(step: ScriptStep, vars: Record<string, string>): void {
     const regex = new RegExp(step.pattern);
     const match = regex.exec(source);
     if (match) {
-      vars[saveTo] = match[1] ?? match[0];
+      // Decode HTML entities (common when extracting from email HTML bodies)
+      vars[saveTo] = decodeHtmlEntities(match[1] ?? match[0]);
     }
   }
 
