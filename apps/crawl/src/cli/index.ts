@@ -24,6 +24,11 @@ const { startCrawl, batchCrawl, recrawl, resumeCrawl, mapSite } = await import("
   mapSite: null as any,
 }));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { crawlInSandbox, checkE2B } = await import("../lib/sandbox.js").catch(() => ({
+  crawlInSandbox: null as any,
+  checkE2B: null as any,
+}));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { checkAiProviders } = await import("../lib/ai.js").catch(() => ({
   checkAiProviders: null as any,
 }));
@@ -61,6 +66,7 @@ program
   .option("--skip-tls", "disable TLS certificate verification")
   .option("--actions <json>", "pre-scrape browser actions JSON array")
   .option("--prompt <text>", "run AI prompt against first page after crawl")
+  .option("--sandbox", "run crawl inside an isolated e2b cloud sandbox")
   .option("--json", "output as JSON")
   .action(async (url: string, opts: {
     depth: string;
@@ -74,18 +80,45 @@ program
     ignoreQueryParams?: boolean;
     allowSubdomains?: boolean;
     allowExternal?: boolean;
-    mainContent?: boolean; // commander negates --no-main-content to mainContent=false
+    mainContent?: boolean;
     maxAge?: string;
     proxy?: string;
     skipTls?: boolean;
     actions?: string;
     prompt?: string;
+    sandbox?: boolean;
     json?: boolean;
   }) => {
     try {
       const depth = parseInt(opts.depth, 10);
       const maxPages = parseInt(opts.maxPages, 10);
       const delay = parseInt(opts.delay, 10);
+
+      // ─── Sandbox mode ────────────────────────────────────────────────────
+      if (opts.sandbox) {
+        const e2bStatus = checkE2B();
+        if (!e2bStatus.available) {
+          process.stderr.write(chalk.red(`Cannot use sandbox: ${e2bStatus.reason}\n`));
+          process.exit(1);
+        }
+        if (!opts.json) process.stderr.write(chalk.cyan(`Crawling ${url} `) + chalk.yellow(`[sandbox]\n`));
+        const result = await crawlInSandbox(
+          { url, depth, maxPages },
+          {
+            onOutput: opts.json ? undefined : (line: string) => process.stderr.write(chalk.gray(line + "\n")),
+          }
+        );
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        } else {
+          process.stderr.write(chalk.green(`✓ Sandbox crawl complete\n`));
+          process.stderr.write(`  ${chalk.bold("ID:")}       ${chalk.cyan(result.crawl.id)}\n`);
+          process.stderr.write(`  ${chalk.bold("Pages:")}    ${result.pages.length}\n`);
+          process.stderr.write(`  ${chalk.bold("Sandbox:")}  ${result.sandboxId}\n`);
+          process.stderr.write(`  ${chalk.bold("Duration:")} ${(result.durationMs / 1000).toFixed(1)}s\n`);
+        }
+        return;
+      }
 
       if (!opts.json) {
         process.stderr.write(
@@ -1364,6 +1397,66 @@ program
         process.stderr.write(`  ${chalk.bold(r.title)}\n`);
         if (r.snippet) process.stderr.write(`  ${chalk.gray(r.snippet.slice(0, 120))}\n`);
         process.stderr.write("\n");
+      }
+    } catch (err) {
+      process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));
+      process.exit(1);
+    }
+  });
+
+// ─── sandbox <url> ───────────────────────────────────────────────────────────
+
+program
+  .command("sandbox <url>")
+  .description("Crawl a URL inside an isolated e2b cloud sandbox")
+  .option("-d, --depth <n>", "crawl depth", "1")
+  .option("-m, --max-pages <n>", "max pages", "50")
+  .option("--timeout <ms>", "sandbox timeout in ms", "300000")
+  .option("--json", "output as JSON")
+  .action(async (url: string, opts: { depth: string; maxPages: string; timeout: string; json?: boolean }) => {
+    try {
+      const e2bStatus = checkE2B();
+      if (!e2bStatus.available) {
+        process.stderr.write(chalk.red(`Cannot use sandbox: ${e2bStatus.reason}\n`));
+        process.stderr.write(chalk.gray("Set E2B_API_KEY to use cloud sandboxes. Get a key at https://e2b.dev\n"));
+        process.exit(1);
+      }
+
+      if (!opts.json) {
+        process.stderr.write(chalk.cyan(`Crawling ${url} `) + chalk.yellow(`[e2b sandbox]\n`));
+        process.stderr.write(chalk.gray("  Spinning up isolated cloud environment...\n"));
+      }
+
+      const result = await crawlInSandbox(
+        {
+          url,
+          depth: parseInt(opts.depth, 10),
+          maxPages: parseInt(opts.maxPages, 10),
+        },
+        {
+          timeoutMs: parseInt(opts.timeout, 10),
+          onOutput: opts.json ? undefined : (line: string) => process.stderr.write(chalk.gray(`  ${line}\n`)),
+        }
+      );
+
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        return;
+      }
+
+      process.stderr.write(chalk.green("\n✓ Sandbox crawl complete\n"));
+      process.stderr.write(`  ${chalk.bold("Crawl ID:")}  ${chalk.cyan(result.crawl.id)}\n`);
+      process.stderr.write(`  ${chalk.bold("Pages:")}     ${chalk.white(String(result.pages.length))}\n`);
+      process.stderr.write(`  ${chalk.bold("Sandbox:")}   ${chalk.gray(result.sandboxId)}\n`);
+      process.stderr.write(`  ${chalk.bold("Duration:")}  ${chalk.gray((result.durationMs / 1000).toFixed(1) + "s")}\n`);
+      process.stderr.write("\n" + chalk.bold("Pages crawled:\n"));
+      for (const page of result.pages.slice(0, 5)) {
+        process.stderr.write(
+          `  ${chalk.green(String(page.statusCode ?? "?"))}  ${chalk.blue(page.url.slice(0, 70))}\n`
+        );
+      }
+      if (result.pages.length > 5) {
+        process.stderr.write(chalk.gray(`  ... and ${result.pages.length - 5} more\n`));
       }
     } catch (err) {
       process.stderr.write(chalk.red(`Error: ${(err as Error).message}\n`));

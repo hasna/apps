@@ -1,5 +1,5 @@
 {
-  "name": "@hasna/crawl",
+  "name": "webcrawl",
   "version": "0.3.0",
   "description": "AI-powered web crawler — self-hosted Firecrawl alternative. Crawl, extract, render JS, search. CLI + MCP + REST API + Dashboard.",
   "type": "module",
@@ -22,7 +22,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external playwright --external playwright-core && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external playwright --external playwright-core && bun build src/server/index.ts --outdir dist/server --target bun --external playwright --external playwright-core && bun build src/index.ts --outdir dist --target bun --external playwright --external playwright-core && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external playwright --external playwright-core --external e2b && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external playwright --external playwright-core --external e2b && bun build src/server/index.ts --outdir dist/server --target bun --external playwright --external playwright-core --external e2b && bun build src/index.ts --outdir dist --target bun --external playwright --external playwright-core --external e2b && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -41,18 +41,21 @@
     "cli",
     "dashboard",
     "playwright",
-    "extraction"
+    "extraction",
+    "e2b",
+    "sandbox",
+    "webcrawl"
   ],
   "publishConfig": {
     "access": "public"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-crawl.git"
+    "url": "https://github.com/hasna/crawl.git"
   },
-  "homepage": "https://github.com/hasna/open-crawl",
+  "homepage": "https://webcrawl.ai",
   "bugs": {
-    "url": "https://github.com/hasna/open-crawl/issues"
+    "url": "https://github.com/hasna/crawl/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
@@ -70,6 +73,7 @@
     "typescript": "^5.7.3"
   },
   "optionalDependencies": {
-    "playwright": "^1.50.0"
+    "playwright": "^1.50.0",
+    "e2b": "^2.14.1"
   }
 }

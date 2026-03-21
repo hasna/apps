@@ -2,7 +2,7 @@
 
 ## Project
 AI-powered web crawler — self-hosted Firecrawl alternative.
-Package: `@hasna/crawl` | Port: `19700`
+Package: `webcrawl` | Port: `19700`
 
 ## Commands
 ```bash

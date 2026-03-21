@@ -93,3 +93,7 @@ export { searchWeb } from "./lib/search-web.js";
 
 // Lib — Crawler (main entry points)
 export { crawlUrl, startCrawl, batchCrawl, recrawl } from "./lib/crawler.js";
+
+// Lib — Sandbox (e2b cloud crawling)
+export { crawlInSandbox, mapInSandbox, checkE2B } from './lib/sandbox.js';
+export type { SandboxCrawlResult, SandboxOptions } from './lib/sandbox.js';

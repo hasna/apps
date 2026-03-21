@@ -906,6 +906,86 @@ server.tool(
   }
 );
 
+// ─── Sandbox tools ───────────────────────────────────────────────────────────
+
+server.tool(
+  "crawl_in_sandbox",
+  "Crawl a URL inside an isolated e2b cloud sandbox. Useful for avoiding IP blocks and crawling in a clean environment. Requires E2B_API_KEY.",
+  {
+    url: z.string().describe("URL to crawl"),
+    depth: z.number().optional().describe("Crawl depth (default: 1)"),
+    maxPages: z.number().optional().describe("Max pages to crawl (default: 50)"),
+    timeoutMs: z.number().optional().describe("Sandbox timeout in ms (default: 300000)"),
+  },
+  async ({ url, depth, maxPages, timeoutMs }) => {
+    try {
+      const { crawlInSandbox, checkE2B } = await import("../lib/sandbox.js");
+      const status = checkE2B();
+      if (!status.available) {
+        return { content: [{ type: "text" as const, text: `Cannot use sandbox: ${status.reason}. Set E2B_API_KEY.` }], isError: true };
+      }
+      const result = await crawlInSandbox({ url, depth, maxPages }, { timeoutMs });
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            crawlId: result.crawl.id,
+            sandboxId: result.sandboxId,
+            pagesCrawled: result.pages.length,
+            durationMs: result.durationMs,
+            pages: result.pages.slice(0, 5).map(p => ({ url: p.url, title: p.title, wordCount: p.wordCount })),
+          }, null, 2),
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: String(err) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "map_in_sandbox",
+  "Discover all URLs on a site using an e2b cloud sandbox. Requires E2B_API_KEY.",
+  {
+    url: z.string().describe("Website URL to map"),
+    limit: z.number().optional().describe("Max URLs to return (default: 1000)"),
+    search: z.string().optional().describe("Filter URLs containing this string"),
+  },
+  async ({ url, limit, search }) => {
+    try {
+      const { mapInSandbox, checkE2B } = await import("../lib/sandbox.js");
+      const status = checkE2B();
+      if (!status.available) {
+        return { content: [{ type: "text" as const, text: `Cannot use sandbox: ${status.reason}` }], isError: true };
+      }
+      const urls = await mapInSandbox(url, { limit, search });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ urls, count: urls.length }, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: String(err) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "check_sandbox",
+  "Check if e2b sandbox is configured and available.",
+  {},
+  async () => {
+    const { checkE2B } = await import("../lib/sandbox.js");
+    const status = checkE2B();
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          available: status.available,
+          reason: status.reason ?? null,
+          setup: status.available ? "Ready" : "Set E2B_API_KEY env var. Get a key at https://e2b.dev",
+        }, null, 2),
+      }],
+    };
+  }
+);
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 async function main() {
