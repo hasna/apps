@@ -1867,6 +1867,376 @@ server.tool(
   }
 );
 
+// ── open-* Integration Tools ──────────────────────────────────────────────────
+
+// browser_secrets_login
+server.tool(
+  "browser_secrets_login",
+  "Login to a service using credentials from open-secrets vault or ~/.secrets. One call replaces 10+ tool calls.",
+  { session_id: z.string(), service: z.string(), login_url: z.string().optional(), save_profile: z.boolean().optional().default(true) },
+  async ({ session_id, service, login_url, save_profile }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const { getCredentials, loginWithCredentials } = await import("../lib/auth.js");
+      const creds = await getCredentials(service);
+      if (!creds) return err(new Error(`No credentials found for '${service}'. Add them: secrets set ${service}_email yourlogin && secrets set ${service}_password yourpass`));
+      const result = await loginWithCredentials(page as any, creds, {
+        loginUrl: login_url,
+        saveProfile: save_profile ? service : undefined,
+      });
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_remember
+server.tool(
+  "browser_remember",
+  "Store page facts in open-mementos for future recall. Agents skip re-scraping on repeat visits.",
+  { session_id: z.string(), facts: z.record(z.unknown()), tags: z.array(z.string()).optional() },
+  async ({ session_id, facts, tags }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const { rememberPage } = await import("../lib/page-memory.js");
+      const url = page.url();
+      await rememberPage(url, facts, tags);
+      return json({ remembered: true, url, facts_count: Object.keys(facts).length });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_recall
+server.tool(
+  "browser_recall",
+  "Retrieve cached page facts from open-mementos. Returns null if not cached or expired.",
+  { url: z.string(), max_age_hours: z.number().optional().default(24) },
+  async ({ url, max_age_hours }) => {
+    try {
+      const { recallPage } = await import("../lib/page-memory.js");
+      const memory = await recallPage(url, max_age_hours);
+      return json({ found: !!memory, memory });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_session_announce
+server.tool(
+  "browser_session_announce",
+  "Announce to other agents via open-conversations what this session is browsing.",
+  { session_id: z.string(), message: z.string().optional() },
+  async ({ session_id, message }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const { announceNavigation } = await import("../lib/coordination.js");
+      const url = page.url();
+      await announceNavigation(url, session_id);
+      return json({ announced: true, url, message });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_check_navigation
+server.tool(
+  "browser_check_navigation",
+  "Check if another agent is already scraping this URL. Prevents duplicate work across agents.",
+  { url: z.string() },
+  async ({ url }) => {
+    try {
+      const { checkDuplicate } = await import("../lib/coordination.js");
+      return json(await checkDuplicate(url));
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_task_queue
+server.tool(
+  "browser_task_queue",
+  "Queue a browser task in open-todos for agents to pick up.",
+  { title: z.string(), description: z.string(), url: z.string().optional(), priority: z.enum(["low", "medium", "high", "critical"]).optional().default("medium") },
+  async ({ title, description, url, priority }) => {
+    try {
+      const { queueBrowserTask } = await import("../lib/task-queue.js");
+      return json(await queueBrowserTask({ title, description, url, priority }));
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_task_list
+server.tool(
+  "browser_task_list",
+  "List pending browser tasks from open-todos.",
+  { status: z.enum(["pending", "in_progress"]).optional() },
+  async ({ status }) => {
+    try {
+      const { getBrowserTasks } = await import("../lib/task-queue.js");
+      const tasks = await getBrowserTasks(status);
+      return json({ tasks, count: tasks.length });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_task_complete
+server.tool(
+  "browser_task_complete",
+  "Mark a browser task as completed with extracted result data.",
+  { task_id: z.string(), result: z.record(z.unknown()) },
+  async ({ task_id, result }) => {
+    try {
+      const { completeBrowserTask } = await import("../lib/task-queue.js");
+      await completeBrowserTask(task_id, result);
+      return json({ completed: task_id });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_skill_run
+server.tool(
+  "browser_skill_run",
+  "Run a pre-built browser skill (login, extract-pricing, extract-nav-links, monitor-price, get-metadata). One call replaces 5–15 tool calls.",
+  { session_id: z.string(), skill: z.string(), params: z.record(z.unknown()).optional().default({}) },
+  async ({ session_id, skill, params }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const { runBrowserSkill } = await import("../lib/skills-runner.js");
+      return json(await runBrowserSkill(skill, params, page as any));
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_skill_list
+server.tool(
+  "browser_skill_list",
+  "List available browser skills.",
+  {},
+  async () => {
+    try {
+      const { listBuiltInSkills } = await import("../lib/skills-runner.js");
+      return json({ skills: listBuiltInSkills() });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_batch — execute multiple actions server-side, return final snapshot
+server.tool(
+  "browser_batch",
+  "Execute multiple browser actions in one call. Returns final snapshot. Eliminates 80% of round trips for multi-step flows.",
+  {
+    session_id: z.string(),
+    actions: z.array(z.object({
+      tool: z.string(),
+      args: z.record(z.unknown()).optional().default({}),
+    })),
+  },
+  async ({ session_id, actions }) => {
+    try {
+      const results: Array<{ tool: string; success: boolean; result?: unknown; error?: string }> = [];
+      const page = getSessionPage(session_id);
+      const t0 = Date.now();
+
+      for (const action of actions) {
+        try {
+          const toolName = action.tool.replace(/^browser_/, "");
+          const args = { session_id, ...(action.args as Record<string, unknown>) } as any;
+
+          switch (toolName) {
+            case "navigate":
+              await navigate(page, (action.args as any).url as string);
+              results.push({ tool: action.tool, success: true, result: { url: page.url() } });
+              break;
+            case "click":
+              if (args.ref) { const { clickRef } = await import("../lib/actions.js"); await clickRef(page as any, session_id, args.ref as string); }
+              else if (args.selector) await page.click(args.selector as string);
+              results.push({ tool: action.tool, success: true });
+              break;
+            case "type":
+              if (args.ref && args.text) { const { typeRef } = await import("../lib/actions.js"); await typeRef(page as any, session_id, args.ref as string, args.text as string); }
+              else if (args.selector && args.text) await page.fill(args.selector as string, args.text as string);
+              results.push({ tool: action.tool, success: true });
+              break;
+            case "fill_form":
+              if (args.fields) { const { fillForm } = await import("../lib/actions.js"); const r = await fillForm(page as any, args.fields as any); results.push({ tool: action.tool, success: true, result: r }); }
+              break;
+            case "scroll":
+              await scroll(page, ((args.direction as string) ?? "down") as "up" | "down" | "left" | "right", (args.amount as number) ?? 300);
+              results.push({ tool: action.tool, success: true });
+              break;
+            case "wait":
+              if (args.selector) await waitForSelector(page, args.selector as string, { timeout: args.timeout as number });
+              else await new Promise(r => setTimeout(r, (args.ms as number) ?? 500));
+              results.push({ tool: action.tool, success: true });
+              break;
+            case "evaluate":
+              const evalResult = await page.evaluate(args.script as string);
+              results.push({ tool: action.tool, success: true, result: evalResult });
+              break;
+            case "screenshot":
+              const ss = await takeScreenshot(page, { maxWidth: 1280, track: false });
+              results.push({ tool: action.tool, success: true, result: { path: ss.path, size_bytes: ss.size_bytes } });
+              break;
+            default:
+              results.push({ tool: action.tool, success: false, error: `Unknown batch action: ${toolName}` });
+          }
+        } catch (e) {
+          results.push({ tool: action.tool, success: false, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+
+      // Get final snapshot
+      let final_snapshot: Record<string, unknown> = {};
+      try {
+        const snap = await takeSnapshotFn(page, session_id);
+        final_snapshot = {
+          refs: Object.fromEntries(Object.entries(snap.refs).slice(0, 20)),
+          interactive_count: snap.interactive_count,
+        };
+      } catch {}
+
+      return json({
+        results,
+        succeeded: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+        final_url: page.url(),
+        final_snapshot,
+        elapsed_ms: Date.now() - t0,
+      });
+    } catch (e) { return err(e); }
+  }
+);
+
+// browser_pool_status
+server.tool(
+  "browser_pool_status",
+  "Get status of the pre-warmed browser session pool.",
+  {},
+  async () => {
+    try {
+      return json({ message: "Session pool not yet implemented in this version. Coming in v0.0.6+", ready: 0, total: 0 });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── v0.0.7: Automation + Cron + AI Task + Assert ─────────────────────────────
+
+server.tool(
+  "browser_cron_create",
+  "Schedule a browser task to run automatically. Uses Bun.cron. Example: '0 9 * * 1' = Monday 9am.",
+  { schedule: z.string(), url: z.string().optional(), skill: z.string().optional(), extract: z.record(z.string()).optional(), name: z.string().optional() },
+  async ({ schedule, url, skill, extract, name }) => {
+    try {
+      const { createCronJob } = await import("../lib/cron-manager.js");
+      return json(createCronJob(schedule, { url, skill, extract }, name));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool("browser_cron_list", "List scheduled browser cron jobs.", {},
+  async () => { try { const { listCronJobs } = await import("../lib/cron-manager.js"); return json({ jobs: listCronJobs() }); } catch (e) { return err(e); } }
+);
+
+server.tool("browser_cron_delete", "Delete a cron job.", { id: z.string() },
+  async ({ id }) => { try { const { deleteCronJob } = await import("../lib/cron-manager.js"); return json({ deleted: deleteCronJob(id) }); } catch (e) { return err(e); } }
+);
+
+server.tool("browser_cron_run_now", "Manually trigger a cron job.", { id: z.string() },
+  async ({ id }) => { try { const { runCronJobNow } = await import("../lib/cron-manager.js"); return json(await runCronJobNow(id)); } catch (e) { return err(e); } }
+);
+
+server.tool("browser_cron_enable", "Enable/disable a cron job.", { id: z.string(), enabled: z.boolean() },
+  async ({ id, enabled }) => { try { const { enableCronJob } = await import("../lib/cron-manager.js"); return json(enableCronJob(id, enabled)); } catch (e) { return err(e); } }
+);
+
+server.tool(
+  "browser_watch_url",
+  "Monitor a URL for content changes on a schedule. Stores change events.",
+  { url: z.string(), schedule: z.string().optional().default("*/5 * * * *"), selector: z.string().optional(), name: z.string().optional() },
+  async ({ url, schedule, selector, name }) => {
+    try {
+      const { createWatchJob } = await import("../lib/url-watcher.js");
+      return json(createWatchJob(url, schedule, { name, selector }));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool("browser_watch_list", "List URL watchers.", {},
+  async () => { try { const { listWatchJobs } = await import("../lib/url-watcher.js"); return json({ watches: listWatchJobs() }); } catch (e) { return err(e); } }
+);
+
+server.tool("browser_watch_events", "Get change events from a watcher.", { watch_id: z.string(), limit: z.number().optional().default(20) },
+  async ({ watch_id, limit }) => { try { const { getWatchEvents } = await import("../lib/url-watcher.js"); return json({ events: getWatchEvents(watch_id, limit) }); } catch (e) { return err(e); } }
+);
+
+server.tool("browser_watch_delete", "Delete a URL watcher.", { watch_id: z.string() },
+  async ({ watch_id }) => { try { const { deleteWatchJob } = await import("../lib/url-watcher.js"); return json({ deleted: deleteWatchJob(watch_id) }); } catch (e) { return err(e); } }
+);
+
+server.tool(
+  "browser_task",
+  "Execute a natural language browser task autonomously using Claude Haiku. Returns result + steps taken.",
+  { session_id: z.string(), task: z.string(), max_steps: z.number().optional().default(10), model: z.string().optional() },
+  async ({ session_id, task, max_steps, model }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const { executeBrowserTask } = await import("../lib/ai-task.js");
+      return json(await executeBrowserTask(page as any, task, { maxSteps: max_steps, model, sessionId: session_id }));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_assert",
+  "Assert page conditions in one call. Conditions: 'url contains X', 'text:\"Y\" is visible', 'element:\"#id\" exists', 'count:\"a\" > 10', 'title contains Z'. Chain with AND.",
+  { session_id: z.string(), condition: z.string() },
+  async ({ session_id, condition }) => {
+    try {
+      const page = getSessionPage(session_id);
+      const checks: Array<{ assertion: string; result: boolean }> = [];
+      let passed = true;
+
+      for (const part of condition.split(/\s+AND\s+/i)) {
+        const trimmed = part.trim();
+        let result = false;
+        try {
+          if (/^url\s+contains\s+/i.test(trimmed)) {
+            result = page.url().includes(trimmed.replace(/^url\s+contains\s+/i, "").replace(/^["']|["']$/g, ""));
+          } else if (/^title\s+contains\s+/i.test(trimmed)) {
+            const needle = trimmed.replace(/^title\s+contains\s+/i, "").replace(/^["']|["']$/g, "");
+            result = (await getTitle(page)).toLowerCase().includes(needle.toLowerCase());
+          } else if (/^text:["'](.+)["']/i.test(trimmed)) {
+            const text = trimmed.match(/^text:["'](.+)["']/i)?.[1] ?? "";
+            result = await page.evaluate(`document.body?.textContent?.includes(${JSON.stringify(text)}) ?? false`) as boolean;
+          } else if (/^element:["'](.+)["']/i.test(trimmed)) {
+            const sel = trimmed.match(/^element:["'](.+)["']/i)?.[1] ?? "";
+            result = await page.evaluate(`!!document.querySelector(${JSON.stringify(sel)})`) as boolean;
+          } else if (/^count:["'](.+)["']\s*([><=!]+)\s*(\d+)/i.test(trimmed)) {
+            const [, sel, op, n] = trimmed.match(/^count:["'](.+)["']\s*([><=!]+)\s*(\d+)/i)!;
+            const count = await page.evaluate(`document.querySelectorAll(${JSON.stringify(sel)}).length`) as number;
+            const num = parseInt(n);
+            result = op === ">" ? count > num : op === ">=" ? count >= num : op === "<" ? count < num : op === "<=" ? count <= num : count === num;
+          } else {
+            result = !!(await page.evaluate(trimmed));
+          }
+        } catch { result = false; }
+        checks.push({ assertion: trimmed, result });
+        if (!result) passed = false;
+      }
+      return json({ passed, checks, condition });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "browser_profile_auto_refresh",
+  "Schedule automatic cookie refresh to keep a profile session alive.",
+  { name: z.string(), refresh_url: z.string(), schedule: z.string().optional().default("0 */6 * * *") },
+  async ({ name, refresh_url, schedule }) => {
+    try {
+      const { createCronJob } = await import("../lib/cron-manager.js");
+      const job = createCronJob(schedule, { url: refresh_url }, `profile-refresh:${name}`);
+      return json({ scheduled: true, profile: name, schedule, job_id: job.id });
+    } catch (e) { return err(e); }
+  }
+);
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 // Log version to stderr on startup so debugging is instant

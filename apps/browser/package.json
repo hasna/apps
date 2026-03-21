@@ -1,6 +1,6 @@
 {
   "name": "@hasna/browser",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "General-purpose browser agent toolkit — Playwright, Chrome DevTools Protocol, Lightpanda with auto engine selection. CLI + MCP + REST + SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -38,6 +38,10 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
+    "@hasna/conversations": "/Users/hasna/Workspace/hasna/opensource/opensourcedev/open-conversations",
+    "@hasna/mementos": "/Users/hasna/Workspace/hasna/opensource/opensourcedev/open-mementos",
+    "@hasna/skills": "/Users/hasna/Workspace/hasna/opensource/opensourcedev/open-skills",
+    "@hasna/todos": "/Users/hasna/Workspace/hasna/opensource/opensourcedev/open-todos",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
