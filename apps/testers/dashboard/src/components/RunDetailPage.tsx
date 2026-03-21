@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Run, Result } from "../types";
 import { getRun, getResult, getScreenshotUrl } from "../lib/api";
 import { Spinner } from "./Spinner";
@@ -14,14 +14,37 @@ export function RunDetailPage({ runId, onBack, onSelectResult }: { runId: string
   const [run, setRun] = useState<Run | null>(null);
   const [results, setResults] = useState<Result[]>([]);
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
+  const [isLive, setIsLive] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
+    // Initial fetch
     getRun(runId)
       .then(({ run, results }) => {
         setRun(run);
         setResults(results);
+        // If still running, open SSE stream for live updates
+        if (run.status === "pending" || run.status === "running") {
+          setIsLive(true);
+          const es = new EventSource(`/api/runs/${runId}/stream`);
+          esRef.current = es;
+          es.onmessage = (e) => {
+            try {
+              const data = JSON.parse(e.data) as { type: string; run: Run; results: Result[] };
+              setRun(data.run);
+              setResults(data.results ?? []);
+              if (data.type === "done") {
+                setIsLive(false);
+                es.close();
+              }
+            } catch { /* ignore parse errors */ }
+          };
+          es.onerror = () => { setIsLive(false); es.close(); };
+        }
       })
       .catch(console.error);
+
+    return () => { esRef.current?.close(); };
   }, [runId]);
 
   // Shift+click accumulates up to 2 results for comparison
@@ -57,7 +80,15 @@ export function RunDetailPage({ runId, onBack, onSelectResult }: { runId: string
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 13 }}>
           <div><span style={{ color: "var(--text-muted)" }}>URL:</span> {run.url}</div>
           <div><span style={{ color: "var(--text-muted)" }}>Model:</span> {run.model}</div>
-          <div><span style={{ color: "var(--text-muted)" }}>Status:</span> <span style={{ color: statusColors[run.status] }}>{run.status}</span></div>
+          <div>
+            <span style={{ color: "var(--text-muted)" }}>Status:</span>{" "}
+            <span style={{ color: statusColors[run.status] }}>{run.status}</span>
+            {isLive && (
+              <span style={{ marginLeft: 8, fontSize: 10, background: "rgba(59,130,246,0.15)", color: "var(--blue)", borderRadius: 4, padding: "2px 6px", fontWeight: 600 }}>
+                ● LIVE
+              </span>
+            )}
+          </div>
           <div><span style={{ color: "var(--green)" }}>{run.passed} passed</span> / <span style={{ color: run.failed > 0 ? "var(--red)" : "var(--text-muted)" }}>{run.failed} failed</span> / {run.total} total</div>
         </div>
       </div>
@@ -110,6 +141,11 @@ export function RunDetailPage({ runId, onBack, onSelectResult }: { runId: string
                 </span>
                 {r.scenarioShortId && <span style={{ color: "var(--cyan)", fontFamily: "monospace", fontSize: 12 }}>{r.scenarioShortId}</span>}
                 <span style={{ fontWeight: 500, fontSize: 13 }}>{r.scenarioName ?? r.scenarioId.slice(0, 8)}</span>
+                {r.personaName && (
+                  <span style={{ fontSize: 12, background: "rgba(139,92,246,0.12)", color: "#8b5cf6", padding: "1px 7px", borderRadius: 10, fontWeight: 500 }}>
+                    👤 {r.personaName}
+                  </span>
+                )}
                 <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 12 }}>
                   {(r.durationMs / 1000).toFixed(1)}s | {r.tokensUsed} tokens | {r.screenshots.length} screenshots
                 </span>

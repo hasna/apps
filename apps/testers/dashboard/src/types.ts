@@ -45,6 +45,8 @@ export interface Result {
   tokensUsed: number;
   costCents: number;
   screenshots: ScreenshotRef[];
+  personaId: string | null;
+  personaName: string | null;
 }
 
 export interface ScreenshotRef {
@@ -144,4 +146,37 @@ export interface Environment {
   isDefault: boolean;
   variables: Record<string, string>;
   createdAt: string;
+}
+
+export interface Persona {
+  id: string;
+  shortId: string;
+  projectId: string | null;
+  name: string;
+  description: string;
+  role: string;
+  instructions: string;
+  traits: string[];
+  goals: string[];
+  enabled: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScanIssue {
+  id: string;
+  fingerprint: string;
+  type: "console_error" | "network_error" | "broken_link" | "performance";
+  severity: "critical" | "high" | "medium" | "low";
+  pageUrl: string;
+  message: string;
+  detail: Record<string, unknown> | null;
+  status: "open" | "resolved" | "regressed";
+  occurrenceCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  resolvedAt: string | null;
+  todoTaskId: string | null;
+  projectId: string | null;
 }

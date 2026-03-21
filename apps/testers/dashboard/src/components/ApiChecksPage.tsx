@@ -361,6 +361,7 @@ export function ApiChecksPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "passing" | "failing" | "error">("all");
   const [toast, setToast] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -541,8 +542,14 @@ export function ApiChecksPage() {
               {filteredChecks.map((check) => {
                 const lastResult = lastResults[check.id];
                 const isRunning = runningId === check.id;
+                const isExpanded = expandedId === check.id;
                 return (
-                  <tr key={check.id} style={{ opacity: isRunning ? 0.6 : 1, transition: "opacity 0.2s" }}>
+                  <>
+                  <tr
+                    key={check.id}
+                    onClick={() => setExpandedId(isExpanded ? null : check.id)}
+                    style={{ opacity: isRunning ? 0.6 : 1, transition: "opacity 0.2s", cursor: "pointer" }}
+                  >
                     <td style={tdStyle}>
                       <MethodBadge method={check.method} />
                     </td>
@@ -589,7 +596,7 @@ export function ApiChecksPage() {
                     <td style={{ ...tdStyle, textAlign: "right" }}>
                       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                         <button
-                          onClick={() => handleRunCheck(check)}
+                          onClick={(e) => { e.stopPropagation(); handleRunCheck(check); }}
                           disabled={isRunning}
                           title="Run check"
                           style={{
@@ -603,7 +610,7 @@ export function ApiChecksPage() {
                           {isRunning ? "…" : "▶ Run"}
                         </button>
                         <button
-                          onClick={() => handleDelete(check)}
+                          onClick={(e) => { e.stopPropagation(); handleDelete(check); }}
                           title="Delete check"
                           style={{ ...btnStyle, color: "var(--red)", borderColor: "var(--red)" }}
                         >
@@ -612,6 +619,67 @@ export function ApiChecksPage() {
                       </div>
                     </td>
                   </tr>
+                  {isExpanded && lastResult && (
+                    <tr key={`${check.id}-detail`} onClick={(e) => e.stopPropagation()}>
+                      <td colSpan={6} style={{ padding: 0, background: "rgba(0,0,0,0.2)", borderBottom: "1px solid var(--border)" }}>
+                        <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                          {/* Response Body */}
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
+                              Response Body
+                            </div>
+                            <pre style={{
+                              margin: 0, padding: "10px 12px", background: "var(--bg)", border: "1px solid var(--border)",
+                              borderRadius: 6, fontSize: 11, fontFamily: "monospace", overflowX: "auto",
+                              maxHeight: 200, color: "var(--text)", whiteSpace: "pre-wrap", wordBreak: "break-all",
+                            }}>
+                              {(() => {
+                                const body = lastResult.responseBody;
+                                if (!body) return <span style={{ color: "var(--text-muted)" }}>Empty</span>;
+                                try { return JSON.stringify(JSON.parse(body), null, 2); }
+                                catch { return body; }
+                              })()}
+                            </pre>
+                          </div>
+                          {/* Assertions + Headers */}
+                          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                            {/* Assertions */}
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                                Assertions
+                              </div>
+                              {lastResult.assertionsPassed.map((a, i) => (
+                                <div key={i} style={{ fontSize: 12, color: "var(--green)", marginBottom: 3 }}>✓ {a}</div>
+                              ))}
+                              {lastResult.assertionsFailed.map((a, i) => (
+                                <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 3 }}>✗ {a}</div>
+                              ))}
+                              {lastResult.error && (
+                                <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 3 }}>⚠ {lastResult.error}</div>
+                              )}
+                            </div>
+                            {/* Response Headers */}
+                            {Object.keys(lastResult.responseHeaders).length > 0 && (
+                              <div>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                                  Response Headers
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                  {Object.entries(lastResult.responseHeaders).slice(0, 8).map(([k, v]) => (
+                                    <div key={k} style={{ fontSize: 11, fontFamily: "monospace" }}>
+                                      <span style={{ color: "var(--blue)" }}>{k}:</span>{" "}
+                                      <span style={{ color: "var(--text-muted)" }}>{v}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </>
                 );
               })}
             </tbody>
