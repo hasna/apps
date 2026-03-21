@@ -2641,16 +2641,22 @@ function promptPassphrase(promptText: string): Promise<string> {
 vaultCmd
   .command('init')
   .description('Initialize the encrypted vault')
-  .action(async () => {
+  .option('--passphrase <pass>', 'Passphrase (non-interactive)')
+  .action(async (opts: { passphrase?: string }) => {
     const { initVault, isVaultInitialized } = await import('../lib/vault.js');
     if (isVaultInitialized()) {
       console.log(chalk.yellow('\nVault already initialized. Use "contacts vault unlock" to access it.\n'));
       return;
     }
-    const passphrase = await promptPassphrase('Enter vault passphrase: ');
-    if (!passphrase) { console.error(chalk.red('Passphrase is required.')); process.exit(1); }
-    const confirm = await promptPassphrase('Confirm passphrase: ');
-    if (passphrase !== confirm) { console.error(chalk.red('Passphrases do not match.')); process.exit(1); }
+    let passphrase: string;
+    if (opts.passphrase) {
+      passphrase = opts.passphrase;
+    } else {
+      passphrase = await promptPassphrase('Enter vault passphrase: ');
+      if (!passphrase) { console.error(chalk.red('Passphrase is required.')); process.exit(1); }
+      const confirm = await promptPassphrase('Confirm passphrase: ');
+      if (passphrase !== confirm) { console.error(chalk.red('Passphrases do not match.')); process.exit(1); }
+    }
     initVault(passphrase);
     console.log(chalk.green('\nVault initialized and unlocked.\n'));
   });
@@ -2658,9 +2664,10 @@ vaultCmd
 vaultCmd
   .command('unlock')
   .description('Unlock the vault')
-  .action(async () => {
+  .option('--passphrase <pass>', 'Passphrase (non-interactive)')
+  .action(async (opts: { passphrase?: string }) => {
     const { unlockVault } = await import('../lib/vault.js');
-    const passphrase = await promptPassphrase('Enter vault passphrase: ');
+    const passphrase = opts.passphrase || await promptPassphrase('Enter vault passphrase: ');
     const ok = unlockVault(passphrase);
     if (!ok) {
       console.error(chalk.red('\nInvalid passphrase.\n'));
