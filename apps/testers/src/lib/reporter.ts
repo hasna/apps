@@ -242,7 +242,7 @@ export function getScenarioRunStats(scenarioId: string): ScenarioRunStats {
   };
 }
 
-export function formatScenarioList(scenarios: Array<{ id?: string; shortId: string; name: string; priority: string; tags: string[] }>): string {
+export function formatScenarioList(scenarios: Array<{ id?: string; shortId: string; name: string; priority: string; tags: string[]; flakinessScore?: number | null; recentRunCount?: number }>): string {
   const lines: string[] = [];
   lines.push("");
   lines.push(chalk.bold("  Scenarios"));
@@ -277,7 +277,11 @@ export function formatScenarioList(scenarios: Array<{ id?: string; shortId: stri
       passRateStr = stats.passRate === "—" ? chalk.dim("—") : chalk.dim(stats.passRate);
     }
 
-    lines.push(`  ${chalk.cyan(s.shortId)}  ${s.name}  ${priorityColor(s.priority)}${tags}  ${lastStatusIcon} ${passRateStr}`);
+    const flakinessStr = (s.flakinessScore !== null && s.flakinessScore !== undefined && s.flakinessScore < 0.8)
+      ? chalk.yellow(` ⚡ flaky (${Math.round(s.flakinessScore * 100)}%)`)
+      : "";
+
+    lines.push(`  ${chalk.cyan(s.shortId)}  ${s.name}  ${priorityColor(s.priority)}${tags}${flakinessStr}  ${lastStatusIcon} ${passRateStr}`);
   }
 
   lines.push("");

@@ -139,7 +139,38 @@ export function listScenarios(filter?: ScenarioFilter): Scenario[] {
   }
 
   const rows = db.query(sql).all(...params) as ScenarioRow[];
-  return rows.map(scenarioFromRow);
+  const scenarios = rows.map(scenarioFromRow);
+
+  // Compute flakiness score per scenario using last 10 results each
+  if (scenarios.length === 0) return scenarios;
+
+  const scenarioIds = scenarios.map((s) => s.id);
+  const placeholders = scenarioIds.map(() => "?").join(",");
+
+  // Subquery: get last 10 results per scenario, then aggregate
+  const statsRows = db.query(`
+    SELECT scenario_id,
+           COUNT(*) as total,
+           SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed
+    FROM (
+      SELECT scenario_id, status
+      FROM results
+      WHERE scenario_id IN (${placeholders})
+      ORDER BY created_at DESC
+    )
+    GROUP BY scenario_id
+  `).all(...scenarioIds) as { scenario_id: string; total: number; passed: number }[];
+
+  const statsMap = new Map(statsRows.map((r) => [r.scenario_id, r]));
+
+  return scenarios.map((s) => {
+    const stats = statsMap.get(s.id);
+    return {
+      ...s,
+      flakinessScore: stats ? stats.passed / stats.total : null,
+      recentRunCount: stats?.total ?? 0,
+    };
+  });
 }
 
 export function updateScenario(id: string, input: UpdateScenarioInput, version: number): Scenario {
@@ -283,6 +314,12 @@ export function findStaleScenarios(days: number): StaleScenario[] {
     ...scenarioFromRow(row),
     lastRunAt: row.last_run_at,
   }));
+}
+
+export function updateScenarioPassedCache(id: string, url: string): void {
+  const db = getDatabase();
+  db.query("UPDATE scenarios SET last_passed_at = ?, last_passed_url = ? WHERE id = ?")
+    .run(now(), url, id);
 }
 
 export function deleteScenario(id: string): boolean {

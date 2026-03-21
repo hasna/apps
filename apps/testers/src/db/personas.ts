@@ -17,8 +17,8 @@ export function createPersona(input: CreatePersonaInput): Persona {
   const timestamp = now();
 
   db.query(`
-    INSERT INTO personas (id, short_id, project_id, name, description, role, instructions, traits, goals, metadata, enabled, version, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    INSERT INTO personas (id, short_id, project_id, name, description, role, instructions, traits, goals, behaviors, expertise_level, demographics, pain_points, metadata, enabled, version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `).run(
     id,
     short_id,
@@ -29,6 +29,10 @@ export function createPersona(input: CreatePersonaInput): Persona {
     input.instructions ?? "",
     JSON.stringify(input.traits ?? []),
     JSON.stringify(input.goals ?? []),
+    JSON.stringify(input.behaviors ?? []),
+    input.expertiseLevel ?? "intermediate",
+    JSON.stringify(input.demographics ?? {}),
+    JSON.stringify(input.painPoints ?? []),
     input.metadata ? JSON.stringify(input.metadata) : "{}",
     input.enabled === false ? 0 : 1,
     timestamp,
@@ -134,6 +138,22 @@ export function updatePersona(id: string, updates: UpdatePersonaInput, version: 
   if (updates.goals !== undefined) {
     sets.push("goals = ?");
     params.push(JSON.stringify(updates.goals));
+  }
+  if (updates.behaviors !== undefined) {
+    sets.push("behaviors = ?");
+    params.push(JSON.stringify(updates.behaviors));
+  }
+  if (updates.expertiseLevel !== undefined) {
+    sets.push("expertise_level = ?");
+    params.push(updates.expertiseLevel);
+  }
+  if (updates.demographics !== undefined) {
+    sets.push("demographics = ?");
+    params.push(JSON.stringify(updates.demographics));
+  }
+  if (updates.painPoints !== undefined) {
+    sets.push("pain_points = ?");
+    params.push(JSON.stringify(updates.painPoints));
   }
   if (updates.enabled !== undefined) {
     sets.push("enabled = ?");

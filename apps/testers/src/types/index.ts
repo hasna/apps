@@ -3,7 +3,7 @@
 export type ScenarioPriority = "low" | "medium" | "high" | "critical";
 export type RunStatus = "pending" | "running" | "passed" | "failed" | "cancelled";
 export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
-export type ModelPreset = "quick" | "thorough" | "deep";
+export type ModelPreset = "quick" | "thorough" | "deep" | "cerebras-fast" | "cerebras-smart";
 export type BrowserEngine = "playwright" | "lightpanda" | "bun";
 
 export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations";
@@ -19,6 +19,8 @@ export const MODEL_MAP: Record<ModelPreset, string> = {
   quick: "claude-haiku-4-5-20251001",
   thorough: "claude-sonnet-4-6-20260311",
   deep: "claude-opus-4-6-20260311",
+  "cerebras-fast": "llama-3.1-8b",
+  "cerebras-smart": "llama-3.3-70b",
 };
 
 // ─── Database Row Types (snake_case from SQLite) ─────────────────────────────
@@ -66,6 +68,8 @@ export interface ScenarioRow {
   version: number;
   created_at: string;
   updated_at: string;
+  last_passed_at: string | null;
+  last_passed_url: string | null;
 }
 
 export interface RunRow {
@@ -87,6 +91,16 @@ export interface RunRow {
   flakiness_threshold: number;
 }
 
+export interface FailureAnalysis {
+  type: "selector_not_found" | "assertion_failed" | "timeout" | "auth_error" | "network_error" | "eval_failed" | "unknown";
+  affectedElement?: string;
+  affectedUrl?: string;
+  expected?: string;
+  actual?: string;
+  stepNumber?: number;
+  confidence: "high" | "medium" | "low";
+}
+
 export interface ResultRow {
   id: string;
   run_id: string;
@@ -104,6 +118,7 @@ export interface ResultRow {
   created_at: string;
   persona_id: string | null;
   persona_name: string | null;
+  failure_analysis: string | null;
 }
 
 export interface ScreenshotRow {
@@ -201,6 +216,10 @@ export interface Scenario {
   version: number;
   createdAt: string;
   updatedAt: string;
+  lastPassedAt: string | null;
+  lastPassedUrl: string | null;
+  flakinessScore?: number | null;
+  recentRunCount?: number;
 }
 
 export interface Run {
@@ -239,6 +258,7 @@ export interface Result {
   createdAt: string;
   personaId: string | null;
   personaName: string | null;
+  failureAnalysis: FailureAnalysis | null;
 }
 
 export interface Screenshot {
@@ -409,6 +429,8 @@ export interface TestersConfig {
   judgeModel?: string;    // model used for LLM-as-judge (any provider)
   judgeProvider?: string; // explicit provider override for judge
   selfHeal?: boolean;     // enable self-healing selector repair (default false)
+  conversationsSpace?: string;  // conversations MCP space ID to post run results to
+  defaultMaxCostCents?: number; // hard budget cap per run in cents
 }
 
 // ─── Row Converters ──────────────────────────────────────────────────────────
@@ -461,6 +483,8 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastPassedAt: row.last_passed_at ?? null,
+    lastPassedUrl: row.last_passed_url ?? null,
   };
 }
 
@@ -503,6 +527,7 @@ export function resultFromRow(row: ResultRow): Result {
     createdAt: row.created_at,
     personaId: row.persona_id ?? null,
     personaName: row.persona_name ?? null,
+    failureAnalysis: row.failure_analysis ? JSON.parse(row.failure_analysis) : null,
   };
 }
 
@@ -694,6 +719,13 @@ export function scanIssueFromRow(row: ScanIssueRow): PersistedScanIssue {
   };
 }
 
+export class BudgetExceededError extends Error {
+  constructor(estimatedCents: number, capCents: number) {
+    super(`Estimated run cost ($${(estimatedCents / 100).toFixed(2)}) exceeds budget cap ($${(capCents / 100).toFixed(2)}). Pass skipBudgetCheck: true to override.`);
+    this.name = "BudgetExceededError";
+  }
+}
+
 export class ApiCheckNotFoundError extends Error {
   constructor(id: string) {
     super(`API check not found: ${id}`);
@@ -780,6 +812,10 @@ export interface PersonaRow {
   version: number;
   created_at: string;
   updated_at: string;
+  behaviors: string; // JSON array
+  expertise_level: string;
+  demographics: string; // JSON object
+  pain_points: string; // JSON array
 }
 
 export interface Persona {
@@ -792,6 +828,10 @@ export interface Persona {
   instructions: string;
   traits: string[];
   goals: string[];
+  behaviors: string[];
+  expertiseLevel: string;
+  demographics: Record<string, unknown>;
+  painPoints: string[];
   metadata: Record<string, unknown> | null;
   enabled: boolean;
   version: number;
@@ -806,6 +846,10 @@ export interface CreatePersonaInput {
   instructions?: string;
   traits?: string[];
   goals?: string[];
+  behaviors?: string[];
+  expertiseLevel?: string;
+  demographics?: Record<string, unknown>;
+  painPoints?: string[];
   projectId?: string; // omit for global
   enabled?: boolean;
   metadata?: Record<string, unknown>;
@@ -818,6 +862,10 @@ export interface UpdatePersonaInput {
   instructions?: string;
   traits?: string[];
   goals?: string[];
+  behaviors?: string[];
+  expertiseLevel?: string;
+  demographics?: Record<string, unknown>;
+  painPoints?: string[];
   enabled?: boolean;
   metadata?: Record<string, unknown>;
 }
@@ -839,8 +887,12 @@ export function personaFromRow(row: PersonaRow): Persona {
     description: row.description,
     role: row.role,
     instructions: row.instructions,
-    traits: JSON.parse(row.traits),
-    goals: JSON.parse(row.goals),
+    traits: JSON.parse(row.traits || "[]"),
+    goals: JSON.parse(row.goals || "[]"),
+    behaviors: JSON.parse(row.behaviors || "[]"),
+    expertiseLevel: row.expertise_level || "intermediate",
+    demographics: JSON.parse(row.demographics || "{}"),
+    painPoints: JSON.parse(row.pain_points || "[]"),
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
     enabled: row.enabled === 1,
     version: row.version,

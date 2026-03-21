@@ -608,9 +608,13 @@ program
   .option("--watch-results", "When used with --background, poll and display live results table until run completes", false)
   .option("--failed-only", "Only show failed/error scenarios in output (passed count shown as summary)", false)
   .option("--smoke", "Run only smoke-tagged scenarios (fast validation suite, <2 min)", false)
+  .option("--minimal", "Fastest possible run: cheapest model, max parallelism, min turns (ideal for CI)", false)
   .option("--github-comment", "Post pass/fail summary as a GitHub PR comment (requires GITHUB_TOKEN env var)", false)
   .option("--pr <number>", "GitHub PR number (auto-detected from GITHUB_REF if not provided)")
   .option("--persona <id>", "Override persona for this run (comma-separated IDs for divergence testing)")
+  .option("--max-cost <dollars>", "Hard budget cap in dollars — abort if estimated cost exceeds this (e.g. 0.50 for 50 cents)")
+  .option("--cache-max-age <seconds>", "Skip scenarios that passed at the same URL within this many seconds (0 = disabled)", "0")
+  .option("--diff", "Auto-detect changed files from git diff and run only relevant scenarios", false)
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -910,6 +914,33 @@ program
         log("");
       }
 
+      // --diff mode: detect changed files from git and filter to relevant scenarios
+      let diffScenarioIds: string[] | undefined;
+      if (opts.diff) {
+        try {
+          const { execSync } = await import("child_process");
+          const staged = execSync("git diff --cached --name-only", { cwd: process.cwd(), encoding: "utf-8" }).trim();
+          const unstaged = execSync("git diff --name-only HEAD", { cwd: process.cwd(), encoding: "utf-8" }).trim();
+          const diffOutput = [staged, unstaged].filter(Boolean).join("\n");
+          if (!diffOutput.trim()) {
+            log(chalk.yellow("  --diff: No changed files detected. Running all scenarios."));
+          } else {
+            const filePaths = [...new Set(diffOutput.split("\n").filter(Boolean))];
+            const { matchFilesToScenarios } = await import("../lib/affected.js");
+            const allScenarios = listScenarios({ projectId });
+            const matched = matchFilesToScenarios(filePaths, allScenarios, []);
+            if (matched.length === 0) {
+              log(chalk.yellow(`  --diff: No scenarios match changed files (${filePaths.length} files changed). Exiting.`));
+              process.exit(0);
+            }
+            diffScenarioIds = matched.map((s) => s.id);
+            log(chalk.dim(`  --diff: ${filePaths.length} files changed → ${matched.length} matching scenario(s)`));
+          }
+        } catch {
+          log(chalk.yellow("  --diff: git diff failed. Running all scenarios."));
+        }
+      }
+
       // Run by filter
       // Parse persona IDs: support comma-separated list for divergence testing
       const personaIdList: string[] | undefined = opts.persona
@@ -918,7 +949,7 @@ program
       const { run, results } = await runByFilter({
         url,
         tags: opts.tag.length > 0 ? opts.tag : undefined,
-        scenarioIds: opts.scenario ? [opts.scenario] : undefined,
+        scenarioIds: diffScenarioIds ?? (opts.scenario ? [opts.scenario] : undefined),
         priority: opts.priority,
         model: opts.model,
         headed: opts.headed,
@@ -933,6 +964,9 @@ program
         selfHeal: opts.selfHeal || undefined,
         personaId: personaIdList?.[0],
         personaIds: personaIdList && personaIdList.length > 1 ? personaIdList : undefined,
+        maxCostCents: opts.maxCost ? Math.round(parseFloat(opts.maxCost) * 100) : undefined,
+        cacheMaxAgeMs: opts.cacheMaxAge ? parseInt(opts.cacheMaxAge, 10) * 1000 : undefined,
+        minimal: opts.minimal || undefined,
       });
 
       if (opts.json || opts.output) {
@@ -3015,6 +3049,22 @@ program
     const bunAvailable = isBunWebViewAvailable();
     log((bunAvailable ? chalk.green("✓") : chalk.dim("○")) + ` Bun.WebView: ${bunAvailable ? "available (native, ~11x faster)" : "not available — upgrade to Bun canary: bun upgrade --canary (optional)"}`);
 
+    // 5. Check AI provider API keys
+    log("");
+    log(chalk.dim("  AI Providers:"));
+    const anthropicKey = !!process.env["ANTHROPIC_API_KEY"];
+    const openaiKey = !!process.env["OPENAI_API_KEY"];
+    const googleKey = !!process.env["GOOGLE_API_KEY"];
+    const cerebrasKey = !!process.env["CEREBRAS_API_KEY"];
+    log((anthropicKey ? chalk.green("  ✓") : chalk.red("  ✗")) + ` Anthropic (ANTHROPIC_API_KEY)${!anthropicKey ? " — required for default model" : ""}`);
+    log((openaiKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` OpenAI (OPENAI_API_KEY) — optional, enables gpt-* models`);
+    log((googleKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Google Gemini (GOOGLE_API_KEY) — optional, enables gemini-* models`);
+    log((cerebrasKey ? chalk.green("  ✓") : chalk.dim("  ○")) + ` Cerebras (CEREBRAS_API_KEY) — optional, enables llama-*/qwen-* at ~20x faster inference`);
+    if (!anthropicKey && !openaiKey && !googleKey && !cerebrasKey) {
+      log(chalk.red("  ✗") + " No AI provider API keys found — at least one is required");
+      allPassed = false;
+    }
+
     if (!allPassed) {
       process.exit(1);
     }
@@ -3616,6 +3666,29 @@ personaCmd
   });
 
 personaCmd
+  .command("seed")
+  .description("Seed the 7 default global personas (idempotent)")
+  .option("--json", "Output as JSON", false)
+  .action((seedOpts) => {
+    try {
+      const { seedDefaultPersonas } = require("../db/seed-personas.js");
+      const result = seedDefaultPersonas();
+      if (seedOpts.json) {
+        log(JSON.stringify(result, null, 2));
+      } else {
+        if (result.seeded > 0) {
+          log(chalk.green(`Seeded ${result.seeded} default personas.`));
+        } else {
+          log(chalk.dim(`Default personas already present (${result.skipped} skipped).`));
+        }
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+personaCmd
   .command("detach <scenario-id>")
   .description("Detach persona from a scenario")
   .action(async (scenarioId: string) => {
@@ -3936,6 +4009,134 @@ goldenCmd
         log(chalk.yellow("  This may indicate hallucination or response degradation."));
         log("");
       }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers run-many <url> ───────────────────────────────────────────────────
+
+program
+  .command("run-many <url>")
+  .description("Run scenarios × personas matrix — test each scenario under multiple personas")
+  .option("--personas <ids>", "Comma-separated persona IDs, or 'all' for all global personas", "all")
+  .option("--scenarios <ids>", "Comma-separated scenario IDs, or 'all'", "all")
+  .option("--parallel <n>", "Parallel workers per run", "2")
+  .option("--model <model>", "AI model to use")
+  .option("--project <id>", "Filter by project ID")
+  .option("--json", "Output as JSON", false)
+  .action(async (url: string, opts) => {
+    try {
+      const projectId = resolveProject(opts.project);
+
+      // Resolve personas
+      let personas;
+      if (opts.personas === "all") {
+        personas = listPersonas({ globalOnly: true, enabled: true });
+      } else {
+        const ids = opts.personas.split(",").map((s: string) => s.trim()).filter(Boolean);
+        personas = ids.map((id: string) => getPersona(id)).filter(Boolean);
+      }
+      if (personas.length === 0) {
+        logError(chalk.red("No personas found. Run: testers persona seed"));
+        process.exit(1);
+      }
+
+      // Resolve scenarios
+      let scenarios;
+      if (opts.scenarios === "all") {
+        scenarios = listScenarios({ projectId, limit: 20 });
+      } else {
+        const ids = opts.scenarios.split(",").map((s: string) => s.trim()).filter(Boolean);
+        const all = listScenarios({ projectId });
+        scenarios = all.filter((s) => ids.includes(s.id) || ids.includes(s.shortId));
+      }
+      if (scenarios.length === 0) {
+        logError(chalk.red("No scenarios found."));
+        process.exit(1);
+      }
+
+      log("");
+      log(chalk.bold(`  Running ${scenarios.length} scenarios × ${personas.length} personas (${scenarios.length * personas.length} total runs)`));
+      log("");
+
+      const matrixResults: Array<{ personaName: string; runId: string; run?: import("../types/index.js").Run }> = [];
+
+      for (const persona of personas) {
+        if (!persona) continue;
+        log(chalk.dim(`  Starting run for persona: ${persona.name} ...`));
+        const { run, results } = await runByFilter({
+          url,
+          scenarioIds: scenarios.map((s) => s.id),
+          model: opts.model,
+          parallel: parseInt(opts.parallel, 10),
+          projectId,
+          personaId: persona.id,
+        });
+        matrixResults.push({ personaName: persona.name, runId: run.id, run });
+        const status = run.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
+        log(`  ${status}  ${persona.name.padEnd(24)} ${run.passed}/${run.total} passed`);
+      }
+
+      if (opts.json) {
+        log(JSON.stringify(matrixResults.map((r) => ({ personaName: r.personaName, runId: r.runId, run: r.run })), null, 2));
+      } else {
+        log("");
+        log(chalk.bold("  Summary"));
+        let allPassed = true;
+        for (const r of matrixResults) {
+          if (r.run && r.run.failed > 0) allPassed = false;
+        }
+        log(allPassed ? chalk.green("  All personas passed!") : chalk.yellow("  Some personas had failures — review per-persona results above."));
+        log("");
+      }
+
+      const anyFailed = matrixResults.some((r) => r.run && r.run.failed > 0);
+      process.exit(anyFailed ? 1 : 0);
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers run-script <file.ts> ─────────────────────────────────────────────
+
+program
+  .command("run-script <file>")
+  .description("Run a hybrid test script (.ts) that exports an array of HybridScenario objects")
+  .option("--url <url>", "Base URL to run against")
+  .option("--json", "Output as JSON", false)
+  .action(async (file: string, opts) => {
+    try {
+      const { resolve } = await import("node:path");
+      const { runHybridScenario } = await import("../lib/hybrid-runner.js");
+      const scriptPath = resolve(process.cwd(), file);
+      const mod = await import(scriptPath);
+      const scenarios = mod.scenarios ?? mod.default ?? [];
+      if (!Array.isArray(scenarios) || scenarios.length === 0) {
+        logError(chalk.red(`No scenarios exported from ${file}. Export an array as 'export const scenarios = [...]'`));
+        process.exit(1);
+      }
+      const results = [];
+      for (const scenario of scenarios) {
+        log(chalk.dim(`Running: ${scenario.name} ...`));
+        const result = await runHybridScenario(scenario, { baseUrl: opts.url });
+        results.push(result);
+        const icon = result.status === "passed" ? chalk.green("PASS") : chalk.red("FAIL");
+        log(`${icon}  ${result.name ?? scenario.name} (${result.durationMs}ms)`);
+        if (result.status !== "passed" && result.error) {
+          log(chalk.dim(`     ${result.error}`));
+        }
+      }
+      if (opts.json) {
+        log(JSON.stringify(results, null, 2));
+      }
+      const passed = results.filter((r) => r.status === "passed").length;
+      const failed = results.length - passed;
+      log("");
+      log(chalk.bold(`Results: ${passed}/${results.length} passed${failed > 0 ? `, ${failed} failed` : ""}`));
+      process.exit(failed > 0 ? 1 : 0);
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);

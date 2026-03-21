@@ -155,6 +155,61 @@ export function getCostSummary(options?: {
   };
 }
 
+// ─── Run Cost Estimator ──────────────────────────────────────────────────────
+
+/**
+ * Estimated cost per scenario in cents based on model.
+ * These are conservative upper estimates per single scenario run.
+ */
+const COST_PER_SCENARIO_CENTS: Record<string, number> = {
+  // Anthropic
+  "haiku": 5,
+  "sonnet": 30,
+  "opus": 150,
+  "claude-haiku": 5,
+  "claude-sonnet": 30,
+  "claude-opus": 150,
+  // OpenAI
+  "gpt-4o-mini": 3,
+  "gpt-4o": 25,
+  // Google
+  "gemini-2.0-flash": 2,
+  "gemini-1.5-pro": 20,
+  // Cerebras
+  "llama-3.1-8b": 1,
+  "llama-3.3-70b": 3,
+};
+
+function modelToCostKey(model: string): number {
+  // Exact match first
+  const exact = COST_PER_SCENARIO_CENTS[model];
+  if (exact !== undefined) return exact;
+
+  // Partial match (model names like "claude-haiku-4-5-20251001")
+  const lower = model.toLowerCase();
+  if (lower.includes("opus")) return COST_PER_SCENARIO_CENTS["opus"]!;
+  if (lower.includes("sonnet")) return COST_PER_SCENARIO_CENTS["sonnet"]!;
+  if (lower.includes("haiku")) return COST_PER_SCENARIO_CENTS["haiku"]!;
+  if (lower.includes("gpt-4o-mini")) return COST_PER_SCENARIO_CENTS["gpt-4o-mini"]!;
+  if (lower.includes("gpt-4o")) return COST_PER_SCENARIO_CENTS["gpt-4o"]!;
+  if (lower.includes("gemini-2.0-flash") || lower.includes("gemini-flash")) return COST_PER_SCENARIO_CENTS["gemini-2.0-flash"]!;
+  if (lower.includes("gemini-1.5-pro") || lower.includes("gemini-pro")) return COST_PER_SCENARIO_CENTS["gemini-1.5-pro"]!;
+  if (lower.includes("llama-3.3") || lower.includes("llama3.3")) return COST_PER_SCENARIO_CENTS["llama-3.3-70b"]!;
+  if (lower.includes("llama")) return COST_PER_SCENARIO_CENTS["llama-3.1-8b"]!;
+
+  // Default fallback
+  return 10;
+}
+
+/**
+ * Estimate the total cost in cents for running a batch of scenarios.
+ * scenarioCount × costPerScenario × samples
+ */
+export function estimateRunCostCents(scenarioCount: number, model: string, samples = 1): number {
+  const costPerScenario = modelToCostKey(model);
+  return scenarioCount * costPerScenario * Math.max(1, samples);
+}
+
 // ─── By-Scenario Cost Breakdown ──────────────────────────────────────────────
 
 export interface ScenarioCostRow {

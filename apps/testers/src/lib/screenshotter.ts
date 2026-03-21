@@ -186,12 +186,13 @@ export class Screenshotter {
 
     ensureDir(dir);
 
-    await page.screenshot({
+    const screenshotOpts: Record<string, unknown> = {
       path: filePath,
       fullPage: this.fullPage,
       type: this.format,
-      quality: this.format === "jpeg" ? this.quality : undefined,
-    });
+    };
+    if (this.format === "jpeg") screenshotOpts.quality = this.quality;
+    await page.screenshot(screenshotOpts);
 
     const viewport = page.viewportSize() ?? { width: 0, height: 0 };
     const pageUrl = page.url();
@@ -236,12 +237,13 @@ export class Screenshotter {
 
     ensureDir(dir);
 
-    await page.screenshot({
+    const ssOpts2: Record<string, unknown> = {
       path: filePath,
       fullPage: true,
       type: this.format,
-      quality: this.format === "jpeg" ? this.quality : undefined,
-    });
+    };
+    if (this.format === "jpeg") ssOpts2.quality = this.quality;
+    await page.screenshot(ssOpts2);
 
     const viewport = page.viewportSize() ?? { width: 0, height: 0 };
     const pageUrl = page.url();
@@ -284,11 +286,12 @@ export class Screenshotter {
 
     ensureDir(dir);
 
-    await page.locator(selector).screenshot({
+    const ssOpts3: Record<string, unknown> = {
       path: filePath,
       type: this.format,
-      quality: this.format === "jpeg" ? this.quality : undefined,
-    });
+    };
+    if (this.format === "jpeg") ssOpts3.quality = this.quality;
+    await page.locator(selector).screenshot(ssOpts3);
 
     const viewport = page.viewportSize() ?? { width: 0, height: 0 };
     const pageUrl = page.url();

@@ -2,6 +2,7 @@ import {
   type Result,
   type ResultRow,
   type ResultStatus,
+  type FailureAnalysis,
   resultFromRow,
 } from "../types/index.js";
 import { getDatabase, now, uuid, resolvePartialId } from "./database.js";
@@ -69,6 +70,7 @@ export function updateResult(
     tokensUsed: number;
     costCents: number;
     metadata: Record<string, unknown>;
+    failureAnalysis: FailureAnalysis | null;
   }>,
 ): Result {
   const db = getDatabase();
@@ -111,6 +113,10 @@ export function updateResult(
   if (updates.metadata !== undefined) {
     sets.push("metadata = ?");
     params.push(JSON.stringify(updates.metadata));
+  }
+  if (updates.failureAnalysis !== undefined) {
+    sets.push("failure_analysis = ?");
+    params.push(updates.failureAnalysis !== null ? JSON.stringify(updates.failureAnalysis) : null);
   }
 
   if (sets.length === 0) {

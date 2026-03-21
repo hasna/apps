@@ -684,7 +684,7 @@ export type StepEventHandler = (event: {
 }) => void;
 
 interface AgentLoopOptions {
-  client: Anthropic | { provider: "openai" | "google"; baseUrl: string; apiKey: string };
+  client: Anthropic | OpenAICompatConfig;
   page: Page;
   scenario: Scenario;
   screenshotter: Screenshotter;
@@ -699,6 +699,8 @@ interface AgentLoopOptions {
     instructions: string;
     traits: string[];
     goals: string[];
+    behaviors?: string[];
+    painPoints?: string[];
   } | null;
   a11y?: boolean | { level?: "A" | "AA" | "AAA" };
 }
@@ -750,6 +752,8 @@ export async function runAgentLoop(
     persona.instructions ? `\nInstructions: ${persona.instructions}` : "",
     persona.traits.length > 0 ? `Traits: ${persona.traits.join(", ")}` : "",
     persona.goals.length > 0 ? `Goals: ${persona.goals.join("; ")}` : "",
+    persona.behaviors && persona.behaviors.length > 0 ? `Behaviors: ${persona.behaviors.join("; ")}` : "",
+    persona.painPoints && persona.painPoints.length > 0 ? `Pain points: ${persona.painPoints.join("; ")}` : "",
     "",
     "Stay in character throughout the test. Your observations, choices, and priorities should reflect this persona.",
   ].filter(Boolean).join("\n") : "";
@@ -814,11 +818,22 @@ export async function runAgentLoop(
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
-      // Call the appropriate provider
+      // Every 5 turns, reinforce persona to prevent drift
+      if (persona && turn > 0 && turn % 5 === 0) {
+        messages = [
+          ...messages,
+          {
+            role: "user" as const,
+            content: `[Reminder: You are ${persona.name} — ${persona.role}. Traits: ${persona.traits.join(", ")}. Stay in character.]`,
+          },
+        ];
+      }
+
+      // Call the appropriate provider — unified dispatch, no per-turn branching
       const response = isOpenAICompat
         ? await callOpenAICompatible({
-            baseUrl: (client as { provider: string; baseUrl: string; apiKey: string }).baseUrl,
-            apiKey: (client as { provider: string; baseUrl: string; apiKey: string }).apiKey,
+            baseUrl: (client as OpenAICompatConfig).baseUrl,
+            apiKey: (client as OpenAICompatConfig).apiKey,
             model,
             system: systemPrompt,
             messages,
@@ -954,9 +969,11 @@ export async function runAgentLoop(
  * - "gemini-*" → google
  * - everything else → anthropic (default)
  */
-export function detectProvider(model: string): "anthropic" | "openai" | "google" {
+export function detectProvider(model: string): "anthropic" | "openai" | "google" | "cerebras" {
   if (model.startsWith("gpt-") || /^o\d/.test(model)) return "openai";
   if (model.startsWith("gemini-")) return "google";
+  // Cerebras: llama-* or qwen-* models, or explicit cerebras env key set
+  if (model.startsWith("llama-") || model.startsWith("qwen-") || model.includes("cerebras")) return "cerebras";
   return "anthropic";
 }
 
@@ -1085,7 +1102,12 @@ export async function callOpenAICompatible(options: {
  * Creates the right client/config for a given model. Returns either an Anthropic
  * client or a config object for the OpenAI-compatible path.
  */
-export function createClientForModel(model: string, apiKey?: string): Anthropic | { provider: "openai" | "google"; baseUrl: string; apiKey: string } {
+// ─── Unified AgentLLMClient ─────────────────────────────────────────────────
+// Single interface for all providers — no if/else branching in the agent loop.
+
+export type OpenAICompatConfig = { provider: "openai" | "google" | "cerebras"; baseUrl: string; apiKey: string };
+
+export function createClientForModel(model: string, apiKey?: string): Anthropic | OpenAICompatConfig {
   const provider = detectProvider(model);
   if (provider === "openai") {
     const key = apiKey ?? process.env["OPENAI_API_KEY"];
@@ -1096,6 +1118,11 @@ export function createClientForModel(model: string, apiKey?: string): Anthropic 
     const key = apiKey ?? process.env["GOOGLE_API_KEY"];
     if (!key) throw new AIClientError("No Google API key. Set GOOGLE_API_KEY or pass it explicitly.");
     return { provider: "google", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: key };
+  }
+  if (provider === "cerebras") {
+    const key = apiKey ?? process.env["CEREBRAS_API_KEY"];
+    if (!key) throw new AIClientError("No Cerebras API key. Set CEREBRAS_API_KEY or pass it explicitly.");
+    return { provider: "cerebras", baseUrl: "https://api.cerebras.ai/v1", apiKey: key };
   }
   return createClient(apiKey);
 }

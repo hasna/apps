@@ -495,6 +495,21 @@ async function handleRequest(req: Request): Promise<Response> {
     return jsonResponse({ ...result, screenshots }, 200, { "X-Total-Count": String(total) });
   }
 
+  // GET /api/results/:id/explain
+  const resultExplainMatch = pathname.match(/^\/api\/results\/([^/]+)\/explain$/);
+  if (resultExplainMatch && method === "GET") {
+    const id = resultExplainMatch[1]!;
+    try {
+      const { explainFailure } = await import("../lib/failure-explainer.js");
+      const explanation = explainFailure(id);
+      return jsonResponse(explanation);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("not found")) return errorResponse(msg, 404);
+      return errorResponse(msg, 500);
+    }
+  }
+
   // ── Screenshots ───────────────────────────────────────────────────────
 
   // GET /api/screenshots/:id/file

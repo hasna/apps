@@ -403,6 +403,25 @@ CREATE INDEX IF NOT EXISTS idx_golden_project ON golden_answers(project_id);
 CREATE INDEX IF NOT EXISTS idx_golden_enabled ON golden_answers(enabled);
 CREATE INDEX IF NOT EXISTS idx_golden_results_golden ON golden_check_results(golden_id);
   `,
+
+  // Migration 22: Structured failure analysis on results
+  `
+ALTER TABLE results ADD COLUMN failure_analysis TEXT;
+  `,
+
+  // Migration 23: Persona detail fields — behaviors, expertise_level, demographics, pain_points
+  `
+ALTER TABLE personas ADD COLUMN behaviors TEXT DEFAULT '[]';
+ALTER TABLE personas ADD COLUMN expertise_level TEXT DEFAULT 'intermediate';
+ALTER TABLE personas ADD COLUMN demographics TEXT DEFAULT '{}';
+ALTER TABLE personas ADD COLUMN pain_points TEXT DEFAULT '[]';
+  `,
+
+  // Migration 24: Session result cache — track last passing run per scenario
+  `
+ALTER TABLE scenarios ADD COLUMN last_passed_at TEXT;
+ALTER TABLE scenarios ADD COLUMN last_passed_url TEXT;
+  `,
 ];
 
 function applyMigrations(database: Database): void {

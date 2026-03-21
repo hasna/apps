@@ -142,3 +142,63 @@ export async function notifyFailureToConversations(
     // Never throw — notifications are optional
   }
 }
+
+// ─── Run Completion Notification ─────────────────────────────────────────────
+
+/**
+ * Post a run completion summary to a conversations space.
+ * Called for ALL run completions (passed and failed).
+ * Controlled by:
+ *   TESTERS_CONVERSATIONS_URL   — base URL of the conversations service
+ *   TESTERS_CONVERSATIONS_SPACE — space name/slug to post to
+ * No-op if either env var is missing.
+ */
+export async function notifyRunToConversations(
+  run: Run,
+  results: Result[],
+  options?: { spaceId?: string },
+): Promise<void> {
+  const baseUrl = process.env["TESTERS_CONVERSATIONS_URL"];
+  const space = options?.spaceId ?? process.env["TESTERS_CONVERSATIONS_SPACE"];
+  if (!baseUrl || !space) return;
+
+  const passRate = run.total > 0 ? ((run.passed / run.total) * 100).toFixed(0) : "0";
+  const statusIcon = run.status === "passed" ? "✅" : run.status === "failed" ? "❌" : "⚠️";
+  const durationSec = run.finishedAt && run.startedAt
+    ? ((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000).toFixed(1)
+    : null;
+
+  const lines: string[] = [
+    `${statusIcon} **Testers run ${run.status.toUpperCase()}** — ${run.passed}/${run.total} scenarios (${passRate}% pass rate)`,
+    ``,
+    `**URL:** ${run.url}`,
+    `**Run ID:** \`${run.id}\``,
+    `**Model:** ${run.model}`,
+    durationSec ? `**Duration:** ${durationSec}s` : null,
+  ].filter((l): l is string => l !== null);
+
+  if (run.status === "failed") {
+    const failedResults = results.filter((r) => r.status === "failed" || r.status === "error");
+    const failLines = failedResults.slice(0, 5).map((r) => {
+      const err = r.error ? ` — ${r.error.slice(0, 100)}` : "";
+      return `  ❌ ${r.scenarioId.slice(0, 8)}${err}`;
+    });
+    if (failLines.length > 0) {
+      lines.push(``, `**Failures:**`);
+      lines.push(...failLines);
+      if (failedResults.length > 5) lines.push(`  … and ${failedResults.length - 5} more`);
+    }
+  }
+
+  const message = lines.join("\n");
+
+  try {
+    await fetch(`${baseUrl.replace(/\/$/, "")}/api/spaces/${encodeURIComponent(space)}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: message, from: "testers" }),
+    });
+  } catch {
+    // Never throw — notifications are optional
+  }
+}

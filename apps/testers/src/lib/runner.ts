@@ -1,9 +1,12 @@
 import type { Scenario, Run, Result } from "../types/index.js";
+import { BudgetExceededError } from "../types/index.js";
 import { runEvalScenario } from "./eval-runner.js";
 import { createRun, getRun, updateRun } from "../db/runs.js";
 import { createResult, updateResult } from "../db/results.js";
+import { analyzeFailure } from "./failure-analyzer.js";
+import { estimateRunCostCents } from "./costs.js";
 import { createScreenshot } from "../db/screenshots.js";
-import { listScenarios } from "../db/scenarios.js";
+import { listScenarios, updateScenarioPassedCache } from "../db/scenarios.js";
 import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
@@ -11,7 +14,7 @@ import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js
 import { loadConfig } from "./config.js";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
-import { createFailureTasks, notifyFailureToConversations } from "./failure-pipeline.js";
+import { createFailureTasks, notifyFailureToConversations, notifyRunToConversations } from "./failure-pipeline.js";
 import type { Browser, Page } from "playwright";
 
 export interface RunOptions {
@@ -31,6 +34,10 @@ export interface RunOptions {
   flakinessThreshold?: number; // pass rate below this = "flaky" (default 0.95)
   a11y?: boolean | { level?: "A" | "AA" | "AAA" }; // enable axe-core a11y scan after each navigation
   selfHeal?: boolean;    // override config.selfHeal for this run
+  maxCostCents?: number;  // hard budget cap — throws BudgetExceededError if estimated cost exceeds this
+  skipBudgetCheck?: boolean; // bypass maxCostCents check
+  cacheMaxAgeMs?: number; // skip scenario if it passed at the same URL within this many ms (0 = disabled)
+  minimal?: boolean;  // fastest possible run: cheapest model, fastest browser, max parallelism, min turns
 }
 
 export interface RunEvent {
@@ -114,10 +121,42 @@ export async function runSingleScenario(
   const config = loadConfig();
   // Allow per-run override of self-healing
   if (options.selfHeal !== undefined) config.selfHeal = options.selfHeal;
-  const model = resolveModel(options.model ?? scenario.model ?? config.defaultModel);
-  const client = createClientForModel(model, options.apiKey ?? config.anthropicApiKey);
+
+  // Minimal mode: override to cheapest/fastest settings
+  let effectiveOptions = options;
+  if (options.minimal) {
+    effectiveOptions = {
+      ...options,
+      engine: options.engine ?? "playwright", // use playwright as fallback
+    };
+    // Try to pick fastest available engine
+    try {
+      const { isLightpandaAvailable } = await import("./browser-lightpanda.js").catch(() => ({ isLightpandaAvailable: () => false }));
+      if (isLightpandaAvailable()) effectiveOptions = { ...effectiveOptions, engine: "lightpanda" };
+    } catch { /* use playwright */ }
+  }
+
+  const model = resolveModel(
+    effectiveOptions.minimal ? "quick" : (effectiveOptions.model ?? scenario.model ?? config.defaultModel)
+  );
+
+  // Cache check: skip if scenario passed recently at the same URL
+  if (options.cacheMaxAgeMs && options.cacheMaxAgeMs > 0 && scenario.lastPassedAt && scenario.lastPassedUrl === options.url) {
+    const age = Date.now() - new Date(scenario.lastPassedAt).getTime();
+    if (age < options.cacheMaxAgeMs) {
+      const cached = createResult({ runId, scenarioId: scenario.id, model, stepsTotal: 0 });
+      return updateResult(cached.id, {
+        status: "passed",
+        reasoning: `Cache hit: passed ${Math.round(age / 1000)}s ago at ${options.url}`,
+        stepsCompleted: 0,
+        durationMs: 0,
+        tokensUsed: 0,
+      });
+    }
+  }
+  const client = createClientForModel(model, effectiveOptions.apiKey ?? config.anthropicApiKey);
   const screenshotter = new Screenshotter({
-    baseDir: options.screenshotDir ?? config.screenshots.dir,
+    baseDir: effectiveOptions.screenshotDir ?? config.screenshots.dir,
   });
 
   // Resolve persona before creating result so we can store the name
@@ -139,7 +178,7 @@ export async function runSingleScenario(
   let page: Page | null = null;
 
   try {
-    browser = await launchBrowser({ headless: !(options.headed ?? false), engine: options.engine });
+    browser = await launchBrowser({ headless: !(effectiveOptions.headed ?? false), engine: effectiveOptions.engine });
     page = await getPage(browser, {
       viewport: config.browser.viewport,
     });
@@ -167,8 +206,8 @@ export async function runSingleScenario(
       screenshotter,
       model,
       runId,
-      maxTurns: 30,
-      a11y: options.a11y,
+      maxTurns: effectiveOptions.minimal ? 10 : 30,
+      a11y: effectiveOptions.a11y,
       persona: persona ? {
         name: persona.name,
         role: persona.role,
@@ -176,6 +215,8 @@ export async function runSingleScenario(
         instructions: persona.instructions,
         traits: persona.traits,
         goals: persona.goals,
+        behaviors: (persona as import("../types/index.js").Persona).behaviors,
+        painPoints: (persona as import("../types/index.js").Persona).painPoints,
       } : null,
       onStep: (stepEvent) => {
         let stepDurationMs: number | undefined;
@@ -226,7 +267,7 @@ export async function runSingleScenario(
     }
 
     const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : options.engine === "bun" ? " (Running with Bun.WebView — native, ~11x faster)" : "";
-    const updatedResult = updateResult(result.id, {
+    let updatedResult = updateResult(result.id, {
       status: agentResult.status,
       reasoning: agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || undefined,
       stepsCompleted: agentResult.stepsCompleted,
@@ -235,22 +276,45 @@ export async function runSingleScenario(
       costCents: estimateCost(model, agentResult.tokensUsed),
     });
 
+    // Wire failure analysis for non-passing results
+    if (agentResult.status === "failed" || agentResult.status === "error") {
+      const failureAnalysis = analyzeFailure(null, agentResult.reasoning ?? null);
+      if (failureAnalysis) {
+        updatedResult = updateResult(result.id, { failureAnalysis });
+      }
+    }
+
+    // Update the cache when the scenario passes
+    if (agentResult.status === "passed") {
+      try {
+        updateScenarioPassedCache(scenario.id, options.url);
+      } catch {
+        // Non-critical — don't fail the run if cache update fails
+      }
+    }
+
     const eventType = agentResult.status === "passed" ? "scenario:pass" : "scenario:fail";
     emit({ type: eventType, scenarioId: scenario.id, scenarioName: scenario.name, resultId: result.id, runId });
 
     return updatedResult;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    const updatedResult = updateResult(result.id, {
+    let updatedResult = updateResult(result.id, {
       status: "error",
       error: errorMsg,
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
     });
 
+    // Wire failure analysis for caught errors
+    const failureAnalysis = analyzeFailure(errorMsg, null);
+    if (failureAnalysis) {
+      updatedResult = updateResult(result.id, { failureAnalysis });
+    }
+
     emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: errorMsg, runId });
     return updatedResult;
   } finally {
-    if (browser) await closeBrowser(browser, options.engine);
+    if (browser) await closeBrowser(browser, effectiveOptions.engine);
   }
 }
 
@@ -259,10 +323,22 @@ export async function runBatch(
   options: RunOptions
 ): Promise<{ run: Run; results: Result[] }> {
   const config = loadConfig();
-  const model = resolveModel(options.model ?? config.defaultModel);
-  const parallel = options.parallel ?? 1;
+  const model = resolveModel(options.minimal ? "quick" : (options.model ?? config.defaultModel));
+  // Minimal mode: boost parallelism to at least 5 to finish faster
+  const parallel = options.minimal ? Math.max(5, options.parallel ?? 1) : (options.parallel ?? 1);
   const samples = options.samples ?? 1;
   const flakinessThreshold = options.flakinessThreshold ?? 0.95;
+
+  // Budget guard: estimate cost and throw if it exceeds the cap
+  if (!options.skipBudgetCheck) {
+    const cap = options.maxCostCents ?? config.defaultMaxCostCents;
+    if (cap !== undefined && cap > 0) {
+      const estimated = estimateRunCostCents(scenarios.length, model, samples);
+      if (estimated > cap) {
+        throw new BudgetExceededError(estimated, cap);
+      }
+    }
+  }
 
   const run = createRun({
     url: options.url,
@@ -441,6 +517,13 @@ export async function runBatch(
     notifyFailureToConversations(finalRun, failedResults, scenarios).catch(() => {});
   }
 
+  // Notify conversations on all run completions (pass or fail) if space is configured
+  const conversationsSpaceId = (config as unknown as { conversationsSpace?: string }).conversationsSpace
+    ?? process.env["TESTERS_CONVERSATIONS_SPACE"];
+  if (conversationsSpaceId) {
+    notifyRunToConversations(finalRun, results, { spaceId: conversationsSpaceId }).catch(() => {});
+  }
+
   return { run: finalRun, results };
 }
 
@@ -491,6 +574,18 @@ export function startRunAsync(
       tags: options.tags,
       priority: options.priority as "low" | "medium" | "high" | "critical" | undefined,
     });
+  }
+
+  // Budget guard: check before creating the run record
+  if (!options.skipBudgetCheck) {
+    const cap = options.maxCostCents ?? config.defaultMaxCostCents;
+    if (cap !== undefined && cap > 0 && scenarios.length > 0) {
+      const samples = options.samples ?? 1;
+      const estimated = estimateRunCostCents(scenarios.length, model, samples);
+      if (estimated > cap) {
+        throw new BudgetExceededError(estimated, cap);
+      }
+    }
   }
 
   const parallel = options.parallel ?? 1;

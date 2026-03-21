@@ -166,10 +166,14 @@ server.tool(
     tags: z.array(z.string()).optional().describe("Filter by tags"),
     priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Filter by priority"),
     limit: z.number().optional().describe("Max results to return"),
+    flakyOnly: z.boolean().optional().describe("Return only scenarios with flakinessScore < 0.8 (have recent failures)"),
   },
-  async ({ projectId, tags, priority, limit }) => {
+  async ({ projectId, tags, priority, limit, flakyOnly }) => {
     try {
-      const scenarios = listScenarios({ projectId, tags, priority, limit });
+      let scenarios = listScenarios({ projectId, tags, priority, limit });
+      if (flakyOnly) {
+        scenarios = scenarios.filter((s) => s.flakinessScore !== null && s.flakinessScore !== undefined && s.flakinessScore < 0.8);
+      }
       return json({ items: scenarios, total: scenarios.length });
     } catch (error) {
       return errorResponse(error);
@@ -240,8 +244,11 @@ server.tool(
     personaId: z.string().optional().describe("Override persona ID for this run"),
     samples: z.number().int().min(1).max(20).optional().describe("Run each scenario N times for flakiness detection (default 1)"),
     flakinessThreshold: z.number().min(0).max(1).optional().describe("Pass rate below which scenario is marked flaky (default 0.95)"),
+    maxCostCents: z.number().optional().describe("Hard budget cap in cents — run is rejected before starting if estimated cost exceeds this"),
+    cacheMaxAgeMs: z.number().optional().describe("Skip scenarios that passed at the same URL within this many ms (0 = disabled)"),
+    minimal: z.boolean().optional().describe("Fastest mode: cheapest model, max parallelism, min turns — ideal for CI smoke checks"),
   },
-  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold }) => {
+  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal }) => {
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
@@ -256,7 +263,7 @@ server.tool(
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold });
+      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);
@@ -1442,6 +1449,601 @@ server.tool(
       return json(updated);
     } catch (error) {
       return errorResponse(error);
+    }
+  },
+);
+
+// ─── 49. quick_check ─────────────────────────────────────────────────────────
+
+server.tool(
+  "quick_check",
+  "Single-call health check — runs smoke-tagged scenarios + API checks and returns pass/fail immediately (synchronous, waits for completion)",
+  {
+    url: z.string().optional().describe("Target URL to test against"),
+    env: z.string().optional().describe("Environment name to resolve URL from"),
+    tags: z.array(z.string()).optional().default(["smoke"]).describe("Tags to filter scenarios (default: ['smoke'])"),
+    timeoutPerScenarioMs: z.number().optional().default(60000).describe("Timeout per scenario in ms (default 60000)"),
+    includeApiChecks: z.boolean().optional().default(true).describe("Whether to run API checks (default true)"),
+    projectId: z.string().optional().describe("Filter by project ID"),
+  },
+  async ({ url, env, tags, timeoutPerScenarioMs, includeApiChecks, projectId }) => {
+    try {
+      // Resolve URL
+      let resolvedUrl = url;
+      if (!resolvedUrl && env) {
+        const { getEnvironment } = await import("../db/environments.js");
+        const environment = getEnvironment(env);
+        if (environment) resolvedUrl = environment.url;
+      }
+      if (!resolvedUrl) {
+        const { getDefaultEnvironment } = await import("../db/environments.js");
+        const defaultEnv = getDefaultEnvironment(projectId);
+        if (defaultEnv) resolvedUrl = defaultEnv.url;
+      }
+      if (!resolvedUrl) return errorResponse(new Error("No URL provided. Pass url or env parameter."));
+
+      const startTime = Date.now();
+      const resolvedTags = tags ?? ["smoke"];
+
+      // Run browser scenarios (smoke-tagged, max 10, synchronously)
+      const smokeScenarios = listScenarios({ tags: resolvedTags, projectId, limit: 10 });
+      let browserPassed = 0;
+      let browserFailed = 0;
+      const failedScenarios: Array<{ name: string; shortId: string; error: string }> = [];
+
+      if (smokeScenarios.length > 0) {
+        const { runBatch } = await import("../lib/runner.js");
+        const { run, results } = await runBatch(smokeScenarios, {
+          url: resolvedUrl,
+          model: "quick",
+          parallel: 3,
+          timeout: timeoutPerScenarioMs ?? 60000,
+          projectId,
+        });
+        browserPassed = run.passed;
+        browserFailed = run.failed;
+        for (const r of results.filter((r) => r.status !== "passed")) {
+          const scenario = smokeScenarios.find((s) => s.id === r.scenarioId);
+          failedScenarios.push({
+            name: scenario?.name ?? r.scenarioId,
+            shortId: r.id.slice(0, 8),
+            error: r.error ?? r.reasoning ?? "failed",
+          });
+        }
+      }
+
+      // Run API checks
+      let apiPassed = 0;
+      let apiFailed = 0;
+      const failedApiChecks: Array<{ name: string; url: string; statusCode: number | null; error: string }> = [];
+      if (includeApiChecks ?? true) {
+        const apiResult = await runApiChecksByFilter({ baseUrl: resolvedUrl, projectId, enabled: true });
+        apiPassed = apiResult.passed;
+        apiFailed = apiResult.failed + apiResult.errors;
+        const allChecks = listApiChecks({ projectId, enabled: true });
+        for (const r of apiResult.results.filter((r) => r.status !== "passed")) {
+          const check = allChecks.find((c) => c.id === r.checkId);
+          failedApiChecks.push({
+            name: check?.name ?? r.checkId,
+            url: check?.url ?? "",
+            statusCode: r.statusCode,
+            error: r.error ?? r.assertionsFailed.join("; ") ?? "failed",
+          });
+        }
+      }
+
+      const total = smokeScenarios.length + apiPassed + apiFailed;
+      const passed = browserPassed + apiPassed;
+      const failed = browserFailed + apiFailed;
+      const status = failed === 0 ? "healthy" : total > 0 && failed / total > 0.2 ? "down" : "degraded";
+
+      return json({
+        status,
+        passed,
+        failed,
+        total,
+        durationMs: Date.now() - startTime,
+        failedScenarios,
+        failedApiChecks,
+        summary: `${passed}/${total} passing${failedApiChecks.length > 0 ? `, ${apiFailed} API checks failing` : ""}`,
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 50. explain_failure ─────────────────────────────────────────────────────
+
+server.tool(
+  "explain_failure",
+  "Explain why a test scenario failed and suggest a fix",
+  {
+    resultId: z.string().describe("Result ID to explain"),
+  },
+  async ({ resultId }) => {
+    try {
+      const { explainFailure } = await import("../lib/failure-explainer.js");
+      const explanation = explainFailure(resultId);
+      return json(explanation);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 51. run_for_diff ────────────────────────────────────────────────────────
+
+server.tool(
+  "run_for_diff",
+  "Run only scenarios relevant to changed files — auto-detects from git diff",
+  {
+    url: z.string().optional().describe("Target URL to test against (omit if using env)"),
+    env: z.string().optional().describe("Named environment to use for the URL"),
+    baseRef: z.string().optional().default("HEAD").describe("Git ref to diff against (default: HEAD)"),
+    projectId: z.string().optional().describe("Filter scenarios to this project"),
+    model: z.string().optional().describe(MODEL_DESC),
+    parallel: z.number().optional().describe("Number of parallel workers"),
+  },
+  async ({ url, env, baseRef, projectId, model, parallel }) => {
+    try {
+      // Resolve URL
+      let resolvedUrl = url;
+      if (!resolvedUrl && env) {
+        const { getEnvironment } = await import("../db/environments.js");
+        const environment = getEnvironment(env);
+        if (!environment) return errorResponse(notFoundErr(env, "Environment"));
+        resolvedUrl = environment.url;
+      }
+      if (!resolvedUrl) {
+        const { getDefaultEnvironment } = await import("../db/environments.js");
+        const defaultEnv = getDefaultEnvironment();
+        if (defaultEnv) resolvedUrl = defaultEnv.url;
+      }
+      if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
+
+      // Detect changed files from git diff
+      const { execSync } = await import("child_process");
+      let diffOutput = "";
+      try {
+        const ref = baseRef ?? "HEAD";
+        const stagedOut = execSync(`git diff --cached --name-only`, { cwd: process.cwd(), encoding: "utf-8" }).trim();
+        const unstagedOut = execSync(`git diff --name-only ${ref}`, { cwd: process.cwd(), encoding: "utf-8" }).trim();
+        diffOutput = [stagedOut, unstagedOut].filter(Boolean).join("\n");
+      } catch {
+        return json({ skipped: true, reason: "git diff failed — not a git repository or git not available" });
+      }
+
+      if (!diffOutput.trim()) {
+        return json({ skipped: true, reason: "No changed files detected in git diff" });
+      }
+
+      const filePaths = [...new Set(diffOutput.split("\n").filter(Boolean))];
+
+      // Match files to scenarios
+      const allScenarios = listScenarios({ projectId });
+      const matched = matchFilesToScenarios(filePaths, allScenarios, []);
+
+      if (matched.length === 0) {
+        return json({ skipped: true, reason: "No scenarios match changed files", changedFiles: filePaths });
+      }
+
+      const { runId, scenarioCount } = startRunAsync({
+        url: resolvedUrl,
+        scenarioIds: matched.map((s) => s.id),
+        model,
+        parallel,
+        projectId,
+      });
+
+      const matchedFiles = filePaths.filter((f) =>
+        matched.some((s) => s.targetPath && f.includes(s.targetPath.replace(/^\//, "")))
+      );
+
+      return json({
+        runId,
+        scenarioCount,
+        changedFiles: filePaths,
+        matchedFiles,
+        url: resolvedUrl,
+        status: "running",
+        matchedScenarios: matched.map((s) => ({ id: s.id, shortId: s.shortId, name: s.name, tags: s.tags })),
+        message: "Poll with get_run to check progress.",
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 52. estimate_run_cost ───────────────────────────────────────────────────
+
+server.tool(
+  "estimate_run_cost",
+  "Estimate the cost in cents of running a set of scenarios before actually running them",
+  {
+    scenarioIds: z.array(z.string()).optional().describe("Specific scenario IDs to estimate (default: all matching tags/projectId)"),
+    tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
+    projectId: z.string().optional().describe("Filter by project ID"),
+    model: z.string().optional().describe(MODEL_DESC),
+    samples: z.number().int().min(1).optional().default(1).describe("Number of samples per scenario (for flakiness testing)"),
+  },
+  async ({ scenarioIds, tags, projectId, model, samples }) => {
+    try {
+      const { estimateRunCostCents } = await import("../lib/costs.js");
+      const { resolveModel } = await import("../lib/ai-client.js");
+      const { loadConfig } = await import("../lib/config.js");
+      const config = loadConfig();
+      const resolvedModel = resolveModel(model ?? config.defaultModel);
+
+      let scenarios;
+      if (scenarioIds && scenarioIds.length > 0) {
+        const allScenarios = listScenarios({ projectId });
+        scenarios = allScenarios.filter((s) => scenarioIds.includes(s.id) || scenarioIds.includes(s.shortId));
+      } else {
+        scenarios = listScenarios({ tags, projectId });
+      }
+
+      const count = scenarios.length;
+      const resolvedSamples = samples ?? 1;
+      const totalCents = estimateRunCostCents(count, resolvedModel, resolvedSamples);
+
+      return json({
+        scenarioCount: count,
+        model: resolvedModel,
+        samples: resolvedSamples,
+        estimatedCostCents: totalCents,
+        estimatedCostDollars: (totalCents / 100).toFixed(4),
+        perScenarioCents: count > 0 ? totalCents / count : 0,
+        scenarios: scenarios.map((s) => ({ id: s.id, shortId: s.shortId, name: s.name })),
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 53. get_run_insight ─────────────────────────────────────────────────────
+
+server.tool(
+  "get_run_insight",
+  "Get a structured insight summary for a run — failure type breakdown, likely cause, and recommended action",
+  {
+    runId: z.string().describe("Run ID to analyze"),
+  },
+  async ({ runId }) => {
+    try {
+      const run = getRun(runId);
+      if (!run) return errorResponse(notFoundErr(runId, "Run"));
+      const results = getResultsByRun(runId);
+
+      // Group failures by type
+      const failureGroups: Record<string, { count: number; examples: string[] }> = {};
+      for (const r of results.filter((r) => r.status !== "passed" && r.status !== "skipped")) {
+        const type = (r.failureAnalysis?.type as string) ?? "unknown";
+        if (!failureGroups[type]) failureGroups[type] = { count: 0, examples: [] };
+        failureGroups[type]!.count++;
+        if (failureGroups[type]!.examples.length < 3) {
+          failureGroups[type]!.examples.push(r.scenarioId.slice(0, 8) + (r.error ? `: ${r.error.slice(0, 80)}` : ""));
+        }
+      }
+
+      const blockingIssues = Object.entries(failureGroups).map(([type, data]) => ({
+        type,
+        count: data.count,
+        examples: data.examples,
+      })).sort((a, b) => b.count - a.count);
+
+      const dominantType = blockingIssues[0]?.type ?? "unknown";
+      const allSameType = blockingIssues.length === 1;
+      const likelyCause = allSameType
+        ? `All failures are ${dominantType.replace(/_/g, " ")}`
+        : `Mixed failure types (most common: ${dominantType.replace(/_/g, " ")})`;
+
+      const ACTION_MAP: Record<string, string> = {
+        selector_not_found: "Check for recent UI changes that may have renamed or removed elements",
+        timeout: "Check app responsiveness and consider increasing timeout",
+        auth_error: "Verify the auth flow and credentials are working",
+        network_error: "Verify the app is running and accessible at the URL",
+        assertion_failed: "Review recent code changes that may have altered the expected output",
+        eval_failed: "Review scenario evaluation criteria for ambiguity",
+        unknown: "Review full error messages and app logs for more context",
+      };
+
+      const recommendedAction = ACTION_MAP[dominantType] ?? ACTION_MAP.unknown!;
+
+      // Quick fix hint
+      const selectorFailure = blockingIssues.find((b) => b.type === "selector_not_found");
+      const failedResult = results.find((r) => r.failureAnalysis?.type === "selector_not_found");
+      const quickFix = selectorFailure && failedResult?.failureAnalysis?.affectedElement
+        ? `Update selector "${failedResult.failureAnalysis.affectedElement}" — it was not found during the run`
+        : undefined;
+
+      return json({
+        runId,
+        status: run.status,
+        passed: run.passed,
+        failed: run.failed,
+        total: run.total,
+        blockingIssues,
+        likelyCause,
+        recommendedAction,
+        quickFix,
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 54. get_scenario_coverage ───────────────────────────────────────────────
+
+server.tool(
+  "get_scenario_coverage",
+  "Check which changed files have scenario coverage and which don't",
+  {
+    filePaths: z.array(z.string()).describe("File paths to check coverage for"),
+    projectId: z.string().optional().describe("Filter scenarios by project ID"),
+    includeAutoDetect: z.boolean().optional().describe("Also check git diff HEAD for changed files"),
+  },
+  async ({ filePaths, projectId, includeAutoDetect }) => {
+    try {
+      let allFiles = [...filePaths];
+
+      if (includeAutoDetect) {
+        try {
+          const { execSync } = await import("child_process");
+          const diffOutput = execSync("git diff --name-only HEAD", { encoding: "utf-8", cwd: process.cwd() }).trim();
+          const gitFiles = diffOutput.split("\n").filter(Boolean);
+          allFiles = [...new Set([...allFiles, ...gitFiles])];
+        } catch {
+          // git diff failed — continue with provided files only
+        }
+      }
+
+      const allScenarios = listScenarios({ projectId });
+      const covered: Array<{ file: string; scenarios: Array<{ id: string; shortId: string; name: string }> }> = [];
+      const uncovered: string[] = [];
+
+      for (const file of allFiles) {
+        const matched = matchFilesToScenarios([file], allScenarios, []);
+        if (matched.length > 0) {
+          covered.push({ file, scenarios: matched.map((s) => ({ id: s.id, shortId: s.shortId, name: s.name })) });
+        } else {
+          uncovered.push(file);
+        }
+      }
+
+      const coverageRate = allFiles.length > 0 ? covered.length / allFiles.length : 0;
+      const recommendation = uncovered.length === 0
+        ? "All changed files have scenario coverage."
+        : `${uncovered.length} file(s) have no coverage. Consider adding scenarios for: ${uncovered.slice(0, 3).join(", ")}${uncovered.length > 3 ? "..." : ""}`;
+
+      return json({
+        summary: { total: allFiles.length, covered: covered.length, uncovered: uncovered.length, coverageRate: Math.round(coverageRate * 100) },
+        covered,
+        uncovered,
+        recommendation,
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 55. run_matrix ──────────────────────────────────────────────────────────
+
+server.tool(
+  "run_matrix",
+  "Run scenarios × personas matrix — tests each scenario under each persona and returns divergence analysis",
+  {
+    url: z.string().describe("Target URL to test against"),
+    scenarioIds: z.array(z.string()).optional().describe("Scenario IDs to include (default: all)"),
+    personaIds: z.array(z.string()).optional().describe("Persona IDs to test with (default: all global personas)"),
+    model: z.string().optional().describe(MODEL_DESC),
+    parallel: z.number().optional().default(2).describe("Parallel workers per persona run (default 2)"),
+    projectId: z.string().optional().describe("Filter scenarios/personas by project ID"),
+  },
+  async ({ url, scenarioIds, personaIds, model, parallel, projectId }) => {
+    try {
+      // Resolve scenarios
+      let scenarios;
+      if (scenarioIds && scenarioIds.length > 0) {
+        const all = listScenarios({ projectId });
+        scenarios = all.filter((s) => scenarioIds.includes(s.id) || scenarioIds.includes(s.shortId));
+      } else {
+        scenarios = listScenarios({ projectId, limit: 20 });
+      }
+      if (scenarios.length === 0) return json({ runs: [], message: "No scenarios found." });
+
+      // Resolve personas
+      let personas;
+      if (personaIds && personaIds.length > 0) {
+        personas = personaIds.map((id) => getPersona(id)).filter(Boolean);
+      } else {
+        personas = listPersonas({ globalOnly: true, enabled: true });
+      }
+      if (personas.length === 0) return json({ runs: [], message: "No personas found. Seed defaults with persona seed command." });
+
+      // Run each persona sequentially (scenarios in parallel within each)
+      const matrixResults: Array<{
+        personaId: string;
+        personaName: string;
+        runId: string;
+        passed: number;
+        failed: number;
+        total: number;
+      }> = [];
+
+      for (const persona of personas) {
+        if (!persona) continue;
+        const { runId, scenarioCount } = startRunAsync({
+          url,
+          scenarioIds: scenarios.map((s) => s.id),
+          model,
+          parallel: parallel ?? 2,
+          projectId,
+          personaId: persona.id,
+        });
+        matrixResults.push({
+          personaId: persona.id,
+          personaName: persona.name,
+          runId,
+          passed: 0,
+          failed: 0,
+          total: scenarioCount,
+        });
+      }
+
+      return json({
+        matrix: matrixResults,
+        scenarioCount: scenarios.length,
+        personaCount: personas.length,
+        totalRuns: matrixResults.length,
+        message: `Started ${matrixResults.length} runs (${scenarios.length} scenarios × ${personas.length} personas). Poll each runId with get_run.`,
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 56. duplicate_scenario_for_persona ──────────────────────────────────────
+
+server.tool(
+  "duplicate_scenario_for_persona",
+  "Clone a scenario with a persona attached. The duplicate name gets the persona name as a suffix.",
+  {
+    scenarioId: z.string().describe("Scenario ID or short ID to clone"),
+    personaId: z.string().describe("Persona ID or short ID to attach"),
+    nameSuffix: z.string().optional().describe("Custom name suffix (default: persona name)"),
+  },
+  async ({ scenarioId, personaId, nameSuffix }) => {
+    try {
+      const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+      if (!scenario) return errorResponse(notFoundErr(scenarioId, "Scenario"));
+
+      const persona = getPersona(personaId);
+      if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
+
+      const suffix = nameSuffix ?? persona.name;
+      const clone = createScenario({
+        name: `${scenario.name} [${suffix}]`,
+        description: scenario.description,
+        steps: scenario.steps,
+        tags: [...scenario.tags, "persona-variant"],
+        priority: scenario.priority,
+        model: scenario.model ?? undefined,
+        targetPath: scenario.targetPath ?? undefined,
+        requiresAuth: scenario.requiresAuth,
+        authConfig: scenario.authConfig ?? undefined,
+        assertions: scenario.assertions,
+        metadata: { ...scenario.metadata, clonedFrom: scenario.id },
+        projectId: scenario.projectId ?? undefined,
+        personaId: persona.id,
+      });
+
+      return json({ ...clone, attachedPersona: persona, clonedFrom: scenario.id });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 57. create_persona_test_matrix ──────────────────────────────────────────
+
+server.tool(
+  "create_persona_test_matrix",
+  "Create N×M scenario clones — one per (scenario, persona) combination",
+  {
+    scenarioIds: z.array(z.string()).describe("Scenario IDs to clone"),
+    personaIds: z.array(z.string()).describe("Persona IDs to attach"),
+    tagPrefix: z.string().optional().default("matrix").describe("Tag prefix for generated scenarios"),
+  },
+  async ({ scenarioIds, personaIds, tagPrefix }) => {
+    try {
+      const created: Array<{ scenarioId: string; personaId: string; name: string; shortId: string }> = [];
+
+      for (const scenarioId of scenarioIds) {
+        const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
+        if (!scenario) continue;
+
+        for (const personaId of personaIds) {
+          const persona = getPersona(personaId);
+          if (!persona) continue;
+
+          const clone = createScenario({
+            name: `${scenario.name} [${persona.name}]`,
+            description: scenario.description,
+            steps: scenario.steps,
+            tags: [...scenario.tags, tagPrefix ?? "matrix", "persona-variant"],
+            priority: scenario.priority,
+            model: scenario.model ?? undefined,
+            targetPath: scenario.targetPath ?? undefined,
+            requiresAuth: scenario.requiresAuth,
+            authConfig: scenario.authConfig ?? undefined,
+            assertions: scenario.assertions,
+            metadata: { ...scenario.metadata, clonedFrom: scenario.id, matrixPersonaId: persona.id },
+            projectId: scenario.projectId ?? undefined,
+            personaId: persona.id,
+          });
+
+          created.push({ scenarioId: clone.id, personaId: persona.id, name: clone.name, shortId: clone.shortId });
+        }
+      }
+
+      return json({
+        created,
+        total: created.length,
+        message: `Created ${created.length} scenario variants (${scenarioIds.length} scenarios × ${personaIds.length} personas).`,
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 58. create_scenario_from_error ──────────────────────────────────────────
+
+server.tool(
+  "create_scenario_from_error",
+  "Create a regression scenario from a bug report or error message",
+  {
+    url: z.string().describe("URL where the error occurred"),
+    error: z.string().describe("Error message or bug description"),
+    context: z.string().optional().describe("Additional context about the error"),
+    projectId: z.string().optional().describe("Project ID"),
+    autoRun: z.boolean().optional().describe("Start a run immediately after creating the scenario"),
+  },
+  async ({ url, error, context, projectId, autoRun }) => {
+    try {
+      const name = `Regression: ${error.slice(0, 50)}${error.length > 50 ? "..." : ""}`;
+      const steps = [
+        `Navigate to ${url}`,
+        "Verify no errors occur on the page",
+        "Check that the reported issue is resolved",
+        ...(context ? [`Context: ${context}`] : []),
+      ];
+
+      const scenario = createScenario({
+        name,
+        description: `Regression test for: ${error}${context ? `\n\nContext: ${context}` : ""}`,
+        steps,
+        tags: ["regression", "error"],
+        priority: "high",
+        targetPath: new URL(url).pathname !== "/" ? new URL(url).pathname : undefined,
+        projectId,
+      });
+
+      let runInfo = null;
+      if (autoRun) {
+        const { runId, scenarioCount } = startRunAsync({ url, scenarioIds: [scenario.id], projectId });
+        runInfo = { runId, scenarioCount };
+      }
+
+      return json({ scenario, runInfo, message: autoRun ? "Scenario created and run started." : "Scenario created. Use run_scenarios to run it." });
+    } catch (e) {
+      return errorResponse(e);
     }
   },
 );
