@@ -1,5 +1,6 @@
 import type { ApiCheck, ApiCheckResult, ApiCheckFilter } from "../types/index.js";
 import { createApiCheckResult, listApiChecks } from "../db/api-checks.js";
+import { dispatchApiCheckWebhooks } from "./webhooks.js";
 
 export interface RunApiCheckOptions {
   runId?: string;
@@ -73,7 +74,7 @@ export async function runApiCheck(
 
     const status = assertionsFailed.length === 0 ? "passed" : "failed";
 
-    return createApiCheckResult({
+    const result = createApiCheckResult({
       checkId: check.id,
       runId: options?.runId,
       status,
@@ -84,6 +85,9 @@ export async function runApiCheck(
       assertionsPassed,
       assertionsFailed,
     });
+    // Fire webhooks asynchronously for failures — don't await to avoid slowing down the run
+    if (status !== "passed") dispatchApiCheckWebhooks(check, result).catch(() => {});
+    return result;
   } catch (error) {
     clearTimeout(timeoutId);
     const responseTimeMs = Date.now() - startTime;
@@ -99,7 +103,7 @@ export async function runApiCheck(
       errorMessage = String(error);
     }
 
-    return createApiCheckResult({
+    const result = createApiCheckResult({
       checkId: check.id,
       runId: options?.runId,
       status: "error",
@@ -108,6 +112,8 @@ export async function runApiCheck(
       assertionsPassed,
       assertionsFailed,
     });
+    dispatchApiCheckWebhooks(check, result).catch(() => {});
+    return result;
   }
 }
 
