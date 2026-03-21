@@ -16,6 +16,12 @@ import {
   XCircle,
   Clock,
   RefreshCw,
+  Download,
+  Copy,
+  Layers,
+  Wand2,
+  BookMarked,
+  ExternalLink,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -883,9 +889,480 @@ function TemplatesTab({ currentProject }: { currentProject: string }) {
   );
 }
 
+// ── Extract + Kits Types ──────────────────────────────────────────────────────
+
+interface ColorToken { value: string; frequency: number; source: string; name?: string }
+interface DesignTokens {
+  colors: ColorToken[];
+  typography: { fontFamilies: string[]; fontSizes: string[]; fontWeights: string[]; lineHeights: string[]; letterSpacings: string[] };
+  spacing: string[];
+  borderRadius: string[];
+  shadows: string[];
+  transitions: string[];
+  zIndices: string[];
+  gradients: string[];
+}
+interface StyleKit {
+  id: string; name: string; url: string;
+  tokens: DesignTokens; tags: string[]; notes?: string;
+  extractedAt: number; createdAt: number; updatedAt: number;
+}
+interface ExtractResult { tokens: DesignTokens; configs: Record<string, string>; kit: StyleKit | null; url: string; extractedAt: number }
+
+type ExportFormat = "shadcn" | "tailwind" | "css-vars" | "mui" | "radix";
+const FORMATS: ExportFormat[] = ["shadcn", "tailwind", "css-vars", "mui", "radix"];
+
+// ── Extract Tab ───────────────────────────────────────────────────────────────
+
+function ExtractTab() {
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const [saveKit, setSaveKit] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ExtractResult | null>(null);
+  const [format, setFormat] = useState<ExportFormat>("shadcn");
+  const [copied, setCopied] = useState(false);
+
+  const handleExtract = async () => {
+    if (!url) return;
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const data = await api<ExtractResult>("/api/extract", {
+        method: "POST",
+        body: JSON.stringify({ url, name: name || undefined, save: saveKit && !!name }),
+      });
+      setResult(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = () => {
+    if (!result) return;
+    navigator.clipboard.writeText(result.configs[format] ?? "");
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleDownload = () => {
+    if (!result) return;
+    const ext = format === "css-vars" ? "css" : format === "shadcn" || format === "tailwind" ? "ts" : "ts";
+    const blob = new Blob([result.configs[format] ?? ""], { type: "text/plain" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `${format}-config.${ext}`; a.click();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-zinc-100 mb-1">Extract Styles</h2>
+        <p className="text-sm text-zinc-500">Enter a URL to extract colors, typography, shadows, and spacing — then export as shadcn, Tailwind, CSS vars, MUI, or Radix config.</p>
+      </div>
+
+      {/* URL Input */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+        <Input label="Website URL" value={url} onChange={setUrl} placeholder="https://linear.app" />
+        <div className="flex gap-3 items-end">
+          <Input label="Kit name (optional)" value={name} onChange={setName} placeholder="linear-dark" className="flex-1" />
+          <label className="flex items-center gap-2 text-sm text-zinc-400 pb-2 cursor-pointer select-none">
+            <input type="checkbox" checked={saveKit} onChange={e => setSaveKit(e.target.checked)} className="rounded border-zinc-700" />
+            Save kit
+          </label>
+        </div>
+        <Button variant="primary" onClick={handleExtract} disabled={loading || !url}>
+          {loading ? <><RefreshCw size={14} className="animate-spin" /> Extracting...</> : <><Wand2 size={14} /> Extract Styles</>}
+        </Button>
+        {error && <p className="text-sm text-red-400 bg-red-950/30 border border-red-900/50 rounded-lg p-3">{error}</p>}
+      </div>
+
+      {/* Results */}
+      {result && (
+        <>
+          {/* Summary */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: "Colors", value: result.tokens.colors.length },
+              { label: "Fonts", value: result.tokens.typography.fontFamilies.length },
+              { label: "Radii", value: result.tokens.borderRadius.length },
+              { label: "Shadows", value: result.tokens.shadows.length },
+            ].map(({ label, value }) => (
+              <div key={label} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold text-zinc-100">{value}</div>
+                <div className="text-xs text-zinc-500 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Color swatches */}
+          {result.tokens.colors.length > 0 && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+              <h3 className="text-sm font-medium text-zinc-300 mb-3">Colors</h3>
+              <div className="flex flex-wrap gap-2">
+                {result.tokens.colors.slice(0, 24).map((c, i) => (
+                  <div key={i} className="flex flex-col items-center gap-1">
+                    <div className="w-10 h-10 rounded-lg border border-zinc-700 shadow-sm" style={{ backgroundColor: c.value }} title={c.value} />
+                    <span className="text-xs text-zinc-600 font-mono" style={{ fontSize: "9px" }}>{c.value.slice(0, 9)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Typography */}
+          {result.tokens.typography.fontFamilies.length > 0 && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+              <h3 className="text-sm font-medium text-zinc-300 mb-3">Typography</h3>
+              <div className="space-y-2">
+                {result.tokens.typography.fontFamilies.map((f, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-xs text-zinc-500 w-16">Font {i + 1}</span>
+                    <span className="text-base text-zinc-200" style={{ fontFamily: f }}>{f} — The quick brown fox</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Border radii + Shadows */}
+          <div className="grid grid-cols-2 gap-4">
+            {result.tokens.borderRadius.length > 0 && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                <h3 className="text-sm font-medium text-zinc-300 mb-3">Border Radii</h3>
+                <div className="flex flex-wrap gap-3">
+                  {result.tokens.borderRadius.slice(0, 8).map((r, i) => (
+                    <div key={i} className="flex flex-col items-center gap-1">
+                      <div className="w-12 h-12 bg-zinc-700 border border-zinc-600" style={{ borderRadius: r }} />
+                      <span className="text-xs text-zinc-500 font-mono">{r}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {result.tokens.shadows.length > 0 && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                <h3 className="text-sm font-medium text-zinc-300 mb-3">Shadows</h3>
+                <div className="space-y-3">
+                  {result.tokens.shadows.slice(0, 4).map((s, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-12 h-8 bg-zinc-700 rounded" style={{ boxShadow: s }} />
+                      <span className="text-xs text-zinc-500 font-mono truncate flex-1">{s.slice(0, 40)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Export panel */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-zinc-300">Export Config</h3>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={handleCopy}><Copy size={12} />{copied ? "Copied!" : "Copy"}</Button>
+                <Button size="sm" onClick={handleDownload}><Download size={12} /> Download</Button>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {FORMATS.map((f) => (
+                <button key={f} onClick={() => setFormat(f)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${format === f ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"}`}>
+                  {f}
+                </button>
+              ))}
+            </div>
+            <pre className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-xs text-zinc-300 font-mono overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap">{result.configs[format]}</pre>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── UI Kit Tab ────────────────────────────────────────────────────────────────
+
+function UiKitTab() {
+  const [kits, setKits] = useState<StyleKit[]>([]);
+  const [selectedKit, setSelectedKit] = useState<StyleKit | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadKits = useCallback(async () => {
+    try { setKits(await api<StyleKit[]>("/api/kits")); } catch { /* ignore */ } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { loadKits(); }, [loadKits]);
+
+  const vars = selectedKit ? buildCssVars(selectedKit.tokens) : {};
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-100 mb-1">UI Kit Preview</h2>
+          <p className="text-sm text-zinc-500">See your extracted styles applied as a real component kit.</p>
+        </div>
+        {kits.length > 0 && (
+          <select
+            className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+            value={selectedKit?.id ?? ""}
+            onChange={e => setSelectedKit(kits.find(k => k.id === e.target.value) ?? null)}
+          >
+            <option value="">Select a kit...</option>
+            {kits.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {loading && <p className="text-zinc-500 text-sm">Loading kits...</p>}
+      {!loading && kits.length === 0 && (
+        <EmptyState icon={Layers} title="No kits saved yet" subtitle="Go to Extract tab, extract a site, and save it as a kit." />
+      )}
+      {!loading && kits.length > 0 && !selectedKit && (
+        <EmptyState icon={Layers} title="Select a kit above to preview it" />
+      )}
+
+      {selectedKit && (
+        <div style={vars as React.CSSProperties} className="space-y-8">
+          {/* Colors */}
+          <section>
+            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Colors</h3>
+            <div className="flex flex-wrap gap-2">
+              {selectedKit.tokens.colors.slice(0, 20).map((c, i) => (
+                <div key={i} className="flex flex-col items-center gap-1">
+                  <div className="w-12 h-12 rounded-xl border border-zinc-800" style={{ backgroundColor: c.value }} />
+                  <span style={{ fontSize: "9px" }} className="text-zinc-500 font-mono">{c.value.slice(0, 9)}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Typography */}
+          <section>
+            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Typography</h3>
+            <div className="space-y-2 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+              {selectedKit.tokens.typography.fontFamilies.slice(0, 2).map((f, i) => (
+                <div key={i}>
+                  <div style={{ fontFamily: f, fontSize: "2rem", lineHeight: 1.2, color: selectedKit.tokens.colors[0]?.value ?? "#fff" }}>Heading {i + 1}</div>
+                  <div style={{ fontFamily: f, fontSize: "1rem", color: selectedKit.tokens.colors[1]?.value ?? "#aaa" }}>The quick brown fox jumps over the lazy dog</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Buttons */}
+          <section>
+            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Buttons</h3>
+            <div className="flex flex-wrap gap-3 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+              {[
+                { label: "Primary", bg: selectedKit.tokens.colors[0]?.value ?? "#fff", color: "#000" },
+                { label: "Secondary", bg: selectedKit.tokens.colors[1]?.value ?? "#333", color: "#fff" },
+                { label: "Ghost", bg: "transparent", color: selectedKit.tokens.colors[0]?.value ?? "#aaa", border: `1px solid ${selectedKit.tokens.colors[0]?.value ?? "#555"}` },
+                { label: "Muted", bg: selectedKit.tokens.colors[2]?.value ?? "#222", color: "#aaa" },
+              ].map((btn) => (
+                <button key={btn.label} style={{ backgroundColor: btn.bg, color: btn.color, borderRadius: selectedKit.tokens.borderRadius[0] ?? "6px", padding: "8px 18px", fontSize: "14px", border: btn.border ?? "none", fontFamily: selectedKit.tokens.typography.fontFamilies[0] ?? "sans-serif", cursor: "default" }}>
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Cards */}
+          <section>
+            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Cards</h3>
+            <div className="grid grid-cols-3 gap-4">
+              {[1, 2, 3].map((n) => (
+                <div key={n} style={{ backgroundColor: selectedKit.tokens.colors[n]?.value ?? "#1a1a1a", borderRadius: selectedKit.tokens.borderRadius[0] ?? "8px", boxShadow: selectedKit.tokens.shadows[0] ?? "none", padding: "20px", fontFamily: selectedKit.tokens.typography.fontFamilies[0] ?? "sans-serif" }}>
+                  <div style={{ color: selectedKit.tokens.colors[0]?.value ?? "#fff", fontWeight: "600", marginBottom: "8px" }}>Card {n}</div>
+                  <div style={{ color: selectedKit.tokens.colors[1]?.value ?? "#aaa", fontSize: "14px" }}>Sample card content with extracted styles applied.</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Inputs */}
+          <section>
+            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Inputs</h3>
+            <div className="flex gap-4 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+              <input placeholder="Text input" style={{ backgroundColor: selectedKit.tokens.colors[2]?.value ?? "#222", color: selectedKit.tokens.colors[0]?.value ?? "#fff", borderRadius: selectedKit.tokens.borderRadius[0] ?? "6px", border: `1px solid ${selectedKit.tokens.colors[1]?.value ?? "#555"}`, padding: "8px 12px", fontSize: "14px", outline: "none" }} />
+              <input type="search" placeholder="Search..." style={{ backgroundColor: selectedKit.tokens.colors[2]?.value ?? "#222", color: selectedKit.tokens.colors[0]?.value ?? "#fff", borderRadius: selectedKit.tokens.borderRadius[0] ?? "6px", border: `1px solid ${selectedKit.tokens.colors[1]?.value ?? "#555"}`, padding: "8px 12px", fontSize: "14px", outline: "none" }} />
+            </div>
+          </section>
+
+          {/* Shadows + Radii scale */}
+          <section>
+            <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Shadows & Radii</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+                {selectedKit.tokens.shadows.slice(0, 4).map((s, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div style={{ width: 40, height: 32, background: "#3f3f46", borderRadius: 4, boxShadow: s }} />
+                    <span className="text-xs text-zinc-500 font-mono truncate">{s.slice(0, 36)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-wrap gap-3">
+                {selectedKit.tokens.borderRadius.slice(0, 8).map((r, i) => (
+                  <div key={i} className="flex flex-col items-center gap-1">
+                    <div style={{ width: 40, height: 40, background: "#3f3f46", borderRadius: r }} />
+                    <span className="text-xs text-zinc-500 font-mono">{r}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildCssVars(tokens: DesignTokens): Record<string, string> {
+  const vars: Record<string, string> = {};
+  tokens.colors.slice(0, 12).forEach((c, i) => { vars[`--color-${i + 1}`] = c.value; });
+  tokens.typography.fontFamilies.forEach((f, i) => { vars[`--font-${i + 1}`] = `"${f}", sans-serif`; });
+  tokens.borderRadius.slice(0, 6).forEach((r, i) => { vars[`--radius-${i + 1}`] = r; });
+  tokens.shadows.slice(0, 4).forEach((s, i) => { vars[`--shadow-${i + 1}`] = s; });
+  return vars;
+}
+
+// ── Kits Tab ──────────────────────────────────────────────────────────────────
+
+function KitsTab() {
+  const [kits, setKits] = useState<StyleKit[]>([]);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<StyleKit | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saveAsProfileName, setSaveAsProfileName] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaved, setProfileSaved] = useState<string | null>(null);
+
+  const loadKits = useCallback(async () => {
+    try { setKits(await api<StyleKit[]>("/api/kits")); } catch { /* ignore */ } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { loadKits(); }, [loadKits]);
+
+  const filtered = kits.filter(k =>
+    !search || k.name.toLowerCase().includes(search.toLowerCase()) || k.url.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleDelete = async (id: string) => {
+    await api(`/api/kits/${id}`, { method: "DELETE" });
+    setKits(prev => prev.filter(k => k.id !== id));
+    if (selected?.id === id) setSelected(null);
+  };
+
+  const handleSaveAsProfile = async () => {
+    if (!selected || !saveAsProfileName) return;
+    setSavingProfile(true);
+    try {
+      await api(`/api/kits/${selected.id}/save-as-profile`, {
+        method: "POST", body: JSON.stringify({ name: saveAsProfileName }),
+      });
+      setProfileSaved(saveAsProfileName);
+      setSaveAsProfileName("");
+      setTimeout(() => setProfileSaved(null), 3000);
+    } catch { /* ignore */ } finally { setSavingProfile(false); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-zinc-100 mb-1">Saved Kits</h2>
+        <p className="text-sm text-zinc-500">Browse and manage your extracted style kits.</p>
+      </div>
+
+      <Input value={search} onChange={setSearch} placeholder="Search by name or URL..." />
+
+      {loading && <p className="text-zinc-500 text-sm">Loading...</p>}
+      {!loading && filtered.length === 0 && (
+        <EmptyState icon={BookMarked} title="No kits saved yet" subtitle="Go to Extract tab to extract your first style kit." />
+      )}
+
+      <div className="space-y-3">
+        {filtered.map(kit => (
+          <div key={kit.id} onClick={() => setSelected(selected?.id === kit.id ? null : kit)}
+            className={`bg-zinc-900 border rounded-xl p-4 cursor-pointer transition-all ${selected?.id === kit.id ? "border-zinc-500" : "border-zinc-800 hover:border-zinc-700"}`}>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                {/* Color strip */}
+                <div className="flex gap-0.5 shrink-0">
+                  {kit.tokens.colors.slice(0, 6).map((c, i) => (
+                    <div key={i} className="w-4 h-8 first:rounded-l last:rounded-r" style={{ backgroundColor: c.value }} />
+                  ))}
+                </div>
+                <div className="min-w-0">
+                  <div className="font-medium text-zinc-100 truncate">{kit.name}</div>
+                  <div className="text-xs text-zinc-500 truncate flex items-center gap-1 mt-0.5">
+                    <ExternalLink size={10} />
+                    {kit.url}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="text-xs text-zinc-600">{new Date(kit.createdAt).toLocaleDateString()}</div>
+                <div className="flex gap-1.5 text-xs text-zinc-500">
+                  <span className="bg-zinc-800 px-2 py-0.5 rounded">{kit.tokens.colors.length} colors</span>
+                  <span className="bg-zinc-800 px-2 py-0.5 rounded">{kit.tokens.typography.fontFamilies.length} fonts</span>
+                </div>
+                <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); handleDelete(kit.id); }}><Trash2 size={12} /></Button>
+              </div>
+            </div>
+
+            {/* Expanded detail */}
+            {selected?.id === kit.id && (
+              <div className="mt-4 pt-4 border-t border-zinc-800 space-y-3">
+                <div className="grid grid-cols-4 gap-3 text-center">
+                  {[
+                    { label: "Colors", v: kit.tokens.colors.length },
+                    { label: "Fonts", v: kit.tokens.typography.fontFamilies.length },
+                    { label: "Radii", v: kit.tokens.borderRadius.length },
+                    { label: "Shadows", v: kit.tokens.shadows.length },
+                  ].map(({ label, v }) => (
+                    <div key={label} className="bg-zinc-950 rounded-lg p-3">
+                      <div className="text-xl font-bold text-zinc-100">{v}</div>
+                      <div className="text-xs text-zinc-500">{label}</div>
+                    </div>
+                  ))}
+                </div>
+                {kit.tokens.typography.fontFamilies.length > 0 && (
+                  <div className="text-xs text-zinc-400">
+                    <span className="text-zinc-600">Fonts: </span>
+                    {kit.tokens.typography.fontFamilies.join(", ")}
+                  </div>
+                )}
+                {kit.tags.length > 0 && (
+                  <div className="flex gap-1.5 flex-wrap">
+                    {kit.tags.map(t => <Badge key={t}>{t}</Badge>)}
+                  </div>
+                )}
+                {/* Save as Profile */}
+                <div className="flex gap-2 items-center pt-1">
+                  <input
+                    className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                    placeholder="Profile name (e.g. linear-dark)"
+                    value={saveAsProfileName}
+                    onChange={e => setSaveAsProfileName(e.target.value)}
+                  />
+                  <Button size="sm" variant="primary" onClick={handleSaveAsProfile} disabled={savingProfile || !saveAsProfileName}>
+                    <Plus size={12} />{savingProfile ? "Saving..." : "Save as Profile"}
+                  </Button>
+                </div>
+                {profileSaved && <p className="text-xs text-green-400">Profile "{profileSaved}" created</p>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 
-type Tab = "styles" | "health" | "profiles" | "preferences" | "templates";
+type Tab = "styles" | "health" | "profiles" | "preferences" | "templates" | "extract" | "uikit" | "kits";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "styles", label: "Styles", icon: Palette },
@@ -893,6 +1370,9 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "profiles", label: "Profiles", icon: User },
   { id: "preferences", label: "Preferences", icon: Settings },
   { id: "templates", label: "Templates", icon: Layout },
+  { id: "extract", label: "Extract", icon: Wand2 },
+  { id: "uikit", label: "UI Kit", icon: Layers },
+  { id: "kits", label: "Kits", icon: BookMarked },
 ];
 
 export default function App() {
@@ -939,6 +1419,9 @@ export default function App() {
         {tab === "profiles" && <ProfilesTab />}
         {tab === "preferences" && <PreferencesTab currentProject={currentProject} />}
         {tab === "templates" && <TemplatesTab currentProject={currentProject} />}
+        {tab === "extract" && <ExtractTab />}
+        {tab === "uikit" && <UiKitTab />}
+        {tab === "kits" && <KitsTab />}
       </main>
     </div>
   );
