@@ -158,6 +158,23 @@ export {
 } from "./lib/transformer.js";
 export type { TransformFormat, TransformResult } from "./lib/transformer.js";
 
+// ── Model config ──────────────────────────────────────────────────────────────
+export {
+  getActiveModel,
+  setActiveModel,
+  clearActiveModel,
+  DEFAULT_MODEL,
+} from "./lib/model-config.js";
+
+// ── Training data gatherer ────────────────────────────────────────────────────
+export { gatherTrainingData } from "./lib/gatherer.js";
+export type {
+  GatherTrainingDataFn,
+  GatherResult,
+  GathererOptions,
+  TrainingExample,
+} from "./lib/gatherer.js";
+
 // ── Style Kits ────────────────────────────────────────────────────────────────
 export {
   saveKit,
@@ -169,3 +186,18 @@ export {
   kitToProfile,
 } from "./lib/kits.js";
 export type { StyleKit, CreateKitInput } from "./lib/kits.js";
+
+// ── Accessibility audit ───────────────────────────────────────────────────────
+export { auditColorContrast } from "./lib/a11y.js";
+export type { A11yReport, ContrastResult, WcagLevel } from "./lib/a11y.js";
+
+// ── Design diff ───────────────────────────────────────────────────────────────
+export { diffTokens } from "./lib/diff.js";
+export type { TokenDiff } from "./lib/diff.js";
+
+// ── Figma Variables ───────────────────────────────────────────────────────────
+export { toFigmaVariables, publishToFigma } from "./lib/figma.js";
+export type { FigmaVariablesPayload, FigmaVariable } from "./lib/figma.js";
+
+// ── Screenshot extraction ─────────────────────────────────────────────────────
+export { extractStylesFromScreenshot, extractStylesFromFile } from "./lib/extractor.js";

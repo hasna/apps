@@ -56,6 +56,7 @@ import { getExample, listExamples, PATTERNS } from "../lib/examples.js";
 import type { Pattern } from "../lib/examples.js";
 import { getDb } from "../lib/db.js";
 import { App } from "./components/App.js";
+import { registerBrainsCommand } from "./brains.js";
 
 // ── TTY detection ─────────────────────────────────────────────────────────────
 
@@ -1152,31 +1153,45 @@ program
 // ── styles extract ────────────────────────────────────────────────────────────
 
 program
-  .command("extract <url>")
-  .description("Extract design tokens from a live website URL")
+  .command("extract [url]")
+  .description("Extract design tokens from a URL or local CSS file")
   .option("-n, --name <name>", "Name to save the kit as")
   .option("-s, --save", "Save extracted kit to database")
-  .option("-f, --format <format>", "Output format: shadcn|tailwind|css-vars|mui|radix", "shadcn")
+  .option("-f, --format <format>", "Output format: shadcn|tailwind|css-vars|mui|radix|w3c|scss|style-dictionary", "shadcn")
   .option("-o, --output <file>", "Write config to file instead of stdout")
   .option("-t, --tags <tags>", "Comma-separated tags")
-  .action(async (url: string, opts: { name?: string; save?: boolean; format?: string; output?: string; tags?: string }) => {
-    const { extractStylesFromUrl, enrichTokensWithAi } = await import("../lib/extractor.js");
+  .option("--file <path>", "Extract from a local CSS/SCSS file instead of URL")
+  .option("--screenshot <path>", "Extract from a screenshot/image using AI vision")
+  .option("--pages <n>", "Crawl N pages (default: 1)", "1")
+  .option("--responsive", "Sample at mobile/tablet/desktop viewports")
+  .option("--states", "Capture hover/focus state style deltas")
+  .option("--audit", "Run WCAG accessibility contrast audit on extracted colors")
+  .action(async (url: string | undefined, opts: { name?: string; save?: boolean; format?: string; output?: string; tags?: string; file?: string; screenshot?: string; pages?: string; responsive?: boolean; states?: boolean; audit?: boolean }) => {
+    const { extractStylesFromUrl, extractStylesFromFile, extractStylesFromScreenshot, enrichTokensWithAi } = await import("../lib/extractor.js");
     const { tokenizeStyles } = await import("../lib/tokenizer.js");
     const transformMod = await import("../lib/transformer.js");
     const { saveKit } = await import("../lib/kits.js");
 
-    if (isTTY) console.log(chalk.dim(`Extracting styles from ${url}...`));
+    if (!url && !opts.file && !opts.screenshot) error("Provide a URL, --file <path>, or --screenshot <path>");
+    const isFile = !!opts.file;
+    const isScreenshot = !!opts.screenshot;
+    const source = opts.screenshot ?? opts.file ?? url!;
+    if (isTTY) console.log(chalk.dim(`Extracting styles from ${source}...`));
 
     try {
-      const raw = await extractStylesFromUrl(url);
+      const pages = Math.max(1, Math.min(parseInt(opts.pages ?? "1", 10), 10));
+      const raw = isScreenshot
+        ? await extractStylesFromScreenshot(source)
+        : isFile
+          ? extractStylesFromFile(source)
+          : await extractStylesFromUrl(source, { pages, viewports: opts.responsive, states: opts.states });
       const tokens = tokenizeStyles(raw);
 
-      // Auto-enrich with Cerebras if key is available
+      // Auto-enrich with Cerebras if key is available (skip for file/screenshot — already AI-processed)
       let enrichment = null;
-      if (process.env["CEREBRAS_API_KEY"]) {
+      if (!isFile && !isScreenshot && process.env["CEREBRAS_API_KEY"]) {
         if (isTTY) process.stdout.write(chalk.dim("  Running AI enrichment..."));
-        enrichment = await enrichTokensWithAi(tokens, url);
-        // Write names back onto ColorToken objects
+        enrichment = await enrichTokensWithAi(tokens, source);
         for (const color of tokens.colors) {
           const name = enrichment.colorNames[color.value];
           if (name) color.name = name;
@@ -1186,6 +1201,13 @@ program
 
       const format = (opts.format ?? "shadcn") as Parameters<typeof transformMod.transform>[1];
       const result = transformMod.transform(tokens, format);
+
+      // A11y audit
+      let a11yReport = null;
+      if (opts.audit) {
+        const { auditColorContrast } = await import("../lib/a11y.js");
+        a11yReport = auditColorContrast(tokens, raw);
+      }
 
       if (isTTY) {
         console.log(chalk.green("\n✔ Extraction complete\n"));
@@ -1198,11 +1220,21 @@ program
           console.log(chalk.bold("  Suggested name: ") + chalk.cyan(enrichment.suggestedName));
           console.log(chalk.dim(`  ${enrichment.profileDescription}`));
         }
+        if (a11yReport) {
+          console.log();
+          const scoreColor = a11yReport.score >= 80 ? chalk.green : a11yReport.score >= 50 ? chalk.yellow : chalk.red;
+          console.log(chalk.bold("  A11y score:     ") + scoreColor(`${a11yReport.score}/100`) + chalk.dim(` (${a11yReport.passCount} pass, ${a11yReport.failCount} fail)`));
+          const fails = a11yReport.pairs.filter((p) => p.level === "fail").slice(0, 3);
+          if (fails.length) {
+            console.log(chalk.dim("  Failing pairs:"));
+            for (const f of fails) console.log(chalk.dim(`    ${f.foreground} on ${f.background} → ${f.ratio}:1`));
+          }
+        }
         console.log();
         console.log(chalk.bold(`  Config (${format}):\n`));
         console.log(result.code);
       } else {
-        jsonOut({ tokens, code: result.code, config: result.config, format, enrichment });
+        jsonOut({ tokens, code: result.code, config: result.config, format, enrichment, a11y: a11yReport });
       }
 
       if (opts.save) {
@@ -1211,8 +1243,7 @@ program
           process.exit(1);
         }
         const tags = opts.tags ? opts.tags.split(",").map((t) => t.trim()) : [];
-        const kitName = opts.name === "stripe" && enrichment?.suggestedName ? opts.name : opts.name;
-        const kit = saveKit({ name: kitName, url, tokens, raw, tags, extractedAt: raw.extractedAt });
+        const kit = saveKit({ name: opts.name!, url: source, tokens, raw, tags, extractedAt: raw.extractedAt });
         if (isTTY) console.log(chalk.green(`\n  Saved as "${kit.name}" (${kit.id})`));
       }
 
@@ -1294,6 +1325,52 @@ kitsCmd
   });
 
 kitsCmd
+  .command("figma <id>")
+  .description("Push a kit's tokens to Figma as Variables")
+  .option("--file-key <key>", "Figma file key (from the URL)")
+  .option("--token <token>", "Figma personal access token (or set FIGMA_ACCESS_TOKEN env var)")
+  .action(async (id: string, opts: { fileKey?: string; token?: string }) => {
+    const { getKit } = await import("../lib/kits.js");
+    const { publishToFigma } = await import("../lib/figma.js");
+    const kit = getKit(id);
+    if (!kit) error(`Kit not found: ${id}`);
+    const fileKey = opts.fileKey ?? process.env["FIGMA_FILE_KEY"];
+    const token = opts.token ?? process.env["FIGMA_ACCESS_TOKEN"];
+    if (!fileKey) error("--file-key or FIGMA_FILE_KEY env var required");
+    if (!token) error("--token or FIGMA_ACCESS_TOKEN env var required");
+    if (isTTY) process.stdout.write(chalk.dim("  Publishing to Figma..."));
+    const result = await publishToFigma(kit!.tokens, fileKey!, token!);
+    if (isTTY) {
+      if (result.success) console.log(chalk.green(` ✔ ${result.message}`));
+      else console.log(chalk.red(` ✖ ${result.message}`));
+    } else jsonOut(result);
+  });
+
+kitsCmd
+  .command("diff <idA> <idB>")
+  .description("Compare two saved kits and show what changed")
+  .action(async (idA: string, idB: string) => {
+    const { getKit } = await import("../lib/kits.js");
+    const { diffTokens } = await import("../lib/diff.js");
+    const a = getKit(idA);
+    const b = getKit(idB);
+    if (!a) error(`Kit not found: ${idA}`);
+    if (!b) error(`Kit not found: ${idB}`);
+    const diff = diffTokens(a!.tokens, b!.tokens);
+    if (!isTTY) { jsonOut(diff); return; }
+    console.log(chalk.bold(`\n  ${a!.name} → ${b!.name}\n`));
+    console.log(chalk.dim(`  ${diff.summary.description} (${diff.summary.totalChanges} total changes)\n`));
+    if (diff.colors.added.length) console.log(chalk.green(`  +${diff.colors.added.length} colors: `) + diff.colors.added.slice(0, 5).map((c) => c.value).join(", "));
+    if (diff.colors.removed.length) console.log(chalk.red(`  -${diff.colors.removed.length} colors: `) + diff.colors.removed.slice(0, 5).map((c) => c.value).join(", "));
+    if (diff.typography.fontFamilies.added.length) console.log(chalk.green("  +fonts: ") + diff.typography.fontFamilies.added.join(", "));
+    if (diff.typography.fontFamilies.removed.length) console.log(chalk.red("  -fonts: ") + diff.typography.fontFamilies.removed.join(", "));
+    if (diff.borderRadius.added.length) console.log(chalk.green("  +radii: ") + diff.borderRadius.added.join(", "));
+    if (diff.borderRadius.removed.length) console.log(chalk.red("  -radii: ") + diff.borderRadius.removed.join(", "));
+    if (diff.shadows.added.length) console.log(chalk.green(`  +${diff.shadows.added.length} shadows`));
+    if (diff.shadows.removed.length) console.log(chalk.red(`  -${diff.shadows.removed.length} shadows`));
+  });
+
+kitsCmd
   .command("save-as-profile <id> <name>")
   .description("Convert a saved kit into a reusable style profile")
   .action(async (id: string, name: string) => {
@@ -1306,6 +1383,10 @@ kitsCmd
     if (isTTY) console.log(chalk.green(`  Created profile "${profile.name}" (${profile.id})`));
     else jsonOut(profile);
   });
+
+// ── styles brains ─────────────────────────────────────────────────────────────
+
+registerBrainsCommand(program);
 
 // ── Parse & run ───────────────────────────────────────────────────────────────
 

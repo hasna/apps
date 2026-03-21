@@ -18,10 +18,13 @@ import { listProjectDirs, getProjectConfig, setProjectConfig, initProjectDir } f
 import { runHealthCheck, type HealthCheckResult } from "../lib/health.js";
 import { listTemplates, createTemplate, deleteTemplate, applyTemplate } from "../lib/templates.js";
 import { getDb } from "../lib/db.js";
-import { extractStylesFromUrl, enrichTokensWithAi } from "../lib/extractor.js";
+import { extractStylesFromUrl, extractStylesFromFile, enrichTokensWithAi } from "../lib/extractor.js";
 import { tokenizeStyles } from "../lib/tokenizer.js";
 import { transform, type TransformFormat } from "../lib/transformer.js";
 import { saveKit, getKit, listKits, updateKit, deleteKit, kitToProfile } from "../lib/kits.js";
+import { auditColorContrast } from "../lib/a11y.js";
+import { diffTokens } from "../lib/diff.js";
+import { publishToFigma } from "../lib/figma.js";
 
 const pkg = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf-8")
@@ -405,16 +408,18 @@ async function handleRequest(req: Request): Promise<Response> {
 
     // POST /api/extract
     if (path === "/api/extract" && method === "POST") {
-      const body = await parseBody<{ url: string; name?: string; save?: boolean; tags?: string[] }>(req);
-      if (!body?.url) return err("url is required");
+      const body = await parseBody<{ url?: string; cssFile?: string; name?: string; save?: boolean; tags?: string[]; pages?: number; responsive?: boolean }>(req);
+      if (!body?.url && !body?.cssFile) return err("url or cssFile is required");
       try {
-        const raw = await extractStylesFromUrl(body.url);
+        const raw = body.cssFile
+          ? extractStylesFromFile(body.cssFile)
+          : await extractStylesFromUrl(body.url!, { pages: body.pages ?? 1, viewports: body.responsive });
         const tokens = tokenizeStyles(raw);
 
         // Auto-enrich with AI if Cerebras key is available
         let enrichment = null;
         if (process.env["CEREBRAS_API_KEY"]) {
-          enrichment = await enrichTokensWithAi(tokens, body.url);
+          enrichment = await enrichTokensWithAi(tokens, body.url ?? "");
           for (const color of tokens.colors) {
             const name = enrichment.colorNames[color.value];
             if (name) color.name = name;
@@ -430,7 +435,7 @@ async function handleRequest(req: Request): Promise<Response> {
         };
         let kit = null;
         if (body.save && body.name) {
-          kit = saveKit({ name: body.name, url: body.url, tokens, raw, tags: body.tags, extractedAt: raw.extractedAt });
+          kit = saveKit({ name: body.name, url: body.url ?? body.cssFile ?? "", tokens, raw, tags: body.tags, extractedAt: raw.extractedAt });
         }
         return json({ tokens, configs, kit, enrichment, url: body.url, extractedAt: raw.extractedAt });
       } catch (e) {
@@ -455,6 +460,40 @@ async function handleRequest(req: Request): Promise<Response> {
       } catch (e) {
         return err((e as Error).message);
       }
+    }
+
+    // POST /api/diff
+    if (path === "/api/diff" && method === "POST") {
+      const body = await parseBody<{ kitIdA: string; kitIdB: string }>(req);
+      if (!body?.kitIdA || !body?.kitIdB) return err("kitIdA and kitIdB are required");
+      const kitA = getKit(body.kitIdA);
+      const kitB = getKit(body.kitIdB);
+      if (!kitA) return err(`Kit not found: ${body.kitIdA}`, 404);
+      if (!kitB) return err(`Kit not found: ${body.kitIdB}`, 404);
+      return json(diffTokens(kitA.tokens, kitB.tokens));
+    }
+
+    // POST /api/kits/:id/figma
+    const kitFigmaMatch = path.match(/^\/api\/kits\/([^/]+)\/figma$/);
+    if (kitFigmaMatch && method === "POST") {
+      const kit = getKit(kitFigmaMatch[1]);
+      if (!kit) return err("Kit not found", 404);
+      const body = await parseBody<{ fileKey?: string; accessToken?: string }>(req);
+      const fileKey = body?.fileKey ?? process.env["FIGMA_FILE_KEY"];
+      const token = body?.accessToken ?? process.env["FIGMA_ACCESS_TOKEN"];
+      if (!fileKey) return err("fileKey or FIGMA_FILE_KEY env var required");
+      if (!token) return err("accessToken or FIGMA_ACCESS_TOKEN env var required");
+      const result = await publishToFigma(kit.tokens, fileKey, token);
+      return json(result, result.success ? 200 : 502);
+    }
+
+    // GET /api/kits/:id/audit
+    const kitAuditMatch = path.match(/^\/api\/kits\/([^/]+)\/audit$/);
+    if (kitAuditMatch && method === "GET") {
+      const kit = getKit(kitAuditMatch[1]);
+      if (!kit) return err("Kit not found", 404);
+      const report = auditColorContrast(kit.tokens, kit.raw);
+      return json(report);
     }
 
     // POST /api/kits/:id/save-as-profile
