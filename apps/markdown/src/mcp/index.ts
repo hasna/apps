@@ -11,7 +11,7 @@ import { parseFromFile, parseFromString, validate, compile, run } from "../lib/p
 import { validateAndLint } from "../validator/validate.js";
 
 const server = new Server(
-  { name: "omp", version: "0.1.0" },
+  { name: "markdown", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -20,7 +20,7 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: "omp_validate",
+      name: "markdown_validate",
       description: "Validate an OMP document against the spec. Pass either file path or raw content.",
       inputSchema: {
         type: "object" as const,
@@ -31,7 +31,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "omp_inspect",
+      name: "markdown_inspect",
       description: "Parse an OMP document and return its structure: cards, types, dependencies, execution plan.",
       inputSchema: {
         type: "object" as const,
@@ -42,7 +42,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "omp_compile",
+      name: "markdown_compile",
       description: "Parse an OMP document and return the execution plan as JSON (DAG with parallel groups).",
       inputSchema: {
         type: "object" as const,
@@ -53,7 +53,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "omp_lint",
+      name: "markdown_lint",
       description: "Validate + lint an OMP document for errors and best practice warnings.",
       inputSchema: {
         type: "object" as const,
@@ -64,7 +64,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "omp_run",
+      name: "markdown_run",
       description: "Execute an OMP document through the full pipeline. Use dry_run=true to preview without executing.",
       inputSchema: {
         type: "object" as const,
@@ -86,7 +86,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
-      case "omp_validate": {
+      case "markdown_validate": {
         const doc = args?.file
           ? parseFromFile(args.file as string)
           : parseFromString((args?.content as string) ?? "");
@@ -105,7 +105,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "omp_inspect": {
+      case "markdown_inspect": {
         const doc = args?.file
           ? parseFromFile(args.file as string)
           : parseFromString((args?.content as string) ?? "");
@@ -131,7 +131,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "omp_compile": {
+      case "markdown_compile": {
         const doc = args?.file
           ? parseFromFile(args.file as string)
           : parseFromString((args?.content as string) ?? "");
@@ -144,7 +144,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "omp_lint": {
+      case "markdown_lint": {
         const doc = args?.file
           ? parseFromFile(args.file as string)
           : parseFromString((args?.content as string) ?? "");
@@ -162,7 +162,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "omp_run": {
+      case "markdown_run": {
         const file = args?.file as string;
         if (!file) throw new Error("file is required");
         const result = await run(file, {
