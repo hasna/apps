@@ -440,6 +440,13 @@ export const CONNECTORS: ConnectorMeta[] = [
     tags: ["weather", "data"],
   },
   {
+    name: "arxiv",
+    displayName: "arXiv",
+    description: "Research paper search and retrieval",
+    category: "Data & Analytics",
+    tags: ["research", "papers", "academic"],
+  },
+  {
     name: "brandsight",
     displayName: "Brandsight",
     description: "Brand monitoring",

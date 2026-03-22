@@ -129,6 +129,31 @@ export function buildAuthorizationUrl(
 }
 
 /**
+ * Send a token request to X's OAuth 2.0 endpoint.
+ * Always sends client_id as a POST body parameter (works for both public
+ * and confidential clients). If a client_secret is configured, also sends
+ * it as a body parameter. This avoids the "unauthorized_client / Missing
+ * valid authorization header" error that occurs when Basic Auth is sent
+ * for apps registered as public clients on X's developer portal.
+ */
+async function tokenRequest(
+  url: string,
+  body: URLSearchParams,
+  config: OAuth2Config
+): Promise<Response> {
+  body.append('client_id', config.clientId);
+  if (config.clientSecret) {
+    body.append('client_secret', config.clientSecret);
+  }
+
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+}
+
+/**
  * Exchange authorization code for tokens
  */
 export async function exchangeCodeForTokens(
@@ -143,28 +168,7 @@ export async function exchangeCodeForTokens(
     code_verifier: codeVerifier,
   });
 
-  // For confidential clients, add client_id to body
-  // For public clients with secret, use Basic auth
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-  };
-
-  if (config.clientSecret) {
-    // Confidential client - use Basic auth
-    const credentials = Buffer.from(
-      `${config.clientId}:${config.clientSecret}`
-    ).toString('base64');
-    headers['Authorization'] = `Basic ${credentials}`;
-  } else {
-    // Public client - include client_id in body
-    body.append('client_id', config.clientId);
-  }
-
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers,
-    body: body.toString(),
-  });
+  const response = await tokenRequest(TOKEN_URL, body, config);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -201,24 +205,7 @@ export async function refreshAccessToken(
     refresh_token: refreshToken,
   });
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-  };
-
-  if (config.clientSecret) {
-    const credentials = Buffer.from(
-      `${config.clientId}:${config.clientSecret}`
-    ).toString('base64');
-    headers['Authorization'] = `Basic ${credentials}`;
-  } else {
-    body.append('client_id', config.clientId);
-  }
-
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers,
-    body: body.toString(),
-  });
+  const response = await tokenRequest(TOKEN_URL, body, config);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -256,24 +243,7 @@ export async function revokeToken(
     token_type_hint: tokenTypeHint,
   });
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-  };
-
-  if (config.clientSecret) {
-    const credentials = Buffer.from(
-      `${config.clientId}:${config.clientSecret}`
-    ).toString('base64');
-    headers['Authorization'] = `Basic ${credentials}`;
-  } else {
-    body.append('client_id', config.clientId);
-  }
-
-  const response = await fetch(REVOKE_URL, {
-    method: 'POST',
-    headers,
-    body: body.toString(),
-  });
+  const response = await tokenRequest(REVOKE_URL, body, config);
 
   if (!response.ok) {
     const errorText = await response.text();
