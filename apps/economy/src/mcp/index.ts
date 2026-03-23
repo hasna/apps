@@ -51,6 +51,7 @@ const TOOLS = [
   { name: 'register_agent', description: 'Register agent session.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, session_id: { type: 'string' } }, required: ['name'] } },
   { name: 'heartbeat', description: 'Update last_seen_at.', inputSchema: { type: 'object', properties: { agent_id: { type: 'string' } }, required: ['agent_id'] } },
   { name: 'set_focus', description: 'Set active project context.', inputSchema: { type: 'object', properties: { agent_id: { type: 'string' }, project_id: { type: 'string' } }, required: ['agent_id'] } },
+  { name: 'list_agents', description: 'List all registered agents.', inputSchema: { type: 'object', properties: {} } },
   { name: 'send_feedback', description: 'Send feedback about this service.', inputSchema: { type: 'object', properties: { message: { type: 'string' }, email: { type: 'string' }, category: { type: 'string', enum: ['bug','feature','general'] } }, required: ['message'] } },
 ]
 
@@ -266,6 +267,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!ag) return { content: [{ type: 'text', text: `Agent not found` }], isError: true };
         (ag as Record<string, unknown>)['project_id'] = args['project_id'];
         return { content: [{ type: 'text', text: String(args['project_id'] ? `Focus: ${args['project_id']}` : 'Focus cleared') }] };
+      }
+      case 'list_agents': {
+        return { content: [{ type: 'text', text: JSON.stringify([..._econAgents.values()]) }] };
       }
       case 'send_feedback': {
         try {
