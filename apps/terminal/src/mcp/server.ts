@@ -15,6 +15,7 @@ import { registerProcessTools } from "./tools/process.js";
 import { registerBatchTools } from "./tools/batch.js";
 import { registerMemoryTools } from "./tools/memory.js";
 import { registerMetaTools } from "./tools/meta.js";
+import { registerCloudTools } from "@hasna/cloud";
 
 // ── server ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ export function createServer(): McpServer {
   registerBatchTools(server, h);
   registerMemoryTools(server, h);
   registerMetaTools(server, h);
+  registerCloudTools(server, "terminal");
 
   return server;
 }

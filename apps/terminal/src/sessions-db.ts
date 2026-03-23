@@ -2,6 +2,7 @@
 
 // @ts-ignore — bun:sqlite is a bun built-in
 import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -15,7 +16,7 @@ let db: Database | null = null;
 function getDb(): Database {
   if (db) return db;
   if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
-  db = new Database(DB_PATH);
+  db = new SqliteAdapter(DB_PATH) as unknown as Database;
   db.exec("PRAGMA journal_mode = WAL");
 
   db.exec(`
@@ -71,6 +72,16 @@ function getDb(): Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_corrections_prompt ON corrections(prompt);
+
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   return db;
