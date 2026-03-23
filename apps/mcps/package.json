@@ -1,6 +1,6 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Meta-MCP registry & CLI \u2014 discover, manage, and proxy MCP servers",
   "type": "module",
   "main": "dist/index.js",
