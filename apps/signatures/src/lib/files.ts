@@ -3,9 +3,17 @@ import { join, basename, extname } from "node:path";
 import { homedir } from "node:os";
 
 export function getSignaturesDir(): string {
-  const dir = join(homedir(), ".signatures");
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  const home = homedir();
+  const newDir = join(home, ".hasna", "signatures");
+  const legacyDir = join(home, ".signatures");
+
+  // Use legacy dir if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newDir) && existsSync(legacyDir)) {
+    return legacyDir;
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
 }
 
 export function getDocumentsDir(): string {

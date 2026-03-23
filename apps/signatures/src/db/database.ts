@@ -6,11 +6,14 @@ import { homedir } from "node:os";
 let db: Database | null = null;
 
 function getDbPath(): string {
+  if (process.env["HASNA_SIGNATURES_DB_PATH"]) {
+    return process.env["HASNA_SIGNATURES_DB_PATH"];
+  }
   if (process.env["SIGNATURES_DB_PATH"]) {
     return process.env["SIGNATURES_DB_PATH"];
   }
 
-  // Check for git root .signatures/
+  // Check for git root .signatures/ (project-scoped, unchanged)
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
     if (existsSync(join(dir, ".git"))) {
@@ -23,10 +26,18 @@ function getDbPath(): string {
     dir = parent;
   }
 
-  // Default global
-  const globalPath = join(homedir(), ".signatures", "signatures.db");
-  mkdirSync(dirname(globalPath), { recursive: true });
-  return globalPath;
+  const home = homedir();
+  const newPath = join(home, ".hasna", "signatures", "signatures.db");
+  const legacyPath = join(home, ".signatures", "signatures.db");
+
+  // Use legacy DB if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newPath) && existsSync(legacyPath)) {
+    return legacyPath;
+  }
+
+  // Default global — new location
+  mkdirSync(dirname(newPath), { recursive: true });
+  return newPath;
 }
 
 export function getDatabase(): Database {

@@ -4,9 +4,18 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 
 function getCacheDir(): string {
-  const dir = join(homedir(), ".signatures", "cache");
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  const home = homedir();
+  const newDir = join(home, ".hasna", "signatures", "cache");
+  const legacyDir = join(home, ".signatures", "cache");
+
+  // Use legacy dir if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newDir) && existsSync(legacyDir)) {
+    mkdirSync(legacyDir, { recursive: true });
+    return legacyDir;
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
 }
 
 function docHash(filePath: string): string {
