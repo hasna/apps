@@ -333,6 +333,108 @@ repoCmd
     }
   });
 
+repoCmd
+  .command('commits <owner> <repo>')
+  .description('List commits on a repository')
+  .option('--sha <sha>', 'SHA or branch to start listing from')
+  .option('--path <path>', 'Only commits containing this file path')
+  .option('--author <author>', 'GitHub login or email to filter by')
+  .option('--since <since>', 'Only commits after this date (ISO 8601)')
+  .option('--until <until>', 'Only commits before this date (ISO 8601)')
+  .option('--limit <number>', 'Maximum results', '10')
+  .action(async (owner: string, repo: string, opts) => {
+    try {
+      const client = getClient();
+      const commits = await client.repos.listCommits(owner, repo, {
+        sha: opts.sha,
+        path: opts.path,
+        author: opts.author,
+        since: opts.since,
+        until: opts.until,
+        per_page: parseInt(opts.limit, 10) || 10,
+      });
+
+      if (getFormat(repoCmd) === 'json') {
+        print(commits, 'json');
+      } else {
+        if (commits.length === 0) {
+          info('No commits found.');
+          return;
+        }
+        for (const c of commits) {
+          const date = c.commit.author?.date ? new Date(c.commit.author.date).toLocaleDateString() : '';
+          const author = c.commit.author?.name || c.author?.login || 'unknown';
+          const msg = c.commit.message.split('\n')[0];
+          console.log(`${chalk.yellow(c.sha.slice(0, 7))} ${chalk.gray(date)} ${chalk.cyan(author)} ${msg}`);
+        }
+        info(`${commits.length} commit(s)`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+repoCmd
+  .command('commit <owner> <repo> <ref>')
+  .description('Get a single commit by SHA or ref')
+  .action(async (owner: string, repo: string, ref: string) => {
+    try {
+      const client = getClient();
+      const commit = await client.repos.getCommit(owner, repo, ref);
+
+      if (getFormat(repoCmd) === 'json') {
+        print(commit, 'json');
+      } else {
+        const msg = commit.commit.message.split('\n')[0];
+        const author = commit.commit.author?.name || 'unknown';
+        const date = commit.commit.author?.date || '';
+        console.log(`${chalk.yellow('Commit:')} ${commit.sha}`);
+        console.log(`${chalk.cyan('Author:')} ${author}`);
+        console.log(`${chalk.gray('Date:')}   ${date}`);
+        console.log(`${chalk.white('Message:')} ${msg}`);
+        if (commit.parents.length > 0) {
+          console.log(`${chalk.gray('Parents:')} ${commit.parents.map(p => p.sha.slice(0, 7)).join(', ')}`);
+        }
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+repoCmd
+  .command('branches <owner> <repo>')
+  .description('List branches for a repository')
+  .option('--protected', 'Only show protected branches')
+  .option('--limit <number>', 'Maximum results', '30')
+  .action(async (owner: string, repo: string, opts) => {
+    try {
+      const client = getClient();
+      const branches = await client.repos.listBranches(owner, repo, {
+        protected: opts.protected,
+        per_page: parseInt(opts.limit, 10) || 30,
+      });
+
+      if (getFormat(repoCmd) === 'json') {
+        print(branches, 'json');
+      } else {
+        if (branches.length === 0) {
+          info('No branches found.');
+          return;
+        }
+        for (const b of branches) {
+          const prot = b.protected ? chalk.yellow(' [protected]') : '';
+          console.log(`${chalk.cyan(b.name)}${prot} ${chalk.gray(b.commit.sha.slice(0, 7))}`);
+        }
+        info(`${branches.length} branch(es)`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // ============================================
 // Issue Commands
 // ============================================

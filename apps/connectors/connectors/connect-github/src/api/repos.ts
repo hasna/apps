@@ -5,6 +5,7 @@ import type {
   FileContent,
   CreateOrUpdateFileOptions,
   FileCommitResponse,
+  Commit,
 } from '../types';
 
 /**
@@ -137,6 +138,43 @@ export class ReposApi {
       `/repos/${owner}/${repo}/contents/${path}`,
       options as Record<string, string | undefined>
     );
+  }
+
+  /**
+   * List commits on a repository
+   */
+  async listCommits(
+    owner: string,
+    repo: string,
+    options?: {
+      sha?: string;
+      path?: string;
+      author?: string;
+      since?: string;
+      until?: string;
+      per_page?: number;
+      page?: number;
+    }
+  ): Promise<Commit[]> {
+    return this.client.get<Commit[]>(`/repos/${owner}/${repo}/commits`, options);
+  }
+
+  /**
+   * Get a single commit
+   */
+  async getCommit(owner: string, repo: string, ref: string): Promise<Commit> {
+    return this.client.get<Commit>(`/repos/${owner}/${repo}/commits/${ref}`);
+  }
+
+  /**
+   * List branches for a repository
+   */
+  async listBranches(
+    owner: string,
+    repo: string,
+    options?: { protected?: boolean; per_page?: number; page?: number }
+  ): Promise<Array<{ name: string; commit: { sha: string; url: string }; protected: boolean }>> {
+    return this.client.get(`/repos/${owner}/${repo}/branches`, options);
   }
 
   /**
