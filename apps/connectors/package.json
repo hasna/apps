@@ -26,7 +26,7 @@
   "scripts": {
     "build": "cd dashboard && bun run build && cd .. && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --outDir ./dist",
     "build:dashboard": "cd dashboard && bun run build",
-    "postinstall": "[ \"$SKIP_DASHBOARD\" = \"1\" ] || [ ! -f dashboard/package.json ] || [ -d dashboard/node_modules ] || (cd dashboard && bun install)",
+    "postinstall": "mkdir -p $HOME/.hasna/connectors 2>/dev/null || true; [ \"$SKIP_DASHBOARD\" = \"1\" ] || [ ! -f dashboard/package.json ] || [ -d dashboard/node_modules ] || (cd dashboard && bun install)",
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
