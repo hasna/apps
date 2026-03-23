@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite"
+import { SqliteAdapter as Database } from "@hasna/cloud"
 import { join } from "path"
 import { existsSync, mkdirSync, cpSync } from "fs"
 
@@ -238,6 +238,10 @@ function runMigrations(db: Database): void {
           VALUES ('delete', old.rowid, old.name, old.slug, old.title, old.body, COALESCE(old.description,''), old.tags);
         END;
       `,
+    },
+    {
+      name: "009_feedback",
+      sql: `CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
     },
   ]
 
