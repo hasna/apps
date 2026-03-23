@@ -1,7 +1,7 @@
 {
   "name": "@hasna/testers",
   "version": "0.0.18",
-  "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
+  "description": "AI-powered QA testing CLI \u2014 spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -35,7 +35,8 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/testers/screenshots $HOME/.hasna/testers/browser/profiles 2>/dev/null || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
