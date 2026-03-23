@@ -1,10 +1,10 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import type { TestersConfig, ModelPreset } from "../types/index.js";
 import { MODEL_MAP } from "../types/index.js";
+import { getTestersDir } from "./paths.js";
 
-const CONFIG_DIR = join(homedir(), ".testers");
+const CONFIG_DIR = getTestersDir();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 /**
@@ -20,7 +20,7 @@ export function getDefaultConfig(): TestersConfig {
       timeout: 60_000,
     },
     screenshots: {
-      dir: join(homedir(), ".testers", "screenshots"),
+      dir: join(getTestersDir(), "screenshots"),
       format: "png",
       quality: 90,
       fullPage: false,
@@ -30,7 +30,7 @@ export function getDefaultConfig(): TestersConfig {
 }
 
 /**
- * Loads configuration from ~/.testers/config.json (if it exists),
+ * Loads configuration from ~/.hasna/testers/config.json (if it exists),
  * merges with defaults, and applies environment variable overrides.
  */
 export function loadConfig(): TestersConfig {

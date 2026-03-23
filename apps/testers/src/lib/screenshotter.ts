@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { getTestersDir } from "./paths.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ async function generateThumbnail(
 
 // ─── Class ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_BASE_DIR = join(homedir(), ".testers", "screenshots");
+const DEFAULT_BASE_DIR = join(getTestersDir(), "screenshots");
 
 export class Screenshotter {
   private readonly baseDir: string;

@@ -13,7 +13,7 @@
 
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { getTestersDir } from "./paths.js";
 
 // ─── Availability check ───────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ export function isBunWebViewAvailable(): boolean {
 // ─── Profile directory helper ────────────────────────────────────────────────
 
 function getProfileDir(profileName: string): string {
-  const base = process.env["TESTERS_BROWSER_DATA_DIR"] ?? join(homedir(), ".testers", "browser");
+  const base = process.env["TESTERS_BROWSER_DATA_DIR"] ?? join(getTestersDir(), "browser");
   const dir = join(base, "profiles", profileName);
   mkdirSync(dir, { recursive: true });
   return dir;

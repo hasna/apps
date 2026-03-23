@@ -3,8 +3,8 @@ process.env.TESTERS_DB_PATH = ":memory:";
 import { describe, it, expect } from "bun:test";
 import { getDefaultConfig, loadConfig, resolveModel } from "./config.js";
 import { MODEL_MAP } from "../types/index.js";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getTestersDir } from "./paths.js";
 
 describe("getDefaultConfig", () => {
   it("returns correct default model", () => {
@@ -20,7 +20,7 @@ describe("getDefaultConfig", () => {
   it("returns correct default screenshot dir", () => {
     const config = getDefaultConfig();
     expect(config.screenshots.dir).toBe(
-      join(homedir(), ".testers", "screenshots"),
+      join(getTestersDir(), "screenshots"),
     );
   });
 

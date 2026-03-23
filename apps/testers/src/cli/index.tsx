@@ -37,6 +37,7 @@ import { generateGitHubActionsWorkflow } from "../lib/ci.js";
 import type { ScenarioPriority } from "../types/index.js";
 import { parseAssertionString } from "../lib/assertions.js";
 import { existsSync, mkdirSync } from "node:fs";
+import { getTestersDir } from "../lib/paths.js";
 
 // ─── Interactive Add Prompt (Ink) ────────────────────────────────────────────
 
@@ -238,7 +239,7 @@ program
 
 // ─── Helper: active project ─────────────────────────────────────────────────
 
-const CONFIG_DIR = join(process.env["HOME"] ?? "~", ".testers");
+const CONFIG_DIR = getTestersDir();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 function getActiveProject(): string | undefined {
@@ -1272,7 +1273,7 @@ program
     try {
       const config = loadConfig();
       const hasApiKey = !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
-      const dbPath = join(process.env["HOME"] ?? "~", ".testers", "testers.db");
+      const dbPath = join(getTestersDir(), "testers.db");
 
       log("");
       log(chalk.bold("  Open Testers Status"));
@@ -3013,7 +3014,7 @@ program
     }
 
     // 2. Check DB is accessible
-    const dbPath = join(process.env["HOME"] ?? "~", ".testers", "testers.db");
+    const dbPath = join(getTestersDir(), "testers.db");
     try {
       const { Database } = await import("bun:sqlite");
       const db = new Database(dbPath, { create: true });

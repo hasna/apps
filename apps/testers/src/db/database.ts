@@ -18,11 +18,22 @@ function shortUuid(): string {
 }
 
 function resolveDbPath(): string {
-  const envPath = process.env["TESTERS_DB_PATH"];
-  if (envPath) return envPath;
-  const dir = join(homedir(), ".testers");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return join(dir, "testers.db");
+  if (process.env["HASNA_TESTERS_DB_PATH"]) return process.env["HASNA_TESTERS_DB_PATH"];
+  if (process.env["TESTERS_DB_PATH"]) return process.env["TESTERS_DB_PATH"];
+
+  const home = homedir();
+  const newDir = join(home, ".hasna", "testers");
+  const legacyDir = join(home, ".testers");
+  const newPath = join(newDir, "testers.db");
+  const legacyPath = join(legacyDir, "testers.db");
+
+  // Use legacy DB if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newPath) && existsSync(legacyPath)) {
+    return legacyPath;
+  }
+
+  if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true });
+  return newPath;
 }
 
 const MIGRATIONS: string[] = [

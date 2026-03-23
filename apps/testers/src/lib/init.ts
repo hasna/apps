@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, basename } from "path";
-import { homedir } from "os";
+import { getTestersDir } from "./paths.js";
 import { createScenario } from "../db/scenarios.js";
 import { ensureProject } from "../db/projects.js";
 import type { CreateScenarioInput } from "../types/index.js";
@@ -318,7 +318,7 @@ export function initProject(options: InitOptions): InitResult {
   const scenarios = starterInputs.map((input) => createScenario(input));
 
   // Write activeProject to config
-  const configDir = join(homedir(), ".testers");
+  const configDir = getTestersDir();
   const configPath = join(configDir, "config.json");
 
   if (!existsSync(configDir)) {

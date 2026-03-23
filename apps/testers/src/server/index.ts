@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { getTestersDir } from "../lib/paths.js";
 import { z } from "zod";
 import { listScenarios, createScenario, getScenario, getScenarioByShortId, updateScenario, deleteScenario, countScenarios } from "../db/scenarios.js";
 import { listRuns, getRun, countRuns } from "../db/runs.js";
@@ -258,7 +258,7 @@ async function handleRequest(req: Request): Promise<Response> {
     const config = loadConfig();
     // Force DB init to get the path
     getDatabase();
-    const dbPath = process.env["TESTERS_DB_PATH"] ?? join(homedir(), ".testers", "testers.db");
+    const dbPath = process.env["HASNA_TESTERS_DB_PATH"] ?? process.env["TESTERS_DB_PATH"] ?? join(getTestersDir(), "testers.db");
     const scenarios = listScenarios();
     const runs = listRuns();
     return jsonResponse({

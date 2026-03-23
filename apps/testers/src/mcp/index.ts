@@ -23,6 +23,7 @@ import { createApiCheck, getApiCheck, listApiChecks, updateApiCheck, deleteApiCh
 import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createPersona, getPersona, listPersonas, updatePersona, deletePersona } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
+import { getTestersDir } from "../lib/paths.js";
 
 // ─── Response Helpers ────────────────────────────────────────────────────────
 
@@ -490,7 +491,7 @@ server.tool(
       const runCount = (db.query("SELECT COUNT(*) as count FROM runs").get() as { count: number }).count;
       const hasApiKey = !!(config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"]);
       return json({
-        dbPath: process.env["TESTERS_DB_PATH"] || "~/.testers/testers.db",
+        dbPath: process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || `${getTestersDir()}/testers.db`,
         apiKey: hasApiKey ? "configured" : "not set",
         scenarioCount,
         runCount,
