@@ -49,6 +49,9 @@ export {
 // Database — Connection
 export { getDb, closeDb } from "./db/database.js";
 
+// Database — PostgreSQL migrations
+export { PG_MIGRATIONS } from "./db/pg-migrations.js";
+
 // Lib — Config
 export { getConfig, setConfig, resetConfig, getConfigPath } from "./lib/config.js";
 
