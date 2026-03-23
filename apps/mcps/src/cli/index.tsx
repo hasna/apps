@@ -45,7 +45,7 @@ import {
   disconnectAll,
 } from "../lib/proxy.js";
 import { getCachedTools } from "../lib/registry.js";
-import { closeDb, getDb } from "../lib/db.js";
+import { closeDb, getDb, getAdapter } from "../lib/db.js";
 import * as readline from "readline";
 import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
@@ -1221,6 +1221,22 @@ program
   .description("Start meta-MCP server (stdio)")
   .action(async () => {
     await startMcpServer();
+  });
+
+// --- feedback ---
+program
+  .command("feedback <message>")
+  .description("Send feedback")
+  .option("--email <email>", "Contact email")
+  .option("--category <category>", "Category: bug, feature, general")
+  .action((message: string, opts: { email?: string; category?: string }) => {
+    const adapter = getAdapter();
+    adapter.run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      message, opts.email || null, opts.category || "general", VERSION
+    );
+    console.log(chalk.green("Feedback saved. Thank you!"));
+    closeDb();
   });
 
 // --- default: TUI ---

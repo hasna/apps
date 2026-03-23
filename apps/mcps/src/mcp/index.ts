@@ -36,6 +36,7 @@ import {
 } from "../lib/proxy.js";
 import { diagnoseServer } from "../lib/doctor.js";
 import { TOOL_PREFIX_SEPARATOR } from "../lib/config.js";
+import { getAdapter } from "../lib/db.js";
 
 function redactServerEnv<T extends { env: Record<string, string> }>(server: T): T {
   return { ...server, env: {} };
@@ -486,6 +487,26 @@ server.tool(
     const report = await diagnoseServer(entry);
     return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
   }
+);
+
+// --- Feedback ---
+
+server.tool(
+  "send_feedback",
+  "Send feedback about this service",
+  {
+    message: z.string().describe("Feedback message"),
+    email: z.string().optional().describe("Contact email (optional)"),
+    category: z.enum(["bug", "feature", "general"]).optional().describe("Feedback category"),
+  },
+  async (params: { message: string; email?: string; category?: string }) => {
+    const adapter = getAdapter();
+    adapter.run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      params.message, params.email || null, params.category || "general", VERSION
+    );
+    return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+  },
 );
 
 // --- Start ---
