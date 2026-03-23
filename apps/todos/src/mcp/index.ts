@@ -180,7 +180,24 @@ function formatError(error: unknown): string {
     return JSON.stringify({ code: CompletionGuardError.code, message: error.reason, suggestion: CompletionGuardError.suggestion, ...retry });
   }
   if (error instanceof Error) {
-    return JSON.stringify({ code: "UNKNOWN_ERROR", message: error.message });
+    const msg = error.message;
+    // Wrap SQLite constraint errors with agent-friendly messages
+    if (msg.includes("UNIQUE constraint failed: projects.path")) {
+      const db = getDatabase();
+      const existing = db.prepare("SELECT id, name FROM projects WHERE path = ?").get(msg.match(/'([^']+)'$/)?.[1] ?? "") as any;
+      return JSON.stringify({ code: "DUPLICATE_PROJECT", message: `Project already exists at this path${existing ? ` (id: ${existing.id}, name: ${existing.name})` : ""}. Use list_projects to find it.`, suggestion: "Use list_projects or get_project to retrieve the existing project." });
+    }
+    if (msg.includes("UNIQUE constraint failed: projects.name")) {
+      return JSON.stringify({ code: "DUPLICATE_PROJECT", message: "A project with this name already exists. Use a different name or list_projects to find the existing one.", suggestion: "Use list_projects to see existing projects." });
+    }
+    if (msg.includes("UNIQUE constraint failed")) {
+      const table = msg.match(/UNIQUE constraint failed: (\w+)\./)?.[1] ?? "unknown";
+      return JSON.stringify({ code: "DUPLICATE_ENTRY", message: `Duplicate entry in ${table}. The record already exists.`, suggestion: `Use the list or get endpoint for ${table} to find the existing record.` });
+    }
+    if (msg.includes("FOREIGN KEY constraint failed")) {
+      return JSON.stringify({ code: "REFERENCE_ERROR", message: "Referenced record does not exist. Check that the ID is correct.", suggestion: "Verify the referenced ID exists before creating this record." });
+    }
+    return JSON.stringify({ code: "UNKNOWN_ERROR", message: msg });
   }
   return JSON.stringify({ code: "UNKNOWN_ERROR", message: String(error) });
 }
