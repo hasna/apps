@@ -48,6 +48,7 @@ import { updateDocument as updateDoc } from "../db/documents.js";
 import { signWithBrowseruse, registerSigningSession } from "../lib/connector-integration.js";
 import { shareDocument, receiveDocument } from "../lib/attachments-integration.js";
 import { getSetting, setSetting } from "../db/settings.js";
+import { getDatabase } from "../db/database.js";
 import { isCerebrasConfigured } from "../lib/pdf-detector.js";
 
 const server = new Server(
@@ -309,6 +310,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: { key: { type: "string" } },
         required: ["key"],
+      },
+    },
+    {
+      name: "send_feedback",
+      description: "Send feedback about this service",
+      inputSchema: {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          email: { type: "string" },
+          category: { type: "string", enum: ["bug", "feature", "general"] },
+        },
+        required: ["message"],
       },
     },
   ],
@@ -689,6 +703,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify({ key: a["key"], value }, null, 2),
           }],
         };
+      }
+
+      case "send_feedback": {
+        const a = args as Record<string, unknown>;
+        const db = getDatabase();
+        db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [a["message"] as string, (a["email"] as string) || null, (a["category"] as string) || "general", "0.1.1"]);
+        return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
       }
 
       default:

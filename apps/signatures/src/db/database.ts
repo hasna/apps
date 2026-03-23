@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -275,5 +275,9 @@ const MIGRATIONS: [string, string][] = [
   [
     "004c_signing_session_share_expires_at",
     `ALTER TABLE signing_sessions ADD COLUMN share_expires_at TEXT`,
+  ],
+  [
+    "005_feedback",
+    `CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
   ],
 ];
