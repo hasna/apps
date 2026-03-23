@@ -1090,7 +1090,7 @@ program
 program
   .command("export")
   .description("Export all servers and sources to a JSON file")
-  .option("--file <path>", "Output file path", `${process.env.HOME ?? "~"}/.mcps/export.json`)
+  .option("--file <path>", "Output file path", `${process.env.HOME ?? "~"}/.hasna/mcps/export.json`)
   .option("--stdout", "Write to stdout instead of a file")
   .action((opts) => {
     const servers = listServers();
