@@ -147,7 +147,7 @@ async function parseBody<T>(req: Request): Promise<T | null> {
 function getHealthHistory(projectPath: string, limit = 10): HealthCheckResult[] {
   const db = getDb();
   const rows = db
-    .query(
+    .prepare(
       `SELECT * FROM health_checks WHERE project_path = ? ORDER BY run_at DESC LIMIT ?`
     )
     .all(projectPath, limit) as Array<Record<string, unknown>>;

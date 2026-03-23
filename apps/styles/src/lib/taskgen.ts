@@ -104,7 +104,7 @@ function hasExistingTask(
 ): boolean {
   const db = getDb();
   const row = db
-    .query(
+    .prepare(
       `SELECT auto_task_id FROM health_violations
        WHERE check_id = ? AND file_path = ? AND rule = ? AND auto_task_id IS NOT NULL`
     )
@@ -144,7 +144,7 @@ export async function createTasksFromViolations(
   // We'll use the most recent health check for this project.
   const db = getDb();
   const latestCheck = db
-    .query(
+    .prepare(
       "SELECT id FROM health_checks WHERE project_path = ? ORDER BY run_at DESC LIMIT 1"
     )
     .get(projectPath) as { id: string } | null;

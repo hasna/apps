@@ -12,7 +12,7 @@ export function getPref(key: string, projectPath?: string): string | null {
   // Project-scoped preference takes priority
   if (projectPath) {
     const row = db
-      .query(
+      .prepare(
         "SELECT value FROM preferences WHERE key = ? AND scope = 'project' AND project_path = ?"
       )
       .get(key, projectPath) as { value: string } | null;
@@ -21,7 +21,7 @@ export function getPref(key: string, projectPath?: string): string | null {
 
   // Fall back to global preference
   const global = db
-    .query(
+    .prepare(
       "SELECT value FROM preferences WHERE key = ? AND scope = 'global' AND project_path IS NULL"
     )
     .get(key) as { value: string } | null;
@@ -99,7 +99,7 @@ export function listPrefs(
 
   if (projectPath) {
     rows = db
-      .query(
+      .prepare(
         `SELECT key, value, scope FROM preferences
          WHERE scope = 'global' AND project_path IS NULL
             OR (scope = 'project' AND project_path = ?)
@@ -108,7 +108,7 @@ export function listPrefs(
       .all(projectPath) as Array<{ key: string; value: string; scope: string }>;
   } else {
     rows = db
-      .query(
+      .prepare(
         "SELECT key, value, scope FROM preferences WHERE scope = 'global' AND project_path IS NULL ORDER BY key ASC"
       )
       .all() as Array<{ key: string; value: string; scope: string }>;

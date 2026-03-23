@@ -1,9 +1,29 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { homedir } from "os";
 import { join, dirname } from "path";
-import { mkdirSync, existsSync } from "fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, statSync } from "fs";
 
-export const DB_PATH = join(homedir(), ".styles", "styles.db");
+export function getDataDir(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const newDir = join(home, ".hasna", "styles");
+  const oldDir = join(home, ".styles");
+
+  // Auto-migrate old dir to new location
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+    for (const file of readdirSync(oldDir)) {
+      const oldPath = join(oldDir, file);
+      if (statSync(oldPath).isFile()) {
+        copyFileSync(oldPath, join(newDir, file));
+      }
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
+}
+
+export const DB_PATH = join(getDataDir(), "styles.db");
 
 let _db: Database | null = null;
 let _dbPath: string = DB_PATH;
@@ -30,11 +50,7 @@ export function initDb(): Database {
     mkdirSync(dir, { recursive: true });
   }
 
-  const db = new Database(_dbPath, { create: true });
-
-  // Enable WAL mode for better concurrent read performance
-  db.exec("PRAGMA journal_mode=WAL");
-  db.exec("PRAGMA foreign_keys=ON");
+  const db = new Database(_dbPath);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS style_profiles (
@@ -113,6 +129,28 @@ export function initDb(): Database {
       extracted_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_presence (
+      id TEXT NOT NULL DEFAULT '',
+      agent TEXT PRIMARY KEY,
+      session_id TEXT,
+      role TEXT NOT NULL DEFAULT 'agent',
+      project_id TEXT,
+      status TEXT NOT NULL DEFAULT 'online',
+      last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      metadata TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
 

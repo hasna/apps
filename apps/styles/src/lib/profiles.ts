@@ -82,7 +82,7 @@ export function createProfile(input: CreateProfileInput): StyleProfile {
 export function getProfile(id: string): StyleProfile | null {
   const db = getDb();
   const row = db
-    .query("SELECT * FROM style_profiles WHERE id = ?")
+    .prepare("SELECT * FROM style_profiles WHERE id = ?")
     .get(id) as Record<string, unknown> | null;
   if (!row) return null;
   return rowToProfile(row);
@@ -91,7 +91,7 @@ export function getProfile(id: string): StyleProfile | null {
 export function getProfileByName(name: string): StyleProfile | null {
   const db = getDb();
   const row = db
-    .query("SELECT * FROM style_profiles WHERE name = ?")
+    .prepare("SELECT * FROM style_profiles WHERE name = ?")
     .get(name) as Record<string, unknown> | null;
   if (!row) return null;
   return rowToProfile(row);
@@ -100,7 +100,7 @@ export function getProfileByName(name: string): StyleProfile | null {
 export function listProfiles(): StyleProfile[] {
   const db = getDb();
   const rows = db
-    .query("SELECT * FROM style_profiles ORDER BY created_at ASC")
+    .prepare("SELECT * FROM style_profiles ORDER BY created_at ASC")
     .all() as Record<string, unknown>[];
   return rows.map((r) => rowToProfile(r));
 }
@@ -152,7 +152,7 @@ export function setActiveProfile(
 ): void {
   const db = getDb();
   const existing = db
-    .query("SELECT id FROM project_configs WHERE project_path = ?")
+    .prepare("SELECT id FROM project_configs WHERE project_path = ?")
     .get(projectPath) as { id: string } | null;
 
   if (existing) {
@@ -176,7 +176,7 @@ export function getActiveProfile(
 
   // 1. Check project_configs first
   const config = db
-    .query("SELECT profile_id FROM project_configs WHERE project_path = ?")
+    .prepare("SELECT profile_id FROM project_configs WHERE project_path = ?")
     .get(projectPath) as { profile_id: string | null } | null;
 
   if (config?.profile_id) {
@@ -186,7 +186,7 @@ export function getActiveProfile(
 
   // 2. Fallback: check global preference
   const pref = db
-    .query(
+    .prepare(
       "SELECT value FROM preferences WHERE key = 'active_profile' AND scope = 'global'"
     )
     .get() as { value: string } | null;

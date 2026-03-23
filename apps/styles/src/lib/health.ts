@@ -309,7 +309,7 @@ export async function runHealthCheck(
   let lastRunAt = 0;
   if (options.sinceLast) {
     const lastRow = db
-      .query(
+      .prepare(
         `SELECT run_at FROM health_checks WHERE project_path = ? ORDER BY run_at DESC LIMIT 1`
       )
       .get(projectPath) as { run_at: number } | null;

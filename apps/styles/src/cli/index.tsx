@@ -736,7 +736,7 @@ program
     // Get last health check from DB
     const db = getDb();
     const lastCheck = db
-      .query(
+      .prepare(
         "SELECT score, status, run_at FROM health_checks WHERE project_path = ? ORDER BY run_at DESC LIMIT 1"
       )
       .get(projectPath) as { score: number; status: string; run_at: number } | null;
@@ -802,7 +802,7 @@ program
     const db = getDb();
 
     const lastCheck = db
-      .query(
+      .prepare(
         `SELECT score, status, run_at, json_array_length(violations) as violation_count
          FROM health_checks
          WHERE project_path = ?

@@ -91,7 +91,7 @@ export function saveKit(input: CreateKitInput): StyleKit {
 export function getKit(id: string): StyleKit | null {
   const db = getDb();
   const row = db
-    .query("SELECT * FROM extracted_style_kits WHERE id = ?")
+    .prepare("SELECT * FROM extracted_style_kits WHERE id = ?")
     .get(id) as Record<string, unknown> | null;
   if (!row) return null;
   return rowToKit(row);
@@ -100,7 +100,7 @@ export function getKit(id: string): StyleKit | null {
 export function listKits(filter?: { tags?: string[]; search?: string }): StyleKit[] {
   const db = getDb();
   let sql = "SELECT * FROM extracted_style_kits ORDER BY created_at DESC";
-  const rows = db.query(sql).all() as Record<string, unknown>[];
+  const rows = db.prepare(sql).all() as Record<string, unknown>[];
   let kits = rows.map(rowToKit);
 
   if (filter?.search) {

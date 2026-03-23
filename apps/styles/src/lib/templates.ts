@@ -65,7 +65,7 @@ export function createTemplate(input: CreateTemplateInput): StyleTemplate {
 export function getTemplate(id: string): StyleTemplate | null {
   const db = getDb();
   const row = db
-    .query("SELECT * FROM templates WHERE id = ?")
+    .prepare("SELECT * FROM templates WHERE id = ?")
     .get(id) as Record<string, unknown> | null;
   if (!row) return null;
   return rowToTemplate(row);
@@ -77,11 +77,11 @@ export function listTemplates(profileId?: string): StyleTemplate[] {
 
   if (profileId) {
     rows = db
-      .query("SELECT * FROM templates WHERE style_profile_id = ? ORDER BY created_at ASC")
+      .prepare("SELECT * FROM templates WHERE style_profile_id = ? ORDER BY created_at ASC")
       .all(profileId) as Record<string, unknown>[];
   } else {
     rows = db
-      .query("SELECT * FROM templates ORDER BY created_at ASC")
+      .prepare("SELECT * FROM templates ORDER BY created_at ASC")
       .all() as Record<string, unknown>[];
   }
 

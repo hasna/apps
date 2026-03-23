@@ -32,7 +32,7 @@ export function getHealthDiff(projectPath: string): HealthDiffResult {
   const db = getDb();
 
   const rows = db
-    .query(
+    .prepare(
       `SELECT id, score, status, run_at, violations
        FROM health_checks
        WHERE project_path = ?
