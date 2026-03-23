@@ -1,6 +1,6 @@
 {
   "name": "@hasna/tickets",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open-source MCP-native ticketing system — bugs, features, incidents for any product, service, or app. CLI + MCP server + REST API + Web Dashboard + SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -47,6 +47,7 @@
     "dashboard"
   ],
   "publishConfig": {
+    "registry": "https://registry.npmjs.org",
     "access": "public"
   },
   "repository": {
