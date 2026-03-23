@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { SqliteAdapter, ensureFeedbackTable, migrateDotfile } from "@hasna/cloud";
-import { existsSync, mkdirSync } from "fs";
+import { mkdirSync } from "fs";
 import { join } from "path";
 import { runMigrations } from "./migrations";
 

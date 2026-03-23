@@ -1503,7 +1503,7 @@ program
     const db = getDb();
     db.run(
       "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-      [message, opts.email || null, opts.category || "general", program.version()]
+      [message, opts.email || null, opts.category || "general", program.version() || "0.0.0"]
     );
     console.log(chalk.green("✓") + " Feedback saved. Thank you!");
   });
