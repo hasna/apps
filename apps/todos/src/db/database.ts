@@ -32,7 +32,10 @@ function findGitRoot(startDir: string): string | null {
 }
 
 function getDbPath(): string {
-  // 1. Environment variable override
+  // 1. Environment variable override (new env var takes precedence)
+  if (process.env["HASNA_TODOS_DB_PATH"]) {
+    return process.env["HASNA_TODOS_DB_PATH"];
+  }
   if (process.env["TODOS_DB_PATH"]) {
     return process.env["TODOS_DB_PATH"];
   }
@@ -50,9 +53,17 @@ function getDbPath(): string {
     }
   }
 
-  // 4. Default: ~/.todos/todos.db
+  // 4. Default: ~/.hasna/todos/todos.db (with backward compat for ~/.todos/)
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".todos", "todos.db");
+  const newPath = join(home, ".hasna", "todos", "todos.db");
+  const legacyPath = join(home, ".todos", "todos.db");
+
+  // Use legacy DB if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newPath) && existsSync(legacyPath)) {
+    return legacyPath;
+  }
+
+  return newPath;
 }
 
 function ensureDir(filePath: string): void {

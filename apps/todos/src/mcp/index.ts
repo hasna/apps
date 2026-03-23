@@ -1388,7 +1388,7 @@ server.tool(
           allActive.length > 0
             ? `Active agents (avoid these names): ${allActive.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}`
             : "No active agents.",
-          "\nTo restrict names, configure agent_pool or project_pools in ~/.todos/config.json",
+          "\nTo restrict names, configure agent_pool or project_pools in ~/.hasna/todos/config.json",
         ];
         return { content: [{ type: "text" as const, text: lines.join("\n") }] };
       }

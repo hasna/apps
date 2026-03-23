@@ -28,12 +28,19 @@ interface AgentTask {
   metadata: Record<string, unknown>;
 }
 
+function getTodosGlobalDir(): string {
+  const newDir = join(HOME, ".hasna", "todos");
+  const legacyDir = join(HOME, ".todos");
+  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
+  return newDir;
+}
+
 function agentBaseDir(agent: string): string {
   const key = `TODOS_${agent.toUpperCase()}_TASKS_DIR`;
   return process.env[key]
     || getAgentTasksDir(agent)
     || process.env["TODOS_AGENT_TASKS_DIR"]
-    || join(HOME, ".todos", "agents");
+    || join(getTodosGlobalDir(), "agents");
 }
 
 function getTaskListDir(agent: string, taskListId: string): string {

@@ -38,8 +38,16 @@ export interface TodosConfig {
   project_pools?: Record<string, string[]>;
 }
 
+function getTodosGlobalDir(): string {
+  const home = process.env["HOME"] || HOME;
+  const newDir = join(home, ".hasna", "todos");
+  const legacyDir = join(home, ".todos");
+  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
+  return newDir;
+}
+
 function getConfigPath(): string {
-  return join(process.env["HOME"] || HOME, ".todos", "config.json");
+  return join(getTodosGlobalDir(), "config.json");
 }
 let cached: TodosConfig | null = null;
 

@@ -10,6 +10,14 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+function getTodosGlobalDir(): string {
+  const home = homedir();
+  const newDir = join(home, ".hasna", "todos");
+  const legacyDir = join(home, ".todos");
+  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
+  return newDir;
+}
 import chalk from "chalk";
 import { gatherTrainingData } from "../lib/gatherer.js";
 import {
@@ -50,7 +58,7 @@ export function makeBrainsCommand(): Command {
     .description("Gather training data from tasks and write to JSONL")
     .option("--limit <n>", "Maximum number of examples to gather", parseInt)
     .option("--since <date>", "Only include tasks created since this date (ISO 8601)")
-    .option("--output <dir>", "Output directory (default: ~/.todos/training/)")
+    .option("--output <dir>", "Output directory (default: ~/.hasna/todos/training/)")
     .option("--json", "Output result summary as JSON")
     .action(
       async (opts: {
@@ -75,7 +83,7 @@ export function makeBrainsCommand(): Command {
             since,
           });
 
-          const outputDir = opts.output ?? join(homedir(), ".todos", "training");
+          const outputDir = opts.output ?? join(getTodosGlobalDir(), "training");
           if (!existsSync(outputDir)) {
             mkdirSync(outputDir, { recursive: true });
           }
@@ -137,7 +145,7 @@ export function makeBrainsCommand(): Command {
           // Resolve dataset path
           let datasetPath = opts.dataset;
           if (!datasetPath) {
-            const trainingDir = join(homedir(), ".todos", "training");
+            const trainingDir = join(getTodosGlobalDir(), "training");
             if (!existsSync(trainingDir)) {
               printError(
                 "No training data found. Run `todos brains gather` first."
