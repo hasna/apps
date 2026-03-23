@@ -1,6 +1,6 @@
 {
   "name": "@hasna/crawl",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "AI-powered web crawler — self-hosted Firecrawl alternative. Crawl, extract, render JS, search. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -64,6 +64,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/cloud": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
