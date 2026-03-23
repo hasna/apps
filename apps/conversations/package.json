@@ -29,7 +29,8 @@
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/conversations $HOME/.hasna/conversations/training 2>/dev/null || true"
   },
   "keywords": [
     "conversations",
