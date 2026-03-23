@@ -1694,6 +1694,22 @@ server.registerTool("describe_tools", {
   return { content: [{ type: "text" as const, text: result }] };
 });
 
+// ---- send_feedback tool ----
+server.tool(
+  "send_feedback",
+  "Send feedback about this service",
+  { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
+  async (params) => {
+    try {
+      const db = (await import("../lib/db.js")).getDb();
+      db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(params.message, params.email || null, params.category || "general", pkg.version);
+      return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: String(e) }], isError: true };
+    }
+  }
+);
+
 // ---- Start server ----
 
 export async function startMcpServer() {
