@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
@@ -171,6 +171,24 @@ function migrate(db: Database): void {
     CREATE TABLE IF NOT EXISTS connector_promotions (
       connector TEXT UNIQUE NOT NULL,
       promoted_at TEXT NOT NULL
+    )
+  `);
+
+  // Migration 9: add project_id to agents for set_focus support
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN project_id TEXT`);
+  } catch (_) { /* column already exists */ }
+
+  // Migration 10: feedback table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 }

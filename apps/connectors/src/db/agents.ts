@@ -13,6 +13,7 @@ export interface Agent {
   name: string;
   session_id: string | null;
   role: string;
+  project_id: string | null;
   last_seen_at: string;
   created_at: string;
 }
@@ -109,6 +110,18 @@ export function listAgents(db?: Database): Agent[] {
 export function updateAgentActivity(id: string, db?: Database): void {
   const d = db ?? getDatabase();
   d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), id]);
+}
+
+export function heartbeat(id: string, db?: Database): Agent | null {
+  const d = db ?? getDatabase();
+  d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), id]);
+  return getAgent(id, d);
+}
+
+export function setFocus(id: string, projectId: string | null, db?: Database): Agent | null {
+  const d = db ?? getDatabase();
+  d.run("UPDATE agents SET project_id = ?, last_seen_at = ? WHERE id = ?", [projectId, now(), id]);
+  return getAgent(id, d);
 }
 
 export function deleteAgent(id: string, db?: Database): boolean {

@@ -26,7 +26,7 @@ import {
   getConnectorCommandHelp,
   getConnectorCliPath,
 } from "../lib/runner.js";
-import { registerAgent, listAgents, isAgentConflict } from "../db/agents.js";
+import { registerAgent, listAgents, isAgentConflict, heartbeat as dbHeartbeat, setFocus as dbSetFocus } from "../db/agents.js";
 import { checkRateBudget, getRateBudget, isRateExceeded } from "../db/rate.js";
 import { maybeStrip } from "../lib/strip.js";
 import pkg from "../../package.json" with { type: "json" };
@@ -686,6 +686,7 @@ server.registerTool(
       "connector_info", "connector_auth_status", "configure_auth",
       "setup_connector", "list_categories", "list_connector_operations",
       "run_connector_operation", "search_tools", "describe_tools",
+      "register_agent", "heartbeat", "set_focus", "list_agents",
     ];
     const matches = query ? all.filter((n) => n.includes(query.toLowerCase())) : all;
     return { content: [{ type: "text" as const, text: matches.join(", ") }] };
@@ -878,6 +879,41 @@ server.registerTool(
   async () => {
     const agents = listAgents();
     return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+  }
+);
+
+// --- Tool: heartbeat ---
+server.registerTool(
+  "heartbeat",
+  {
+    title: "Heartbeat",
+    description: "Update last_seen_at to signal agent is active.",
+    inputSchema: {
+      agent_id: z.string(),
+    },
+  },
+  async ({ agent_id }) => {
+    const agent = dbHeartbeat(agent_id);
+    if (!agent) return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Agent not found: ${agent_id}` }) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }] };
+  }
+);
+
+// --- Tool: set_focus ---
+server.registerTool(
+  "set_focus",
+  {
+    title: "Set Focus",
+    description: "Set active project context for this agent session.",
+    inputSchema: {
+      agent_id: z.string(),
+      project_id: z.string().optional(),
+    },
+  },
+  async ({ agent_id, project_id }) => {
+    const agent = dbSetFocus(agent_id, project_id ?? null);
+    if (!agent) return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Agent not found: ${agent_id}` }) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }] };
   }
 );
 
