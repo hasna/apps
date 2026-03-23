@@ -1,5 +1,5 @@
 // Model config for @hasna/tickets
-// Reads/writes the active fine-tuned model ID from ~/.tickets/config.json
+// Reads/writes the active fine-tuned model ID from ~/.hasna/tickets/config.json
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
@@ -7,7 +7,15 @@ import { join } from "path";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 
-const CONFIG_PATH = join(homedir(), ".tickets", "config.json");
+function getTicketsDir(): string {
+  const home = homedir();
+  const newDir = join(home, ".hasna", "tickets");
+  const legacyDir = join(home, ".tickets");
+  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
+  return newDir;
+}
+
+const CONFIG_PATH = join(getTicketsDir(), "config.json");
 
 interface TicketsConfig {
   activeModel?: string;
@@ -26,7 +34,7 @@ function loadConfig(): TicketsConfig {
 }
 
 function saveConfig(config: TicketsConfig): void {
-  const dir = join(homedir(), ".tickets");
+  const dir = getTicketsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
 }
@@ -36,7 +44,7 @@ export function getActiveModel(): string {
   return loadConfig().activeModel ?? DEFAULT_MODEL;
 }
 
-/** Persists the active fine-tuned model ID to ~/.tickets/config.json. */
+/** Persists the active fine-tuned model ID to ~/.hasna/tickets/config.json. */
 export function setActiveModel(id: string): void {
   const config = loadConfig();
   config.activeModel = id;

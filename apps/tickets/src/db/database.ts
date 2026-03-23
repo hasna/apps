@@ -21,14 +21,26 @@ function findNearestTicketsDb(startDir: string): string | null {
 }
 
 function getDbPath(): string {
+  if (process.env["HASNA_TICKETS_DB_PATH"]) {
+    return process.env["HASNA_TICKETS_DB_PATH"];
+  }
   if (process.env["TICKETS_DB_PATH"]) {
     return process.env["TICKETS_DB_PATH"];
   }
   const cwd = process.cwd();
   const nearest = findNearestTicketsDb(cwd);
   if (nearest) return nearest;
+
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".tickets", "tickets.db");
+  const newPath = join(home, ".hasna", "tickets", "tickets.db");
+  const legacyPath = join(home, ".tickets", "tickets.db");
+
+  // Use legacy DB if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newPath) && existsSync(legacyPath)) {
+    return legacyPath;
+  }
+
+  return newPath;
 }
 
 function ensureDir(filePath: string): void {

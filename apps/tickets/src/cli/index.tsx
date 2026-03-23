@@ -53,7 +53,7 @@ program
     const wsName = name ?? "default";
     const db = getDatabase();
     // Create default workspace record if tables allow it
-    out({ message: `Workspace "${wsName}" initialized`, db_path: process.env["TICKETS_DB_PATH"] ?? "~/.tickets/tickets.db" }, json);
+    out({ message: `Workspace "${wsName}" initialized`, db_path: process.env["HASNA_TICKETS_DB_PATH"] ?? process.env["TICKETS_DB_PATH"] ?? "~/.hasna/tickets/tickets.db" }, json);
   });
 
 // ── project ───────────────────────────────────────────────────────────────────
