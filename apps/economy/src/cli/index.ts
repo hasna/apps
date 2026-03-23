@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander'
 import chalk from 'chalk'
+import { registerBrainsCommand } from './brains.js'
 import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
@@ -1156,5 +1157,9 @@ program
       process.exit(1)
     }
   })
+
+// ── brains ─────────────────────────────────────────────────────────────────────
+
+registerBrainsCommand(program)
 
 program.parse()
