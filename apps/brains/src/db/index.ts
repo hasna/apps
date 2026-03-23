@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { homedir } from "os";
@@ -47,9 +47,8 @@ function ensureDir(filePath: string) {
 export function getDb(dbPath?: string) {
   const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
   ensureDir(resolvedPath);
-  const sqlite = new Database(resolvedPath);
-  sqlite.run("PRAGMA journal_mode = WAL");
-  sqlite.run("PRAGMA foreign_keys = ON");
+  const adapter = new SqliteAdapter(resolvedPath);
+  const sqlite = adapter.raw;
   const db = drizzle(sqlite, { schema });
 
   // Run migrations (idempotent — drizzle tracks applied migrations in __drizzle_migrations table)
@@ -96,5 +95,25 @@ export function getDb(dbPath?: string) {
     `);
   }
 
+  // Ensure feedback table exists (not managed by drizzle migrations)
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
   return db;
+}
+
+/** Get a raw SqliteAdapter for direct SQL queries (e.g. feedback table). */
+export function getRawDb(dbPath?: string): SqliteAdapter {
+  const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
+  ensureDir(resolvedPath);
+  return new SqliteAdapter(resolvedPath);
 }

@@ -7,7 +7,7 @@ import { randomUUID } from "crypto";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../db/index.js";
+import { getDb, getRawDb, fineTunedModels, trainingJobs, trainingDatasets } from "../db/index.js";
 import * as openaiProvider from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "./ui.js";
@@ -948,6 +948,24 @@ configCmd
     }
     deleteConfigValue(key as ConfigKey);
     printSuccess(`${key} removed from config.`);
+  });
+
+// ── feedback ─────────────────────────────────────────────────────────────────
+
+program
+  .command("feedback <message>")
+  .description("Send feedback")
+  .option("--email <email>", "Contact email")
+  .option("--category <category>", "Category: bug, feature, general")
+  .action((message: string, opts: { email?: string; category?: string }) => {
+    const rawDb = getRawDb();
+    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
+    rawDb.run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      message, opts.email || null, opts.category || "general", pkg.version
+    );
+    rawDb.close();
+    printSuccess("Feedback saved. Thank you!");
   });
 
 program.parse();

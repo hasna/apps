@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { homedir } from "os";
 import { eq, desc } from "drizzle-orm";
-import { getDb, fineTunedModels, trainingDatasets } from "../db/index.js";
+import { getDb, getRawDb, fineTunedModels, trainingDatasets } from "../db/index.js";
 import { OpenAIProvider } from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { gatherFromTodos } from "../lib/gatherers/todos.js";
@@ -148,6 +148,29 @@ export function createMcpServer() {
             },
           },
           required: ["file_path"],
+        },
+      },
+      {
+        name: "send_feedback",
+        description: "Send feedback about this service",
+        inputSchema: {
+          type: "object",
+          properties: {
+            message: {
+              type: "string",
+              description: "Feedback message",
+            },
+            email: {
+              type: "string",
+              description: "Contact email (optional)",
+            },
+            category: {
+              type: "string",
+              enum: ["bug", "feature", "general"],
+              description: "Feedback category",
+            },
+          },
+          required: ["message"],
         },
       },
     ],
@@ -417,6 +440,23 @@ export function createMcpServer() {
               text: JSON.stringify({ examples, total }, null, 2),
             },
           ],
+        };
+      }
+
+      case "send_feedback": {
+        const { message, email, category } = args as {
+          message: string;
+          email?: string;
+          category?: string;
+        };
+        const rawDb = getRawDb();
+        rawDb.run(
+          "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+          message, email || null, category || "general", MCP_SERVER_INFO.version
+        );
+        rawDb.close();
+        return {
+          content: [{ type: "text", text: "Feedback saved. Thank you!" }],
         };
       }
 
