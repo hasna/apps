@@ -127,6 +127,17 @@ export {
 export { logTaskChange, getTaskHistory, getRecentActivity, getRecap } from "./db/audit.js";
 export type { RecapSummary } from "./db/audit.js";
 
+// Training data gatherer (for @hasna/brains fine-tuning integration)
+export { gatherTrainingData } from "./lib/gatherer.js";
+
+// Model config (active fine-tuned model ID)
+export {
+  getActiveModel,
+  setActiveModel,
+  clearActiveModel,
+  DEFAULT_MODEL,
+} from "./lib/model-config.js";
+
 // Webhooks
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
 

@@ -3829,4 +3829,8 @@ program.action(async () => {
   }
 });
 
+// ── brains subcommand ────────────────────────────────────────────────────────
+import { makeBrainsCommand } from "./brains.js";
+program.addCommand(makeBrainsCommand());
+
 program.parse();
