@@ -29,7 +29,8 @@
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/markdown 2>/dev/null || true"
   },
   "keywords": [
     "omp",
@@ -44,6 +45,7 @@
     "specification"
   ],
   "publishConfig": {
+    "registry": "https://registry.npmjs.org",
     "access": "public"
   },
   "repository": {
