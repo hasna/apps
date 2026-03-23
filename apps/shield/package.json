@@ -1,5 +1,5 @@
 {
-  "name": "@hasnaxyz/security",
+  "name": "@hasna/security",
   "version": "0.1.0",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
@@ -34,9 +34,11 @@
     "test:coverage": "bun test --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/",
-    "clean": "rm -rf dist dashboard/dist"
+    "clean": "rm -rf dist dashboard/dist",
+    "postinstall": "mkdir -p $HOME/.hasna/security 2>/dev/null || true"
   },
   "dependencies": {
+    "@hasna/cloud": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.4.1",
@@ -67,7 +69,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasnaxyz/security"
+    "url": "https://github.com/hasna/security.git"
   },
   "keywords": [
     "security",

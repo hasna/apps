@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -9,9 +10,16 @@ function getDbPath(): string {
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
   const local = join(process.cwd(), ".security", "security.db");
   if (existsSync(dirname(local))) return local;
-  const global = join(homedir(), ".security", "security.db");
-  mkdirSync(dirname(global), { recursive: true });
-  return global;
+
+  // New path: ~/.hasna/security/
+  const home = homedir();
+  const newPath = join(home, ".hasna", "security", "security.db");
+  // Backward compat: check old ~/.security/ path
+  const oldPath = join(home, ".security", "security.db");
+  if (existsSync(oldPath) && !existsSync(newPath)) return oldPath;
+
+  mkdirSync(dirname(newPath), { recursive: true });
+  return newPath;
 }
 
 let _postInitCallbacks: Array<() => void> = [];
@@ -37,7 +45,7 @@ export function getDb(): Database {
   if (_db) return _db;
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
-  _db = new Database(dbPath);
+  _db = new SqliteAdapter(dbPath) as unknown as Database;
   _db.exec("PRAGMA journal_mode = WAL");
   _db.exec("PRAGMA foreign_keys = ON");
   _db.exec("PRAGMA busy_timeout = 5000");
@@ -193,6 +201,20 @@ const MIGRATIONS = [
         description TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         last_seen TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `,
+  },
+  {
+    name: "002_feedback",
+    sql: `
+      CREATE TABLE feedback (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        message TEXT NOT NULL,
+        email TEXT,
+        category TEXT DEFAULT 'general',
+        version TEXT,
+        machine_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `,
   },
