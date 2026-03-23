@@ -1,6 +1,6 @@
 {
   "name": "@hasna/search",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Unified search aggregator — 12 providers (Google, SerpAPI, Exa, Perplexity, Twitter, Reddit, YouTube, Brave, Bing, Hacker News, GitHub, arXiv) + YouTube transcription. CLI + MCP + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
