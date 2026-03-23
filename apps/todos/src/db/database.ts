@@ -670,7 +670,7 @@ export function getDatabase(dbPath?: string): Database {
   const path = dbPath || getDbPath();
   ensureDir(path);
 
-  _db = new SqliteAdapter(path) as unknown as Database;
+  _db = new Database(path);
 
   // Enable WAL mode for concurrent access
   _db.run("PRAGMA journal_mode = WAL");
