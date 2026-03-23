@@ -1,6 +1,6 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "type": "module",
   "main": "dist/index.js",
@@ -52,5 +52,9 @@
   "engines": {
     "bun": ">=1.0.0"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  }
 }
