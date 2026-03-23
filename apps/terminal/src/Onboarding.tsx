@@ -76,7 +76,7 @@ export default function Onboarding({ onDone }: Props) {
         })}
       </Box>
       <Box marginTop={1}><Text dimColor>space toggle  ·  enter confirm</Text></Box>
-      <Text dimColor>edit later: ~/.terminal/config.json</Text>
+      <Text dimColor>edit later: ~/.hasna/terminal/config.json</Text>
     </Box>
   );
 }

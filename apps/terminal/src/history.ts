@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
+import { getTerminalDir } from "./paths.js";
 
-const DIR = join(homedir(), ".terminal");
+const DIR = getTerminalDir();
 const HISTORY_FILE = join(DIR, "history.json");
 const CONFIG_FILE = join(DIR, "config.json");
 

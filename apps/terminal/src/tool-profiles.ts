@@ -1,9 +1,10 @@
 // Tool profiles — config-driven AI enhancement for specific command categories
-// Profiles are loaded from ~/.terminal/profiles/ (user-customizable)
+// Profiles are loaded from ~/.hasna/terminal/profiles/ (user-customizable)
 // Each profile tells the AI how to handle a specific tool's output
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { getTerminalDir } from "./paths.js";
 
 export interface ToolProfile {
   name: string;
@@ -23,7 +24,7 @@ export interface ToolProfile {
   };
 }
 
-const PROFILES_DIR = join(process.env.HOME ?? "~", ".terminal", "profiles");
+const PROFILES_DIR = join(getTerminalDir(), "profiles");
 
 /** Built-in profiles — sensible defaults, user can override */
 const BUILTIN_PROFILES: ToolProfile[] = [
@@ -90,7 +91,7 @@ const BUILTIN_PROFILES: ToolProfile[] = [
   },
 ];
 
-/** Load user profiles from ~/.terminal/profiles/ */
+/** Load user profiles from ~/.hasna/terminal/profiles/ */
 function loadUserProfiles(): ToolProfile[] {
   if (!existsSync(PROFILES_DIR)) return [];
 

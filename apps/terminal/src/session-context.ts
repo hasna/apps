@@ -2,10 +2,10 @@
 // Enables: terminal "show auth code" → terminal "explain that function"
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
+import { getTerminalDir } from "./paths.js";
 
-const DIR = join(homedir(), ".terminal");
+const DIR = getTerminalDir();
 const CTX_FILE = join(DIR, "session-context.json");
 const MAX_ENTRIES = 5;
 

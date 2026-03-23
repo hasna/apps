@@ -1,10 +1,10 @@
 // Token economy tracker — tracks token savings across all interactions
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
+import { getTerminalDir } from "./paths.js";
 
-const DIR = join(homedir(), ".terminal");
+const DIR = getTerminalDir();
 const ECONOMY_FILE = join(DIR, "economy.json");
 
 export interface EconomyStats {
@@ -129,7 +129,7 @@ const PROVIDER_PRICING: Record<string, { input: number; output: number }> = {
   "anthropic-opus":   { input: 5.00, output: 25.00 },
 };
 
-/** Load configurable turns-before-compaction from ~/.terminal/config.json */
+/** Load configurable turns-before-compaction from ~/.hasna/terminal/config.json */
 function loadTurnsMultiplier(): number {
   try {
     const configPath = join(DIR, "config.json");

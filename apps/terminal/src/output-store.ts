@@ -4,8 +4,9 @@
 import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
+import { getTerminalDir } from "./paths.js";
 
-const OUTPUTS_DIR = join(process.env.HOME ?? "~", ".terminal", "outputs");
+const OUTPUTS_DIR = join(getTerminalDir(), "outputs");
 
 /** Ensure outputs directory exists */
 function ensureDir() {

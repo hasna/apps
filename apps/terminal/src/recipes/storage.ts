@@ -1,12 +1,12 @@
-// Recipes storage — global (~/.terminal/recipes.json) + per-project (.terminal/recipes.json)
+// Recipes storage — global (~/.hasna/terminal/recipes.json) + per-project (.terminal/recipes.json)
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import type { Recipe, Collection, RecipeStore } from "./model.js";
 import { genId, extractVariables } from "./model.js";
+import { getTerminalDir } from "../paths.js";
 
-const GLOBAL_DIR = join(homedir(), ".terminal");
+const GLOBAL_DIR = getTerminalDir();
 const GLOBAL_FILE = join(GLOBAL_DIR, "recipes.json");
 
 function projectFile(projectPath: string): string {

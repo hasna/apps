@@ -2,11 +2,11 @@
 // After 3 identical prompt→command mappings, cache locally
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import { createHash } from "crypto";
+import { getTerminalDir } from "./paths.js";
 
-const DIR = join(homedir(), ".terminal");
+const DIR = getTerminalDir();
 const CACHE_FILE = join(DIR, "learned.json");
 
 interface LearnedEntry {

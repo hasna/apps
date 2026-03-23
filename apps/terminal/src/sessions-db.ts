@@ -3,12 +3,12 @@
 // @ts-ignore — bun:sqlite is a bun built-in
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { getTerminalDir } from "./paths.js";
 
-const DIR = join(homedir(), ".terminal");
-const DB_PATH = join(DIR, "sessions.db");
+const DIR = getTerminalDir();
+const DB_PATH = process.env.HASNA_TERMINAL_DB_PATH ?? process.env.TERMINAL_DB_PATH ?? join(DIR, "sessions.db");
 
 let db: Database | null = null;
 

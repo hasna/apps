@@ -1,10 +1,10 @@
 // In-memory LRU cache + disk persistence for command translations
 
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
+import { getTerminalDir } from "./paths.js";
 
-const CACHE_FILE = join(homedir(), ".terminal", "cache.json");
+const CACHE_FILE = join(getTerminalDir(), "cache.json");
 const MAX_ENTRIES = 500;
 
 type CacheMap = Record<string, string>;

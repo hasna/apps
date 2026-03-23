@@ -136,7 +136,8 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
     async ({ name, value }) => {
       const { existsSync, readFileSync, writeFileSync, chmodSync } = await import("fs");
       const { join } = await import("path");
-      const secretsFile = join(process.env.HOME ?? "~", ".terminal", "secrets.json");
+      const { getTerminalDir } = await import("../../paths.js");
+      const secretsFile = join(getTerminalDir(), "secrets.json");
       let secrets: Record<string, string> = {};
       if (existsSync(secretsFile)) {
         try { secrets = JSON.parse(readFileSync(secretsFile, "utf8")); } catch {}
@@ -157,7 +158,8 @@ export function registerMemoryTools(server: McpServer, h: ToolHelpers): void {
     async () => {
       const { existsSync, readFileSync } = await import("fs");
       const { join } = await import("path");
-      const secretsFile = join(process.env.HOME ?? "~", ".terminal", "secrets.json");
+      const { getTerminalDir } = await import("../../paths.js");
+      const secretsFile = join(getTerminalDir(), "secrets.json");
       let names: string[] = [];
       if (existsSync(secretsFile)) {
         try { names = Object.keys(JSON.parse(readFileSync(secretsFile, "utf8"))); } catch {}
