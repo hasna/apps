@@ -1681,6 +1681,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: "set_health_data", description: "Set or update health data for a contact. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, blood_type: { type: "string" }, allergies: { type: "array", items: { type: "string" } }, medical_conditions: { type: "array", items: { type: "string" } }, medications: { type: "array", items: { type: "string" } }, emergency_contacts: { type: "array", items: { type: "object", properties: { name: { type: "string" }, phone: { type: "string" }, relationship: { type: "string" } }, required: ["name", "phone", "relationship"] } }, health_insurance_provider: { type: "string" }, health_insurance_id: { type: "string" }, primary_physician: { type: "string" }, primary_physician_phone: { type: "string" }, organ_donor: { type: "boolean" }, notes: { type: "string" } }, required: ["contact_id"] } },
     { name: "get_health_data", description: "Get health data for a contact. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
     { name: "delete_health_data", description: "Delete all health data for a contact.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
+    { name: "send_feedback", description: "Send feedback about this service", inputSchema: { type: "object", properties: { message: { type: "string" }, email: { type: "string" }, category: { type: "string", enum: ["bug", "feature", "general"] } }, required: ["message"] } },
   ],
 }));
 
@@ -3551,6 +3552,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "delete_health_data": {
         deleteHealthData(a.contact_id as string);
         return { content: [{ type: "text", text: JSON.stringify({ deleted: true }) }] };
+      }
+
+      case "send_feedback": {
+        const db = getDatabase();
+        db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(a.message as string, (a.email as string) || null, (a.category as string) || "general", "0.1.0");
+        return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
       }
 
       default:
