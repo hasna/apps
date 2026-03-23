@@ -284,8 +284,18 @@ server.registerTool("create_space", {
     };
   } catch (e: any) {
     if (e.message?.includes("UNIQUE constraint")) {
+      // Try to find the existing space to return its ID
+      try {
+        const existing = getSpace(name);
+        if (existing) {
+          return {
+            content: [{ type: "text", text: `Space "${name}" already exists. Use read_space or join_space to interact with it.` }],
+            isError: true,
+          };
+        }
+      } catch { /* fallthrough */ }
       return {
-        content: [{ type: "text", text: `space "${name}" already exists` }],
+        content: [{ type: "text", text: `Space "${name}" already exists. Use list_spaces to find it.` }],
         isError: true,
       };
     }
@@ -1434,10 +1444,20 @@ server.registerTool("register_agent", {
   },
 }, async (args: Record<string, any>) => {
   const { name, session_id, role, project_id } = args;
-  const result = registerAgent(name, session_id, role, project_id);
-  return {
-    content: [{ type: "text", text: JSON.stringify(result) }],
-  };
+  try {
+    const result = registerAgent(name, session_id, role, project_id);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
+    };
+  } catch (e: any) {
+    if (e.message?.includes("UNIQUE constraint")) {
+      return {
+        content: [{ type: "text", text: `Agent "${name}" already registered. Use heartbeat to update presence, or list_agents to see active agents.` }],
+        isError: true,
+      };
+    }
+    return { content: [{ type: "text", text: e.message ?? String(e) }], isError: true };
+  }
 });
 
 server.registerTool("heartbeat", {
