@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { join } from "node:path";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -354,6 +354,20 @@ function runMigrations(db: Database): void {
           duration_ms INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_script_runs_script ON script_runs(script_id, status);
+      `,
+    },
+    {
+      version: 10,
+      sql: `
+        CREATE TABLE IF NOT EXISTS feedback (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          message TEXT NOT NULL,
+          email TEXT,
+          category TEXT DEFAULT 'general',
+          version TEXT,
+          machine_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
       `,
     },
   ];

@@ -24,6 +24,25 @@ registerCapture(server);
 registerNetwork(server);
 registerData(server);
 
+// --- send_feedback tool ---
+import { z } from "zod";
+import { getDatabase } from "../db/schema.js";
+
+server.tool(
+  "send_feedback",
+  "Send feedback about this service",
+  { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
+  async (params) => {
+    try {
+      const db = getDatabase();
+      db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(params.message, params.email || null, params.category || "general", _pkg.version);
+      return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: String(e) }], isError: true };
+    }
+  }
+);
+
 // Log version to stderr on startup so debugging is instant
 const _startupToolCount = Object.keys((server as any)._registeredTools ?? {}).length;
 console.error(`@hasna/browser v${_pkg.version} — ${_startupToolCount} tools | data: ${(await import("../db/schema.js")).getDataDir()}`);
