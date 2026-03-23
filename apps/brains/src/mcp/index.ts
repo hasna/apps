@@ -32,6 +32,24 @@ function defaultOutputDir() {
   return resolve(homedir(), ".brains", "datasets");
 }
 
+// --- in-memory agent registry ---
+
+interface BrainsAgent { id: string; name: string; session_id?: string; last_seen_at: string; project_id?: string; }
+const _brainsAgents = new Map<string, BrainsAgent>();
+
+function registerBrainsAgent(name: string, sessionId?: string): BrainsAgent {
+  const existing = [..._brainsAgents.values()].find(a => a.name === name);
+  if (existing) {
+    existing.last_seen_at = new Date().toISOString();
+    if (sessionId) existing.session_id = sessionId;
+    return existing;
+  }
+  const id = Math.random().toString(36).slice(2, 10);
+  const agent: BrainsAgent = { id, name, session_id: sessionId, last_seen_at: new Date().toISOString() };
+  _brainsAgents.set(agent.id, agent);
+  return agent;
+}
+
 // --- server ---
 
 export const MCP_SERVER_INFO = {
@@ -171,6 +189,49 @@ export function createMcpServer() {
             },
           },
           required: ["message"],
+        },
+      },
+      {
+        name: "register_agent",
+        description: "Register an agent session. Returns agent_id. Auto-triggers a heartbeat.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Agent name" },
+            session_id: { type: "string", description: "Session identifier" },
+          },
+          required: ["name"],
+        },
+      },
+      {
+        name: "heartbeat",
+        description: "Update last_seen_at to signal agent is active.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            agent_id: { type: "string", description: "Agent ID from register_agent" },
+          },
+          required: ["agent_id"],
+        },
+      },
+      {
+        name: "set_focus",
+        description: "Set active project context for this agent session.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            agent_id: { type: "string", description: "Agent ID" },
+            project_id: { type: "string", description: "Project to focus on" },
+          },
+          required: ["agent_id"],
+        },
+      },
+      {
+        name: "list_agents",
+        description: "List all registered agents.",
+        inputSchema: {
+          type: "object",
+          properties: {},
         },
       },
     ],
@@ -460,6 +521,28 @@ export function createMcpServer() {
         };
       }
 
+        case "register_agent": {
+          const a = args as { name: string; session_id?: string };
+          const agent = registerBrainsAgent(a.name, a.session_id);
+          return { content: [{ type: "text", text: JSON.stringify(agent) }] };
+        }
+        case "heartbeat": {
+          const a = args as { agent_id: string };
+          const agent = _brainsAgents.get(a.agent_id);
+          if (!agent) return { content: [{ type: "text", text: `Agent not found: ${a.agent_id}` }], isError: true };
+          agent.last_seen_at = new Date().toISOString();
+          return { content: [{ type: "text", text: JSON.stringify({ agent_id: agent.id, last_seen_at: agent.last_seen_at }) }] };
+        }
+        case "set_focus": {
+          const a = args as { agent_id: string; project_id?: string };
+          const agent = _brainsAgents.get(a.agent_id);
+          if (!agent) return { content: [{ type: "text", text: `Agent not found: ${a.agent_id}` }], isError: true };
+          agent.project_id = a.project_id;
+          return { content: [{ type: "text", text: JSON.stringify({ agent_id: agent.id, project_id: agent.project_id }) }] };
+        }
+        case "list_agents": {
+          return { content: [{ type: "text", text: JSON.stringify([..._brainsAgents.values()]) }] };
+        }
         default:
           return {
             content: [{ type: "text", text: `Unknown tool: ${name}` }],
