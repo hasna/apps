@@ -204,6 +204,10 @@ function runMigrations(db: Database): void {
       `,
     },
     {
+      name: "009_agents_focus",
+      sql: `ALTER TABLE agents ADD COLUMN active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;`,
+    },
+    {
       name: "002_fts5",
       sql: `
         CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(

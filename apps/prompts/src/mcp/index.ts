@@ -5,7 +5,7 @@ import { z } from "zod"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, ensureCollection, movePrompt } from "../db/collections.js"
-import { registerAgent } from "../db/agents.js"
+import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
 import { resolveProject } from "../db/database.js"
 import { getDatabase } from "../db/database.js"
@@ -520,11 +520,11 @@ server.registerTool(
   }
 )
 
-// ── prompts_register_agent ────────────────────────────────────────────────────
+// ── register_agent ───────────────────────────────────────────────────────────
 server.registerTool(
-  "prompts_register_agent",
+  "register_agent",
   {
-    description: "Register an agent to track which agent saved/used prompts.",
+    description: "Register an agent (idempotent). Auto-updates last_seen_at on re-register.",
     inputSchema: {
       name: z.string(),
       description: z.string().optional(),
@@ -1024,47 +1024,50 @@ server.registerTool(
   }
 )
 
-// ── Start ─────────────────────────────────────────────────────────────────────
-
-const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string }>();
-
-server.tool(
-  "register_agent",
-  "Register this agent session. Returns agent_id for use in heartbeat/set_focus.",
-  { name: z.string(), session_id: z.string().optional() },
-  async (a: { name: string; session_id?: string }) => {
-    const existing = [..._agentReg.values()].find(x => x.name === a.name);
-    if (existing) { existing.last_seen_at = new Date().toISOString(); return { content: [{ type: "text" as const, text: JSON.stringify(existing) }] }; }
-    const id = Math.random().toString(36).slice(2, 10);
-    const ag = { id, name: a.name, last_seen_at: new Date().toISOString() };
-    _agentReg.set(id, ag);
-    return { content: [{ type: "text" as const, text: JSON.stringify(ag) }] };
-  }
-);
-
-server.tool(
+// ── heartbeat ────────────────────────────────────────────────────────────────
+server.registerTool(
   "heartbeat",
-  "Update last_seen_at to signal agent is active.",
-  { agent_id: z.string() },
-  async (a: { agent_id: string }) => {
-    const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
-    ag.last_seen_at = new Date().toISOString();
-    return { content: [{ type: "text" as const, text: `♥ ${ag.name} — active` }] };
+  {
+    description: "Update last_seen_at to signal agent is active. Call periodically during long tasks.",
+    inputSchema: {
+      agent_id: z.string().describe("Agent ID or name"),
+    },
+  },
+  async ({ agent_id }) => {
+    const agent = heartbeatAgent(agent_id)
+    if (!agent) return err(`Agent not found: ${agent_id}`)
+    return ok({ id: agent.id, name: agent.name, last_seen_at: agent.last_seen_at })
   }
-);
+)
 
-server.tool(
+// ── set_focus ────────────────────────────────────────────────────────────────
+server.registerTool(
   "set_focus",
-  "Set active project context for this agent session.",
-  { agent_id: z.string(), project_id: z.string().optional() },
-  async (a: { agent_id: string; project_id?: string }) => {
-    const ag = _agentReg.get(a.agent_id);
-    if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
-    (ag as any).project_id = a.project_id;
-    return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
+  {
+    description: "Set active project context for this agent session.",
+    inputSchema: {
+      agent_id: z.string().describe("Agent ID or name"),
+      project_id: z.string().nullable().optional().describe("Project ID to focus on, or null to clear"),
+    },
+  },
+  async ({ agent_id, project_id }) => {
+    const agent = setAgentFocus(agent_id, project_id ?? null)
+    if (!agent) return err(`Agent not found: ${agent_id}`)
+    return ok({ id: agent.id, name: agent.name, active_project_id: project_id ?? null })
   }
-);
+)
+
+// ── list_agents ──────────────────────────────────────────────────────────────
+server.registerTool(
+  "list_agents",
+  {
+    description: "List all registered agents.",
+    inputSchema: {},
+  },
+  async () => ok(listAgents())
+)
+
+// ── Start ─────────────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
