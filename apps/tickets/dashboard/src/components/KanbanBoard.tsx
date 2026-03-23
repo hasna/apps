@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiFetch, STATUS_COLORS, PRIORITY_COLORS, TYPE_ICONS } from "../lib.ts";
+import { apiFetch, PRIORITY_COLORS, TYPE_ICONS } from "../lib.ts";
 import type { Ticket } from "../../../src/types/index.ts";
 
 const COLUMNS: { status: string; label: string }[] = [
@@ -97,7 +97,7 @@ function KanbanColumn({
 
 export default function KanbanBoard({ projectId }: { projectId?: string }) {
   const qc = useQueryClient();
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [_draggingId, setDraggingId] = useState<string | null>(null);
 
   const queries = COLUMNS.map((col) => ({
     ...col,

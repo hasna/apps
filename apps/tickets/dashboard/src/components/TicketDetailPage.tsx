@@ -3,8 +3,6 @@ import { useParams } from "@tanstack/react-router";
 import { apiFetch, STATUS_COLORS, PRIORITY_COLORS, TYPE_ICONS } from "../lib.ts";
 import type { Ticket, Comment, Activity } from "../../../src/types/index.ts";
 
-interface CommentList { comments?: Comment[]; length?: number }
-
 export default function TicketDetailPage() {
   const { shortId } = useParams({ strict: false }) as { shortId: string };
 

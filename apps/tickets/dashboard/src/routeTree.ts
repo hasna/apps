@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { createRootRoute, createRoute } from "@tanstack/react-router";
 import { lazy } from "react";
 
 const RootLayout = lazy(() => import("./components/RootLayout.tsx"));

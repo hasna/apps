@@ -10,7 +10,7 @@ interface Domain {
 export default function DomainsPage() {
   const qc = useQueryClient();
   const [newDomain, setNewDomain] = useState("");
-  const [projectId, setProjectId] = useState("");
+  const [projectId, _setProjectId] = useState("");
   const [added, setAdded] = useState<{ domain: Domain; token: string } | null>(null);
 
   const { data: domains } = useQuery<Domain[]>({

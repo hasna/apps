@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { apiFetch, STATUS_COLORS, TYPE_ICONS } from "../lib.ts";
 import type { Ticket } from "../../../src/types/index.ts";
 
-interface StatsData { open: number; in_progress: number; resolved: number; closed: number; total: number }
 interface TicketList { tickets: Ticket[]; total: number }
 
 export default function OverviewPage() {
