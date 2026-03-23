@@ -173,6 +173,10 @@ import { setHealthData, getHealthData, deleteHealthData } from "../db/health.js"
 import type { SetHealthInput } from "../db/health.js";
 import { scanDocument } from "../lib/document-scanner.js";
 
+// --- in-memory agent registry ---
+interface _ContactsAgent { id: string; name: string; session_id?: string; last_seen_at: string; project_id?: string; }
+const _contactsAgents = new Map<string, _ContactsAgent>();
+
 const server = new Server(
   { name: "contacts", version: "0.1.0" },
   { capabilities: { tools: {} } }
@@ -1682,6 +1686,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: "get_health_data", description: "Get health data for a contact. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
     { name: "delete_health_data", description: "Delete all health data for a contact.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
     { name: "send_feedback", description: "Send feedback about this service", inputSchema: { type: "object", properties: { message: { type: "string" }, email: { type: "string" }, category: { type: "string", enum: ["bug", "feature", "general"] } }, required: ["message"] } },
+    { name: "register_agent", description: "Register an agent session. Returns agent_id. Auto-triggers a heartbeat.", inputSchema: { type: "object", properties: { name: { type: "string" }, session_id: { type: "string" } }, required: ["name"] } },
+    { name: "heartbeat", description: "Update last_seen_at to signal agent is active.", inputSchema: { type: "object", properties: { agent_id: { type: "string" } }, required: ["agent_id"] } },
+    { name: "set_focus", description: "Set active project context for this agent session.", inputSchema: { type: "object", properties: { agent_id: { type: "string" }, project_id: { type: "string" } }, required: ["agent_id"] } },
+    { name: "list_agents", description: "List all registered agents.", inputSchema: { type: "object", properties: {} } },
   ],
 }));
 
@@ -3558,6 +3566,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const db = getDatabase();
         db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(a.message as string, (a.email as string) || null, (a.category as string) || "general", "0.1.0");
         return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
+      }
+
+      case "register_agent": {
+        const n = String(a.name ?? "");
+        const existing = [..._contactsAgents.values()].find(x => x.name === n);
+        if (existing) { existing.last_seen_at = new Date().toISOString(); if (a.session_id) existing.session_id = String(a.session_id); return { content: [{ type: "text", text: JSON.stringify(existing) }] }; }
+        const id = Math.random().toString(36).slice(2, 10);
+        const ag: _ContactsAgent = { id, name: n, session_id: a.session_id ? String(a.session_id) : undefined, last_seen_at: new Date().toISOString() };
+        _contactsAgents.set(id, ag);
+        return { content: [{ type: "text", text: JSON.stringify(ag) }] };
+      }
+      case "heartbeat": {
+        const ag = _contactsAgents.get(String(a.agent_id ?? ""));
+        if (!ag) return { content: [{ type: "text", text: `Agent not found: ${a.agent_id}` }], isError: true };
+        ag.last_seen_at = new Date().toISOString();
+        return { content: [{ type: "text", text: JSON.stringify({ agent_id: ag.id, last_seen_at: ag.last_seen_at }) }] };
+      }
+      case "set_focus": {
+        const ag = _contactsAgents.get(String(a.agent_id ?? ""));
+        if (!ag) return { content: [{ type: "text", text: `Agent not found: ${a.agent_id}` }], isError: true };
+        ag.project_id = a.project_id ? String(a.project_id) : undefined;
+        return { content: [{ type: "text", text: JSON.stringify({ agent_id: ag.id, project_id: ag.project_id ?? null }) }] };
+      }
+      case "list_agents": {
+        return { content: [{ type: "text", text: JSON.stringify([..._contactsAgents.values()]) }] };
       }
 
       default:
