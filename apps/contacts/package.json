@@ -1,7 +1,7 @@
 {
   "name": "@hasna/contacts",
   "version": "0.6.7",
-  "description": "Contact management for AI coding agents — CLI + MCP + Web",
+  "description": "Contact management for AI coding agents \u2014 CLI + MCP + Web",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,7 +30,8 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/contacts/{backups,images,documents} 2>/dev/null || true"
   },
   "keywords": [
     "contacts",
