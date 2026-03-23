@@ -17,8 +17,8 @@ export function createPersona(input: CreatePersonaInput): Persona {
   const timestamp = now();
 
   db.query(`
-    INSERT INTO personas (id, short_id, project_id, name, description, role, instructions, traits, goals, behaviors, expertise_level, demographics, pain_points, metadata, enabled, version, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    INSERT INTO personas (id, short_id, project_id, name, description, role, instructions, traits, goals, behaviors, expertise_level, demographics, pain_points, metadata, enabled, auth_email, auth_password, auth_login_path, version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `).run(
     id,
     short_id,
@@ -35,6 +35,9 @@ export function createPersona(input: CreatePersonaInput): Persona {
     JSON.stringify(input.painPoints ?? []),
     input.metadata ? JSON.stringify(input.metadata) : "{}",
     input.enabled === false ? 0 : 1,
+    input.authEmail ?? null,
+    input.authPassword ?? null,
+    input.authLoginPath ?? null,
     timestamp,
     timestamp,
   );
@@ -163,6 +166,22 @@ export function updatePersona(id: string, updates: UpdatePersonaInput, version: 
     sets.push("metadata = ?");
     params.push(JSON.stringify(updates.metadata));
   }
+  if (updates.authEmail !== undefined) {
+    sets.push("auth_email = ?");
+    params.push(updates.authEmail);
+  }
+  if (updates.authPassword !== undefined) {
+    sets.push("auth_password = ?");
+    params.push(updates.authPassword);
+  }
+  if (updates.authLoginPath !== undefined) {
+    sets.push("auth_login_path = ?");
+    params.push(updates.authLoginPath);
+  }
+  if (updates.authCookies !== undefined) {
+    sets.push("auth_cookies = ?");
+    params.push(updates.authCookies ? JSON.stringify(updates.authCookies) : null);
+  }
 
   if (sets.length === 0) {
     return existing;
@@ -194,6 +213,33 @@ export function deletePersona(id: string): boolean {
 
   const result = db.query("DELETE FROM personas WHERE id = ?").run(persona.id);
   return result.changes > 0;
+}
+
+/**
+ * List personas that have auth credentials configured (for multi-user session pool).
+ */
+export function listAuthenticatedPersonas(projectId?: string): Persona[] {
+  const db = getDatabase();
+  const conditions = ["auth_email IS NOT NULL", "auth_password IS NOT NULL", "enabled = 1"];
+  const params: string[] = [];
+
+  if (projectId) {
+    conditions.push("(project_id = ? OR project_id IS NULL)");
+    params.push(projectId);
+  }
+
+  const sql = `SELECT * FROM personas WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC`;
+  const rows = db.query(sql).all(...params) as PersonaRow[];
+  return rows.map(personaFromRow);
+}
+
+/**
+ * Save authenticated session cookies back to a persona (after login).
+ */
+export function savePersonaAuthCookies(id: string, cookies: Record<string, unknown>[]): void {
+  const db = getDatabase();
+  db.query("UPDATE personas SET auth_cookies = ?, updated_at = ? WHERE id = ?")
+    .run(JSON.stringify(cookies), now(), id);
 }
 
 export function countPersonas(filter?: PersonaFilter): number {

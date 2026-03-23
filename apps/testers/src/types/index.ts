@@ -65,6 +65,7 @@ export interface ScenarioRow {
   assertions: string; // JSON array
   persona_id: string | null;
   scenario_type: string;
+  required_role: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -213,6 +214,7 @@ export interface Scenario {
   assertions: Assertion[];
   personaId: string | null;
   scenarioType: "browser" | "eval" | "api" | "pipeline";
+  requiredRole: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -480,6 +482,7 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     assertions: JSON.parse(row.assertions || "[]"),
     personaId: row.persona_id ?? null,
     scenarioType: (row.scenario_type ?? "browser") as "browser" | "eval" | "api" | "pipeline",
+    requiredRole: row.required_role ?? null,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -816,6 +819,18 @@ export interface PersonaRow {
   expertise_level: string;
   demographics: string; // JSON object
   pain_points: string; // JSON array
+  // Auth credentials for multi-user session pool
+  auth_email: string | null;
+  auth_password: string | null;
+  auth_login_path: string | null;
+  auth_cookies: string | null; // JSON — saved session state
+}
+
+export interface PersonaAuth {
+  email: string;
+  password: string;
+  loginPath: string;
+  cookies: Record<string, unknown>[] | null; // saved session cookies
 }
 
 export interface Persona {
@@ -837,6 +852,8 @@ export interface Persona {
   version: number;
   createdAt: string;
   updatedAt: string;
+  // Auth credentials for multi-user session pool
+  auth: PersonaAuth | null;
 }
 
 export interface CreatePersonaInput {
@@ -853,6 +870,10 @@ export interface CreatePersonaInput {
   projectId?: string; // omit for global
   enabled?: boolean;
   metadata?: Record<string, unknown>;
+  // Auth credentials for multi-user session pool
+  authEmail?: string;
+  authPassword?: string;
+  authLoginPath?: string;
 }
 
 export interface UpdatePersonaInput {
@@ -868,6 +889,11 @@ export interface UpdatePersonaInput {
   painPoints?: string[];
   enabled?: boolean;
   metadata?: Record<string, unknown>;
+  // Auth credentials for multi-user session pool
+  authEmail?: string;
+  authPassword?: string;
+  authLoginPath?: string;
+  authCookies?: Record<string, unknown>[] | null;
 }
 
 export interface PersonaFilter {
@@ -879,6 +905,7 @@ export interface PersonaFilter {
 }
 
 export function personaFromRow(row: PersonaRow): Persona {
+  const hasAuth = row.auth_email && row.auth_password;
   return {
     id: row.id,
     shortId: row.short_id,
@@ -898,6 +925,12 @@ export function personaFromRow(row: PersonaRow): Persona {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    auth: hasAuth ? {
+      email: row.auth_email!,
+      password: row.auth_password!,
+      loginPath: row.auth_login_path ?? "/login",
+      cookies: row.auth_cookies ? JSON.parse(row.auth_cookies) : null,
+    } : null,
   };
 }
 

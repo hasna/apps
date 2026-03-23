@@ -1284,7 +1284,7 @@ server.tool(
 
 server.tool(
   "create_persona",
-  "Create a new test persona. Leave projectId null to create a global persona.",
+  "Create a new test persona with optional auth credentials for multi-user testing. Leave projectId null to create a global persona.",
   {
     name: z.string().describe("Persona name"),
     role: z.string().describe("Persona role (e.g. first-time user, admin, power user, security auditor)"),
@@ -1293,8 +1293,11 @@ server.tool(
     traits: z.array(z.string()).optional().describe("Personality traits (e.g. impatient, curious, detail-oriented)"),
     goals: z.array(z.string()).optional().describe("Goals the persona is trying to accomplish"),
     projectId: z.string().nullable().optional().describe("Project ID (null = global persona)"),
+    authEmail: z.string().optional().describe("Login email for multi-user session pool"),
+    authPassword: z.string().optional().describe("Login password for multi-user session pool"),
+    authLoginPath: z.string().optional().describe("Login page path (default: /login)"),
   },
-  async ({ name, role, description, instructions, traits, goals, projectId }) => {
+  async ({ name, role, description, instructions, traits, goals, projectId, authEmail, authPassword, authLoginPath }) => {
     try {
       const persona = createPersona({
         name,
@@ -1304,6 +1307,9 @@ server.tool(
         traits,
         goals,
         projectId: projectId ?? undefined,
+        authEmail,
+        authPassword,
+        authLoginPath,
       });
       return json(persona);
     } catch (error) {
@@ -1375,6 +1381,9 @@ server.tool(
     traits: z.array(z.string()).optional().describe("New traits"),
     goals: z.array(z.string()).optional().describe("New goals"),
     enabled: z.boolean().optional().describe("Enable or disable the persona"),
+    authEmail: z.string().optional().describe("Login email for multi-user session pool"),
+    authPassword: z.string().optional().describe("Login password for multi-user session pool"),
+    authLoginPath: z.string().optional().describe("Login page path (default: /login)"),
   },
   async ({ id, version, ...updates }) => {
     try {

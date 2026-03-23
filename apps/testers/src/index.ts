@@ -17,6 +17,7 @@ export type {
   Run,
   Result,
   Screenshot,
+  PersonaAuth,
   CreateScenarioInput,
   UpdateScenarioInput,
   CreateRunInput,

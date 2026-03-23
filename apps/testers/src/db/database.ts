@@ -422,6 +422,15 @@ ALTER TABLE personas ADD COLUMN pain_points TEXT DEFAULT '[]';
 ALTER TABLE scenarios ADD COLUMN last_passed_at TEXT;
 ALTER TABLE scenarios ADD COLUMN last_passed_url TEXT;
   `,
+
+  // Migration 25: Auth credentials on personas for multi-user session pool
+  `
+ALTER TABLE personas ADD COLUMN auth_email TEXT;
+ALTER TABLE personas ADD COLUMN auth_password TEXT;
+ALTER TABLE personas ADD COLUMN auth_login_path TEXT DEFAULT '/login';
+ALTER TABLE personas ADD COLUMN auth_cookies TEXT;
+ALTER TABLE scenarios ADD COLUMN required_role TEXT;
+  `,
 ];
 
 function applyMigrations(database: Database): void {

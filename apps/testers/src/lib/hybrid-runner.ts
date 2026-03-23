@@ -187,6 +187,7 @@ export async function runHybridScenario(
         const syntheticScenario = {
           id: `hybrid-step-${i}`,
           shortId: `hs-${i}`,
+          projectId: null,
           name: `${scenario.name} — step ${i + 1}`,
           description: instruction,
           steps: [instruction],
@@ -201,9 +202,12 @@ export async function runHybridScenario(
           assertions: [],
           personaId: null,
           scenarioType: "browser" as const,
+          requiredRole: null,
           version: 1,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
+          lastPassedAt: null,
+          lastPassedUrl: null,
         };
 
         try {
