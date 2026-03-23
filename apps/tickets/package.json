@@ -1,6 +1,6 @@
 {
   "name": "@hasna/tickets",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Open-source MCP-native ticketing system \u2014 bugs, features, incidents for any product, service, or app. CLI + MCP server + REST API + Web Dashboard + SDK.",
   "type": "module",
   "main": "dist/index.js",
