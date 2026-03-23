@@ -541,6 +541,20 @@ const tools = [
       required: ["project_name"],
     },
   },
+  // Feedback
+  {
+    name: "send_feedback",
+    description: "Send feedback about this service",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        message: { type: "string", description: "Feedback message" },
+        email: { type: "string", description: "Contact email (optional)" },
+        category: { type: "string", enum: ["bug", "feature", "general"], description: "Feedback category" },
+      },
+      required: ["message"],
+    },
+  },
 ];
 
 // ── Tool handler ─────────────────────────────────────────────────────────────
@@ -675,6 +689,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       createLabel(project.id, "urgent", "#f97316");
       createLabel(project.id, "wontfix", "#6b7280");
       return { project, message: "Bootstrapped with default labels" };
+    }
+    case "send_feedback": {
+      const db = (await import("../db/database.ts")).getDatabase();
+      const pkg = await import("../../package.json");
+      db.run("INSERT INTO feedback (id, message, email, category, version) VALUES (?, ?, ?, ?, ?)", [
+        crypto.randomUUID().replace(/-/g, "").slice(0, 32),
+        args["message"] as string,
+        (args["email"] as string) || null,
+        (args["category"] as string) || "general",
+        pkg.version ?? null,
+      ]);
+      return { message: "Feedback saved. Thank you!" };
     }
     default:
       throw new Error(`Unknown tool: ${name}`);

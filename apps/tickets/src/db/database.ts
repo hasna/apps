@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -307,6 +308,20 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (1);
   `,
+  // Migration 2: feedback table
+  `
+  CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    message TEXT NOT NULL,
+    email TEXT,
+    category TEXT DEFAULT 'general',
+    version TEXT,
+    machine_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (2);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -317,7 +332,7 @@ export function getDatabase(dbPath?: string): Database {
   const path = dbPath || getDbPath();
   ensureDir(path);
 
-  _db = new Database(path, { create: true });
+  _db = new SqliteAdapter(path) as unknown as Database;
 
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA busy_timeout = 5000");
