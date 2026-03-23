@@ -1,9 +1,9 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
-import { homedir } from "os";
 import { AGENT_NAMES } from "./names.js";
+import { getDataDir } from "./db.js";
 
-const AGENT_ID_FILE = join(homedir(), ".conversations", "agent-id");
+const AGENT_ID_FILE = join(getDataDir(), "agent-id");
 
 let cachedAutoName: string | null = null;
 
@@ -24,7 +24,7 @@ function isNameTaken(name: string): boolean {
 
 /**
  * Get or create a persistent auto-generated agent name.
- * Stored in ~/.conversations/agent-id so the same installation
+ * Stored in ~/.hasna/conversations/agent-id so the same installation
  * always gets the same name. Checks the DB to avoid duplicates.
  */
 export function getAutoName(): string {

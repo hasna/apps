@@ -1,10 +1,10 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { getDataDir } from "./db.js";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 
-const CONFIG_DIR = join(homedir(), ".conversations");
+const CONFIG_DIR = getDataDir();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 interface ConversationsConfig {
@@ -34,7 +34,7 @@ export function getActiveModel(): string {
   return config.activeModel ?? DEFAULT_MODEL;
 }
 
-/** Sets the active fine-tuned model ID in ~/.conversations/config.json. */
+/** Sets the active fine-tuned model ID in ~/.hasna/conversations/config.json. */
 export function setActiveModel(id: string): void {
   const config = readConfig();
   config.activeModel = id;

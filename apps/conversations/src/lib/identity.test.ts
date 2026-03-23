@@ -3,9 +3,9 @@ import { resolveIdentity, requireIdentity, getAutoName, _resetAutoName } from ".
 import { AGENT_NAMES } from "./names";
 import { unlinkSync, readFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { getDataDir } from "./db";
 
-const AGENT_ID_FILE = join(homedir(), ".conversations", "agent-id");
+const AGENT_ID_FILE = join(getDataDir(), "agent-id");
 const savedEnv = process.env.CONVERSATIONS_AGENT_ID;
 let savedAgentId: string | null = null;
 

@@ -27,7 +27,7 @@ describe("db", () => {
   test("getDbPath returns default when no env", () => {
     delete process.env.CONVERSATIONS_DB_PATH;
     const path = getDbPath();
-    expect(path).toContain(".conversations");
+    expect(path).toContain("conversations");
     expect(path).toEndWith("messages.db");
   });
 

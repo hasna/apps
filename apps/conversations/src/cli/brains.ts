@@ -2,10 +2,10 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { spawnSync } from "child_process";
 import { gatherTrainingData } from "../lib/gatherer.js";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "../lib/model-config.js";
+import { getDataDir } from "../lib/db.js";
 
 export function registerBrainsCommand(program: Command): void {
   const brains = program
@@ -25,7 +25,7 @@ export function registerBrainsCommand(program: Command): void {
         const since = opts.since ? new Date(opts.since) : undefined;
         const result = await gatherTrainingData({ limit: opts.limit, since });
 
-        const outputDir = join(homedir(), ".conversations", "training");
+        const outputDir = join(getDataDir(), "training");
         mkdirSync(outputDir, { recursive: true });
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");

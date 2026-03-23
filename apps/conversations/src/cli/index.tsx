@@ -748,7 +748,8 @@ program
     const { homedir } = await import("os");
     const { existsSync } = await import("fs");
     const { join } = await import("path");
-    const configPath = process.env.CONVERSATIONS_CONFIG_PATH ?? join(homedir(), ".conversations", "config.json");
+    const { getDataDir } = await import("../lib/db.js");
+    const configPath = process.env.CONVERSATIONS_CONFIG_PATH ?? join(getDataDir(), "config.json");
     if (existsSync(configPath)) {
       try {
         const { readFileSync } = await import("fs");
@@ -1824,7 +1825,8 @@ program
     } else {
       const { join } = require("path");
       const { homedir } = require("os");
-      const agentIdFile = join(homedir(), ".conversations", "agent-id");
+      const { getDataDir } = require("../lib/db.js");
+      const agentIdFile = join(getDataDir(), "agent-id");
       source = `auto-generated (${agentIdFile})`;
     }
 

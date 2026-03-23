@@ -1,9 +1,8 @@
-import { getDb } from "./db.js";
+import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
 import { randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync } from "fs";
 import { join, basename } from "path";
-import { homedir } from "os";
 import { fireWebhooks } from "./webhooks.js";
 
 /** Strip null/undefined fields from a message for compact output. */
@@ -48,7 +47,7 @@ function parseMessage(row: Record<string, unknown>): Message {
 
 function getAttachmentsDir(): string {
   if (process.env.CONVERSATIONS_ATTACHMENTS_DIR) return process.env.CONVERSATIONS_ATTACHMENTS_DIR;
-  return join(homedir(), ".conversations", "attachments");
+  return join(getDataDir(), "attachments");
 }
 
 function guessMimeType(name: string): string {

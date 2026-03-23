@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import type { Message } from "../types.js";
+import { getDataDir } from "./db.js";
 
 export interface WebhookConfig {
   url: string;
@@ -18,7 +18,7 @@ let configLoadedAt = 0;
 const CONFIG_CACHE_MS = 10000;
 
 function getConfigPath(): string {
-  return process.env.CONVERSATIONS_CONFIG_PATH || join(homedir(), ".conversations", "config.json");
+  return process.env.CONVERSATIONS_CONFIG_PATH || join(getDataDir(), "config.json");
 }
 
 function loadConfig(): ConversationsConfig {
