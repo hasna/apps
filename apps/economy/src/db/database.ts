@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite'
+import { SqliteAdapter as Database } from '@hasna/cloud'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -138,6 +138,16 @@ function initSchema(db: Database): void {
       cache_read_per_1m REAL NOT NULL DEFAULT 0,
       cache_write_per_1m REAL NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
 }

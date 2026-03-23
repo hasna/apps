@@ -51,6 +51,7 @@ const TOOLS = [
   { name: 'register_agent', description: 'Register agent session.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, session_id: { type: 'string' } }, required: ['name'] } },
   { name: 'heartbeat', description: 'Update last_seen_at.', inputSchema: { type: 'object', properties: { agent_id: { type: 'string' } }, required: ['agent_id'] } },
   { name: 'set_focus', description: 'Set active project context.', inputSchema: { type: 'object', properties: { agent_id: { type: 'string' }, project_id: { type: 'string' } }, required: ['agent_id'] } },
+  { name: 'send_feedback', description: 'Send feedback about this service.', inputSchema: { type: 'object', properties: { message: { type: 'string' }, email: { type: 'string' }, category: { type: 'string', enum: ['bug','feature','general'] } }, required: ['message'] } },
 ]
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -265,6 +266,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!ag) return { content: [{ type: 'text', text: `Agent not found` }], isError: true };
         (ag as Record<string, unknown>)['project_id'] = args['project_id'];
         return { content: [{ type: 'text', text: String(args['project_id'] ? `Focus: ${args['project_id']}` : 'Focus cleared') }] };
+      }
+      case 'send_feedback': {
+        try {
+          const pkg = require('../../package.json');
+          db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(
+            String(a['message']), a['email'] || null, a['category'] || 'general', pkg.version
+          );
+          return { content: [{ type: 'text', text: 'Feedback saved. Thank you!' }] };
+        } catch (e) {
+          return { content: [{ type: 'text', text: String(e) }], isError: true };
+        }
       }
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true }
