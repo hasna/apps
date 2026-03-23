@@ -3,10 +3,10 @@
 import { Command } from 'commander'
 import { writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import { homedir } from 'os'
 import chalk from 'chalk'
 import { gatherTrainingData } from '../lib/gatherer.js'
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from '../lib/model-config.js'
+import { getDataDir } from '../db/database.js'
 
 export function registerBrainsCommand(program: Command): void {
   const brainsCmd = program
@@ -17,9 +17,9 @@ export function registerBrainsCommand(program: Command): void {
 
   brainsCmd
     .command('gather')
-    .description('Gather training data from economy cost data and write to ~/.economy/training/')
+    .description('Gather training data from economy cost data and write to ~/.hasna/economy/training/')
     .option('--limit <n>', 'Maximum number of training examples', '500')
-    .option('--output <path>', 'Output file path (default: ~/.economy/training/training-<timestamp>.jsonl)')
+    .option('--output <path>', 'Output file path (default: ~/.hasna/economy/training/training-<timestamp>.jsonl)')
     .action(async (opts: { limit?: string; output?: string }) => {
       const limit = opts.limit ? parseInt(opts.limit, 10) : 500
       console.log(chalk.cyan(`Gathering up to ${limit} training examples from economy data...`))
@@ -34,7 +34,7 @@ export function registerBrainsCommand(program: Command): void {
         }
 
         // Determine output path
-        const defaultDir = join(homedir(), '.economy', 'training')
+        const defaultDir = join(getDataDir(), 'training')
         await mkdir(defaultDir, { recursive: true })
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
         const outputPath = opts.output ?? join(defaultDir, `training-${timestamp}.jsonl`)
@@ -59,7 +59,7 @@ export function registerBrainsCommand(program: Command): void {
     .description('Start a fine-tuning job using gathered training data')
     .option('--base-model <model>', 'Base model to fine-tune', 'gpt-4o-mini')
     .option('--name <name>', 'Name for the fine-tuned model', 'economy-assistant')
-    .option('--dataset <path>', 'Path to JSONL training file (default: latest in ~/.economy/training/)')
+    .option('--dataset <path>', 'Path to JSONL training file (default: latest in ~/.hasna/economy/training/)')
     .action(async (opts: { baseModel?: string; name?: string; dataset?: string }) => {
       const baseModel = opts.baseModel ?? 'gpt-4o-mini'
       const name = opts.name ?? 'economy-assistant'
@@ -72,7 +72,7 @@ export function registerBrainsCommand(program: Command): void {
       let datasetPath = opts.dataset
       if (!datasetPath) {
         const { readdirSync } = await import('fs')
-        const trainingDir = join(homedir(), '.economy', 'training')
+        const trainingDir = join(getDataDir(), 'training')
         try {
           const files = readdirSync(trainingDir)
             .filter((f) => f.endsWith('.jsonl'))

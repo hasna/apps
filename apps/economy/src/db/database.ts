@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { existsSync, mkdirSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import type {
@@ -15,8 +15,30 @@ import type {
   SessionFilter,
 } from '../types/index.js'
 
+export function getDataDir(): string {
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || homedir()
+  const newDir = join(home, '.hasna', 'economy')
+  const oldDir = join(home, '.economy')
+
+  // Auto-migrate old dir to new location
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true })
+    for (const file of readdirSync(oldDir)) {
+      const oldPath = join(oldDir, file)
+      if (statSync(oldPath).isFile()) {
+        copyFileSync(oldPath, join(newDir, file))
+      }
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true })
+  return newDir
+}
+
 export function getDbPath(): string {
-  return process.env['ECONOMY_DB'] ?? join(homedir(), '.economy', 'economy.db')
+  if (process.env['HASNA_ECONOMY_DB_PATH']) return process.env['HASNA_ECONOMY_DB_PATH']
+  if (process.env['ECONOMY_DB']) return process.env['ECONOMY_DB']
+  return join(getDataDir(), 'economy.db')
 }
 
 export function openDatabase(dbPath?: string, skipSeed = false): Database {

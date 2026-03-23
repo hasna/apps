@@ -1,13 +1,13 @@
 // Model config for @hasna/economy
-// Reads/writes the active fine-tuned model ID from ~/.economy/config.json
+// Reads/writes the active fine-tuned model ID from ~/.hasna/economy/config.json
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { homedir } from 'os'
 import { join } from 'path'
+import { getDataDir } from '../db/database.js'
 
 export const DEFAULT_MODEL = 'gpt-4o-mini'
 
-const CONFIG_PATH = join(homedir(), '.economy', 'config.json')
+const CONFIG_PATH = join(getDataDir(), 'config.json')
 
 interface EconomyModelConfig {
   activeModel?: string
@@ -26,7 +26,7 @@ function loadConfig(): EconomyModelConfig {
 }
 
 function saveConfig(config: EconomyModelConfig): void {
-  const dir = join(homedir(), '.economy')
+  const dir = getDataDir()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
 }
@@ -36,7 +36,7 @@ export function getActiveModel(): string {
   return loadConfig().activeModel ?? DEFAULT_MODEL
 }
 
-/** Persists the active fine-tuned model ID to ~/.economy/config.json. */
+/** Persists the active fine-tuned model ID to ~/.hasna/economy/config.json. */
 export function setActiveModel(id: string): void {
   const config = loadConfig()
   config.activeModel = id

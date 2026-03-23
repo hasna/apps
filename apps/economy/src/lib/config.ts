@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { homedir } from 'os'
 import { join } from 'path'
+import { getDataDir } from '../db/database.js'
 
-const CONFIG_PATH = join(homedir(), '.economy', 'config.json')
+const CONFIG_PATH = join(getDataDir(), 'config.json')
 
 export interface EconomyConfig {
   port: number
