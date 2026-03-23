@@ -51,8 +51,8 @@ export function register(server: McpServer) {
 // ── Agent Tools ───────────────────────────────────────────────────────────────
 
 server.tool(
-  "browser_register_agent",
-  "Register an agent with the browser service",
+  "register_agent",
+  "Register an agent session. Returns agent_id. Auto-triggers a heartbeat.",
   {
     name: z.string(),
     description: z.string().optional(),
@@ -69,8 +69,8 @@ server.tool(
 );
 
 server.tool(
-  "browser_heartbeat",
-  "Send a heartbeat for an agent",
+  "heartbeat",
+  "Update last_seen_at to signal agent is active.",
   { agent_id: z.string() },
   async ({ agent_id }) => {
     try {
@@ -81,12 +81,25 @@ server.tool(
 );
 
 server.tool(
-  "browser_agent_list",
-  "List registered agents",
+  "list_agents",
+  "List all registered agents.",
   { project_id: z.string().optional() },
   async ({ project_id }) => {
     try {
       return json({ agents: listAgents(project_id) });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "set_focus",
+  "Set active project context for this agent session.",
+  { agent_id: z.string(), project_id: z.string().optional() },
+  async ({ agent_id, project_id }) => {
+    try {
+      const { updateAgent: update } = await import("../lib/agents.js");
+      update(agent_id, { project_id: project_id ?? undefined });
+      return json({ ok: true, agent_id, project_id });
     } catch (e) { return err(e); }
   }
 );
@@ -478,9 +491,10 @@ server.tool(
           { tool: "browser_crawl", description: "Crawl a URL recursively" },
         ],
         Agent: [
-          { tool: "browser_register_agent", description: "Register an agent" },
-          { tool: "browser_heartbeat", description: "Send agent heartbeat" },
-          { tool: "browser_agent_list", description: "List registered agents" },
+          { tool: "register_agent", description: "Register an agent session" },
+          { tool: "heartbeat", description: "Update agent last_seen_at" },
+          { tool: "list_agents", description: "List registered agents" },
+          { tool: "set_focus", description: "Set active project context" },
         ],
         Project: [
           { tool: "browser_project_create", description: "Create or ensure a project" },

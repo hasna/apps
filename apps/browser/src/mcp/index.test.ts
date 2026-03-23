@@ -57,14 +57,14 @@ describe("MCP tool logic — sessions", () => {
 });
 
 describe("MCP tool logic — agents", () => {
-  it("browser_register_agent creates agent", async () => {
+  it("register_agent creates agent", async () => {
     const { registerAgent } = await import("../lib/agents.js");
     const a = registerAgent("brutus", { description: "mcp test" });
     expect(a.name).toBe("brutus");
     expect(a.id).toBeTruthy();
   });
 
-  it("browser_heartbeat updates agent", async () => {
+  it("heartbeat updates agent", async () => {
     const { registerAgent, heartbeat, getAgent } = await import("../lib/agents.js");
     const a = registerAgent("maximus");
     expect(() => heartbeat(a.id)).not.toThrow();
@@ -72,7 +72,7 @@ describe("MCP tool logic — agents", () => {
     expect(updated.last_seen).toBeDefined();
   });
 
-  it("browser_agent_list returns all agents", async () => {
+  it("list_agents returns all agents", async () => {
     const { registerAgent, listAgents } = await import("../lib/agents.js");
     registerAgent("titus");
     registerAgent("nero");
