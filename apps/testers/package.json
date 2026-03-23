@@ -1,6 +1,6 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
@@ -56,14 +56,14 @@
     "bun": ">=1.0.0"
   },
   "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/hasna/open-testers.git"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "testing",
     "qa",
