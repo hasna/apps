@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
+import { getDataDir } from "../db/database.js";
 
-const CONFIG_DIR = join(process.env["HOME"] || "~", ".contacts");
+const CONFIG_DIR = getDataDir();
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 interface ContactsConfig {

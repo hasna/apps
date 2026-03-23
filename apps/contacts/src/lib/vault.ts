@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes, pbkdf2Sync, createHash } from "node:crypto";
+import { getDataDir } from "../db/database.js";
 
-const VAULT_DIR = join(process.env["HOME"] || "~", ".contacts");
+const VAULT_DIR = getDataDir();
 const VAULT_CONFIG = join(VAULT_DIR, "vault.json");
 const VAULT_SESSION = join(VAULT_DIR, ".vault-session");
 const DOCUMENTS_DIR = join(VAULT_DIR, "documents");

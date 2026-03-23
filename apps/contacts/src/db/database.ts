@@ -1,11 +1,31 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+export function getDataDir(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  const newDir = join(home, ".hasna", "contacts");
+  const oldDir = join(home, ".contacts");
+
+  // Auto-migrate old dir to new location
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+    for (const file of readdirSync(oldDir)) {
+      const oldPath = join(oldDir, file);
+      if (statSync(oldPath).isFile()) {
+        copyFileSync(oldPath, join(newDir, file));
+      }
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
+}
+
 export function getDbPath(): string {
+  if (process.env["HASNA_CONTACTS_DB_PATH"]) return process.env["HASNA_CONTACTS_DB_PATH"];
   if (process.env["CONTACTS_DB_PATH"]) return process.env["CONTACTS_DB_PATH"];
-  const home = process.env["HOME"] || "~";
-  return join(home, ".contacts", "contacts.db");
+  return join(getDataDir(), "contacts.db");
 }
 
 function ensureDir(filePath: string): void {

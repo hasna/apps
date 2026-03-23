@@ -1,11 +1,12 @@
 /**
  * Image storage for contact photos and company logos.
- * Images stored in ~/.contacts/images/ as {id}.{ext}
+ * Images stored in ~/.hasna/contacts/images/ as {id}.{ext}
  */
 import { existsSync, mkdirSync, copyFileSync, unlinkSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, extname, basename } from "node:path";
+import { getDataDir } from "../db/database.js";
 
-const IMAGES_DIR = join(process.env["HOME"] || "~", ".contacts", "images");
+const IMAGES_DIR = join(getDataDir(), "images");
 
 function ensureImagesDir(): void {
   if (!existsSync(IMAGES_DIR)) mkdirSync(IMAGES_DIR, { recursive: true });

@@ -1655,10 +1655,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     // Events/subscriptions (CON-00081)
     { name: "get_recent_contact_events", description: "Polling fallback for change events — returns recent activity log entries, optionally filtered by event type or date.", inputSchema: { type: "object", properties: { since: { type: "string", description: "ISO 8601 datetime — only events after this date" }, event_types: { type: "array", items: { type: "string" } } } } },
     // Image management
-    { name: "set_contact_photo", description: "Set a contact's profile photo. Provide either a local file path or base64-encoded image data (with or without data URI prefix). Stores image in ~/.contacts/images/ and updates avatar_url. Supported formats: jpg, png, gif, webp, svg, avif.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, image: { type: "string", description: "File path (e.g. /tmp/photo.jpg) OR base64 data (e.g. data:image/png;base64,...) OR raw base64 string" }, format: { type: "string", description: "Image format hint when using raw base64 (jpg, png, webp). Not needed for file paths or data URIs." } }, required: ["contact_id", "image"] } },
+    { name: "set_contact_photo", description: "Set a contact's profile photo. Provide either a local file path or base64-encoded image data (with or without data URI prefix). Stores image in ~/.hasna/contacts/images/ and updates avatar_url. Supported formats: jpg, png, gif, webp, svg, avif.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, image: { type: "string", description: "File path (e.g. /tmp/photo.jpg) OR base64 data (e.g. data:image/png;base64,...) OR raw base64 string" }, format: { type: "string", description: "Image format hint when using raw base64 (jpg, png, webp). Not needed for file paths or data URIs." } }, required: ["contact_id", "image"] } },
     { name: "get_contact_photo", description: "Get a contact's profile photo as base64 data URI. Returns null if no photo is set.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
     { name: "delete_contact_photo", description: "Remove a contact's profile photo.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
-    { name: "set_company_logo", description: "Set a company's logo image. Provide either a local file path or base64-encoded image data. Stores image in ~/.contacts/images/ and updates logo_url.", inputSchema: { type: "object", properties: { company_id: { type: "string" }, image: { type: "string", description: "File path or base64 data" }, format: { type: "string", description: "Image format hint for raw base64" } }, required: ["company_id", "image"] } },
+    { name: "set_company_logo", description: "Set a company's logo image. Provide either a local file path or base64-encoded image data. Stores image in ~/.hasna/contacts/images/ and updates logo_url.", inputSchema: { type: "object", properties: { company_id: { type: "string" }, image: { type: "string", description: "File path or base64 data" }, format: { type: "string", description: "Image format hint for raw base64" } }, required: ["company_id", "image"] } },
     { name: "get_company_logo", description: "Get a company's logo as base64 data URI.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
     { name: "delete_company_logo", description: "Remove a company's logo image.", inputSchema: { type: "object", properties: { company_id: { type: "string" } }, required: ["company_id"] } },
     // ─── v0.6.0 tools ──────────────────────────────────────────────────────────
@@ -1670,7 +1670,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: "vault_lock", description: "Lock the vault, clearing the encryption key from memory.", inputSchema: { type: "object", properties: {} } },
     { name: "vault_status", description: "Check vault initialization and lock status.", inputSchema: { type: "object", properties: {} } },
     // Documents
-    { name: "add_document", description: "Store a document for a contact (passport, tax_id, medical_record, etc.). Text values are encrypted; file attachments are stored plain so agents can read them. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, doc_type: { type: "string", enum: [...DOCUMENT_TYPES] }, label: { type: "string" }, value: { type: "string", description: "Plaintext value (will be encrypted in DB)" }, file_path: { type: "string", description: "File to attach — stored PLAIN in ~/.contacts/documents/ for agent access" }, metadata: { type: "object" }, expires_at: { type: "string" } }, required: ["contact_id", "doc_type", "value"] } },
+    { name: "add_document", description: "Store a document for a contact (passport, tax_id, medical_record, etc.). Text values are encrypted; file attachments are stored plain so agents can read them. Vault must be unlocked.", inputSchema: { type: "object", properties: { contact_id: { type: "string" }, doc_type: { type: "string", enum: [...DOCUMENT_TYPES] }, label: { type: "string" }, value: { type: "string", description: "Plaintext value (will be encrypted in DB)" }, file_path: { type: "string", description: "File to attach — stored PLAIN in ~/.hasna/contacts/documents/ for agent access" }, metadata: { type: "object" }, expires_at: { type: "string" } }, required: ["contact_id", "doc_type", "value"] } },
     { name: "list_documents", description: "List documents for a contact (metadata only — no decryption needed). Returns file_path for attachments so agents can read them directly.", inputSchema: { type: "object", properties: { contact_id: { type: "string" } }, required: ["contact_id"] } },
     { name: "get_document", description: "Get a document with decrypted value and file_path. Vault must be unlocked for the text value; file is always accessible.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
     { name: "get_document_file", description: "Get the plain file path for a document attachment. Agents can read this file directly — it is NOT encrypted. Returns null if no file attached.", inputSchema: { type: "object", properties: { document_id: { type: "string" } }, required: ["document_id"] } },
@@ -3404,8 +3404,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { contact_id, image, format } = a as { contact_id: string; image: string; format?: string };
         const contact = getContact(contact_id);
         const filename = saveImage(contact_id, image, { format });
-        updateContact(contact_id, { avatar_url: `~/.contacts/images/${filename}` });
-        return { content: [{ type: "text", text: JSON.stringify({ ok: true, contact_id, filename, avatar_url: `~/.contacts/images/${filename}` }) }] };
+        updateContact(contact_id, { avatar_url: `~/.hasna/contacts/images/${filename}` });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, contact_id, filename, avatar_url: `~/.hasna/contacts/images/${filename}` }) }] };
       }
       case "get_contact_photo": {
         const { contact_id } = a as { contact_id: string };
@@ -3423,8 +3423,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { company_id, image, format } = a as { company_id: string; image: string; format?: string };
         const co = getCompany(company_id);
         const filename = saveImage(company_id, image, { format });
-        updateCompany(company_id, { logo_url: `~/.contacts/images/${filename}` });
-        return { content: [{ type: "text", text: JSON.stringify({ ok: true, company_id, filename, logo_url: `~/.contacts/images/${filename}` }) }] };
+        updateCompany(company_id, { logo_url: `~/.hasna/contacts/images/${filename}` });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, company_id, filename, logo_url: `~/.hasna/contacts/images/${filename}` }) }] };
       }
       case "get_company_logo": {
         const { company_id } = a as { company_id: string };

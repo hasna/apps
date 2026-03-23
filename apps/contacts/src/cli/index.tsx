@@ -999,7 +999,8 @@ program
   .option("--output <path>", "Output path")
   .option("--list", "List existing backups")
   .action((opts: { output?: string; list?: boolean }) => {
-    const backupDir = join(process.env["HOME"] || "~", ".contacts", "backups");
+    const { getDataDir } = require("../db/database.js") as typeof import("../db/database.js");
+    const backupDir = join(getDataDir(), "backups");
 
     if (opts.list) {
       if (!existsSync(backupDir)) {
@@ -2523,8 +2524,8 @@ photoCmd
     try {
       const contact = getContact(contactId);
       const filename = saveImage(contactId, imagePath);
-      updateContact(contactId, { avatar_url: `~/.contacts/images/${filename}` });
-      console.log(chalk.green(`Photo set for ${contact.display_name}: ~/.contacts/images/${filename}`));
+      updateContact(contactId, { avatar_url: `~/.hasna/contacts/images/${filename}` });
+      console.log(chalk.green(`Photo set for ${contact.display_name}: ~/.hasna/contacts/images/${filename}`));
     } catch (e) {
       console.error(chalk.red(e instanceof Error ? e.message : String(e)));
     }
@@ -2588,8 +2589,8 @@ logoCmd
       if (!company) { console.error(chalk.red('Company not found')); return; }
       const filename = saveImage(companyId, imagePath);
       const { updateCompany } = require('../db/companies.js');
-      updateCompany(companyId, { logo_url: `~/.contacts/images/${filename}` });
-      console.log(chalk.green(`Logo set for ${company.name}: ~/.contacts/images/${filename}`));
+      updateCompany(companyId, { logo_url: `~/.hasna/contacts/images/${filename}` });
+      console.log(chalk.green(`Logo set for ${company.name}: ~/.hasna/contacts/images/${filename}`));
     } catch (e) {
       console.error(chalk.red(e instanceof Error ? e.message : String(e)));
     }
