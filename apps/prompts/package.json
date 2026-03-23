@@ -1,7 +1,7 @@
 {
   "name": "@hasna/prompts",
   "version": "0.3.8",
-  "description": "Reusable prompt library for AI agents — CLI + MCP server + REST API + web dashboard",
+  "description": "Reusable prompt library for AI agents \u2014 CLI + MCP server + REST API + web dashboard",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -33,7 +33,8 @@
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "dev:serve": "bun run src/server/index.ts"
+    "dev:serve": "bun run src/server/index.ts",
+    "postinstall": "mkdir -p $HOME/.hasna/prompts 2>/dev/null || true"
   },
   "keywords": [
     "prompts",
