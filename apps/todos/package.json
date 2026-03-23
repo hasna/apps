@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -46,6 +46,7 @@
     "dashboard"
   ],
   "publishConfig": {
+    "registry": "https://registry.npmjs.org",
     "access": "public"
   },
   "repository": {
