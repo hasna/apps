@@ -107,7 +107,7 @@ export class BunWebViewSession {
 
   // ─── Core navigation ──────────────────────────────────────────────────────
 
-  async goto(url: string, opts?: { waitUntil?: string; timeout?: number }): Promise<void> {
+  async goto(url: string, _opts?: { waitUntil?: string; timeout?: number }): Promise<void> {
     await this.view.navigate(url);
     // Short settle time for JS to execute after navigation
     await new Promise(r => setTimeout(r, 200));
@@ -133,7 +133,7 @@ export class BunWebViewSession {
 
   // ─── Screenshot → Buffer for sharp pipeline ───────────────────────────────
 
-  async screenshot(opts?: { path?: string; type?: string; fullPage?: boolean; quality?: number }): Promise<Buffer> {
+  async screenshot(_opts?: { path?: string; type?: string; fullPage?: boolean; quality?: number }): Promise<Buffer> {
     const uint8 = await this.view.screenshot();
     return Buffer.from(uint8);
   }
@@ -144,7 +144,7 @@ export class BunWebViewSession {
     await this.view.click(selector, opts ? { button: opts.button } : undefined);
   }
 
-  async type(selector: string, text: string, opts?: { delay?: number }): Promise<void> {
+  async type(selector: string, text: string, _opts?: { delay?: number }): Promise<void> {
     // Focus the element first, then type
     try {
       await this.view.click(selector);
@@ -271,7 +271,7 @@ export class BunWebViewSession {
     `);
   }
 
-  async setInputFiles(selector: string, files: string | string[]): Promise<void> {
+  async setInputFiles(_selector: string, _files: string | string[]): Promise<void> {
     throw new Error("File upload not supported in Bun.WebView engine. Use engine: 'playwright' instead.");
   }
 
@@ -332,13 +332,10 @@ export class BunWebViewSession {
     };
   }
 
-  getByText(text: string, opts?: { exact?: boolean }): any {
-    const selector = opts?.exact
-      ? `*:is(button, a, span, div, p, h1, h2, h3, h4, label)`
-      : "*";
+  getByText(text: string, _opts?: { exact?: boolean }): any {
     return {
       first: () => ({
-        click: async (clickOpts?: any) => {
+        click: async (_clickOpts?: any) => {
           await this.view.evaluate(`
             (() => {
               const text = ${JSON.stringify(text)};
@@ -409,7 +406,7 @@ export class BunWebViewSession {
     return { width: 1280, height: 720 }; // default; updated via resize()
   }
 
-  async waitForLoadState(state?: string, opts?: { timeout?: number }): Promise<void> {
+  async waitForLoadState(_state?: string, _opts?: { timeout?: number }): Promise<void> {
     await new Promise(r => setTimeout(r, 200));
   }
 
