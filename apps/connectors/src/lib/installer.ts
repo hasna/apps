@@ -3,9 +3,9 @@
  */
 
 import { existsSync, cpSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from "fs";
-import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { getConnectorsHome } from "../db/database.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -102,7 +102,7 @@ export function installConnector(
 
     // Copy credentials and profiles from ~/.connectors/ if they exist
     // This prevents the local install from shadowing existing home credentials
-    const homeCredDir = join(homedir(), ".connectors", connectorName);
+    const homeCredDir = join(getConnectorsHome(), connectorName);
     if (existsSync(homeCredDir)) {
       const filesToCopy = ["credentials.json", "current_profile"];
       for (const file of filesToCopy) {

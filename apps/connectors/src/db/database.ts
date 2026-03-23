@@ -1,9 +1,43 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
 import { homedir } from "os";
-import { mkdirSync } from "fs";
+import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
 
-const DB_DIR = join(homedir(), ".connectors");
+/**
+ * Get the connectors home directory.
+ * New default: ~/.hasna/connectors/
+ * Auto-migrates from ~/.connectors/ if the new dir doesn't exist yet.
+ */
+export function getConnectorsHome(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const newDir = join(home, ".hasna", "connectors");
+  const oldDir = join(home, ".connectors");
+
+  // Auto-migrate: if old dir exists and new doesn't, copy top-level files
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+    try {
+      for (const file of readdirSync(oldDir)) {
+        const oldPath = join(oldDir, file);
+        const newPath = join(newDir, file);
+        try {
+          if (statSync(oldPath).isFile()) {
+            copyFileSync(oldPath, newPath);
+          }
+        } catch {
+          // Skip files that can't be copied
+        }
+      }
+    } catch {
+      // If we can't read old directory, continue with new
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
+}
+
+const DB_DIR = getConnectorsHome();
 const DB_PATH = join(DB_DIR, "connectors.db");
 
 let _db: Database | null = null;

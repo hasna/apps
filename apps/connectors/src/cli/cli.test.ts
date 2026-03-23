@@ -593,7 +593,7 @@ describe("CLI", () => {
 
       // Cleanup
       const { homedir } = await import("os");
-      const dir = join(homedir(), ".connectors", `connect-zzztest${process.pid}imp`);
+      const dir = join(homedir(), ".hasna", "connectors", `connect-zzztest${process.pid}imp`);
       if (existsSync(dir)) rmSync(dir, { recursive: true });
     });
   });

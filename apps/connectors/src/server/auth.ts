@@ -6,10 +6,10 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from "fs";
 import { randomBytes } from "crypto";
-import { homedir } from "os";
 import { join } from "path";
 import { getConnectorDocs } from "../lib/installer.js";
 import { withWriteLock } from "../lib/lock.js";
+import { getConnectorsHome } from "../db/database.js";
 
 /** Timeout for external HTTP requests (10 seconds) */
 const FETCH_TIMEOUT = 10_000;
@@ -99,7 +99,7 @@ export function getAuthType(name: string): AuthType {
  */
 function getConnectorConfigDir(name: string): string {
   const connectorName = name.startsWith("connect-") ? name : `connect-${name}`;
-  return join(homedir(), ".connectors", connectorName);
+  return join(getConnectorsHome(), connectorName);
 }
 
 /**

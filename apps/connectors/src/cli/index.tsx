@@ -37,6 +37,7 @@ import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSy
 import { homedir } from "os";
 import { join, relative } from "path";
 import { getAuthStatus, getAuthType, saveApiKey, getOAuthStartUrl, getEnvVars, refreshOAuthToken } from "../server/auth.js";
+import { getConnectorsHome } from "../db/database.js";
 import { TEST_ENDPOINTS } from "../lib/test-endpoints.js";
 import { createInterface } from "readline";
 import { getConnectorOperations, runConnectorCommand, getConnectorCommandHelp, getConnectorCliPath } from "../lib/runner.js";
@@ -811,7 +812,7 @@ program
   .description("Show auth status of all configured connectors (project + global)")
   .action((options: { json: boolean }) => {
     const installed = getInstalledConnectors();
-    const configDir = join(homedir(), ".connectors");
+    const configDir = getConnectorsHome();
     const seen = new Set<string>();
 
     type StatusEntry = {
@@ -1348,7 +1349,7 @@ program
     ];
 
     // Auto-detect existing auth — scan ~/.connectors/ for configured connectors
-    const connectorsHome = join(homedir(), ".connectors");
+    const connectorsHome = getConnectorsHome();
     let configuredCount = 0;
     const configuredNames: string[] = [];
     try {
@@ -1470,7 +1471,7 @@ program
   .option("--include-secrets", "Include secrets in plaintext (dangerous — use only for backup/restore)")
   .description("Export all connector credentials as JSON backup")
   .action((options: { output?: string; includeSecrets?: boolean }) => {
-    const connectDir = join(homedir(), ".connectors");
+    const connectDir = getConnectorsHome();
     const result: Record<string, { credentials?: unknown; profiles: Record<string, unknown> }> = {};
 
     if (existsSync(connectDir)) {
@@ -1572,7 +1573,7 @@ program
       return;
     }
 
-    const connectDir = join(homedir(), ".connectors");
+    const connectDir = getConnectorsHome();
     let imported = 0;
 
     for (const [connectorName, connData] of Object.entries(data.connectors)) {
@@ -1610,11 +1611,11 @@ program
   .command("auth-import")
   .option("--json", "Output as JSON", false)
   .option("-d, --dry-run", "Preview what would be imported without copying", false)
-  .option("--force", "Overwrite existing files in ~/.connectors/", false)
-  .description("Migrate auth tokens from ~/.connect/ to ~/.connectors/")
+  .option("--force", "Overwrite existing files in ~/.hasna/connectors/", false)
+  .description("Migrate auth tokens from ~/.connect/ to ~/.hasna/connectors/")
   .action((options: { json: boolean; dryRun: boolean; force: boolean }) => {
     const oldBase = join(homedir(), ".connect");
-    const newBase = join(homedir(), ".connectors");
+    const newBase = getConnectorsHome();
 
     if (!existsSync(oldBase)) {
       if (options.json) {
@@ -1968,7 +1969,7 @@ program
   .option("--json", "Output as JSON", false)
   .description("Show current setup: config dir, installed connectors, auth status")
   .action((options: { json: boolean }) => {
-    const configDir = join(homedir(), ".connectors");
+    const configDir = getConnectorsHome();
     const installed = getInstalledConnectors();
     const version = "0.3.1";
 
@@ -2142,7 +2143,7 @@ program
 
       // Try profile config if no env var
       if (!apiKey) {
-        const connectorConfigDir = join(homedir(), ".connectors", name.startsWith("connect-") ? name : `connect-${name}`);
+        const connectorConfigDir = join(getConnectorsHome(), name.startsWith("connect-") ? name : `connect-${name}`);
 
         // Determine current profile
         let currentProfile = "default";

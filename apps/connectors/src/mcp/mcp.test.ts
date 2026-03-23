@@ -413,7 +413,7 @@ describe("MCP Server", () => {
       const { join } = await import("path");
       const { homedir } = await import("os");
       for (const n of [authName1, authName2]) {
-        const dir = join(homedir(), ".connectors", `connect-${n}`);
+        const dir = join(homedir(), ".hasna", "connectors", `connect-${n}`);
         if (existsSync(dir)) rmSync(dir, { recursive: true });
       }
     });

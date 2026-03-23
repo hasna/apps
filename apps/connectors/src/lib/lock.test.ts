@@ -5,7 +5,7 @@ import { homedir } from "os";
 import { withWriteLock, LockTimeoutError } from "./lock.js";
 
 const TEST_CONNECTOR = `zzztest-lock-${process.pid}`;
-const lockFile = join(homedir(), ".connectors", `connect-${TEST_CONNECTOR}`, ".write.lock");
+const lockFile = join(homedir(), ".hasna", "connectors", `connect-${TEST_CONNECTOR}`, ".write.lock");
 
 afterEach(() => {
   try { unlinkSync(lockFile); } catch { /* already gone */ }
@@ -59,7 +59,7 @@ describe("withWriteLock", () => {
 
   test("stale lock (>30s old) is broken and new caller succeeds", async () => {
     // Create a lock file manually then backdate it
-    mkdirSync(join(homedir(), ".connectors", `connect-${TEST_CONNECTOR}`), { recursive: true });
+    mkdirSync(join(homedir(), ".hasna", "connectors", `connect-${TEST_CONNECTOR}`), { recursive: true });
     const fd = openSync(lockFile, "wx");
     closeSync(fd);
     const staleTime = new Date(Date.now() - 35_000);

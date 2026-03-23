@@ -7,15 +7,15 @@
  *
  * Strategy: atomic O_EXCL file creation as the lock primitive (works on all
  * platforms including macOS). Lock files live at:
- *   ~/.connectors/connect-{name}/.write.lock
+ *   ~/.hasna/connectors/connect-{name}/.write.lock
  *
  * Callers that cannot acquire the lock within the timeout receive a LockTimeoutError.
  */
 
 import { openSync, closeSync, unlinkSync, existsSync, statSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { mkdirSync } from "fs";
+import { getConnectorsHome } from "../db/database.js";
 
 /** How long (ms) to wait for a lock before giving up */
 const LOCK_TIMEOUT_MS = 5_000;
@@ -32,7 +32,7 @@ export class LockTimeoutError extends Error {
 }
 
 function lockPath(connector: string): string {
-  const dir = join(homedir(), ".connectors", `connect-${connector}`);
+  const dir = join(getConnectorsHome(), `connect-${connector}`);
   mkdirSync(dir, { recursive: true });
   return join(dir, ".write.lock");
 }

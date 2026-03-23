@@ -2,7 +2,7 @@
  * Provider-agnostic LLM client for open-connectors.
  *
  * Supports: cerebras, groq, openai, anthropic
- * Config stored at: ~/.connectors/llm.json
+ * Config stored at: ~/.hasna/connectors/llm.json
  *
  * Cerebras and Groq are OpenAI-compatible (same SDK, different base URLs).
  * Anthropic has its own API format.
@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { getConnectorsHome } from "../db/database.js";
 
 export type LLMProvider = "cerebras" | "groq" | "openai" | "anthropic";
 
@@ -44,7 +44,7 @@ export const PROVIDER_DEFAULTS: Record<LLMProvider, { model: string }> = {
 };
 
 function getLlmConfigPath(): string {
-  return join(homedir(), ".connectors", "llm.json");
+  return join(getConnectorsHome(), "llm.json");
 }
 
 export function getLlmConfig(): LLMConfig | null {
@@ -58,7 +58,7 @@ export function getLlmConfig(): LLMConfig | null {
 }
 
 export function saveLlmConfig(config: LLMConfig): void {
-  const dir = join(homedir(), ".connectors");
+  const dir = getConnectorsHome();
   mkdirSync(dir, { recursive: true });
   writeFileSync(getLlmConfigPath(), JSON.stringify(config, null, 2));
 }

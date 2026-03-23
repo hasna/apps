@@ -32,18 +32,18 @@ import { startServer } from "./serve.js";
 
 // ── Test isolation strategy ──
 // Bun's os.homedir() does not respect runtime changes to process.env.HOME,
-// so we write to the real ~/.connectors/ directory using unique test connector
+// so we write to the real ~/.hasna/connectors/ directory using unique test connector
 // names (prefixed with "zzztest") that are cleaned up after each test.
 
 const HOME = homedir();
 const TEST_ID = `zzztest${process.pid}`;
 
-/** Get the real ~/.connectors/connect-<name> path */
+/** Get the real ~/.hasna/connectors/connect-<name> path */
 function testConfigDir(name: string): string {
-  return join(HOME, ".connectors", `connect-${name}`);
+  return join(HOME, ".hasna", "connectors", `connect-${name}`);
 }
 
-/** Clean up test connector directories from ~/.connectors/ */
+/** Clean up test connector directories from ~/.hasna/connectors/ */
 function cleanupTestConnectors(...names: string[]) {
   for (const name of names) {
     const dir = testConfigDir(name);
@@ -1087,7 +1087,7 @@ describe("server API routes", () => {
     });
 
     test("GET /oauth/:name/start redirects when credentials exist", async () => {
-      const configDir = join(homedir(), ".connectors", "connect-gmail");
+      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(
         join(configDir, "credentials.json"),
@@ -1132,7 +1132,7 @@ describe("server API routes", () => {
 
     test("GET /oauth/:name/callback returns error when no code", async () => {
       // Need a valid state first
-      const configDir = join(homedir(), ".connectors", "connect-gmail");
+      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(
         join(configDir, "credentials.json"),

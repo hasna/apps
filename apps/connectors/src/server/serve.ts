@@ -13,10 +13,9 @@ import { createJob, listJobs, getJobByName, updateJob, deleteJob, listJobRuns, c
 import { createWorkflow, listWorkflows, getWorkflowByName, deleteWorkflow } from "../db/workflows.js";
 import { triggerJob } from "../lib/scheduler.js";
 import { runWorkflow } from "../lib/workflow-runner.js";
-import { getDatabase } from "../db/database.js";
+import { getDatabase, getConnectorsHome } from "../db/database.js";
 import { join, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
-import { homedir } from "os";
 import {
   CONNECTORS,
   getConnector,
@@ -595,7 +594,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
         try {
           const profiles = listProfiles(name);
-          const configDir = join(homedir(), ".connectors", name.startsWith("connect-") ? name : `connect-${name}`);
+          const configDir = join(getConnectorsHome(), name.startsWith("connect-") ? name : `connect-${name}`);
           const currentProfileFile = join(configDir, "current_profile");
           let current = "default";
           if (existsSync(currentProfileFile)) {
@@ -647,7 +646,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
       // GET /api/export — Export all connector credentials (excluding OAuth tokens)
       if (path === "/api/export" && method === "GET") {
         try {
-          const connectDir = join(homedir(), ".connectors");
+          const connectDir = getConnectorsHome();
           const result: Record<string, { profiles: Record<string, unknown> }> = {};
 
           if (existsSync(connectDir)) {
@@ -715,7 +714,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           }
 
           let imported = 0;
-          const connectDir = join(homedir(), ".connectors");
+          const connectDir = getConnectorsHome();
 
           for (const [connectorName, data] of Object.entries(body.connectors)) {
             if (!isValidConnectorName(connectorName)) continue;
