@@ -1,6 +1,6 @@
 {
   "name": "@hasna/signatures",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open source e-signature platform — sign PDFs locally, manage documents, MCP + CLI + API",
   "type": "module",
   "bin": {
@@ -47,8 +47,13 @@
   "engines": {
     "bun": ">=1.0.0"
   },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "keywords": ["signatures", "esignature", "pdf", "mcp", "cli", "open-source"],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/hasna/open-signatures"
