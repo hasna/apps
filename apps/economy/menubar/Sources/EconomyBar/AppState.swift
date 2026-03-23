@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class AppState: ObservableObject {
   @Published var today: CostSummary = CostSummary(total_usd: 0, sessions: 0, requests: 0, tokens: 0)
+  @Published var yesterday: CostSummary = CostSummary(total_usd: 0, sessions: 0, requests: 0, tokens: 0)
   @Published var month: CostSummary = CostSummary(total_usd: 0, sessions: 0, requests: 0, tokens: 0)
   @Published var year: CostSummary = CostSummary(total_usd: 0, sessions: 0, requests: 0, tokens: 0)
   @Published var dailyEntries: [DailyEntry] = []
@@ -51,13 +52,15 @@ final class AppState: ObservableObject {
     }
     isOffline = false
     async let todayResult = try? await client.fetchSummary(period: "today")
+    async let yesterdayResult = try? await client.fetchSummary(period: "yesterday")
     async let monthResult = try? await client.fetchSummary(period: "month")
     async let yearResult = try? await client.fetchSummary(period: "year")
     async let dailyResult = try? await client.fetchDaily(days: 14)
     async let projectsResult = try? await client.fetchProjects()
     async let goalsResult = try? await client.fetchGoals()
-    let (t, m, y, d, p, g) = await (todayResult, monthResult, yearResult, dailyResult, projectsResult, goalsResult)
+    let (t, yt, m, y, d, p, g) = await (todayResult, yesterdayResult, monthResult, yearResult, dailyResult, projectsResult, goalsResult)
     if let t { today = t }
+    if let yt { yesterday = yt }
     if let m { month = m }
     if let y { year = y }
     if let d { dailyEntries = d }

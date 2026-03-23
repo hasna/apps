@@ -1,6 +1,6 @@
 export type Agent = 'claude' | 'codex' | 'gemini'
 
-export type Period = 'today' | 'week' | 'month' | 'year' | 'all'
+export type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'
 
 export interface EconomyRequest {
   id: string

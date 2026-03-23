@@ -123,6 +123,7 @@ function initSchema(db: Database): void {
 function periodWhere(period: Period): string {
   switch (period) {
     case 'today': return `DATE(timestamp) = DATE('now')`
+    case 'yesterday': return `DATE(timestamp) = DATE('now', '-1 day')`
     case 'week': return `timestamp >= DATE('now', '-7 days')`
     case 'month': return `timestamp >= DATE('now', '-30 days')`
     case 'year': return `timestamp >= DATE('now', '-365 days')`
@@ -133,6 +134,7 @@ function periodWhere(period: Period): string {
 function sessionPeriodWhere(period: Period): string {
   switch (period) {
     case 'today': return `DATE(started_at) = DATE('now')`
+    case 'yesterday': return `DATE(started_at) = DATE('now', '-1 day')`
     case 'week': return `started_at >= DATE('now', '-7 days')`
     case 'month': return `started_at >= DATE('now', '-30 days')`
     case 'year': return `started_at >= DATE('now', '-365 days')`
