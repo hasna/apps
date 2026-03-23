@@ -1,14 +1,43 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
+import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { homedir } from "os";
 import * as schema from "./schema.js";
 
 export * from "./schema.js";
 
-const DEFAULT_DB_PATH = join(homedir(), ".brains", "brains.db");
+function resolveDefaultDbPath(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const newDir = join(home, ".hasna", "brains");
+  const oldDir = join(home, ".brains");
+
+  // Auto-migrate: if old dir exists and new doesn't, copy files over
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+    try {
+      for (const file of readdirSync(oldDir)) {
+        const oldPath = join(oldDir, file);
+        const newPath = join(newDir, file);
+        try {
+          if (statSync(oldPath).isFile()) {
+            copyFileSync(oldPath, newPath);
+          }
+        } catch {
+          // Skip files that can't be copied
+        }
+      }
+    } catch {
+      // If we can't read old directory, continue with new
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return join(newDir, "brains.db");
+}
+
+const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 function ensureDir(filePath: string) {
   mkdirSync(dirname(filePath), { recursive: true });

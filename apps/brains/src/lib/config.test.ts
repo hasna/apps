@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 
 // Temp HOME for testing
 const testHome = join(tmpdir(), `brains-config-test-${Date.now()}`);
-mkdirSync(join(testHome, ".brains"), { recursive: true });
+mkdirSync(join(testHome, ".hasna", "brains"), { recursive: true });
 
 // Save and override HOME + config-related env vars before importing the module
 const savedHome = process.env.HOME;
@@ -21,7 +21,7 @@ delete process.env.THINKER_LABS_BASE_URL;
 
 const { getConfigValue, setConfigValue, listConfig, deleteConfigValue } = await import("./config.js");
 
-const configPath = join(testHome, ".brains", "config.json");
+const configPath = join(testHome, ".hasna", "brains", "config.json");
 
 beforeEach(() => {
   // Clear config file and all relevant env vars before each test
