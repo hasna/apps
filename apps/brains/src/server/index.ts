@@ -161,7 +161,7 @@ async function handleGather(req: Request): Promise<Response> {
 
   const sources = body.sources ?? ["todos", "mementos", "conversations", "sessions"];
   const limit = body.limit ?? 500;
-  const outDir = body.output_dir ?? join(homedir(), ".brains", "datasets");
+  const outDir = body.output_dir ?? join(homedir(), ".hasna", "brains", "datasets");
 
   mkdirSync(outDir, { recursive: true });
   const results = await gatherAll(sources, { limit });

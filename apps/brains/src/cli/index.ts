@@ -518,7 +518,7 @@ finetuneCmd
 
 // ── data ──────────────────────────────────────────────────────────────────────
 
-const DEFAULT_DATASETS_DIR = join(homedir(), ".brains", "datasets");
+const DEFAULT_DATASETS_DIR = join(homedir(), ".hasna", "brains", "datasets");
 
 const dataCmd = program.command("data").description("Manage training datasets");
 

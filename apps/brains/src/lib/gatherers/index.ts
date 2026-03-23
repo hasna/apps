@@ -37,7 +37,7 @@ export async function mergeAndWriteJSONL(
   results: GatherResult[],
   outputPath?: string
 ): Promise<{ path: string; totalExamples: number; duplicatesRemoved: number }> {
-  const defaultDir = join(homedir(), ".brains", "datasets");
+  const defaultDir = join(homedir(), ".hasna", "brains", "datasets");
   await mkdir(defaultDir, { recursive: true });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");

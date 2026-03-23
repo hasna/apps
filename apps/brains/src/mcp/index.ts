@@ -29,7 +29,7 @@ function getProvider(provider: string) {
 }
 
 function defaultOutputDir() {
-  return resolve(homedir(), ".brains", "datasets");
+  return resolve(homedir(), ".hasna", "brains", "datasets");
 }
 
 // --- in-memory agent registry ---
@@ -144,7 +144,7 @@ export function createMcpServer() {
             },
             output_dir: {
               type: "string",
-              description: "Directory to write JSONL files (default: ~/.brains/datasets/)",
+              description: "Directory to write JSONL files (default: ~/.hasna/brains/datasets/)",
             },
           },
           required: ["sources"],

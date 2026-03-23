@@ -1,7 +1,7 @@
 {
   "name": "@hasna/brains",
   "version": "0.0.11",
-  "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions",
+  "description": "Fine-tuned model tracker and trainer \u2014 wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -34,7 +34,8 @@
     "test": "bun test",
     "db:generate": "bunx drizzle-kit generate",
     "db:migrate": "bunx drizzle-kit migrate",
-    "db:studio": "bunx drizzle-kit studio"
+    "db:studio": "bunx drizzle-kit studio",
+    "postinstall": "mkdir -p $HOME/.hasna/brains 2>/dev/null || true"
   },
   "keywords": [
     "brains",
