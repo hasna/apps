@@ -142,6 +142,14 @@ export type { GraphEdge, RelatedEntity, AgentNetwork } from "./lib/graph.js";
 
 export type { ConversationSummary, SummaryOptions } from "./lib/summary.js";
 
+export { gatherTrainingData } from "./lib/gatherer.js";
+
+export {
+  getActiveModel,
+  setActiveModel,
+  clearActiveModel,
+} from "./lib/model-config.js";
+
 export type {
   Message,
   Session,

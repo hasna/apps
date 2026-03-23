@@ -17,6 +17,7 @@ import { getConversationSummary } from "../lib/summary.js";
 import { buildGraph, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { renderContent } from "../lib/terminal-markdown.js";
 import { App } from "./components/App.js";
+import { registerBrainsCommand } from "./brains.js";
 import pkg from "../../package.json";
 
 const program = new Command();
@@ -2040,6 +2041,9 @@ program
       exec(`open http://localhost:${server.port}`);
     }
   });
+
+// ---- brains ----
+registerBrainsCommand(program);
 
 // ---- default: TUI ----
 program
