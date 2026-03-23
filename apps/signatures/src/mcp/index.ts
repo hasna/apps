@@ -313,6 +313,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "register_agent",
+      description: "Register an agent session (idempotent). Auto-updates last_seen_at on re-register.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          session_id: { type: "string" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "heartbeat",
+      description: "Update last_seen_at to signal agent is active.",
+      inputSchema: {
+        type: "object",
+        properties: { agent_id: { type: "string" } },
+        required: ["agent_id"],
+      },
+    },
+    {
+      name: "set_focus",
+      description: "Set active project context for this agent session.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string" },
+          project_id: { type: "string" },
+        },
+        required: ["agent_id"],
+      },
+    },
+    {
+      name: "list_agents",
+      description: "List all registered agents.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "send_feedback",
       description: "Send feedback about this service",
       inputSchema: {
@@ -328,11 +366,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
+const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
     switch (name) {
+      case "register_agent": {
+        const a = args as Record<string, unknown>;
+        const agentName = a["name"] as string;
+        const existing = [..._agentReg.values()].find(x => x.name === agentName);
+        if (existing) { existing.last_seen_at = new Date().toISOString(); return { content: [{ type: "text", text: JSON.stringify(existing) }] }; }
+        const id = Math.random().toString(36).slice(2, 10);
+        const ag = { id, name: agentName, last_seen_at: new Date().toISOString() };
+        _agentReg.set(id, ag);
+        return { content: [{ type: "text", text: JSON.stringify(ag) }] };
+      }
+
+      case "heartbeat": {
+        const a = args as Record<string, unknown>;
+        const ag = _agentReg.get(a["agent_id"] as string);
+        if (!ag) return { content: [{ type: "text", text: `Agent not found: ${a["agent_id"]}` }], isError: true };
+        ag.last_seen_at = new Date().toISOString();
+        return { content: [{ type: "text", text: JSON.stringify({ id: ag.id, name: ag.name, last_seen_at: ag.last_seen_at }) }] };
+      }
+
+      case "set_focus": {
+        const a = args as Record<string, unknown>;
+        const ag = _agentReg.get(a["agent_id"] as string);
+        if (!ag) return { content: [{ type: "text", text: `Agent not found: ${a["agent_id"]}` }], isError: true };
+        (ag as any).project_id = a["project_id"] ?? undefined;
+        return { content: [{ type: "text", text: a["project_id"] ? `Focus: ${a["project_id"]}` : "Focus cleared" }] };
+      }
+
+      case "list_agents": {
+        const agents = [..._agentReg.values()];
+        if (agents.length === 0) return { content: [{ type: "text", text: "No agents registered." }] };
+        return { content: [{ type: "text", text: JSON.stringify(agents, null, 2) }] };
+      }
+
       case "signatures_document_save": {
         const a = args as Record<string, unknown>;
         if (a["id"]) {
