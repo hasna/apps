@@ -1,7 +1,7 @@
 {
   "name": "@hasna/terminal",
   "version": "4.3.3",
-  "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
+  "description": "Smart terminal wrapper for AI agents and humans \u2014 structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
     "dist/**",
@@ -18,7 +18,8 @@
     "build": "tsc",
     "dev": "tsx src/cli.tsx",
     "start": "node dist/cli.js",
-    "test": "bun test"
+    "test": "bun test",
+    "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
