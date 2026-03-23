@@ -1,15 +1,15 @@
 import { Database } from "bun:sqlite"
 import { join } from "path"
-import { existsSync, mkdirSync } from "fs"
+import { existsSync, mkdirSync, cpSync } from "fs"
 
 let _db: Database | null = null
 
 export function getDbPath(): string {
-  if (process.env["PROMPTS_DB_PATH"]) {
-    return process.env["PROMPTS_DB_PATH"]
-  }
+  // Support env var overrides
+  const envPath = process.env["HASNA_PROMPTS_DB_PATH"] ?? process.env["PROMPTS_DB_PATH"]
+  if (envPath) return envPath
 
-  // Walk up looking for .prompts/prompts.db
+  // Walk up looking for .prompts/prompts.db (project-local scope)
   if (process.env["PROMPTS_DB_SCOPE"] === "project") {
     let dir = process.cwd()
     while (true) {
@@ -23,9 +23,22 @@ export function getDbPath(): string {
     }
   }
 
-  // Fallback: global ~/.prompts/prompts.db
+  // Global: ~/.hasna/prompts/prompts.db (with backward compat from ~/.prompts/)
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~"
-  return join(home, ".prompts", "prompts.db")
+  const newDir = join(home, ".hasna", "prompts")
+  const oldDir = join(home, ".prompts")
+
+  // Auto-migrate from old location if new dir doesn't exist yet
+  if (!existsSync(newDir) && existsSync(oldDir)) {
+    try {
+      mkdirSync(join(home, ".hasna"), { recursive: true })
+      cpSync(oldDir, newDir, { recursive: true })
+    } catch {
+      // Fall through to create new dir
+    }
+  }
+
+  return join(newDir, "prompts.db")
 }
 
 export function getDatabase(): Database {
