@@ -3,6 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { registerCloudTools } from "@hasna/cloud";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
 import { getRun, listRuns, updateRun } from "../db/runs.js";
@@ -2057,6 +2058,10 @@ server.tool(
     }
   },
 );
+
+// ─── Cloud ────────────────────────────────────────────────────────────────────
+
+registerCloudTools(server, "testers");
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
 

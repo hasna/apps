@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -442,6 +443,18 @@ ALTER TABLE personas ADD COLUMN auth_login_path TEXT DEFAULT '/login';
 ALTER TABLE personas ADD COLUMN auth_cookies TEXT;
 ALTER TABLE scenarios ADD COLUMN required_role TEXT;
   `,
+  // Migration: feedback table
+  `
+  CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    message TEXT NOT NULL,
+    email TEXT,
+    category TEXT DEFAULT 'general',
+    version TEXT,
+    machine_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -471,7 +484,7 @@ export function getDatabase(): Database {
     mkdirSync(dir, { recursive: true });
   }
 
-  db = new Database(dbPath);
+  db = new SqliteAdapter(dbPath) as unknown as Database;
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
