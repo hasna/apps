@@ -1,6 +1,6 @@
 {
   "name": "@hasna/prompts",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Reusable prompt library for AI agents \u2014 CLI + MCP server + REST API + web dashboard",
   "type": "module",
   "main": "dist/index.js",
