@@ -1,6 +1,6 @@
 {
   "name": "@hasna/brains",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
@@ -46,6 +46,7 @@
     "cli"
   ],
   "publishConfig": {
+    "registry": "https://registry.npmjs.org",
     "access": "public"
   },
   "repository": {
