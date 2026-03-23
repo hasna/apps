@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import type { CrawlConfig } from "../types/index.js";
+import { getDataDir } from "../db/database.js";
 
-const CONFIG_DIR = join(homedir(), ".open-crawl");
+const CONFIG_DIR = getDataDir();
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 const DEFAULT_CONFIG: CrawlConfig = {

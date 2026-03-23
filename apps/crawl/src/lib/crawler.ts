@@ -112,7 +112,8 @@ async function captureScreenshot(
         viewport: config.screenshotViewport,
       });
       await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
-      const screenshotDir = `${process.env.HOME ?? "/tmp"}/.open-crawl/screenshots/${crawlId}`;
+      const { getDataDir } = await import("../db/database.js");
+      const screenshotDir = `${getDataDir()}/screenshots/${crawlId}`;
       const { mkdirSync } = await import("fs");
       mkdirSync(screenshotDir, { recursive: true });
       const screenshotPath = `${screenshotDir}/${pageId}.png`;

@@ -1,5 +1,5 @@
 import type { Crawl, CreateCrawlInput } from "../types/index";
-import { getDb } from "./database";
+import { getDb, getDataDir } from "./database";
 
 interface CrawlRow {
   id: string;
@@ -173,7 +173,7 @@ export function getGlobalStats(): {
 
   const avgPagesPerCrawl = totalCrawls > 0 ? totalPages / totalCrawls : 0;
 
-  const dbPath = process.env.CRAWL_DB_PATH ?? `${process.env.HOME}/.open-crawl/data.db`;
+  const dbPath = process.env.HASNA_CRAWL_DB_PATH ?? process.env.CRAWL_DB_PATH ?? `${getDataDir()}/data.db`;
   const dbSizeBytes = Bun.file(dbPath).size;
 
   return { totalCrawls, totalPages, totalWords, topDomains, dbSizeBytes, avgPagesPerCrawl };

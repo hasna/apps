@@ -1,17 +1,38 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { join } from "path";
 import { runMigrations } from "./migrations";
 
 let instance: Database | null = null;
 
+export function getDataDir(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "/tmp";
+  const newDir = join(home, ".hasna", "crawl");
+  const oldDir = join(home, ".open-crawl");
+
+  // Auto-migrate old dir to new location
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+    for (const file of readdirSync(oldDir)) {
+      const oldPath = join(oldDir, file);
+      if (statSync(oldPath).isFile()) {
+        copyFileSync(oldPath, join(newDir, file));
+      }
+    }
+  }
+
+  mkdirSync(newDir, { recursive: true });
+  return newDir;
+}
+
 function resolveDbPath(): string {
+  if (Bun.env.HASNA_CRAWL_DB_PATH) {
+    return Bun.env.HASNA_CRAWL_DB_PATH;
+  }
   if (Bun.env.CRAWL_DB_PATH) {
     return Bun.env.CRAWL_DB_PATH;
   }
-  const home = Bun.env.HOME ?? "/tmp";
-  const dir = `${home}/.open-crawl`;
-  mkdirSync(dir, { recursive: true });
-  return `${dir}/data.db`;
+  return join(getDataDir(), "data.db");
 }
 
 export function getDb(): Database {
