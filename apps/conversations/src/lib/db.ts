@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
@@ -337,6 +337,19 @@ export function getDb(): Database {
       END
     `);
   }
+
+  // Feedback table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
 
   return db;
 }
