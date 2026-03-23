@@ -98,6 +98,16 @@ export function updateLastSeen(id: string, db?: Database): void {
   database.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), id]);
 }
 
+export function heartbeatAgent(idOrName: string, db?: Database): Agent | null {
+  const database = db ?? getDatabase();
+  const agent = getAgentByName(idOrName, database);
+  if (!agent) {
+    try { const a = getAgentById(idOrName, database); updateLastSeen(a.id, database); return getAgentById(a.id, database); } catch { return null; }
+  }
+  updateLastSeen(agent.id, database);
+  return getAgentById(agent.id, database);
+}
+
 export function updateAgentApiKeyHash(id: string, keyHash: string, db?: Database): void {
   const database = db ?? getDatabase();
   database.run("UPDATE agents SET api_key_hash = ? WHERE id = ?", [keyHash, id]);

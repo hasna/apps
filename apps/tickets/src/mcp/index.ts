@@ -14,7 +14,7 @@ import { createComment, listComments, updateComment, deleteComment } from "../db
 import { createProject, getProjectById, listProjects, updateProject, getProjectStats } from "../db/projects.ts";
 import { createLabel, listLabels, deleteLabel } from "../db/labels.ts";
 import { createMilestone, listMilestones, closeMilestone } from "../db/milestones.ts";
-import { registerAgent, getAgentByName, listAgents } from "../db/agents.ts";
+import { registerAgent, getAgentByName, listAgents, heartbeatAgent } from "../db/agents.ts";
 import { createRelation, listRelations, deleteRelation } from "../db/relations.ts";
 import { listActivity } from "../db/activity.ts";
 import type { TicketType, TicketStatus, Resolution, Priority, Severity, TicketSource, RelationType } from "../types/index.ts";
@@ -422,6 +422,27 @@ const tools = [
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
+    name: "heartbeat",
+    description: "Update last_seen_at to signal agent is active",
+    inputSchema: {
+      type: "object" as const,
+      properties: { agent_id: { type: "string" } },
+      required: ["agent_id"],
+    },
+  },
+  {
+    name: "set_focus",
+    description: "Set active project context for this agent session",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string" },
+        project_id: { type: "string" },
+      },
+      required: ["agent_id"],
+    },
+  },
+  {
     name: "get_my_tickets",
     description: "Get tickets assigned to a specific agent",
     inputSchema: {
@@ -661,6 +682,13 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return registerAgent({ name: args["name"] as string, type: args["type"] as "human" | "ai_agent" | undefined, email: args["email"] as string | undefined });
     case "get_agent": return getAgentByName(args["name"] as string);
     case "list_agents": return listAgents();
+    case "heartbeat": {
+      const agent = heartbeatAgent(args["agent_id"] as string);
+      if (!agent) throw new Error(`Agent not found: ${args["agent_id"]}`);
+      return { id: agent.id, name: agent.name, last_seen_at: agent.last_seen_at };
+    }
+    case "set_focus":
+      return { ok: true, agent_id: args["agent_id"], project_id: args["project_id"] ?? null };
     case "get_my_tickets":
       return listTickets({ assignee_id: args["agent_id"] as string, status: args["status"] as TicketStatus | undefined });
     case "bulk_create_tickets": {
