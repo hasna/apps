@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { registerCloudTools } from "@hasna/cloud";
 import {
   createTask,
   getTask,
@@ -4628,6 +4629,10 @@ server.resource(
     return { contents: [{ uri: "todos://task-lists", text: JSON.stringify(lists, null, 2), mimeType: "application/json" }] };
   },
 );
+
+// === CLOUD ===
+
+registerCloudTools(server, "todos");
 
 // === START SERVER ===
 
