@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, existsSync, cpSync } from "fs";
+import { SqliteAdapter, ensureFeedbackTable, migrateDotfile } from "@hasna/cloud";
+import { mkdirSync } from "fs";
 import { runMigrations } from "./migrations";
 
 let instance: Database | null = null;
+let _adapter: SqliteAdapter | null = null;
 
 function resolveDbPath(): string {
   // Support env var overrides
@@ -10,19 +12,8 @@ function resolveDbPath(): string {
   if (envPath) return envPath;
 
   const home = Bun.env.HOME ?? "/tmp";
+  migrateDotfile("search");
   const newDir = `${home}/.hasna/search`;
-  const oldDir = `${home}/.open-search`;
-
-  // Auto-migrate from old location if new dir doesn't exist yet
-  if (!existsSync(newDir) && existsSync(oldDir)) {
-    try {
-      mkdirSync(`${home}/.hasna`, { recursive: true });
-      cpSync(oldDir, newDir, { recursive: true });
-    } catch {
-      // Fall through
-    }
-  }
-
   mkdirSync(newDir, { recursive: true });
   return `${newDir}/data.db`;
 }
@@ -31,14 +22,14 @@ export function getDb(): Database {
   if (instance) return instance;
 
   const path = resolveDbPath();
-  const db = new Database(path, { create: true });
+  _adapter = new SqliteAdapter(path);
+  const db = _adapter.raw;
 
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
   runMigrations(db);
+  ensureFeedbackTable(_adapter);
 
   instance = db;
   return instance;
@@ -48,6 +39,7 @@ export function closeDb(): void {
   if (instance) {
     instance.close();
     instance = null;
+    _adapter = null;
   }
 }
 

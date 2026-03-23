@@ -442,4 +442,22 @@ program.action(async (_, cmd) => {
   }
 });
 
+// ── feedback ──────────────────────────────────────────────────────────────────
+
+program
+  .command("feedback <message>")
+  .description("Send feedback about this service")
+  .option("-e, --email <email>", "Contact email")
+  .option("-c, --category <cat>", "Category: bug, feature, general", "general")
+  .action(async (message: string, opts: { email?: string; category?: string }) => {
+    const { getDb } = await import("../db/database.js");
+    const db = getDb();
+    const pkg = require("../../package.json");
+    db.run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      [message, opts.email || null, opts.category || "general", pkg.version]
+    );
+    console.log(chalk.green("✓") + " Feedback saved. Thank you!");
+  });
+
 program.parse();

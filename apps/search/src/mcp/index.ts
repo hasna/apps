@@ -510,6 +510,28 @@ server.tool(
   },
 );
 
+// --- Feedback ---
+
+server.tool(
+  "send_feedback",
+  "Send feedback about this service",
+  {
+    message: z.string().describe("Feedback message"),
+    email: z.string().optional().describe("Contact email (optional)"),
+    category: z.enum(["bug", "feature", "general"]).optional().describe("Feedback category"),
+  },
+  async (params) => {
+    const { getDb } = await import("../db/database.js");
+    const db = getDb();
+    const pkg = require("../../package.json");
+    db.run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      [params.message, params.email || null, params.category || "general", pkg.version]
+    );
+    return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+  }
+);
+
 // --- Start server ---
 const transport = new StdioServerTransport();
 await server.connect(transport);
