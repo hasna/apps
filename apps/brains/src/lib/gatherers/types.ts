@@ -15,5 +15,5 @@ export interface GatherResult {
 export interface GathererOptions {
   limit?: number
   since?: Date
-  outputDir?: string  // where to write JSONL files, default ~/.brains/datasets/
+  outputDir?: string  // where to write JSONL files, default ~/.hasna/brains/datasets/
 }

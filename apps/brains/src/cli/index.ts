@@ -928,14 +928,14 @@ configCmd
 
 configCmd
   .command("set <key> <value>")
-  .description("Set a config value (stored in ~/.brains/config.json)")
+  .description("Set a config value (stored in ~/.hasna/brains/config.json)")
   .action((key: string, value: string) => {
     if (!CONFIG_KEYS.includes(key as ConfigKey)) {
       printError(`Unknown key: ${key}. Valid keys: ${CONFIG_KEYS.join(", ")}`);
       process.exit(1);
     }
     setConfigValue(key as ConfigKey, value);
-    printSuccess(`${key} saved to ~/.brains/config.json`);
+    printSuccess(`${key} saved to ~/.hasna/brains/config.json`);
   });
 
 configCmd
