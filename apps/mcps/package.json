@@ -1,7 +1,7 @@
 {
   "name": "@hasna/mcps",
   "version": "0.0.10",
-  "description": "Meta-MCP registry & CLI \u2014 discover, manage, and proxy MCP servers",
+  "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -35,7 +35,7 @@
     "postinstall": "mkdir -p $HOME/.hasna/mcps/cache 2>/dev/null || true"
   },
   "dependencies": {
-    "@hasna/cloud": "^0.1.0",
+    "@hasna/cloud": "0.1.5",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
