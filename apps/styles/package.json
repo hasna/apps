@@ -1,6 +1,6 @@
 {
   "name": "@hasna/styles",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Style management platform for AI coding agents — profiles, preferences, health checks, and design system enforcement",
   "type": "module",
   "bin": {
@@ -24,7 +24,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external playwright && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun --external playwright && bun build ./src/index.ts --outdir ./dist --target bun --external playwright && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external playwright && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun --external playwright --external ink --external react --external react-devtools-core && bun build ./src/index.ts --outdir ./dist --target bun --external playwright && (tsc --emitDeclarationOnly --declaration --outDir dist || true) && sed -i '' '1s|^// @bun|#!/usr/bin/env bun\\n// @bun|' ./bin/index.js ./bin/mcp.js 2>/dev/null || true",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
