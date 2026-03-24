@@ -284,7 +284,7 @@ export function seedBuiltinRules(): void {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
-  const insertAll = db.transaction(() => {
+  db.transaction(() => {
     const now = new Date().toISOString();
     for (const rule of builtinRules) {
       insertStmt.run(
@@ -302,6 +302,4 @@ export function seedBuiltinRules(): void {
       );
     }
   });
-
-  insertAll();
 }

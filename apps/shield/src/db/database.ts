@@ -90,7 +90,7 @@ function runMigrations(db: Database): void {
     db.transaction(() => {
       db.exec(migration.sql);
       db.prepare("INSERT INTO _migrations (name) VALUES (?)").run(migration.name);
-    })();
+    });
   }
 }
 
