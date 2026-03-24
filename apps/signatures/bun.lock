@@ -6,7 +6,7 @@
       "name": "@hasna/signatures",
       "dependencies": {
         "@hasna/attachments": "latest",
-        "@hasna/cloud": "^0.1.0",
+        "@hasna/cloud": "0.1.5",
         "@modelcontextprotocol/sdk": "^1.0.0",
         "chalk": "^5.3.0",
         "commander": "^12.0.0",
@@ -113,7 +113,7 @@
 
     "@hasna/attachments": ["@hasna/attachments@1.0.16", "", { "dependencies": { "@aws-sdk/client-s3": "^3.1007.0", "@aws-sdk/s3-request-presigner": "^3.1007.0", "@modelcontextprotocol/sdk": "^1.27.1", "@types/mime-types": "^3.0.1", "commander": "^14.0.3", "date-fns": "^4.1.0", "hono": "^4.12.7", "mime-types": "^3.0.2", "nanoid": "^5.1.6" }, "bin": { "attachments": "dist/cli/index.js", "attachments-mcp": "dist/mcp/server.js" } }, "sha512-7BLCZmiOTsTrZV6Lk+5TQQnXA9LFXox5Kwozo1hJnEPFK868Kn9b9fgDr8D6uWRVkDHdp6Un8tAPczLHpSqZ2Q=="],
 
-    "@hasna/cloud": ["@hasna/cloud@0.1.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-yyKwMW0eXMlE0RVwoxvEmbdpmPvlBT/eqj1whFv4MeLtfoQZQD2rzpApkhFmAt7UGBCQcv+9be4CBj2HVPUMOA=="],
+    "@hasna/cloud": ["@hasna/cloud@0.1.5", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-B82jy53QC7xphchffDVZc7gw9OLkcX2rMnmytTQ6FZEeHgG/ySgfM3Om07OOl72dc8ZUkqOpcK+2OYBUYkFR/A=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.11", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g=="],
 
