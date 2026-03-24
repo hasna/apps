@@ -1,7 +1,7 @@
 {
   "name": "@hasna/terminal",
   "version": "4.3.4",
-  "description": "Smart terminal wrapper for AI agents and humans \u2014 structured output, token compression, MCP server, natural language",
+  "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
     "dist/**",
@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@hasna/cloud": "^0.1.0",
+    "@hasna/cloud": "0.1.5",
     "@hasna/mementos": "^0.10.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@typescript/vfs": "^1.6.4",
