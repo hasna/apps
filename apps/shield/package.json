@@ -1,6 +1,6 @@
 {
   "name": "@hasna/security",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
@@ -38,7 +38,7 @@
     "postinstall": "mkdir -p $HOME/.hasna/security 2>/dev/null || true"
   },
   "dependencies": {
-    "@hasna/cloud": "^0.1.0",
+    "@hasna/cloud": "0.1.5",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.4.1",
@@ -57,6 +57,7 @@
     "typescript": "^5.8.3"
   },
   "files": [
+    "bin",
     "dist",
     "dashboard/dist",
     "README.md",
