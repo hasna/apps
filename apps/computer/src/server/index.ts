@@ -2,6 +2,8 @@
 import { runTask } from "../agent/loop.js";
 import { captureScreenshot } from "../drivers/mac/screenshot.js";
 import { executeAction } from "../drivers/mac/input.js";
+import { checkAction } from "../agent/safety.js";
+import { loadConfig } from "../lib/config.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
 import type { Provider, DriverAction } from "../types/index.js";
 
@@ -50,9 +52,14 @@ const server = Bun.serve({
         );
       }
 
-      // POST /action — execute a single action
+      // POST /action — execute a single action (with safety check)
       if (method === "POST" && path === "/action") {
         const action = (await req.json()) as DriverAction;
+        const config = loadConfig();
+        const safety = checkAction(action, config.safety);
+        if (!safety.allowed) {
+          return Response.json({ error: `Blocked: ${safety.reason}` }, { status: 403, headers: corsHeaders });
+        }
         const result = await executeAction(action);
         return Response.json(result, { headers: corsHeaders });
       }
