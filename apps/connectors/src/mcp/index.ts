@@ -29,6 +29,7 @@ import {
 import { registerAgent, listAgents, isAgentConflict, heartbeat as dbHeartbeat, setFocus as dbSetFocus } from "../db/agents.js";
 import { checkRateBudget, getRateBudget, isRateExceeded } from "../db/rate.js";
 import { maybeStrip } from "../lib/strip.js";
+import { registerCloudTools } from "@hasna/cloud";
 import pkg from "../../package.json" with { type: "json" };
 
 // Load versions at startup
@@ -981,6 +982,7 @@ server.registerTool(
 
 async function main() {
   const transport = new StdioServerTransport();
+  registerCloudTools(server, "connectors");
   await server.connect(transport);
 }
 
