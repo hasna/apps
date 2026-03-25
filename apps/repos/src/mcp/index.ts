@@ -19,7 +19,7 @@ import {
 } from "../db/repos.js";
 import { scanRepos } from "../lib/scanner.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
-import { buildGraph, queryNode, queryRelated, findPath, getDeps, getCrossOrgAuthors, getGraphStats } from "../lib/graph.js";
+import { buildGraph, queryNode, queryRelated, findPath, getDeps, getGraphStats } from "../lib/graph.js";
 import { getDb } from "../db/database.js";
 
 const server = new McpServer({
