@@ -18,6 +18,8 @@
   },
   "files": [
     "dist",
+    "helpers/scroll",
+    "helpers/scroll.swift",
     "dashboard/dist",
     "LICENSE",
     "README.md"

@@ -1,8 +1,11 @@
+import { join, dirname } from "path";
+import { existsSync } from "fs";
+import { fileURLToPath } from "url";
 import type { DriverAction, ActionResult, Screenshot } from "../../types/index.js";
 import { captureScreenshot } from "./screenshot.js";
 
 /**
- * Execute a mouse/keyboard action using cliclick + osascript on macOS.
+ * Execute a mouse/keyboard action using cliclick + Swift helpers on macOS.
  */
 export async function executeAction(action: DriverAction): Promise<ActionResult> {
   const start = Date.now();
@@ -56,27 +59,18 @@ export async function executeAction(action: DriverAction): Promise<ActionResult>
       }
 
       case "scroll": {
-        // cliclick doesn't support scroll — use AppleScript
-        const scrollScript = `
-          tell application "System Events"
-            set mouseLocation to {${action.point.x}, ${action.point.y}}
-            ${action.deltaY !== 0 ? `do shell script "cliclick m:${action.point.x},${action.point.y}"` : ""}
-          end tell
-        `;
-        // Use osascript for scroll events via CGEvent
-        const scrollAmount = Math.round(action.deltaY / 3); // normalize
-        await runOsascript(`
-          do shell script "cliclick m:${action.point.x},${action.point.y}"
-        `);
-        // Use python for scroll since cliclick doesn't support it natively
-        await runShell("osascript", "-e", `
-          tell application "System Events"
-            scroll area 1 by ${scrollAmount}
-          end tell
-        `).catch(() => {
-          // Fallback: use cliclick move + AppleScript key events for scroll
-          return runCliclick(`m:${action.point.x},${action.point.y}`);
-        });
+        // Use compiled Swift CGEvent helper for native scroll wheel events
+        const scrollHelperPath = getScrollHelperPath();
+        const args = [
+          scrollHelperPath,
+          String(action.point.x),
+          String(action.point.y),
+          String(action.deltaY),
+        ];
+        if (action.deltaX !== 0) {
+          args.push(String(action.deltaX));
+        }
+        await runShell(...args);
         await sleep(100);
         const screenshot = await captureScreenshot();
         return { success: true, screenshot, duration_ms: Date.now() - start };
@@ -207,4 +201,31 @@ function mapKeys(keys: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Resolve path to the compiled Swift scroll helper binary */
+let _scrollHelperPath: string | null = null;
+function getScrollHelperPath(): string {
+  if (_scrollHelperPath) return _scrollHelperPath;
+
+  // Check multiple locations: helpers/ relative to this file, or in package
+  const candidates = [
+    // Development: helpers/ in project root
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "helpers", "scroll"),
+    // Installed: helpers/ relative to dist/
+    join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "scroll"),
+    // Global install
+    join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "scroll"),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      _scrollHelperPath = candidate;
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    "Scroll helper not found. Run `swiftc helpers/scroll.swift -o helpers/scroll` from the project root."
+  );
 }
