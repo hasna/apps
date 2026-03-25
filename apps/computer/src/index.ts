@@ -43,6 +43,9 @@ export type { SafetyCheckResult } from "./agent/safety.js";
 export { loadConfig, saveConfig, getConfigValue, setConfigValue, getConfigPath, DEFAULT_CONFIG } from "./lib/config.js";
 export type { ComputerConfig } from "./lib/config.js";
 
+// Pricing
+export { calculateCost, formatCost, stepCost, listPricing } from "./lib/pricing.js";
+
 // Utilities
 export { scaleScreenshot, getScaledSize, RECOMMENDED_WIDTHS } from "./lib/scale.js";
 

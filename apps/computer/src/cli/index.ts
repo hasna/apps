@@ -5,6 +5,7 @@ import { runTask } from "../agent/loop.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
+import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
 import type { Provider } from "../types/index.js";
 
 const program = new Command();
@@ -51,10 +52,14 @@ program
         const actionDesc = response.action
           ? `${response.action.type}${response.action.type === "click" ? ` (${(response.action as any).point.x},${(response.action as any).point.y})` : ""}`
           : "done";
+        const cost = response.usage
+          ? chalk.dim(` ${stepCost(opts.model ?? cfg.model ?? "claude-sonnet-4-5", response.usage.input, response.usage.output)}`)
+          : "";
         console.log(
           chalk.dim(`[${String(step + 1).padStart(3)}]`) +
           ` ${status} ${chalk.yellow(actionDesc)}` +
-          chalk.dim(` (${result.duration_ms}ms)`)
+          chalk.dim(` (${result.duration_ms}ms)`) +
+          cost
         );
         if (response.reasoning) {
           const short = response.reasoning.slice(0, 120).replace(/\n/g, " ");
@@ -63,6 +68,7 @@ program
       },
       onDone: (session) => {
         console.log();
+        const totalCost = formatCost(calculateCost(session.model, session.total_tokens_in, session.total_tokens_out));
         if (session.status === "completed" && !session.error) {
           console.log(chalk.green.bold("Task completed successfully."));
         } else if (session.status === "completed" && session.error) {
@@ -72,7 +78,7 @@ program
         }
         console.log(
           chalk.dim(
-            `Steps: ${session.steps} | Tokens: ${session.total_tokens_in + session.total_tokens_out} | Duration: ${(session.total_duration_ms / 1000).toFixed(1)}s`
+            `Steps: ${session.steps} | Tokens: ${(session.total_tokens_in + session.total_tokens_out).toLocaleString()} | Cost: ${totalCost} | Duration: ${(session.total_duration_ms / 1000).toFixed(1)}s`
           )
         );
         console.log(chalk.dim(`Session: ${session.id}`));
