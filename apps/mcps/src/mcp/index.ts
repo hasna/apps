@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
@@ -554,6 +555,7 @@ server.tool("list_agents", "List all registered agents.", {}, async () => {
 
 export async function startMcpServer() {
   const transport = new StdioServerTransport();
+  registerCloudTools(server, "mcps");
   await server.connect(transport);
 }
 
