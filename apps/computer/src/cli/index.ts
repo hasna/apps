@@ -7,6 +7,7 @@ import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screensh
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
 import { registerCloudCommands } from "@hasna/cloud";
+import { renderInlineImage, supportsInlineImages } from "../lib/terminal-image.js";
 import type { Provider } from "../types/index.js";
 
 const program = new Command();
@@ -29,6 +30,7 @@ program
   .option("--system-prompt <prompt>", "Custom system prompt")
   .option("--max-width <px>", "Max screenshot width for AI model (default: 1280)", "1280")
   .option("--dry-run", "Plan actions without executing them", false)
+  .option("--no-preview", "Disable inline screenshot preview in terminal")
   .action(async (task: string, opts: any) => {
     const cfg = loadConfig();
     const provider = opts.provider ?? cfg.provider;
@@ -67,6 +69,11 @@ program
         if (response.reasoning) {
           const short = response.reasoning.slice(0, 120).replace(/\n/g, " ");
           console.log(chalk.dim(`      ${short}${response.reasoning.length > 120 ? "..." : ""}`));
+        }
+        // Inline screenshot preview (iTerm2/Kitty)
+        if (opts.preview !== false && result.screenshot && supportsInlineImages()) {
+          const img = renderInlineImage(result.screenshot.base64, { width: 40, height: 12 });
+          if (img) process.stdout.write(img);
         }
       },
       onDone: (session) => {
