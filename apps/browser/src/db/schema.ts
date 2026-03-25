@@ -1,4 +1,5 @@
 import { SqliteAdapter as Database } from "@hasna/cloud";
+import type { TypedDb } from "../types/cloud-augment.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -34,10 +35,10 @@ export function getDataDir(): string {
   return newDir;
 }
 
-let _db: Database | null = null;
+let _db: TypedDb | null = null;
 let _dbPath: string | null = null;
 
-export function getDatabase(path?: string): Database {
+export function getDatabase(path?: string): TypedDb {
   const resolvedPath = path ?? process.env["BROWSER_DB_PATH"] ?? join(getDataDir(), "browser.db");
   // Re-create if path changed (e.g. test isolation)
   if (_db && _dbPath === resolvedPath) return _db;
@@ -45,7 +46,7 @@ export function getDatabase(path?: string): Database {
 
   mkdirSync(join(resolvedPath, ".."), { recursive: true });
 
-  _db = new Database(resolvedPath);
+  _db = new Database(resolvedPath) as unknown as TypedDb;
   _dbPath = resolvedPath;
   _db.exec("PRAGMA journal_mode=WAL;");
   _db.exec("PRAGMA foreign_keys=ON;");
@@ -60,7 +61,7 @@ export function resetDatabase(): void {
   _dbPath = null;
 }
 
-function runMigrations(db: Database): void {
+function runMigrations(db: TypedDb): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version   INTEGER PRIMARY KEY,
