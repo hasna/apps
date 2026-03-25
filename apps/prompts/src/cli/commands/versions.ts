@@ -1,6 +1,6 @@
 import { Command } from "commander"
 import chalk from "chalk"
-import { getPrompt, listPrompts } from "../../db/prompts.js"
+import { getPrompt } from "../../db/prompts.js"
 import { listVersions, restoreVersion } from "../../db/versions.js"
 import { diffTexts } from "../../lib/diff.js"
 import { isJson, output, handleError } from "../utils.js"
