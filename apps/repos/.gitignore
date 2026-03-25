@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store
+*.tgz
+.secrets/
+coverage/
+.git-local/
