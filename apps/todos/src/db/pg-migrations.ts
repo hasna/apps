@@ -593,4 +593,26 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (37) ON CONFLICT DO NOTHING;
   `,
+  // Migration 38: Template variables — typed variable definitions with defaults
+  `
+  ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS variables TEXT DEFAULT '[]';
+  INSERT INTO _migrations (id) VALUES (38) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 39: Template features — conditional tasks, composition, versioning
+  `
+  ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS condition TEXT;
+  ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS include_template_id TEXT;
+  ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+  CREATE TABLE IF NOT EXISTS template_versions (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    snapshot TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_template_versions_template ON template_versions(template_id);
+
+  INSERT INTO _migrations (id) VALUES (39) ON CONFLICT DO NOTHING;
+  `,
 ];

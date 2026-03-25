@@ -514,6 +514,10 @@ export interface Webhook {
   events: string[];
   secret: string | null;
   active: boolean;
+  project_id: string | null;
+  task_list_id: string | null;
+  agent_id: string | null;
+  task_id: string | null;
   created_at: string;
 }
 
@@ -521,6 +525,18 @@ export interface CreateWebhookInput {
   url: string;
   events?: string[];
   secret?: string;
+  project_id?: string;
+  task_list_id?: string;
+  agent_id?: string;
+  task_id?: string;
+}
+
+// Template variable definition
+export interface TemplateVariable {
+  name: string;        // e.g. "name"
+  required: boolean;   // must be provided
+  default?: string;    // fallback value
+  description?: string; // help text
 }
 
 // Task Template
@@ -531,6 +547,8 @@ export interface TaskTemplate {
   description: string | null;
   priority: TaskPriority;
   tags: string[];
+  variables: TemplateVariable[];
+  version: number;
   project_id: string | null;
   plan_id: string | null;
   metadata: Record<string, unknown>;
@@ -543,6 +561,7 @@ export interface CreateTemplateInput {
   description?: string;
   priority?: TaskPriority;
   tags?: string[];
+  variables?: TemplateVariable[];
   project_id?: string;
   plan_id?: string;
   metadata?: Record<string, unknown>;
@@ -559,6 +578,8 @@ export interface TemplateTask {
   priority: TaskPriority;
   tags: string[];
   task_type: string | null;
+  condition: string | null;
+  include_template_id: string | null;
   depends_on_positions: number[];
   metadata: Record<string, unknown>;
   created_at: string;
@@ -570,12 +591,23 @@ export interface TemplateTaskInput {
   priority?: TaskPriority;
   tags?: string[];
   task_type?: string;
+  condition?: string;
+  include_template_id?: string;
   depends_on?: number[];  // position indices this task depends on
   metadata?: Record<string, unknown>;
 }
 
 export interface TemplateWithTasks extends TaskTemplate {
   tasks: TemplateTask[];
+}
+
+// Template version — historical snapshot of a template
+export interface TemplateVersion {
+  id: string;
+  template_id: string;
+  version: number;
+  snapshot: string;
+  created_at: string;
 }
 
 // Version conflict error

@@ -139,10 +139,16 @@ export {
 } from "./lib/model-config.js";
 
 // Webhooks
-export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
+export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook, listDeliveries } from "./db/webhooks.js";
+export type { WebhookDelivery } from "./db/webhooks.js";
 
 // Templates
-export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate } from "./db/templates.js";
+export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
+export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
+
+// Built-in Templates
+export { initBuiltinTemplates, BUILTIN_TEMPLATES } from "./db/builtin-templates.js";
+export type { BuiltinTemplate } from "./db/builtin-templates.js";
 
 // Checklists
 export {
@@ -286,6 +292,8 @@ export type {
   TemplateTask,
   TemplateTaskInput,
   TemplateWithTasks,
+  TemplateVariable,
+  TemplateVersion,
   Org,
   CreateOrgInput,
 } from "./types/index.js";

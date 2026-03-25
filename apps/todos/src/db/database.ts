@@ -678,6 +678,28 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (37);
   `,
+  // Migration 38: Template variables — typed variable definitions with defaults
+  `
+  ALTER TABLE task_templates ADD COLUMN variables TEXT DEFAULT '[]';
+  INSERT OR IGNORE INTO _migrations (id) VALUES (38);
+  `,
+  // Migration 39: Template features — conditional tasks, composition, versioning
+  `
+  ALTER TABLE template_tasks ADD COLUMN condition TEXT;
+  ALTER TABLE template_tasks ADD COLUMN include_template_id TEXT;
+  ALTER TABLE task_templates ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+
+  CREATE TABLE IF NOT EXISTS template_versions (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    snapshot TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_template_versions_template ON template_versions(template_id);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (39);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -937,6 +959,43 @@ function ensureSchema(db: Database): void {
   // Plans
   ensureColumn("plans", "task_list_id", "TEXT");
   ensureColumn("plans", "agent_id", "TEXT");
+
+  // Templates
+  ensureColumn("task_templates", "variables", "TEXT DEFAULT '[]'");
+  ensureColumn("task_templates", "version", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn("template_tasks", "condition", "TEXT");
+  ensureColumn("template_tasks", "include_template_id", "TEXT");
+
+  ensureTable("template_versions", `
+    CREATE TABLE template_versions (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      snapshot TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_template_versions_template ON template_versions(template_id)");
+
+  // Webhooks — scoped subscriptions
+  ensureColumn("webhooks", "project_id", "TEXT");
+  ensureColumn("webhooks", "task_list_id", "TEXT");
+  ensureColumn("webhooks", "agent_id", "TEXT");
+  ensureColumn("webhooks", "task_id", "TEXT");
+
+  // Webhook delivery log
+  ensureTable("webhook_deliveries", `
+    CREATE TABLE webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      event TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status_code INTEGER,
+      response TEXT,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_event ON webhook_deliveries(event)");
 
   // Comments
   ensureColumn("task_comments", "type", "TEXT DEFAULT 'comment'");

@@ -109,6 +109,7 @@ const STANDARD_EXCLUDED = new Set([
   "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
   "create_template", "list_templates", "create_task_from_template", "delete_template", "update_template",
+  "init_templates", "preview_template", "export_template", "import_template", "template_history",
   "approve_task",
 ]);
 
@@ -2183,17 +2184,22 @@ server.tool(
 if (shouldRegisterTool("create_webhook")) {
 server.tool(
   "create_webhook",
-  "Register a webhook for task change events.",
+  "Register a webhook for task change events. Optionally scope to a project, task list, agent, or specific task.",
   {
     url: z.string(),
-    events: z.array(z.string()).optional(),
-    secret: z.string().optional(),
+    events: z.array(z.string()).optional().describe("Event types to subscribe to (empty = all). E.g. task.created, task.completed, task.failed, task.started, task.assigned, task.status_changed"),
+    secret: z.string().optional().describe("HMAC secret for signing webhook payloads"),
+    project_id: z.string().optional().describe("Only fire for events in this project"),
+    task_list_id: z.string().optional().describe("Only fire for events in this task list"),
+    agent_id: z.string().optional().describe("Only fire for events involving this agent"),
+    task_id: z.string().optional().describe("Only fire for events on this specific task"),
   },
   async (params) => {
     try {
       const { createWebhook } = await import("../db/webhooks.js");
       const wh = createWebhook(params);
-      return { content: [{ type: "text" as const, text: `Webhook created: ${wh.id.slice(0, 8)} | ${wh.url} | events: ${wh.events.length === 0 ? "all" : wh.events.join(",")}` }] };
+      const scope = [wh.project_id && `project:${wh.project_id}`, wh.task_list_id && `list:${wh.task_list_id}`, wh.agent_id && `agent:${wh.agent_id}`, wh.task_id && `task:${wh.task_id}`].filter(Boolean).join(", ");
+      return { content: [{ type: "text" as const, text: `Webhook created: ${wh.id.slice(0, 8)} | ${wh.url} | events: ${wh.events.length === 0 ? "all" : wh.events.join(",")}${scope ? ` | scope: ${scope}` : ""}` }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
@@ -2241,7 +2247,7 @@ server.tool(
 if (shouldRegisterTool("create_template")) {
 server.tool(
   "create_template",
-  "Create a reusable task template. Optionally include a tasks array to define a multi-task template with dependencies and variable placeholders ({name} syntax).",
+  "Create a reusable task template. Optionally include a tasks array to define a multi-task template with dependencies and variable placeholders ({name} syntax). Use variables to define typed variable definitions with defaults and required flags.",
   {
     name: z.string(),
     title_pattern: z.string(),
@@ -2250,6 +2256,12 @@ server.tool(
     tags: z.array(z.string()).optional(),
     project_id: z.string().optional(),
     plan_id: z.string().optional(),
+    variables: z.array(z.object({
+      name: z.string().describe("Variable name (used as {name} in patterns)"),
+      required: z.boolean().describe("Whether this variable must be provided"),
+      default: z.string().optional().describe("Default value if not provided"),
+      description: z.string().optional().describe("Help text for the variable"),
+    })).optional().describe("Typed variable definitions with defaults and required flags"),
     tasks: z.array(z.object({
       title_pattern: z.string().describe("Title pattern with optional {variable} placeholders"),
       description: z.string().optional(),
@@ -2284,7 +2296,10 @@ server.tool(
       const { listTemplates } = await import("../db/templates.js");
       const templates = listTemplates();
       if (templates.length === 0) return { content: [{ type: "text" as const, text: "No templates." }] };
-      const text = templates.map(t => `${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}" | ${t.priority}`).join("\n");
+      const text = templates.map(t => {
+        const vars = t.variables.length > 0 ? ` | vars: ${t.variables.map(v => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}` : "";
+        return `${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}" | ${t.priority}${vars}`;
+      }).join("\n");
       return { content: [{ type: "text" as const, text: `${templates.length} template(s):\n${text}` }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
@@ -2315,9 +2330,10 @@ server.tool(
       const templateWithTasks = getTemplateWithTasks(resolvedTemplateId);
       if (templateWithTasks && templateWithTasks.tasks.length > 0) {
         // Multi-task template — use tasksFromTemplate
+        const effectiveProjectId = params.project_id || templateWithTasks.project_id || undefined;
         const tasks = tasksFromTemplate(
           resolvedTemplateId,
-          params.project_id || templateWithTasks.project_id || "",
+          effectiveProjectId,
           params.variables,
           params.task_list_id,
         );
@@ -2377,6 +2393,115 @@ server.tool(
       const t = updateTemplate(resolvedId, updates);
       if (!t) return { content: [{ type: "text" as const, text: `Template not found: ${id}` }], isError: true };
       return { content: [{ type: "text" as const, text: `Template updated: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}" | ${t.priority}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// init_templates
+if (shouldRegisterTool("init_templates")) {
+server.tool(
+  "init_templates",
+  "Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit). Skips templates that already exist by name.",
+  {},
+  async () => {
+    try {
+      const { initBuiltinTemplates } = await import("../db/builtin-templates.js");
+      const result = initBuiltinTemplates();
+      if (result.created === 0) {
+        return { content: [{ type: "text" as const, text: `All ${result.skipped} built-in template(s) already exist.` }] };
+      }
+      return { content: [{ type: "text" as const, text: `Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// preview_template
+if (shouldRegisterTool("preview_template")) {
+server.tool(
+  "preview_template",
+  "Preview a template without creating tasks. Shows resolved titles (variables substituted), dependencies, and priorities.",
+  {
+    template_id: z.string(),
+    variables: z.record(z.string()).optional().describe("Variable substitution map for {name} placeholders"),
+  },
+  async (params) => {
+    try {
+      const { previewTemplate } = await import("../db/templates.js");
+      const resolvedId = resolveId(params.template_id, "task_templates");
+      const preview = previewTemplate(resolvedId, params.variables);
+      const lines = preview.tasks.map(t => {
+        const deps = t.depends_on_positions.length > 0 ? ` (after: ${t.depends_on_positions.join(", ")})` : "";
+        return `  [${t.position}] ${t.priority} | ${t.title}${deps}`;
+      });
+      const varsInfo = preview.variables.length > 0
+        ? `\nVariables: ${preview.variables.map(v => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`
+        : "";
+      const resolvedVars = Object.keys(preview.resolved_variables).length > 0
+        ? `\nResolved: ${Object.entries(preview.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`
+        : "";
+      return { content: [{ type: "text" as const, text: `Preview: ${preview.template_name} (${preview.tasks.length} tasks)${varsInfo}${resolvedVars}\n${lines.join("\n")}` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// export_template
+if (shouldRegisterTool("export_template")) {
+server.tool(
+  "export_template",
+  "Export a template as a full JSON object (template + tasks + variables). Useful for sharing or backup.",
+  { template_id: z.string() },
+  async ({ template_id }) => {
+    try {
+      const { exportTemplate } = await import("../db/templates.js");
+      const resolvedId = resolveId(template_id, "task_templates");
+      const json = exportTemplate(resolvedId);
+      return { content: [{ type: "text" as const, text: JSON.stringify(json, null, 2) }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// import_template
+if (shouldRegisterTool("import_template")) {
+server.tool(
+  "import_template",
+  "Import a template from a JSON string (as returned by export_template). Creates new template with new IDs.",
+  { json: z.string().describe("JSON string of the template export") },
+  async ({ json }) => {
+    try {
+      const { importTemplate } = await import("../db/templates.js");
+      const parsed = JSON.parse(json);
+      const t = importTemplate(parsed);
+      return { content: [{ type: "text" as const, text: `Template imported: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}"` }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// template_history
+if (shouldRegisterTool("template_history")) {
+server.tool(
+  "template_history",
+  "Show version history of a template. Each update creates a snapshot of the previous state.",
+  { template_id: z.string() },
+  async ({ template_id }) => {
+    try {
+      const { listTemplateVersions, getTemplate } = await import("../db/templates.js");
+      const resolvedId = resolveId(template_id, "task_templates");
+      const template = getTemplate(resolvedId);
+      if (!template) return { content: [{ type: "text" as const, text: `Template not found: ${template_id}` }], isError: true };
+      const versions = listTemplateVersions(resolvedId);
+      if (versions.length === 0) {
+        return { content: [{ type: "text" as const, text: `${template.name} v${template.version} — no previous versions.` }] };
+      }
+      const lines = versions.map(v => {
+        const snap = JSON.parse(v.snapshot);
+        return `v${v.version} | ${v.created_at} | ${snap.name} | "${snap.title_pattern}"`;
+      });
+      return { content: [{ type: "text" as const, text: `${template.name} — current: v${template.version}\n${lines.join("\n")}` }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
@@ -3579,6 +3704,7 @@ server.tool(
       "get_task_history","get_recent_activity","recap","task_context","standup","burndown","blame","import_github_issue",
       "create_webhook","list_webhooks","delete_webhook",
       "create_template","list_templates","create_task_from_template","delete_template","update_template",
+      "init_templates","preview_template","export_template","import_template","template_history",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health","bootstrap",
       "decompose_task",
@@ -3700,7 +3826,12 @@ server.tool(
       list_templates: "List all task templates. No params.",
       create_task_from_template: "Create task(s) from a template. Multi-task templates create all tasks with dependencies wired. Supports {variable} substitution.\n  Params: template_id(string, req), title(string — single-task override), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string), task_list_id(string), variables(Record<string,string> — {name} substitution)\n  Example single: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}\n  Example multi: {template_id: 'a1b2c3d4', project_id: 'proj1', variables: {name: 'OAuth login'}}",
       delete_template: "Delete a task template.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
-      update_template: "Update a task template's name, title pattern, or other fields.\n  Params: id(string, req), name(string), title_pattern(string), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string)\n  Example: {id: 'a1b2c3d4', name: 'Renamed Template', priority: 'critical'}",
+      update_template: "Update a task template's name, title pattern, or other fields.\n  Params: id(string, req), name(string), title_pattern(string), description(string), priority(low|medium|high|critical), tags(string[]), variables(TemplateVariable[]), project_id(string), plan_id(string)\n  Example: {id: 'a1b2c3d4', name: 'Renamed Template', priority: 'critical'}",
+      init_templates: "Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit). Skips already existing. No params.",
+      preview_template: "Preview a template without creating tasks. Shows resolved titles, deps, priorities.\n  Params: template_id(string, req), variables(Record<string,string>)\n  Example: {template_id: 'a1b2c3d4', variables: {name: 'invoices'}}",
+      export_template: "Export a template as JSON (template + tasks + variables). Use for sharing or backup.\n  Params: template_id(string, req)\n  Example: {template_id: 'a1b2c3d4'}",
+      import_template: "Import a template from a JSON string (as returned by export_template). Creates new template with new IDs.\n  Params: json(string, req)\n  Example: {json: '{\"name\":\"My Template\",...}'}",
+      template_history: "Show version history of a template. Each update creates a snapshot of the previous state.\n  Params: template_id(string, req)\n  Example: {template_id: 'a1b2c3d4'}",
 
       // Active work
       get_active_work: "See all in-progress tasks and who is working on them.\n  Params: project_id(string, optional), task_list_id(string, optional)\n  Example: {project_id: 'a1b2c3d4'}",

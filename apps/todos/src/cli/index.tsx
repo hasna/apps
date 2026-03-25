@@ -1083,8 +1083,124 @@ program
     if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
     console.log(chalk.bold(`${templates.length} template(s):\n`));
     for (const t of templates) {
-      console.log(`  ${chalk.dim(t.id.slice(0, 8))} ${chalk.bold(t.name)} ${chalk.cyan(`"${t.title_pattern}"`)} ${chalk.yellow(t.priority)}`);
+      const vars = t.variables && t.variables.length > 0 ? ` ${chalk.dim(`(${t.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')})`)}` : "";
+      console.log(`  ${chalk.dim(t.id.slice(0, 8))} ${chalk.bold(t.name)} ${chalk.cyan(`"${t.title_pattern}"`)} ${chalk.yellow(t.priority)}${vars}`);
     }
+  });
+
+// template init — initialize built-in starter templates
+program
+  .command("template-init")
+  .alias("templates-init")
+  .description("Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit)")
+  .action(() => {
+    const globalOpts = program.opts();
+    const { initBuiltinTemplates } = require("../db/builtin-templates.js");
+    const result = initBuiltinTemplates();
+    if (globalOpts.json) { output(result, true); return; }
+    if (result.created === 0) {
+      console.log(chalk.dim(`All ${result.skipped} built-in template(s) already exist.`));
+    } else {
+      console.log(chalk.green(`Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.`));
+    }
+  });
+
+// template preview — preview template without creating tasks
+program
+  .command("template-preview <id>")
+  .alias("templates-preview")
+  .description("Preview a template without creating tasks — shows resolved titles, deps, and priorities")
+  .option("--var <vars...>", "Variable substitution in key=value format (e.g. --var name=invoices)")
+  .action((id: string, opts: { var?: string[] }) => {
+    const globalOpts = program.opts();
+    const { previewTemplate } = require("../db/templates.js");
+
+    // Parse --var key=value pairs
+    const variables: Record<string, string> = {};
+    if (opts.var) {
+      for (const v of opts.var) {
+        const eq = v.indexOf("=");
+        if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+        variables[v.slice(0, eq)] = v.slice(eq + 1);
+      }
+    }
+
+    try {
+      const preview = previewTemplate(id, Object.keys(variables).length > 0 ? variables : undefined);
+      if (globalOpts.json) { output(preview, true); return; }
+
+      console.log(chalk.bold(`Preview: ${preview.template_name} (${preview.tasks.length} tasks)`));
+      if (preview.description) console.log(chalk.dim(`  ${preview.description}`));
+      if (preview.variables.length > 0) {
+        console.log(chalk.dim(`  Variables: ${preview.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`));
+      }
+      if (Object.keys(preview.resolved_variables).length > 0) {
+        console.log(chalk.dim(`  Resolved: ${Object.entries(preview.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`));
+      }
+      console.log();
+      for (const t of preview.tasks) {
+        const deps = t.depends_on_positions.length > 0 ? chalk.dim(` (after: ${t.depends_on_positions.join(", ")})`) : "";
+        console.log(`  ${chalk.dim(`[${t.position}]`)} ${chalk.yellow(t.priority)} | ${t.title}${deps}`);
+      }
+    } catch (e) { handleError(e); }
+  });
+
+// template export — export a template as JSON
+program
+  .command("template-export <id>")
+  .alias("templates-export")
+  .description("Export a template as JSON to stdout")
+  .action((id: string) => {
+    const { exportTemplate } = require("../db/templates.js");
+    try {
+      const json = exportTemplate(id);
+      console.log(JSON.stringify(json, null, 2));
+    } catch (e) { handleError(e); }
+  });
+
+// template import — import a template from JSON
+program
+  .command("template-import")
+  .alias("templates-import")
+  .description("Import a template from a JSON file")
+  .option("--file <path>", "Path to template JSON file")
+  .action((opts: { file?: string }) => {
+    const globalOpts = program.opts();
+    const { importTemplate } = require("../db/templates.js");
+    const { readFileSync } = require("fs");
+    try {
+      if (!opts.file) { console.error(chalk.red("--file is required")); process.exit(1); }
+      const content = readFileSync(opts.file, "utf-8");
+      const json = JSON.parse(content);
+      const template = importTemplate(json);
+      if (globalOpts.json) { output(template, true); }
+      else { console.log(chalk.green(`Template imported: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+    } catch (e) { handleError(e); }
+  });
+
+// template history — show version history of a template
+program
+  .command("template-history <id>")
+  .alias("templates-history")
+  .description("Show version history of a template")
+  .action((id: string) => {
+    const globalOpts = program.opts();
+    const { listTemplateVersions, getTemplate } = require("../db/templates.js");
+    try {
+      const template = getTemplate(id);
+      if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+      const versions = listTemplateVersions(id);
+      if (globalOpts.json) { output({ current_version: template.version, versions }, true); return; }
+      console.log(chalk.bold(`${template.name} — current version: ${template.version}`));
+      if (versions.length === 0) {
+        console.log(chalk.dim("  No previous versions."));
+      } else {
+        for (const v of versions) {
+          const snap = JSON.parse(v.snapshot);
+          console.log(`  ${chalk.dim(`v${v.version}`)} | ${v.created_at} | ${snap.name} | "${snap.title_pattern}"`);
+        }
+      }
+    } catch (e) { handleError(e); }
   });
 
 // comment

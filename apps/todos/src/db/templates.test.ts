@@ -12,7 +12,10 @@ import {
   getTemplateWithTasks,
   getTemplateTasks,
   tasksFromTemplate,
+  previewTemplate,
+  resolveVariables,
 } from "./templates.js";
+import { initBuiltinTemplates, BUILTIN_TEMPLATES } from "./builtin-templates.js";
 import { createTask } from "./tasks.js";
 import { createProject } from "./projects.js";
 import { createTaskList } from "./task-lists.js";
@@ -596,5 +599,325 @@ describe("deleting multi-task template cascades", () => {
     // Template tasks should be gone
     const rows = db.query("SELECT * FROM template_tasks").all();
     expect(rows).toHaveLength(0);
+  });
+});
+
+// === Feature 1: Template variables with defaults ===
+
+describe("template variables", () => {
+  it("should store variables on template creation", () => {
+    const t = createTemplate({
+      name: "WithVars",
+      title_pattern: "Project: {name}",
+      variables: [
+        { name: "name", required: true, description: "Project name" },
+        { name: "org", required: false, default: "hasna", description: "GitHub org" },
+      ],
+    }, db);
+    expect(t.variables).toHaveLength(2);
+    expect(t.variables[0]!.name).toBe("name");
+    expect(t.variables[0]!.required).toBe(true);
+    expect(t.variables[1]!.name).toBe("org");
+    expect(t.variables[1]!.default).toBe("hasna");
+  });
+
+  it("should default variables to empty array", () => {
+    const t = createTemplate({ name: "NoVars", title_pattern: "T" }, db);
+    expect(t.variables).toEqual([]);
+  });
+
+  it("should return variables in getTemplate", () => {
+    const t = createTemplate({
+      name: "GetVars",
+      title_pattern: "T",
+      variables: [{ name: "x", required: true }],
+    }, db);
+    const found = getTemplate(t.id, db);
+    expect(found!.variables).toHaveLength(1);
+    expect(found!.variables[0]!.name).toBe("x");
+  });
+
+  it("should return variables in getTemplateWithTasks", () => {
+    const t = createTemplate({
+      name: "WithTasksVars",
+      title_pattern: "T: {name}",
+      variables: [{ name: "name", required: true }],
+      tasks: [{ title_pattern: "Do {name}" }],
+    }, db);
+    const result = getTemplateWithTasks(t.id, db);
+    expect(result!.variables).toHaveLength(1);
+  });
+
+  it("should update variables", () => {
+    const t = createTemplate({ name: "UpdVars", title_pattern: "T" }, db);
+    const updated = updateTemplate(t.id, {
+      variables: [{ name: "v", required: false, default: "x" }],
+    }, db);
+    expect(updated!.variables).toHaveLength(1);
+    expect(updated!.variables[0]!.default).toBe("x");
+  });
+});
+
+describe("resolveVariables", () => {
+  it("should fill defaults for missing variables", () => {
+    const vars = [
+      { name: "name", required: true },
+      { name: "org", required: false, default: "hasna" },
+    ];
+    const resolved = resolveVariables(vars, { name: "todos" });
+    expect(resolved.name).toBe("todos");
+    expect(resolved.org).toBe("hasna");
+  });
+
+  it("should throw on missing required variables", () => {
+    const vars = [{ name: "name", required: true }];
+    expect(() => resolveVariables(vars, {})).toThrow("Missing required template variable(s): name");
+  });
+
+  it("should not throw when required variable is provided", () => {
+    const vars = [{ name: "name", required: true }];
+    const resolved = resolveVariables(vars, { name: "test" });
+    expect(resolved.name).toBe("test");
+  });
+
+  it("should allow overriding defaults", () => {
+    const vars = [{ name: "org", required: false, default: "hasna" }];
+    const resolved = resolveVariables(vars, { org: "custom" });
+    expect(resolved.org).toBe("custom");
+  });
+
+  it("should work with empty variables array", () => {
+    const resolved = resolveVariables([], { extra: "value" });
+    expect(resolved.extra).toBe("value");
+  });
+
+  it("should report all missing required variables at once", () => {
+    const vars = [
+      { name: "a", required: true },
+      { name: "b", required: true },
+    ];
+    expect(() => resolveVariables(vars, {})).toThrow("Missing required template variable(s): a, b");
+  });
+});
+
+describe("tasksFromTemplate with variables validation", () => {
+  it("should throw when required variable is missing", () => {
+    const project = createProject({ name: "VarReq", path: "/tmp/test-varreq" }, db);
+    const t = createTemplate({
+      name: "RequiredVar",
+      title_pattern: "T: {name}",
+      variables: [{ name: "name", required: true }],
+      tasks: [{ title_pattern: "Build {name}" }],
+    }, db);
+
+    expect(() => tasksFromTemplate(t.id, project.id, {}, undefined, db)).toThrow("Missing required template variable(s): name");
+  });
+
+  it("should fill defaults and substitute", () => {
+    const project = createProject({ name: "VarDef", path: "/tmp/test-vardef" }, db);
+    const t = createTemplate({
+      name: "DefaultVar",
+      title_pattern: "T: {name}",
+      variables: [
+        { name: "name", required: true },
+        { name: "org", required: false, default: "hasna" },
+      ],
+      tasks: [{ title_pattern: "Create {org}/{name}" }],
+    }, db);
+
+    const tasks = tasksFromTemplate(t.id, project.id, { name: "todos" }, undefined, db);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.title).toContain("Create hasna/todos");
+  });
+});
+
+// === Feature 2: Built-in starter templates ===
+
+describe("initBuiltinTemplates", () => {
+  it("should create all 4 built-in templates", () => {
+    const result = initBuiltinTemplates(db);
+    expect(result.created).toBe(4);
+    expect(result.skipped).toBe(0);
+    expect(result.names).toContain("open-source-project");
+    expect(result.names).toContain("bug-fix");
+    expect(result.names).toContain("feature");
+    expect(result.names).toContain("security-audit");
+  });
+
+  it("should skip already existing templates", () => {
+    initBuiltinTemplates(db);
+    const result2 = initBuiltinTemplates(db);
+    expect(result2.created).toBe(0);
+    expect(result2.skipped).toBe(4);
+  });
+
+  it("should create templates with variables", () => {
+    initBuiltinTemplates(db);
+    const templates = listTemplates(db);
+    const osp = templates.find(t => t.name === "open-source-project");
+    expect(osp).not.toBeNull();
+    expect(osp!.variables).toHaveLength(2);
+    expect(osp!.variables[0]!.name).toBe("name");
+    expect(osp!.variables[0]!.required).toBe(true);
+    expect(osp!.variables[1]!.name).toBe("org");
+    expect(osp!.variables[1]!.default).toBe("hasna");
+  });
+
+  it("should create templates with tasks", () => {
+    initBuiltinTemplates(db);
+    const templates = listTemplates(db);
+    const osp = templates.find(t => t.name === "open-source-project");
+    const withTasks = getTemplateWithTasks(osp!.id, db);
+    expect(withTasks!.tasks.length).toBe(16);
+  });
+
+  it("should create bug-fix template with 5 tasks", () => {
+    initBuiltinTemplates(db);
+    const templates = listTemplates(db);
+    const bf = templates.find(t => t.name === "bug-fix");
+    const withTasks = getTemplateWithTasks(bf!.id, db);
+    expect(withTasks!.tasks.length).toBe(5);
+    expect(withTasks!.tasks[0]!.title_pattern).toBe("Reproduce: {bug}");
+  });
+
+  it("should only create templates that are missing", () => {
+    // Create one manually first
+    createTemplate({ name: "bug-fix", title_pattern: "Custom bug fix" }, db);
+    const result = initBuiltinTemplates(db);
+    expect(result.created).toBe(3);
+    expect(result.skipped).toBe(1);
+    expect(result.names).not.toContain("bug-fix");
+  });
+});
+
+describe("BUILTIN_TEMPLATES constant", () => {
+  it("should have 4 templates", () => {
+    expect(BUILTIN_TEMPLATES).toHaveLength(4);
+  });
+
+  it("should have required variables in each template", () => {
+    for (const bt of BUILTIN_TEMPLATES) {
+      expect(bt.variables.length).toBeGreaterThan(0);
+      // Each template should have at least one required variable
+      const hasRequired = bt.variables.some(v => v.required);
+      expect(hasRequired).toBe(true);
+    }
+  });
+});
+
+// === Feature 3: Template preview ===
+
+describe("previewTemplate", () => {
+  it("should preview a multi-task template", () => {
+    const t = createTemplate({
+      name: "Preview Test",
+      title_pattern: "Preview: {name}",
+      variables: [{ name: "name", required: true }],
+      tasks: [
+        { title_pattern: "Design {name}" },
+        { title_pattern: "Build {name}", depends_on: [0] },
+        { title_pattern: "Test {name}", depends_on: [1], priority: "high" },
+      ],
+    }, db);
+
+    const preview = previewTemplate(t.id, { name: "invoices" }, db);
+    expect(preview.template_id).toBe(t.id);
+    expect(preview.template_name).toBe("Preview Test");
+    expect(preview.tasks).toHaveLength(3);
+    expect(preview.tasks[0]!.title).toBe("Design invoices");
+    expect(preview.tasks[1]!.title).toBe("Build invoices");
+    expect(preview.tasks[1]!.depends_on_positions).toEqual([0]);
+    expect(preview.tasks[2]!.title).toBe("Test invoices");
+    expect(preview.tasks[2]!.priority).toBe("high");
+  });
+
+  it("should NOT create any tasks", () => {
+    const project = createProject({ name: "NoCreate", path: "/tmp/test-nocreate" }, db);
+    const t = createTemplate({
+      name: "NoCreate",
+      title_pattern: "NC: {name}",
+      variables: [{ name: "name", required: true }],
+      tasks: [{ title_pattern: "Task {name}" }],
+    }, db);
+
+    const tasksBefore = db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
+    previewTemplate(t.id, { name: "test" }, db);
+    const tasksAfter = db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
+    expect(tasksAfter.count).toBe(tasksBefore.count);
+  });
+
+  it("should fill default variables", () => {
+    const t = createTemplate({
+      name: "DefPreview",
+      title_pattern: "DP: {name}",
+      variables: [
+        { name: "name", required: true },
+        { name: "org", required: false, default: "hasna" },
+      ],
+      tasks: [{ title_pattern: "Create {org}/{name}" }],
+    }, db);
+
+    const preview = previewTemplate(t.id, { name: "todos" }, db);
+    expect(preview.tasks[0]!.title).toBe("Create hasna/todos");
+    expect(preview.resolved_variables.org).toBe("hasna");
+    expect(preview.resolved_variables.name).toBe("todos");
+  });
+
+  it("should throw on missing required variables", () => {
+    const t = createTemplate({
+      name: "ReqPreview",
+      title_pattern: "RP: {name}",
+      variables: [{ name: "name", required: true }],
+      tasks: [{ title_pattern: "Task {name}" }],
+    }, db);
+
+    expect(() => previewTemplate(t.id, {}, db)).toThrow("Missing required template variable(s): name");
+  });
+
+  it("should preview single-task template", () => {
+    const t = createTemplate({
+      name: "Single",
+      title_pattern: "Bug: {desc}",
+      description: "Fix {desc}",
+      variables: [{ name: "desc", required: true }],
+    }, db);
+
+    const preview = previewTemplate(t.id, { desc: "login crash" }, db);
+    expect(preview.tasks).toHaveLength(1);
+    expect(preview.tasks[0]!.title).toBe("Bug: login crash");
+    expect(preview.tasks[0]!.description).toBe("Fix login crash");
+  });
+
+  it("should throw for nonexistent template", () => {
+    expect(() => previewTemplate("nonexistent", {}, db)).toThrow("Template not found");
+  });
+
+  it("should show variables metadata in preview", () => {
+    const t = createTemplate({
+      name: "VarMeta",
+      title_pattern: "VM: {name}",
+      variables: [
+        { name: "name", required: true, description: "Service name" },
+        { name: "env", required: false, default: "prod" },
+      ],
+      tasks: [{ title_pattern: "Deploy {name} to {env}" }],
+    }, db);
+
+    const preview = previewTemplate(t.id, { name: "api" }, db);
+    expect(preview.variables).toHaveLength(2);
+    expect(preview.variables[0]!.description).toBe("Service name");
+    expect(preview.tasks[0]!.title).toBe("Deploy api to prod");
+  });
+
+  it("should preview built-in templates after init", () => {
+    initBuiltinTemplates(db);
+    const templates = listTemplates(db);
+    const osp = templates.find(t => t.name === "open-source-project");
+
+    const preview = previewTemplate(osp!.id, { name: "invoices" }, db);
+    expect(preview.tasks).toHaveLength(16);
+    expect(preview.tasks[0]!.title).toBe("Scaffold invoices package structure");
+    expect(preview.tasks[8]!.title).toBe("Create GitHub repo hasna/invoices");
+    expect(preview.resolved_variables.org).toBe("hasna");
   });
 });
