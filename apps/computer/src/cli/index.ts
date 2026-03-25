@@ -416,7 +416,129 @@ configCmd
     console.log(chalk.green("Config reset to defaults."));
   });
 
+// ── completions ──────────────────────────────────────────────────────
+program
+  .command("completions")
+  .description("Generate shell completions")
+  .argument("<shell>", "Shell type (zsh or bash)")
+  .action(async (shell: string) => {
+    if (shell === "zsh") {
+      console.log(generateZshCompletions());
+    } else if (shell === "bash") {
+      console.log(generateBashCompletions());
+    } else {
+      console.error(chalk.red(`Unknown shell: ${shell}. Use "zsh" or "bash".`));
+      process.exit(1);
+    }
+  });
+
 // ── Cloud commands (sync, feedback) ──────────────────────────────────
 registerCloudCommands(program, "computer");
 
 program.parse();
+
+function generateZshCompletions(): string {
+  return `#compdef computer
+# Zsh completions for @hasna/computer
+# Install: computer completions zsh > ~/.zsh/completions/_computer
+
+_computer() {
+  local -a commands
+  commands=(
+    'run:Run a computer use task'
+    'screenshot:Take a screenshot'
+    'sessions:List sessions'
+    'session:Show session details'
+    'delete:Delete a session'
+    'stats:Show usage statistics'
+    'watch:Live-stream agent activity'
+    'search:Search sessions'
+    'config:View or modify configuration'
+    'completions:Generate shell completions'
+    'cloud:Cloud sync and feedback'
+  )
+
+  _arguments -C \\
+    '1:command:->command' \\
+    '*::arg:->args'
+
+  case "$state" in
+    command)
+      _describe 'command' commands
+      ;;
+    args)
+      case "$words[1]" in
+        run)
+          _arguments \\
+            '-p[AI provider]:provider:(anthropic openai)' \\
+            '-m[Model to use]:model:' \\
+            '-s[Max steps]:steps:' \\
+            '--save-screenshots[Save screenshots]' \\
+            '--dry-run[Plan without executing]' \\
+            '--tag[Tag session]:tag:' \\
+            '--max-width[Max screenshot width]:width:' \\
+            '--no-preview[Disable inline preview]' \\
+            '1:task:'
+          ;;
+        sessions)
+          _arguments \\
+            '-n[Limit]:limit:' \\
+            '--status[Filter by status]:status:(running completed failed cancelled)' \\
+            '--tag[Filter by tag]:tag:'
+          ;;
+        config)
+          local -a config_cmds
+          config_cmds=(show get set path edit reset)
+          _describe 'config command' config_cmds
+          ;;
+        completions)
+          _arguments '1:shell:(zsh bash)'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_computer "$@"`;
+}
+
+function generateBashCompletions(): string {
+  return `# Bash completions for @hasna/computer
+# Install: computer completions bash >> ~/.bashrc
+
+_computer_completions() {
+  local cur prev commands
+  COMPREPLY=()
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  prev="\${COMP_WORDS[COMP_CWORD-1]}"
+  commands="run screenshot sessions session delete stats watch search config completions cloud"
+
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+    return 0
+  fi
+
+  case "\${COMP_WORDS[1]}" in
+    run)
+      COMPREPLY=( $(compgen -W "-p --provider -m --model -s --max-steps --save-screenshots --dry-run --tag --max-width --no-preview" -- "$cur") )
+      ;;
+    sessions)
+      COMPREPLY=( $(compgen -W "-n --limit --status --tag" -- "$cur") )
+      ;;
+    config)
+      COMPREPLY=( $(compgen -W "show get set path edit reset" -- "$cur") )
+      ;;
+    completions)
+      COMPREPLY=( $(compgen -W "zsh bash" -- "$cur") )
+      ;;
+    --provider|-p)
+      COMPREPLY=( $(compgen -W "anthropic openai" -- "$cur") )
+      ;;
+    --status)
+      COMPREPLY=( $(compgen -W "running completed failed cancelled" -- "$cur") )
+      ;;
+  esac
+}
+
+complete -F _computer_completions computer`;
+}
