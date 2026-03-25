@@ -12,6 +12,7 @@ import type {
 import { createMacDriver } from "../drivers/mac/index.js";
 import { createProvider } from "../providers/index.js";
 import { saveScreenshotToFile } from "../drivers/mac/screenshot.js";
+import { scaleScreenshot } from "../lib/scale.js";
 import { getDb, logAction, createSession, updateSession } from "../db/index.js";
 
 const DEFAULT_MAX_STEPS = 50;
@@ -29,6 +30,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
     saveScreenshots = false,
     screenshotsDir,
     systemPrompt,
+    screenshotMaxWidth,
     onStep,
     onDone,
   } = options;
@@ -79,13 +81,21 @@ export async function runTask(options: RunOptions): Promise<Session> {
         );
       }
 
-      // 2. Send to AI model
+      // 2. Scale screenshot for the AI model (Anthropic recommends ≤ WXGA)
+      const scaledScreenshot = await scaleScreenshot(screenshot, screenshotMaxWidth);
+
+      // 3. Send to AI model (uses scaled screenshot)
       const response = await provider.analyze({
         task,
-        screenshot,
+        screenshot: scaledScreenshot,
         history,
         systemPrompt,
       });
+
+      // 4. Remap coordinates from scaled → original screen resolution
+      if (response.action && screenshot.size.width !== scaledScreenshot.size.width) {
+        remapCoordinates(response.action, scaledScreenshot.size, screenshot.size);
+      }
 
       // Track tokens
       if (response.usage) {
@@ -93,7 +103,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
         session.total_tokens_out += response.usage.output;
       }
 
-      // 3. Check if done
+      // 5. Check if done
       if (response.done || !response.action) {
         session.status = "completed";
         session.steps = step + 1;
@@ -172,5 +182,39 @@ export async function runTask(options: RunOptions): Promise<Session> {
     onDone?.(session);
     await driver.dispose();
     return session;
+  }
+}
+
+/**
+ * Remap coordinates from scaled screenshot space to original screen space.
+ * When we scale a 2560x1600 screen to 1280x800 for the model, the model
+ * returns coordinates in 1280x800 space. We need to convert them back to
+ * 2560x1600 before executing the action on the real screen.
+ */
+function remapCoordinates(
+  action: import("../types/index.js").DriverAction,
+  from: import("../types/index.js").ScreenSize,
+  to: import("../types/index.js").ScreenSize
+): void {
+  const scaleX = to.width / from.width;
+  const scaleY = to.height / from.height;
+
+  const remap = (p: import("../types/index.js").Point) => {
+    p.x = Math.round(p.x * scaleX);
+    p.y = Math.round(p.y * scaleY);
+  };
+
+  switch (action.type) {
+    case "click":
+    case "mouse_move":
+      remap(action.point);
+      break;
+    case "scroll":
+      remap(action.point);
+      break;
+    case "drag":
+      remap(action.from);
+      remap(action.to);
+      break;
   }
 }

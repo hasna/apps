@@ -134,6 +134,8 @@ export interface RunOptions {
   screenshotsDir?: string;
   /** Custom system prompt */
   systemPrompt?: string;
+  /** Max screenshot width before sending to AI model (default: 1280 WXGA) */
+  screenshotMaxWidth?: number;
   /** Callback for each step */
   onStep?: (step: number, response: ModelResponse, result: ActionResult) => void;
   /** Callback when done */

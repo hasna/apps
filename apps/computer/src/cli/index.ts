@@ -24,9 +24,10 @@ program
   .option("--save-screenshots", "Save screenshots to disk", false)
   .option("--screenshots-dir <dir>", "Directory to save screenshots")
   .option("--system-prompt <prompt>", "Custom system prompt")
+  .option("--max-width <px>", "Max screenshot width for AI model (default: 1280)", "1280")
   .action(async (task: string, opts: any) => {
     console.log(chalk.bold.cyan("computer") + " — starting task");
-    console.log(chalk.dim(`Provider: ${opts.provider} | Max steps: ${opts.maxSteps}`));
+    console.log(chalk.dim(`Provider: ${opts.provider} | Max steps: ${opts.maxSteps} | Max width: ${opts.maxWidth}px`));
     console.log(chalk.dim(`Task: ${task}`));
     console.log();
 
@@ -38,6 +39,7 @@ program
       saveScreenshots: opts.saveScreenshots,
       screenshotsDir: opts.screenshotsDir,
       systemPrompt: opts.systemPrompt,
+      screenshotMaxWidth: parseInt(opts.maxWidth),
       onStep: (step, response, result) => {
         const status = result.success ? chalk.green("OK") : chalk.red("FAIL");
         const actionDesc = response.action
