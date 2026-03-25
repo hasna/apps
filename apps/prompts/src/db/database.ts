@@ -52,7 +52,7 @@ export function getDatabase(): Database {
     }
   }
 
-  const db = new Database(dbPath, { create: true })
+  const db = new Database(dbPath)
   db.exec("PRAGMA journal_mode = WAL")
   db.exec("PRAGMA busy_timeout = 5000")
   db.exec("PRAGMA foreign_keys = ON")
