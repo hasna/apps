@@ -23,6 +23,7 @@ server.tool(
     model: z.string().optional().describe("Specific model to use"),
     max_steps: z.number().default(50).describe("Maximum steps before stopping"),
     save_screenshots: z.boolean().default(false).describe("Save screenshots to disk"),
+    dry_run: z.boolean().default(false).describe("Plan actions without executing them"),
   },
   async (params) => {
     const session = await runTask({
@@ -31,6 +32,7 @@ server.tool(
       model: params.model,
       maxSteps: params.max_steps,
       saveScreenshots: params.save_screenshots,
+      dryRun: params.dry_run,
     });
 
     return {

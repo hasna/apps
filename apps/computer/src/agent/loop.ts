@@ -33,6 +33,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
     screenshotsDir,
     systemPrompt,
     screenshotMaxWidth,
+    dryRun = false,
     onStep,
     onDone,
   } = options;
@@ -159,10 +160,12 @@ export async function runTask(options: RunOptions): Promise<Session> {
         continue;
       }
 
-      // 5. Execute the action
-      const result = await driver.execute(response.action);
+      // 5. Execute the action (or simulate in dry-run mode)
+      const result = dryRun
+        ? { success: true, duration_ms: 0 } as ActionResult
+        : await driver.execute(response.action);
 
-      // 5. Log to DB
+      // 6. Log to DB
       await logAction({
         session_id: sessionId,
         step,

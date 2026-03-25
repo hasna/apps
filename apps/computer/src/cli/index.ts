@@ -27,14 +27,15 @@ program
   .option("--screenshots-dir <dir>", "Directory to save screenshots")
   .option("--system-prompt <prompt>", "Custom system prompt")
   .option("--max-width <px>", "Max screenshot width for AI model (default: 1280)", "1280")
+  .option("--dry-run", "Plan actions without executing them", false)
   .action(async (task: string, opts: any) => {
     const cfg = loadConfig();
     const provider = opts.provider ?? cfg.provider;
     const maxSteps = parseInt(opts.maxSteps) || cfg.maxSteps;
     const maxWidth = parseInt(opts.maxWidth) || cfg.screenshotMaxWidth;
 
-    console.log(chalk.bold.cyan("computer") + " — starting task");
-    console.log(chalk.dim(`Provider: ${provider} | Max steps: ${maxSteps} | Max width: ${maxWidth}px`));
+    console.log(chalk.bold.cyan("computer") + (opts.dryRun ? chalk.yellow.bold(" [DRY RUN]") : "") + " — starting task");
+    console.log(chalk.dim(`Provider: ${provider} | Max steps: ${maxSteps} | Max width: ${maxWidth}px${opts.dryRun ? " | DRY RUN" : ""}`));
     console.log(chalk.dim(`Task: ${task}`));
     console.log();
 
@@ -47,6 +48,7 @@ program
       screenshotsDir: opts.screenshotsDir ?? cfg.screenshotsDir,
       systemPrompt: opts.systemPrompt,
       screenshotMaxWidth: maxWidth,
+      dryRun: opts.dryRun,
       onStep: (step, response, result) => {
         const status = result.success ? chalk.green("OK") : chalk.red("FAIL");
         const actionDesc = response.action
