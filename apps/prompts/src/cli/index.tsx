@@ -2,20 +2,19 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import { createRequire } from "module"
-import { getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
 import { listCollections, movePrompt } from "../db/collections.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
-import { resolveProject, getDatabase } from "../db/database.js"
-import { searchPrompts, findSimilar } from "../lib/search.js"
-import { renderTemplate, extractVariableInfo } from "../lib/template.js"
-import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
-import { lintAll } from "../lib/lint.js"
+import { getPrompt, listPrompts, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, deletePrompt, usePrompt } from "../db/prompts.js"
 import { createSchedule, listSchedules, deleteSchedule, getDueSchedules } from "../db/schedules.js"
 import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { runAudit } from "../lib/audit.js"
 import { generateZshCompletion, generateBashCompletion } from "../lib/completion.js"
 import { diffTexts } from "../lib/diff.js"
+import { lintAll } from "../lib/lint.js"
+import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
+import { isJson, output, handleError, fmtPrompt, getActiveProjectId } from "./utils.js"
+import { registerPromptCommands } from "./commands/prompts.js"
 import type { Prompt } from "../types/index.js"
 
 const require = createRequire(import.meta.url)
@@ -30,365 +29,8 @@ const program = new Command()
   .option("--json", "Output as JSON")
   .option("--project <name>", "Active project (name, slug, or ID) for scoped operations")
 
-function isJson(): boolean {
-  return Boolean(program.opts()["json"])
-}
-
-function getActiveProjectId(): string | null {
-  const projectName = (program.opts()["project"] as string | undefined) ?? process.env["PROMPTS_PROJECT"]
-  if (!projectName) return null
-  const db = getDatabase()
-  return resolveProject(db, projectName)
-}
-
-function output(data: unknown): void {
-  if (isJson()) {
-    console.log(JSON.stringify(data, null, 2))
-  } else {
-    console.log(data)
-  }
-}
-
-function handleError(e: unknown): never {
-  const msg = e instanceof Error ? e.message : String(e)
-  if (isJson()) {
-    console.log(JSON.stringify({ error: msg }))
-  } else {
-    console.error(chalk.red("Error: " + msg))
-  }
-  process.exit(1)
-}
-
-function fmtPrompt(p: Prompt): string {
-  const tags = p.tags.length > 0 ? chalk.gray(` [${p.tags.join(", ")}]`) : ""
-  const template = p.is_template ? chalk.cyan(" ◇") : ""
-  const pin = p.pinned ? chalk.yellow(" 📌") : ""
-  return `${chalk.bold(p.id)} ${chalk.green(p.slug)}${template}${pin}  ${p.title}${tags}  ${chalk.gray(p.collection)}`
-}
-
-// ── save ──────────────────────────────────────────────────────────────────────
-program
-  .command("save <title>")
-  .description("Save a new prompt (or update existing by slug)")
-  .option("-b, --body <body>", "Prompt body (use - to read from stdin)")
-  .option("-f, --file <path>", "Read body from file")
-  .option("-s, --slug <slug>", "Custom slug")
-  .option("-d, --description <desc>", "Short description")
-  .option("-c, --collection <name>", "Collection", "default")
-  .option("-t, --tags <tags>", "Comma-separated tags")
-  .option("--source <source>", "Source: manual|ai-session|imported", "manual")
-  .option("--agent <name>", "Agent name (for attribution)")
-  .option("--force", "Save even if a similar prompt already exists")
-  .option("--pin", "Pin immediately so it appears first in all lists")
-  .action(async (title: string, opts: Record<string, string>) => {
-    try {
-      let body = opts["body"] ?? ""
-      if (opts["file"]) {
-        const { readFileSync } = await import("fs")
-        body = readFileSync(opts["file"], "utf-8")
-      } else if (opts["body"] === "-" || (!opts["body"] && !opts["file"])) {
-        // Read from stdin if no body given
-        const chunks: Buffer[] = []
-        for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-        body = Buffer.concat(chunks).toString("utf-8").trim()
-      }
-      if (!body) handleError("No body provided. Use --body, --file, or pipe via stdin.")
-
-      const project_id = getActiveProjectId()
-      const { prompt, created, duplicate_warning } = upsertPrompt({
-        title,
-        body,
-        slug: opts["slug"],
-        description: opts["description"],
-        collection: opts["collection"],
-        tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : [],
-        source: (opts["source"] as "manual" | "ai-session" | "imported") || "manual",
-        changed_by: opts["agent"],
-        project_id,
-      }, Boolean(opts["force"]))
-      if (duplicate_warning && !isJson()) {
-        console.warn(chalk.yellow(`Warning: ${duplicate_warning}`))
-      }
-      if (opts["pin"]) pinPrompt(prompt.id, true)
-
-      if (isJson()) {
-        output(opts["pin"] ? { ...prompt, pinned: true } : prompt)
-      } else {
-        const action = created ? chalk.green("Created") : chalk.yellow("Updated")
-        console.log(`${action} ${chalk.bold(prompt.id)} — ${chalk.green(prompt.slug)}`)
-        console.log(chalk.gray(`  Title: ${prompt.title}`))
-        console.log(chalk.gray(`  Collection: ${prompt.collection}`))
-        if (opts["pin"]) console.log(chalk.yellow("  📌 Pinned"))
-        if (prompt.is_template) {
-          const vars = extractVariableInfo(prompt.body)
-          console.log(chalk.cyan(`  Template vars: ${vars.map((v) => v.name).join(", ")}`))
-        }
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── use ───────────────────────────────────────────────────────────────────────
-program
-  .command("use <id>")
-  .description("Get a prompt's body and increment its use counter")
-  .option("--edit", "Open in $EDITOR for quick tweaks before printing")
-  .action(async (id: string, opts: { edit?: boolean }) => {
-    try {
-      const prompt = usePrompt(id)
-      let body = prompt.body
-
-      if (opts.edit) {
-        const editor = process.env["EDITOR"] ?? process.env["VISUAL"] ?? "nano"
-        const { writeFileSync, readFileSync, unlinkSync } = await import("fs")
-        const { tmpdir } = await import("os")
-        const { join } = await import("path")
-        const tmp = join(tmpdir(), `prompts-${prompt.id}-${Date.now()}.md`)
-        writeFileSync(tmp, body)
-        const proc = Bun.spawnSync([editor, tmp], { stdio: ["inherit", "inherit", "inherit"] })
-        if (proc.exitCode === 0) {
-          body = readFileSync(tmp, "utf-8")
-        }
-        try { unlinkSync(tmp) } catch { /* ignore */ }
-      }
-
-      if (isJson()) {
-        output({ ...prompt, body })
-      } else {
-        console.log(body)
-        if (prompt.next_prompt) {
-          console.error(chalk.gray(`\n→ next: ${chalk.bold(prompt.next_prompt)}`))
-        }
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── get ───────────────────────────────────────────────────────────────────────
-program
-  .command("get <id>")
-  .description("Get prompt details without incrementing use counter")
-  .action((id: string) => {
-    try {
-      const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
-      output(isJson() ? prompt : fmtPrompt(prompt!))
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── list ──────────────────────────────────────────────────────────────────────
-program
-  .command("list")
-  .description("List prompts")
-  .option("-c, --collection <name>", "Filter by collection")
-  .option("-t, --tags <tags>", "Filter by tags (comma-separated)")
-  .option("--templates", "Show only templates")
-  .option("--recent", "Sort by recently used")
-  .option("-n, --limit <n>", "Max results", "50")
-  .action((opts: Record<string, string | boolean>) => {
-    try {
-      const project_id = getActiveProjectId()
-      let prompts = listPrompts({
-        collection: opts["collection"] as string | undefined,
-        tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
-        is_template: opts["templates"] ? true : undefined,
-        limit: parseInt(opts["limit"] as string) || 50,
-        ...(project_id !== null ? { project_id } : {}),
-      })
-      if (opts["recent"]) {
-        prompts = prompts
-          .filter((p) => p.last_used_at !== null)
-          .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
-      }
-      if (isJson()) {
-        output(prompts)
-      } else if (prompts.length === 0) {
-        console.log(chalk.gray("No prompts found."))
-      } else {
-        for (const p of prompts) console.log(fmtPrompt(p))
-        console.log(chalk.gray(`\n${prompts.length} prompt(s)`))
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── search ────────────────────────────────────────────────────────────────────
-program
-  .command("search <query>")
-  .description("Full-text search across prompts (FTS5)")
-  .option("-c, --collection <name>")
-  .option("-t, --tags <tags>")
-  .option("-n, --limit <n>", "Max results", "20")
-  .action((query: string, opts: Record<string, string>) => {
-    try {
-      const project_id = getActiveProjectId()
-      const results = searchPrompts(query, {
-        collection: opts["collection"],
-        tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
-        limit: parseInt(opts["limit"] ?? "20") || 20,
-        ...(project_id !== null ? { project_id } : {}),
-      })
-      if (isJson()) {
-        output(results)
-      } else if (results.length === 0) {
-        console.log(chalk.gray("No results."))
-      } else {
-        for (const r of results) {
-          console.log(fmtPrompt(r.prompt))
-          if (r.snippet) {
-            // Highlight [matched] portions returned by FTS5 snippet()
-            const highlighted = r.snippet.replace(/\[([^\]]+)\]/g, (_m: string, word: string) => chalk.yellowBright(word))
-            console.log(chalk.gray("  ") + chalk.gray(highlighted))
-          }
-        }
-        console.log(chalk.gray(`\n${results.length} result(s)`))
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── render ────────────────────────────────────────────────────────────────────
-program
-  .command("render <id>")
-  .description("Render a template prompt by filling in {{variables}}")
-  .option("-v, --var <assignments...>", "Variable assignments as key=value")
-  .action((id: string, opts: { var?: string[] }) => {
-    try {
-      const prompt = usePrompt(id)
-      const vars: Record<string, string> = {}
-      for (const assignment of opts.var ?? []) {
-        const eq = assignment.indexOf("=")
-        if (eq === -1) handleError(`Invalid var format: ${assignment}. Use key=value`)
-        vars[assignment.slice(0, eq)] = assignment.slice(eq + 1)
-      }
-      const result = renderTemplate(prompt.body, vars)
-      if (isJson()) {
-        output(result)
-      } else {
-        console.log(result.rendered)
-        if (result.missing_vars.length > 0)
-          console.error(chalk.yellow(`\nWarning: missing vars: ${result.missing_vars.join(", ")}`))
-        if (result.used_defaults.length > 0)
-          console.error(chalk.gray(`Used defaults: ${result.used_defaults.join(", ")}`))
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── templates ─────────────────────────────────────────────────────────────────
-program
-  .command("templates")
-  .description("List template prompts")
-  .option("-c, --collection <name>")
-  .action((opts: Record<string, string>) => {
-    try {
-      const prompts = listPrompts({ is_template: true, collection: opts["collection"] })
-      if (isJson()) {
-        output(prompts)
-      } else if (prompts.length === 0) {
-        console.log(chalk.gray("No templates found."))
-      } else {
-        for (const p of prompts) {
-          const vars = extractVariableInfo(p.body)
-          console.log(fmtPrompt(p))
-          console.log(chalk.cyan(`  vars: ${vars.map((v) => (v.required ? v.name : `${v.name}?`)).join(", ")}`))
-        }
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── inspect ───────────────────────────────────────────────────────────────────
-program
-  .command("inspect <id>")
-  .description("Show a prompt's variables (for templates)")
-  .action((id: string) => {
-    try {
-      const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
-      const vars = extractVariableInfo(prompt!.body)
-      if (isJson()) {
-        output(vars)
-      } else if (vars.length === 0) {
-        console.log(chalk.gray("No template variables found."))
-      } else {
-        console.log(chalk.bold(`Variables for ${prompt!.slug}:`))
-        for (const v of vars) {
-          const req = v.required ? chalk.red("required") : chalk.green("optional")
-          const def = v.default !== null ? chalk.gray(` (default: "${v.default}")`) : ""
-          console.log(`  ${chalk.bold(v.name)}  ${req}${def}`)
-        }
-      }
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── update ────────────────────────────────────────────────────────────────────
-program
-  .command("update <id>")
-  .description("Update a prompt's fields")
-  .option("--title <title>")
-  .option("-b, --body <body>")
-  .option("-d, --description <desc>")
-  .option("-c, --collection <name>")
-  .option("-t, --tags <tags>")
-  .option("--agent <name>")
-  .action((id: string, opts: Record<string, string>) => {
-    try {
-      const prompt = updatePrompt(id, {
-        title: opts["title"] ?? undefined,
-        body: opts["body"] ?? undefined,
-        description: opts["description"] ?? undefined,
-        collection: opts["collection"] ?? undefined,
-        tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
-        changed_by: opts["agent"] ?? undefined,
-      })
-      if (isJson()) output(prompt)
-      else console.log(`${chalk.yellow("Updated")} ${chalk.bold(prompt.id)} — ${chalk.green(prompt.slug)}`)
-    } catch (e) {
-      handleError(e)
-    }
-  })
-
-// ── delete ────────────────────────────────────────────────────────────────────
-program
-  .command("delete <id>")
-  .description("Delete a prompt")
-  .option("-y, --yes", "Skip confirmation")
-  .action(async (id: string, opts: { yes?: boolean }) => {
-    try {
-      const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
-      if (!opts.yes && !isJson()) {
-        const { createInterface } = await import("readline")
-        const rl = createInterface({ input: process.stdin, output: process.stdout })
-        await new Promise<void>((resolve) => {
-          rl.question(chalk.yellow(`Delete "${prompt!.slug}"? [y/N] `), (ans) => {
-            rl.close()
-            if (ans.toLowerCase() !== "y") {
-              console.log("Cancelled.")
-              process.exit(0)
-            }
-            resolve()
-          })
-        })
-      }
-      deletePrompt(id)
-      if (isJson()) output({ deleted: true, id: prompt!.id })
-      else console.log(chalk.red(`Deleted ${prompt!.slug}`))
-    } catch (e) {
-      handleError(e)
-    }
-  })
+// ── prompt CRUD + search commands ─────────────────────────────────────────────
+registerPromptCommands(program)
 
 // ── history ───────────────────────────────────────────────────────────────────
 program
@@ -397,10 +39,10 @@ program
   .action((id: string) => {
     try {
       const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
+      if (!prompt) handleError(program, `Prompt not found: ${id}`)
       const versions = listVersions(prompt!.id)
-      if (isJson()) {
-        output(versions)
+      if (isJson(program)) {
+        output(program, versions)
       } else {
         console.log(chalk.bold(`Version history for ${prompt!.slug}:`))
         for (const v of versions) {
@@ -410,7 +52,7 @@ program
         }
       }
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -422,12 +64,12 @@ program
   .action((id: string, version: string, opts: Record<string, string>) => {
     try {
       const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
+      if (!prompt) handleError(program, `Prompt not found: ${id}`)
       restoreVersion(prompt!.id, parseInt(version), opts["agent"])
-      if (isJson()) output({ restored: true, id: prompt!.id, version: parseInt(version) })
+      if (isJson(program)) output(program, { restored: true, id: prompt!.id, version: parseInt(version) })
       else console.log(chalk.green(`Restored ${prompt!.slug} to v${version}`))
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -438,8 +80,8 @@ program
   .action(() => {
     try {
       const cols = listCollections()
-      if (isJson()) {
-        output(cols)
+      if (isJson(program)) {
+        output(program, cols)
       } else {
         for (const c of cols) {
           console.log(`${chalk.bold(c.name)}  ${chalk.gray(`${c.prompt_count} prompt(s)`)}`)
@@ -447,7 +89,7 @@ program
         }
       }
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -458,10 +100,10 @@ program
   .action((id: string, collection: string) => {
     try {
       movePrompt(id, collection)
-      if (isJson()) output({ moved: true, id, collection })
+      if (isJson(program)) output(program, { moved: true, id, collection })
       else console.log(`${chalk.green("Moved")} ${id} → ${chalk.bold(collection)}`)
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -483,7 +125,7 @@ program
         console.log(json)
       }
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -498,7 +140,7 @@ program
       const raw = JSON.parse(readFileSync(file, "utf-8")) as unknown
       const items = Array.isArray(raw) ? raw : (raw as { prompts: unknown[] }).prompts ?? []
       const results = importFromJson(items as Parameters<typeof importFromJson>[0], opts["agent"])
-      if (isJson()) output(results)
+      if (isJson(program)) output(program, results)
       else {
         console.log(chalk.green(`Created: ${results.created}, Updated: ${results.updated}`))
         if (results.errors.length > 0) {
@@ -507,7 +149,7 @@ program
         }
       }
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -518,8 +160,8 @@ program
   .action(() => {
     try {
       const stats = getPromptStats()
-      if (isJson()) {
-        output(stats)
+      if (isJson(program)) {
+        output(program, stats)
       } else {
         console.log(chalk.bold("Prompt Stats"))
         console.log(`  Total: ${stats.total_prompts}  Templates: ${stats.total_templates}  Collections: ${stats.total_collections}`)
@@ -535,7 +177,7 @@ program
         }
       }
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -550,13 +192,13 @@ program
         .filter((p) => p.last_used_at !== null)
         .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
         .slice(0, limit)
-      if (isJson()) { output(prompts); return }
+      if (isJson(program)) { output(program, prompts); return }
       if (prompts.length === 0) { console.log(chalk.gray("No recently used prompts.")); return }
       for (const p of prompts) {
         const ago = chalk.gray(new Date(p.last_used_at!).toLocaleString())
         console.log(`${chalk.bold(p.id)} ${chalk.green(p.slug)}  ${p.title}  ${ago}`)
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── lint ──────────────────────────────────────────────────────────────────────
@@ -568,7 +210,7 @@ program
     try {
       const prompts = listPrompts({ collection: opts["collection"], limit: 10000 })
       const results = lintAll(prompts)
-      if (isJson()) { output(results); return }
+      if (isJson(program)) { output(program, results); return }
       if (results.length === 0) { console.log(chalk.green("✓ All prompts pass lint.")); return }
 
       let errors = 0, warns = 0, infos = 0
@@ -582,7 +224,7 @@ program
       }
       console.log(chalk.bold(`\n${results.length} prompt(s) with issues — ${errors} errors, ${warns} warnings, ${infos} info`))
       if (errors > 0) process.exit(1)
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── stale ─────────────────────────────────────────────────────────────────────
@@ -599,21 +241,21 @@ program
       ).sort((a, b) => (a.last_used_at ?? "").localeCompare(b.last_used_at ?? ""))
       const now = new Date().toISOString()
       const expired = all.filter((p) => p.expires_at !== null && p.expires_at < now)
-      if (isJson()) { output({ stale, expired }); return }
+      if (isJson(program)) { output(program, { stale, expired }); return }
       if (expired.length > 0) {
         console.log(chalk.red(`\nExpired (${expired.length}):`))
-        for (const p of expired) console.log(chalk.red(`  ✗ ${p.slug}`)  + chalk.gray(` expired ${new Date(p.expires_at!).toLocaleDateString()}`))
+        for (const p of expired) console.log(chalk.red(`  ✗ ${p.slug}`) + chalk.gray(` expired ${new Date(p.expires_at!).toLocaleDateString()}`))
       }
       if (stale.length === 0 && expired.length === 0) { console.log(chalk.green(`No stale prompts (threshold: ${threshold} days).`)); return }
       if (stale.length > 0) {
-      console.log(chalk.bold(`\nStale prompts (not used in ${threshold}+ days):`))
-      for (const p of stale) {
-        const last = p.last_used_at ? chalk.gray(new Date(p.last_used_at).toLocaleDateString()) : chalk.red("never")
-        console.log(`  ${chalk.green(p.slug)}  ${chalk.gray(`${p.use_count}×`)}  last used: ${last}`)
-      }
+        console.log(chalk.bold(`\nStale prompts (not used in ${threshold}+ days):`))
+        for (const p of stale) {
+          const last = p.last_used_at ? chalk.gray(new Date(p.last_used_at).toLocaleDateString()) : chalk.red("never")
+          console.log(`  ${chalk.green(p.slug)}  ${chalk.gray(`${p.use_count}×`)}  last used: ${last}`)
+        }
       }
       console.log(chalk.gray(`\n${stale.length} stale prompt(s)`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── pin / unpin ───────────────────────────────────────────────────────────────
@@ -623,9 +265,9 @@ program
   .action((id: string) => {
     try {
       const p = pinPrompt(id, true)
-      if (isJson()) output(p)
+      if (isJson(program)) output(program, p)
       else console.log(chalk.yellow(`📌 Pinned ${chalk.bold(p.slug)}`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 program
@@ -634,9 +276,9 @@ program
   .action((id: string) => {
     try {
       const p = pinPrompt(id, false)
-      if (isJson()) output(p)
+      if (isJson(program)) output(program, p)
       else console.log(chalk.gray(`Unpinned ${chalk.bold(p.slug)}`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── copy ──────────────────────────────────────────────────────────────────────
@@ -653,7 +295,6 @@ program
         proc.stdin.end()
         await proc.exited
       } else if (platform === "linux") {
-        // Try xclip then xsel
         try {
           const proc = Bun.spawn(["xclip", "-selection", "clipboard"], { stdin: "pipe" })
           proc.stdin.write(prompt.body)
@@ -666,12 +307,12 @@ program
           await proc.exited
         }
       } else {
-        handleError("Clipboard not supported on this platform. Use `prompts use` instead.")
+        handleError(program, "Clipboard not supported on this platform. Use `prompts use` instead.")
       }
-      if (isJson()) output({ copied: true, id: prompt.id, slug: prompt.slug })
+      if (isJson(program)) output(program, { copied: true, id: prompt.id, slug: prompt.slug })
       else console.log(chalk.green(`Copied ${chalk.bold(prompt.slug)} to clipboard`))
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -686,12 +327,12 @@ projectCmd
   .action((name: string, opts: Record<string, string>) => {
     try {
       const project = createProject({ name, description: opts["description"], path: opts["path"] })
-      if (isJson()) output(project)
+      if (isJson(program)) output(program, project)
       else {
         console.log(`${chalk.green("Created")} project ${chalk.bold(project.name)} — ${chalk.gray(project.slug)}`)
         if (project.description) console.log(chalk.gray(`  ${project.description}`))
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 projectCmd
@@ -700,13 +341,13 @@ projectCmd
   .action(() => {
     try {
       const projects = listProjects()
-      if (isJson()) { output(projects); return }
+      if (isJson(program)) { output(program, projects); return }
       if (projects.length === 0) { console.log(chalk.gray("No projects.")); return }
       for (const p of projects) {
         console.log(`${chalk.bold(p.name)}  ${chalk.gray(p.slug)}  ${chalk.cyan(`${p.prompt_count} prompt(s)`)}`)
         if (p.description) console.log(chalk.gray(`  ${p.description}`))
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 projectCmd
@@ -715,9 +356,9 @@ projectCmd
   .action((id: string) => {
     try {
       const project = getProject(id)
-      if (!project) handleError(`Project not found: ${id}`)
-      output(isJson() ? project : `${chalk.bold(project!.name)}  ${chalk.gray(project!.slug)}  ${chalk.cyan(`${project!.prompt_count} prompt(s)`)}`)
-    } catch (e) { handleError(e) }
+      if (!project) handleError(program, `Project not found: ${id}`)
+      output(program, isJson(program) ? project : `${chalk.bold(project!.name)}  ${chalk.gray(project!.slug)}  ${chalk.cyan(`${project!.prompt_count} prompt(s)`)}`)
+    } catch (e) { handleError(program, e) }
   })
 
 projectCmd
@@ -727,9 +368,9 @@ projectCmd
   .action((id: string, opts: Record<string, string>) => {
     try {
       const project = getProject(id)
-      if (!project) handleError(`Project not found: ${id}`)
+      if (!project) handleError(program, `Project not found: ${id}`)
       const prompts = listPrompts({ project_id: project!.id, limit: parseInt(opts["limit"] ?? "100") || 100 })
-      if (isJson()) { output(prompts); return }
+      if (isJson(program)) { output(program, prompts); return }
       if (prompts.length === 0) { console.log(chalk.gray("No prompts.")); return }
       console.log(chalk.bold(`Prompts for project: ${project!.name}`))
       for (const p of prompts) {
@@ -737,7 +378,7 @@ projectCmd
         console.log(fmtPrompt(p) + scope)
       }
       console.log(chalk.gray(`\n${prompts.length} prompt(s)`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 projectCmd
@@ -747,8 +388,8 @@ projectCmd
   .action(async (id: string, opts: { yes?: boolean }) => {
     try {
       const project = getProject(id)
-      if (!project) handleError(`Project not found: ${id}`)
-      if (!opts.yes && !isJson()) {
+      if (!project) handleError(program, `Project not found: ${id}`)
+      if (!opts.yes && !isJson(program)) {
         const { createInterface } = await import("readline")
         const rl = createInterface({ input: process.stdin, output: process.stdout })
         await new Promise<void>((resolve) => {
@@ -760,9 +401,9 @@ projectCmd
         })
       }
       deleteProject(id)
-      if (isJson()) output({ deleted: true, id: project!.id })
+      if (isJson(program)) output(program, { deleted: true, id: project!.id })
       else console.log(chalk.red(`Deleted project ${project!.name}`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── audit ─────────────────────────────────────────────────────────────────────
@@ -772,7 +413,7 @@ program
   .action(() => {
     try {
       const report = runAudit()
-      if (isJson()) { output(report); return }
+      if (isJson(program)) { output(program, report); return }
       if (report.issues.length === 0) { console.log(chalk.green("✓ No audit issues found.")); return }
       for (const issue of report.issues) {
         const sym = issue.severity === "error" ? chalk.red("✗") : issue.severity === "warn" ? chalk.yellow("⚠") : chalk.gray("ℹ")
@@ -781,7 +422,7 @@ program
       }
       console.log(chalk.bold(`\n${report.issues.length} issue(s) — ${report.errors} errors, ${report.warnings} warnings, ${report.info} info`))
       if (report.errors > 0) process.exit(1)
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── unused ────────────────────────────────────────────────────────────────────
@@ -794,13 +435,13 @@ program
     try {
       const all = listPrompts({ collection: opts["collection"], limit: parseInt(opts["limit"] ?? "50") || 50 })
       const unused = all.filter((p) => p.use_count === 0).sort((a, b) => a.created_at.localeCompare(b.created_at))
-      if (isJson()) { output(unused); return }
+      if (isJson(program)) { output(program, unused); return }
       if (unused.length === 0) { console.log(chalk.green("All prompts have been used at least once.")); return }
       console.log(chalk.bold(`Unused prompts (${unused.length}):`))
       for (const p of unused) {
         console.log(`  ${fmtPrompt(p)}  ${chalk.gray(`created ${new Date(p.created_at).toLocaleDateString()}`)}`)
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── trending ──────────────────────────────────────────────────────────────────
@@ -812,13 +453,13 @@ program
   .action((opts: Record<string, string>) => {
     try {
       const results = getTrending(parseInt(opts["days"] ?? "7") || 7, parseInt(opts["limit"] ?? "10") || 10)
-      if (isJson()) { output(results); return }
+      if (isJson(program)) { output(program, results); return }
       if (results.length === 0) { console.log(chalk.gray("No usage data yet.")); return }
       console.log(chalk.bold(`Trending (last ${opts["days"] ?? "7"} days):`))
       for (const r of results) {
         console.log(`  ${chalk.green(r.slug)}  ${chalk.bold(String(r.uses))}×  ${chalk.gray(r.title)}`)
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── expire ────────────────────────────────────────────────────────────────────
@@ -829,9 +470,9 @@ program
     try {
       const expiresAt = (!date || date === "none") ? null : new Date(date).toISOString()
       const p = setExpiry(id, expiresAt)
-      if (isJson()) output(p)
+      if (isJson(program)) output(program, p)
       else console.log(expiresAt ? chalk.yellow(`Expires ${p.slug} on ${new Date(expiresAt).toLocaleDateString()}`) : chalk.gray(`Cleared expiry for ${p.slug}`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── duplicate ─────────────────────────────────────────────────────────────────
@@ -843,7 +484,7 @@ program
   .action((id: string, opts: Record<string, string>) => {
     try {
       const source = getPrompt(id)
-      if (!source) handleError(`Prompt not found: ${id}`)
+      if (!source) handleError(program, `Prompt not found: ${id}`)
       const p = source!
       const { prompt } = upsertPrompt({
         title: opts["title"] ?? `Copy of ${p.title}`,
@@ -854,9 +495,9 @@ program
         tags: p.tags,
         source: "manual",
       })
-      if (isJson()) output(prompt)
+      if (isJson(program)) output(program, prompt)
       else console.log(`${chalk.green("Duplicated")} ${chalk.bold(p.slug)} → ${chalk.bold(prompt.slug)}`)
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── diff ──────────────────────────────────────────────────────────────────────
@@ -866,14 +507,14 @@ program
   .action((id: string, v1: string, v2: string | undefined) => {
     try {
       const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
+      if (!prompt) handleError(program, `Prompt not found: ${id}`)
       const versions = listVersions(prompt!.id)
       const versionA = versions.find((v) => v.version === parseInt(v1))
-      if (!versionA) handleError(`Version ${v1} not found`)
+      if (!versionA) handleError(program, `Version ${v1} not found`)
       const bodyB = v2 ? (versions.find((v) => v.version === parseInt(v2))?.body ?? null) : prompt!.body
-      if (bodyB === null) handleError(`Version ${v2} not found`)
+      if (bodyB === null) handleError(program, `Version ${v2} not found`)
       const lines = diffTexts(versionA!.body, bodyB!)
-      if (isJson()) { output(lines); return }
+      if (isJson(program)) { output(program, lines); return }
       const label2 = v2 ? `v${v2}` : "current"
       console.log(chalk.bold(`${prompt!.slug}: v${v1} → ${label2}`))
       for (const l of lines) {
@@ -881,7 +522,7 @@ program
         else if (l.type === "removed") console.log(chalk.red(`- ${l.content}`))
         else console.log(chalk.gray(`  ${l.content}`))
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── chain ─────────────────────────────────────────────────────────────────────
@@ -893,13 +534,12 @@ program
       if (next !== undefined) {
         const nextSlug = next === "none" ? null : next
         const p = setNextPrompt(id, nextSlug)
-        if (isJson()) output(p)
+        if (isJson(program)) output(program, p)
         else console.log(nextSlug ? `${chalk.green(p.slug)} → ${chalk.bold(nextSlug)}` : chalk.gray(`Cleared chain for ${p.slug}`))
         return
       }
-      // Show chain
       const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
+      if (!prompt) handleError(program, `Prompt not found: ${id}`)
       const chain: Array<{ slug: string; title: string }> = []
       let cur = prompt
       const seen = new Set<string>()
@@ -908,28 +548,9 @@ program
         seen.add(cur.id)
         cur = cur.next_prompt ? getPrompt(cur.next_prompt)! : null!
       }
-      if (isJson()) { output(chain); return }
+      if (isJson(program)) { output(program, chain); return }
       console.log(chain.map((c) => chalk.green(c.slug)).join(chalk.gray(" → ")))
-    } catch (e) { handleError(e) }
-  })
-
-// ── similar ───────────────────────────────────────────────────────────────────
-program
-  .command("similar <id>")
-  .description("Find prompts similar to a given prompt (by tag overlap and collection)")
-  .option("-n, --limit <n>", "Max results", "5")
-  .action((id: string, opts: Record<string, string>) => {
-    try {
-      const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
-      const results = findSimilar(prompt!.id, parseInt(opts["limit"] ?? "5") || 5)
-      if (isJson()) { output(results); return }
-      if (results.length === 0) { console.log(chalk.gray("No similar prompts found.")); return }
-      for (const r of results) {
-        const score = chalk.gray(`${Math.round(r.score * 100)}%`)
-        console.log(`${fmtPrompt(r.prompt)}  ${score}`)
-      }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── completion ────────────────────────────────────────────────────────────────
@@ -943,7 +564,7 @@ program
     } else if (sh === "bash") {
       console.log(generateBashCompletion())
     } else {
-      handleError(`Unknown shell: ${sh}. Use 'zsh' or 'bash'.`)
+      handleError(program, `Unknown shell: ${sh}. Use 'zsh' or 'bash'.`)
     }
   })
 
@@ -977,7 +598,6 @@ program
       }
     })
 
-    // Keep alive
     await new Promise(() => {})
   })
 
@@ -990,7 +610,7 @@ program
   .action((opts: Record<string, string>) => {
     try {
       const { scanned, imported } = scanAndImportSlashCommands(opts["dir"] ?? process.cwd(), opts["agent"])
-      if (isJson()) { output({ scanned, imported }); return }
+      if (isJson(program)) { output(program, { scanned, imported }); return }
       if (scanned.length === 0) { console.log(chalk.gray("No slash command files found.")); return }
       console.log(chalk.bold(`Scanned ${scanned.length} file(s):`))
       for (const s of scanned) console.log(chalk.gray(`  ${s.source}/${s.file}`))
@@ -998,7 +618,7 @@ program
       if (imported.errors.length > 0) {
         for (const e of imported.errors) console.error(chalk.red(`  ✗ ${e.item}: ${e.error}`))
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 // ── remove (alias for delete) ─────────────────────────────────────────────────
@@ -1011,8 +631,8 @@ program
   .action(async (id: string, opts: { yes?: boolean }) => {
     try {
       const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
-      if (!opts.yes && !isJson()) {
+      if (!prompt) handleError(program, `Prompt not found: ${id}`)
+      if (!opts.yes && !isJson(program)) {
         const { createInterface } = await import("readline")
         const rl = createInterface({ input: process.stdin, output: process.stdout })
         await new Promise<void>((resolve) => {
@@ -1027,10 +647,10 @@ program
         })
       }
       deletePrompt(id)
-      if (isJson()) output({ deleted: true, id: prompt!.id })
+      if (isJson(program)) output(program, { deleted: true, id: prompt!.id })
       else console.log(chalk.red(`Removed ${prompt!.slug}`))
     } catch (e) {
-      handleError(e)
+      handleError(program, e)
     }
   })
 
@@ -1045,16 +665,16 @@ scheduleCmd
   .action((id: string, cron: string, opts: { vars?: string; agent?: string }) => {
     try {
       const cronError = validateCron(cron)
-      if (cronError) handleError(`Invalid cron: ${cronError}`)
+      if (cronError) handleError(program, `Invalid cron: ${cronError}`)
       const prompt = getPrompt(id)
-      if (!prompt) handleError(`Prompt not found: ${id}`)
+      if (!prompt) handleError(program, `Prompt not found: ${id}`)
       const vars = opts.vars ? JSON.parse(opts.vars) as Record<string, string> : undefined
       const schedule = createSchedule({ prompt_id: prompt!.id, prompt_slug: prompt!.slug, cron, vars, agent_id: opts.agent })
-      if (isJson()) { output(schedule); return }
+      if (isJson(program)) { output(program, schedule); return }
       console.log(chalk.green(`Scheduled "${prompt!.slug}" [${schedule.id}]`))
       console.log(`  Cron:     ${cron}`)
       console.log(`  Next run: ${schedule.next_run_at}`)
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 scheduleCmd
@@ -1063,12 +683,12 @@ scheduleCmd
   .action((id?: string) => {
     try {
       const schedules = listSchedules(id)
-      if (isJson()) { output(schedules); return }
+      if (isJson(program)) { output(program, schedules); return }
       if (!schedules.length) { console.log(chalk.gray("No schedules.")); return }
       for (const s of schedules) {
         console.log(`${chalk.bold(s.id)}  ${chalk.cyan(s.prompt_slug)}  cron:${s.cron}  next:${s.next_run_at}  runs:${s.run_count}`)
       }
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 scheduleCmd
@@ -1078,9 +698,9 @@ scheduleCmd
   .action((scheduleId: string) => {
     try {
       deleteSchedule(scheduleId)
-      if (isJson()) output({ deleted: true, id: scheduleId })
+      if (isJson(program)) output(program, { deleted: true, id: scheduleId })
       else console.log(chalk.red(`Removed schedule ${scheduleId}`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 scheduleCmd
@@ -1091,14 +711,14 @@ scheduleCmd
     try {
       const due = getDueSchedules()
       if (!due.length) { console.log(chalk.gray("No prompts due.")); return }
-      if (isJson()) { output(due); return }
+      if (isJson(program)) { output(program, due); return }
       for (const d of due) {
         console.log(chalk.bold(`\n[${d.id}] ${d.prompt_slug}`))
         console.log(chalk.gray(`Next run: ${d.next_run_at}  |  Runs: ${d.run_count}`))
         console.log(chalk.white(d.rendered))
       }
       if (!opts.dryRun) console.log(chalk.green(`\n✓ Marked ${due.length} schedule(s) as ran.`))
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 scheduleCmd
@@ -1108,7 +728,7 @@ scheduleCmd
   .action((cron: string, opts: { count?: string }) => {
     try {
       const cronError = validateCron(cron)
-      if (cronError) handleError(`Invalid cron: ${cronError}`)
+      if (cronError) handleError(program, `Invalid cron: ${cronError}`)
       const count = parseInt(opts.count ?? "5", 10)
       const runs: string[] = []
       let from = new Date()
@@ -1117,10 +737,10 @@ scheduleCmd
         runs.push(next.toISOString())
         from = next
       }
-      if (isJson()) { output({ cron, next_runs: runs }); return }
+      if (isJson(program)) { output(program, { cron, next_runs: runs }); return }
       console.log(chalk.bold(`Next ${count} runs for "${cron}":`))
       for (const r of runs) console.log(`  ${r}`)
-    } catch (e) { handleError(e) }
+    } catch (e) { handleError(program, e) }
   })
 
 program.parse()
