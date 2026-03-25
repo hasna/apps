@@ -133,7 +133,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
   }
   const filteredSseClients = new Set<FilteredClient>();
 
-  function broadcastEvent(event: { type: string; task_id?: string; action: string; agent_id?: string | null }) {
+  function broadcastEvent(event: { type: string; task_id?: string; action: string; agent_id?: string | null; project_id?: string | null }) {
     const data = JSON.stringify({ ...event, timestamp: new Date().toISOString() });
     // Broadcast to dashboard clients
     for (const controller of sseClients) {
@@ -145,6 +145,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
     for (const client of filteredSseClients) {
       if (client.events && !client.events.has(eventName) && !client.events.has("*")) continue;
       if (client.agentId && event.agent_id !== client.agentId) continue;
+      if (client.projectId && event.project_id !== client.projectId) continue;
       try { client.controller.enqueue(`event: ${eventName}\ndata: ${data}\n\n`); }
       catch { filteredSseClients.delete(client); }
     }
@@ -179,8 +180,31 @@ export async function startServer(port: number, options?: { open?: boolean; host
         });
       }
 
-      // ── SSE Event Stream ──
+      // ── SSE Event Stream (supports optional agent_id/project_id filtering) ──
       if (path === "/api/events" && method === "GET") {
+        const agentId = url.searchParams.get("agent_id") || undefined;
+        const projectId = url.searchParams.get("project_id") || undefined;
+        if (agentId || projectId) {
+          // Filtered SSE — reuse the filtered client infrastructure
+          const client: FilteredClient = { controller: null as any, agentId, projectId, events: undefined };
+          const stream = new ReadableStream({
+            start(controller) {
+              client.controller = controller;
+              filteredSseClients.add(client);
+              controller.enqueue(`data: ${JSON.stringify({ type: "connected", agent_id: agentId, project_id: projectId, timestamp: new Date().toISOString() })}\n\n`);
+            },
+            cancel() { filteredSseClients.delete(client); },
+          });
+          return new Response(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+            },
+          });
+        }
+        // Unfiltered dashboard SSE
         const stream = new ReadableStream({
           start(controller) {
             sseClients.add(controller);
@@ -290,7 +314,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
             priority: body.priority as Task["priority"] | undefined,
             project_id: body.project_id,
           });
-          broadcastEvent({ type: "task", task_id: task.id, action: "created", agent_id: task.agent_id });
+          broadcastEvent({ type: "task", task_id: task.id, action: "created", agent_id: task.agent_id, project_id: task.project_id });
           return json(taskToSummary(task), 201, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to create task" }, 500, port);
@@ -529,7 +553,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
         const id = startMatch[1]!;
         try {
           const task = startTask(id, "dashboard");
-          broadcastEvent({ type: "task", task_id: task.id, action: "started", agent_id: "dashboard" });
+          broadcastEvent({ type: "task", task_id: task.id, action: "started", agent_id: "dashboard", project_id: task.project_id });
           return json(taskToSummary(task), 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to start task" }, 500, port);
@@ -544,7 +568,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
           const body = await req.json().catch(() => ({})) as { reason?: string; agent_id?: string; retry?: boolean; error_code?: string };
           const { failTask } = await import("../db/tasks.js");
           const result = failTask(id, body.agent_id, body.reason, { retry: body.retry, error_code: body.error_code });
-          broadcastEvent({ type: "task", task_id: id, action: "failed", agent_id: body.agent_id || null });
+          broadcastEvent({ type: "task", task_id: id, action: "failed", agent_id: body.agent_id || null, project_id: result.task.project_id });
           return json({ task: taskToSummary(result.task), retry_task: result.retryTask ? taskToSummary(result.retryTask) : null }, 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to fail task" }, 500, port);
@@ -557,7 +581,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
         const id = completeMatch[1]!;
         try {
           const task = completeTask(id, "dashboard");
-          broadcastEvent({ type: "task", task_id: task.id, action: "completed", agent_id: "dashboard" });
+          broadcastEvent({ type: "task", task_id: task.id, action: "completed", agent_id: "dashboard", project_id: task.project_id });
           return json(taskToSummary(task), 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to complete task" }, 500, port);

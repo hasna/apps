@@ -14,6 +14,11 @@ import {
   tasksFromTemplate,
   previewTemplate,
   resolveVariables,
+  evaluateCondition,
+  exportTemplate,
+  importTemplate,
+  getTemplateVersion,
+  listTemplateVersions,
 } from "./templates.js";
 import { initBuiltinTemplates, BUILTIN_TEMPLATES } from "./builtin-templates.js";
 import { createTask } from "./tasks.js";
@@ -577,6 +582,35 @@ describe("tasksFromTemplate (multi-task)", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.priority).toBe("low");
   });
+
+  it("should create multi-task template without project_id", () => {
+    const t = createTemplate({
+      name: "No Project",
+      title_pattern: "No Project: {feature}",
+      tasks: [
+        { title_pattern: "Design {feature}" },
+        { title_pattern: "Build {feature}", depends_on: [0] },
+        { title_pattern: "Test {feature}", depends_on: [1] },
+      ],
+    }, db);
+
+    // This should NOT throw REFERENCE_ERROR (Bug 1 fix)
+    const tasks = tasksFromTemplate(t.id, undefined, { feature: "SSO" }, undefined, db);
+    expect(tasks).toHaveLength(3);
+    expect(tasks[0]!.title).toContain("Design SSO");
+    expect(tasks[1]!.title).toContain("Build SSO");
+    expect(tasks[2]!.title).toContain("Test SSO");
+    expect(tasks[0]!.project_id).toBeNull();
+  });
+
+  it("should create single-task template without project_id", () => {
+    const t = createTemplate({ name: "NoProjSingle", title_pattern: "Quick task", priority: "high" }, db);
+
+    const tasks = tasksFromTemplate(t.id, undefined, undefined, undefined, db);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.title).toBe("Quick task");
+    expect(tasks[0]!.project_id).toBeNull();
+  });
 });
 
 describe("deleting multi-task template cascades", () => {
@@ -919,5 +953,406 @@ describe("previewTemplate", () => {
     expect(preview.tasks[0]!.title).toBe("Scaffold invoices package structure");
     expect(preview.tasks[8]!.title).toBe("Create GitHub repo hasna/invoices");
     expect(preview.resolved_variables.org).toBe("hasna");
+  });
+});
+
+// === Feature: Conditional tasks ===
+
+describe("evaluateCondition", () => {
+  it("should return true for empty condition", () => {
+    expect(evaluateCondition("", {})).toBe(true);
+    expect(evaluateCondition("  ", {})).toBe(true);
+  });
+
+  it("should evaluate truthy: {var} when value exists", () => {
+    expect(evaluateCondition("{env}", { env: "prod" })).toBe(true);
+  });
+
+  it("should evaluate truthy: {var} when value is empty", () => {
+    expect(evaluateCondition("{env}", { env: "" })).toBe(false);
+  });
+
+  it("should evaluate truthy: {var} when value is false string", () => {
+    expect(evaluateCondition("{env}", { env: "false" })).toBe(false);
+  });
+
+  it("should evaluate truthy: {var} when key doesn't exist", () => {
+    expect(evaluateCondition("{env}", {})).toBe(false);
+  });
+
+  it("should evaluate falsy: !{var} when key doesn't exist", () => {
+    expect(evaluateCondition("!{env}", {})).toBe(true);
+  });
+
+  it("should evaluate falsy: !{var} when value is empty", () => {
+    expect(evaluateCondition("!{env}", { env: "" })).toBe(true);
+  });
+
+  it("should evaluate falsy: !{var} when value exists", () => {
+    expect(evaluateCondition("!{env}", { env: "prod" })).toBe(false);
+  });
+
+  it("should evaluate equality: {var} == value", () => {
+    expect(evaluateCondition("{env} == prod", { env: "prod" })).toBe(true);
+    expect(evaluateCondition("{env} == staging", { env: "prod" })).toBe(false);
+  });
+
+  it("should evaluate inequality: {var} != value", () => {
+    expect(evaluateCondition("{env} != prod", { env: "staging" })).toBe(true);
+    expect(evaluateCondition("{env} != prod", { env: "prod" })).toBe(false);
+  });
+
+  it("should handle unknown condition format as true", () => {
+    expect(evaluateCondition("some random text", {})).toBe(true);
+  });
+});
+
+describe("conditional tasks in tasksFromTemplate", () => {
+  it("should skip tasks when condition evaluates to false", () => {
+    const project = createProject({ name: "Cond", path: "/tmp/test-cond" }, db);
+    const t = createTemplate({
+      name: "Conditional",
+      title_pattern: "Deploy {service}",
+      tasks: [
+        { title_pattern: "Build {service}" },
+        { title_pattern: "Run migrations", condition: "{needs_migration}" },
+        { title_pattern: "Deploy {service}", depends_on: [0, 1] },
+      ],
+    }, db);
+
+    const tasks = tasksFromTemplate(t.id, project.id, { service: "api" }, undefined, db);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]!.title).toContain("Build api");
+    expect(tasks[1]!.title).toContain("Deploy api");
+  });
+
+  it("should include tasks when condition evaluates to true", () => {
+    const project = createProject({ name: "CondTrue", path: "/tmp/test-cond-true" }, db);
+    const t = createTemplate({
+      name: "ConditionalTrue",
+      title_pattern: "Deploy",
+      tasks: [
+        { title_pattern: "Build" },
+        { title_pattern: "Run migrations", condition: "{needs_migration}" },
+        { title_pattern: "Deploy", depends_on: [0, 1] },
+      ],
+    }, db);
+
+    const tasks = tasksFromTemplate(t.id, project.id, { needs_migration: "true" }, undefined, db);
+    expect(tasks).toHaveLength(3);
+  });
+
+  it("should skip dependencies pointing to skipped tasks", () => {
+    const project = createProject({ name: "CondDeps", path: "/tmp/test-cond-deps" }, db);
+    const t = createTemplate({
+      name: "CondDeps",
+      title_pattern: "Pipeline",
+      tasks: [
+        { title_pattern: "Step A" },
+        { title_pattern: "Optional step", condition: "{include_optional}" },
+        { title_pattern: "Step C", depends_on: [0, 1] },
+      ],
+    }, db);
+
+    const tasks = tasksFromTemplate(t.id, project.id, {}, undefined, db);
+    expect(tasks).toHaveLength(2);
+
+    // Step C should only depend on Step A (not the skipped optional step)
+    const deps = db.query("SELECT depends_on FROM task_dependencies WHERE task_id = ?").all(tasks[1]!.id) as { depends_on: string }[];
+    expect(deps).toHaveLength(1);
+    expect(deps[0]!.depends_on).toBe(tasks[0]!.id);
+  });
+
+  it("should respect condition with equality check", () => {
+    const project = createProject({ name: "CondEq", path: "/tmp/test-cond-eq" }, db);
+    const t = createTemplate({
+      name: "CondEq",
+      title_pattern: "Deploy",
+      tasks: [
+        { title_pattern: "Staging deploy", condition: "{env} == staging" },
+        { title_pattern: "Prod deploy", condition: "{env} == prod" },
+      ],
+    }, db);
+
+    const tasks = tasksFromTemplate(t.id, project.id, { env: "prod" }, undefined, db);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.title).toContain("Prod deploy");
+  });
+
+  it("should filter conditional tasks in preview", () => {
+    const t = createTemplate({
+      name: "PreviewCond",
+      title_pattern: "Deploy",
+      tasks: [
+        { title_pattern: "Always" },
+        { title_pattern: "Only prod", condition: "{env} == prod" },
+        { title_pattern: "Only staging", condition: "{env} == staging" },
+      ],
+    }, db);
+
+    const preview = previewTemplate(t.id, { env: "prod" }, db);
+    expect(preview.tasks).toHaveLength(2);
+    expect(preview.tasks[0]!.title).toBe("Always");
+    expect(preview.tasks[1]!.title).toBe("Only prod");
+  });
+});
+
+// === Feature: Export/Import ===
+
+describe("exportTemplate", () => {
+  it("should export a template with all fields", () => {
+    const t = createTemplate({
+      name: "Export Test",
+      title_pattern: "Test: {name}",
+      description: "A test template",
+      priority: "high",
+      tags: ["test"],
+      variables: [{ name: "name", required: true }],
+      tasks: [
+        { title_pattern: "Step 1", priority: "low" },
+        { title_pattern: "Step 2", depends_on: [0], condition: "{flag}" },
+      ],
+    }, db);
+
+    const exported = exportTemplate(t.id, db);
+    expect(exported.name).toBe("Export Test");
+    expect(exported.title_pattern).toBe("Test: {name}");
+    expect(exported.description).toBe("A test template");
+    expect(exported.priority).toBe("high");
+    expect(exported.tags).toEqual(["test"]);
+    expect(exported.variables).toHaveLength(1);
+    expect(exported.tasks).toHaveLength(2);
+    expect(exported.tasks[1]!.condition).toBe("{flag}");
+    expect(exported.tasks[1]!.depends_on_positions).toEqual([0]);
+  });
+
+  it("should throw for non-existent template", () => {
+    expect(() => exportTemplate("nonexistent", db)).toThrow("Template not found");
+  });
+});
+
+describe("importTemplate", () => {
+  it("should import a template from exported JSON", () => {
+    const original = createTemplate({
+      name: "Original",
+      title_pattern: "Task: {x}",
+      priority: "critical",
+      tags: ["imported"],
+      variables: [{ name: "x", required: true }],
+      tasks: [
+        { title_pattern: "Do {x}", priority: "high" },
+        { title_pattern: "Verify {x}", depends_on: [0] },
+      ],
+    }, db);
+
+    const exported = exportTemplate(original.id, db);
+    const imported = importTemplate(exported, db);
+
+    expect(imported.id).not.toBe(original.id);
+    expect(imported.name).toBe("Original");
+    expect(imported.title_pattern).toBe("Task: {x}");
+    expect(imported.priority).toBe("critical");
+    expect(imported.tags).toEqual(["imported"]);
+    expect(imported.variables).toHaveLength(1);
+
+    const importedTasks = getTemplateTasks(imported.id, db);
+    expect(importedTasks).toHaveLength(2);
+    expect(importedTasks[0]!.title_pattern).toBe("Do {x}");
+    expect(importedTasks[1]!.depends_on_positions).toEqual([0]);
+  });
+
+  it("should round-trip through JSON serialization", () => {
+    const original = createTemplate({
+      name: "RoundTrip",
+      title_pattern: "T",
+      tasks: [{ title_pattern: "Step", condition: "{flag}", metadata: { key: "val" } }],
+    }, db);
+
+    const exported = exportTemplate(original.id, db);
+    const jsonStr = JSON.stringify(exported);
+    const parsed = JSON.parse(jsonStr);
+    const imported = importTemplate(parsed, db);
+
+    const importedTasks = getTemplateTasks(imported.id, db);
+    expect(importedTasks[0]!.condition).toBe("{flag}");
+    expect(importedTasks[0]!.metadata).toEqual({ key: "val" });
+  });
+});
+
+// === Feature: Template composition ===
+
+describe("template composition", () => {
+  it("should include tasks from another template", () => {
+    const project = createProject({ name: "Compose", path: "/tmp/test-compose" }, db);
+
+    const inner = createTemplate({
+      name: "Inner",
+      title_pattern: "Inner",
+      tasks: [
+        { title_pattern: "Inner step 1" },
+        { title_pattern: "Inner step 2", depends_on: [0] },
+      ],
+    }, db);
+
+    const outer = createTemplate({
+      name: "Outer",
+      title_pattern: "Outer",
+      tasks: [
+        { title_pattern: "Setup" },
+        { title_pattern: "(include)", include_template_id: inner.id },
+        { title_pattern: "Cleanup", depends_on: [0] },
+      ],
+    }, db);
+
+    const tasks = tasksFromTemplate(outer.id, project.id, undefined, undefined, db);
+    // Setup + Inner step 1 + Inner step 2 + Cleanup = 4 tasks
+    expect(tasks).toHaveLength(4);
+    expect(tasks[0]!.title).toContain("Setup");
+    expect(tasks[1]!.title).toContain("Inner step 1");
+    expect(tasks[2]!.title).toContain("Inner step 2");
+    expect(tasks[3]!.title).toContain("Cleanup");
+  });
+
+  it("should pass variables to included template", () => {
+    const project = createProject({ name: "ComposeVars", path: "/tmp/test-compose-vars" }, db);
+
+    const inner = createTemplate({
+      name: "InnerVars",
+      title_pattern: "InnerVars",
+      tasks: [
+        { title_pattern: "Deploy {service}" },
+      ],
+    }, db);
+
+    const outer = createTemplate({
+      name: "OuterVars",
+      title_pattern: "OuterVars",
+      tasks: [
+        { title_pattern: "Build {service}" },
+        { title_pattern: "(include)", include_template_id: inner.id },
+      ],
+    }, db);
+
+    const tasks = tasksFromTemplate(outer.id, project.id, { service: "api" }, undefined, db);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]!.title).toContain("Build api");
+    expect(tasks[1]!.title).toContain("Deploy api");
+  });
+
+  it("should detect circular template references", () => {
+    const project = createProject({ name: "Circular", path: "/tmp/test-circular" }, db);
+
+    const tA = createTemplate({
+      name: "CircA",
+      title_pattern: "A",
+      tasks: [{ title_pattern: "A step" }],
+    }, db);
+
+    const tB = createTemplate({
+      name: "CircB",
+      title_pattern: "B",
+      tasks: [{ title_pattern: "(include)", include_template_id: tA.id }],
+    }, db);
+
+    // Now make A include B (circular)
+    addTemplateTasks(tA.id, [
+      { title_pattern: "(include)", include_template_id: tB.id },
+    ], db);
+
+    expect(() => tasksFromTemplate(tA.id, project.id, undefined, undefined, db))
+      .toThrow("Circular template reference detected");
+  });
+});
+
+// === Feature: Template versioning ===
+
+describe("template versioning", () => {
+  it("should start at version 1", () => {
+    const t = createTemplate({ name: "V1", title_pattern: "V1" }, db);
+    expect(t.version).toBe(1);
+  });
+
+  it("should increment version on update", () => {
+    const t = createTemplate({ name: "V1", title_pattern: "V1" }, db);
+    const updated = updateTemplate(t.id, { name: "V2" }, db);
+    expect(updated!.version).toBe(2);
+  });
+
+  it("should save snapshot on update", () => {
+    const t = createTemplate({ name: "Original", title_pattern: "OG" }, db);
+    updateTemplate(t.id, { name: "Updated" }, db);
+
+    const versions = listTemplateVersions(t.id, db);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]!.version).toBe(1);
+
+    const snap = JSON.parse(versions[0]!.snapshot);
+    expect(snap.name).toBe("Original");
+    expect(snap.title_pattern).toBe("OG");
+  });
+
+  it("should accumulate versions on multiple updates", () => {
+    const t = createTemplate({ name: "V1", title_pattern: "T" }, db);
+    updateTemplate(t.id, { name: "V2" }, db);
+    updateTemplate(t.id, { name: "V3" }, db);
+    updateTemplate(t.id, { name: "V4" }, db);
+
+    const versions = listTemplateVersions(t.id, db);
+    expect(versions).toHaveLength(3);
+    // Ordered by version DESC
+    expect(versions[0]!.version).toBe(3);
+    expect(versions[1]!.version).toBe(2);
+    expect(versions[2]!.version).toBe(1);
+  });
+
+  it("should retrieve a specific version", () => {
+    const t = createTemplate({ name: "V1", title_pattern: "T1" }, db);
+    updateTemplate(t.id, { name: "V2", title_pattern: "T2" }, db);
+    updateTemplate(t.id, { name: "V3", title_pattern: "T3" }, db);
+
+    const v1 = getTemplateVersion(t.id, 1, db);
+    expect(v1).not.toBeNull();
+    const snap = JSON.parse(v1!.snapshot);
+    expect(snap.name).toBe("V1");
+    expect(snap.title_pattern).toBe("T1");
+  });
+
+  it("should return null for non-existent version", () => {
+    const t = createTemplate({ name: "V1", title_pattern: "T" }, db);
+    expect(getTemplateVersion(t.id, 999, db)).toBeNull();
+  });
+
+  it("should return empty array for template with no versions", () => {
+    const t = createTemplate({ name: "NoVersions", title_pattern: "T" }, db);
+    expect(listTemplateVersions(t.id, db)).toEqual([]);
+  });
+
+  it("should cascade delete versions when template is deleted", () => {
+    const t = createTemplate({ name: "CascadeDel", title_pattern: "T" }, db);
+    updateTemplate(t.id, { name: "Updated" }, db);
+    expect(listTemplateVersions(t.id, db)).toHaveLength(1);
+
+    deleteTemplate(t.id, db);
+    const rows = db.query("SELECT * FROM template_versions").all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it("should include tasks in version snapshot", () => {
+    const t = createTemplate({
+      name: "WithTasks",
+      title_pattern: "T",
+      tasks: [
+        { title_pattern: "Step 1" },
+        { title_pattern: "Step 2", depends_on: [0] },
+      ],
+    }, db);
+
+    updateTemplate(t.id, { name: "Updated" }, db);
+
+    const versions = listTemplateVersions(t.id, db);
+    const snap = JSON.parse(versions[0]!.snapshot);
+    expect(snap.tasks).toHaveLength(2);
+    expect(snap.tasks[0].title_pattern).toBe("Step 1");
+    expect(snap.tasks[1].depends_on_positions).toEqual([0]);
   });
 });
