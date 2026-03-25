@@ -35,6 +35,10 @@ export { executeAction } from "./drivers/mac/input.js";
 // Providers
 export { createProvider, createAnthropicProvider, createOpenAIProvider } from "./providers/index.js";
 
+// Safety
+export { checkAction, resetRateLimiter } from "./agent/safety.js";
+export type { SafetyCheckResult } from "./agent/safety.js";
+
 // Config
 export { loadConfig, saveConfig, getConfigValue, setConfigValue, getConfigPath, DEFAULT_CONFIG } from "./lib/config.js";
 export type { ComputerConfig } from "./lib/config.js";

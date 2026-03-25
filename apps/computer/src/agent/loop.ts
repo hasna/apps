@@ -13,6 +13,8 @@ import { createMacDriver } from "../drivers/mac/index.js";
 import { createProvider } from "../providers/index.js";
 import { saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { scaleScreenshot } from "../lib/scale.js";
+import { loadConfig } from "../lib/config.js";
+import { checkAction } from "./safety.js";
 import { getDb, logAction, createSession, updateSession } from "../db/index.js";
 
 const DEFAULT_MAX_STEPS = 50;
@@ -35,9 +37,11 @@ export async function runTask(options: RunOptions): Promise<Session> {
     onDone,
   } = options;
 
-  // Initialize driver and provider
+  // Initialize driver, provider, and safety config
   const driver = createMacDriver();
   const provider = createProvider(providerName, { model });
+  const config = loadConfig();
+  const safetyConfig = config.safety;
 
   // Create session
   const sessionId = randomUUID();
@@ -129,7 +133,33 @@ export async function runTask(options: RunOptions): Promise<Session> {
         return session;
       }
 
-      // 4. Execute the action
+      // 4. Safety check before executing
+      const safetyResult = checkAction(response.action, safetyConfig);
+      if (!safetyResult.allowed) {
+        // Action blocked by safety layer — tell the model
+        history.push({
+          action: null,
+          reasoning: `BLOCKED by safety: ${safetyResult.reason}`,
+          done: false,
+        });
+        await logAction({
+          session_id: sessionId,
+          step,
+          action: response.action,
+          reasoning: `BLOCKED: ${safetyResult.reason}`,
+          screenshot_path: screenshotPath,
+          success: false,
+          error: safetyResult.reason,
+          duration_ms: 0,
+          tokens_in: response.usage?.input,
+          tokens_out: response.usage?.output,
+        });
+        onStep?.(step, response, { success: false, error: safetyResult.reason, duration_ms: 0 });
+        session.steps = step + 1;
+        continue;
+      }
+
+      // 5. Execute the action
       const result = await driver.execute(response.action);
 
       // 5. Log to DB
