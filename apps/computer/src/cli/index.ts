@@ -217,6 +217,111 @@ program
     console.log(`  Tokens:    ${stats.total_tokens.toLocaleString()}`);
   });
 
+// ── watch ────────────────────────────────────────────────────────────
+program
+  .command("watch")
+  .description("Live-stream what the agent sees (polls running session)")
+  .argument("[id]", "Session ID to watch (default: latest running)")
+  .option("-i, --interval <ms>", "Poll interval in milliseconds", "500")
+  .option("--no-preview", "Disable inline screenshot preview")
+  .action(async (id: string | undefined, opts: any) => {
+    const interval = parseInt(opts.interval);
+
+    // Find session to watch
+    let sessionId = id;
+    if (!sessionId) {
+      const running = listSessions({ status: "running", limit: 1 });
+      if (running.length === 0) {
+        console.log(chalk.yellow("No running sessions found. Start one with `computer run <task>`."));
+        process.exit(0);
+      }
+      sessionId = running[0].id;
+    } else {
+      // Prefix match
+      const all = listSessions({ limit: 100 });
+      const match = all.find((s) => s.id.startsWith(sessionId!));
+      if (match) sessionId = match.id;
+    }
+
+    console.log(chalk.bold.cyan("computer watch") + ` — session ${chalk.dim(sessionId!.slice(0, 8))}`);
+    console.log(chalk.dim(`Polling every ${interval}ms. Press Ctrl+C to stop.\n`));
+
+    let lastStep = -1;
+
+    const poll = async () => {
+      const session = getSession(sessionId!);
+      if (!session) {
+        console.log(chalk.red("Session not found."));
+        process.exit(1);
+      }
+
+      const logs = getActionLogs(sessionId!);
+      const newLogs = logs.filter((l) => l.step > lastStep);
+
+      for (const log of newLogs) {
+        const status = log.success ? chalk.green("OK") : chalk.red("FAIL");
+        console.log(
+          chalk.dim(`[${String(log.step + 1).padStart(3)}]`) +
+          ` ${status} ${chalk.yellow(log.action.type)}` +
+          chalk.dim(` (${log.duration_ms}ms)`)
+        );
+        if (log.reasoning) {
+          const short = log.reasoning.slice(0, 120).replace(/\n/g, " ");
+          console.log(chalk.dim(`      ${short}${log.reasoning.length > 120 ? "..." : ""}`));
+        }
+        if (log.error) {
+          console.log(chalk.red(`      Error: ${log.error}`));
+        }
+        // Show inline screenshot if we have the path and terminal supports it
+        if (opts.preview !== false && log.screenshot_path && supportsInlineImages()) {
+          try {
+            const { readFileSync } = await import("fs");
+            const imgData = readFileSync(log.screenshot_path);
+            const b64 = imgData.toString("base64");
+            const img = renderInlineImage(b64, { width: 40, height: 12 });
+            if (img) process.stdout.write(img);
+          } catch {
+            // Screenshot file may not exist
+          }
+        }
+        lastStep = log.step;
+      }
+
+      // Check if session ended
+      if (session.status !== "running") {
+        console.log();
+        const totalCost = formatCost(calculateCost(session.model, session.total_tokens_in, session.total_tokens_out));
+        if (session.status === "completed" && !session.error) {
+          console.log(chalk.green.bold("Session completed."));
+        } else if (session.status === "completed") {
+          console.log(chalk.yellow.bold(`Session finished: ${session.error}`));
+        } else {
+          console.log(chalk.red.bold(`Session ${session.status}: ${session.error}`));
+        }
+        console.log(
+          chalk.dim(`Steps: ${session.steps} | Tokens: ${(session.total_tokens_in + session.total_tokens_out).toLocaleString()} | Cost: ${totalCost} | Duration: ${(session.total_duration_ms / 1000).toFixed(1)}s`)
+        );
+        process.exit(0);
+      }
+    };
+
+    // Initial poll
+    await poll();
+
+    // Continue polling
+    const timer = setInterval(poll, interval);
+
+    // Clean exit on Ctrl+C
+    process.on("SIGINT", () => {
+      clearInterval(timer);
+      console.log(chalk.dim("\nStopped watching."));
+      process.exit(0);
+    });
+
+    // Keep alive
+    await new Promise(() => {});
+  });
+
 // ── search ───────────────────────────────────────────────────────────
 program
   .command("search")
