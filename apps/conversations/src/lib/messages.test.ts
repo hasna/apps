@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies } from "./messages";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markSpaceRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus } from "./messages";
 import { createSpace, joinSpace } from "./spaces";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -797,5 +797,157 @@ describe("readDigest", () => {
     sendMessage({ from: "a", to: "b", content: "plain" });
     const result = readDigest({ to: "b" });
     expect(result.messages[0].has_attachments).toBe(false);
+  });
+});
+
+describe("compactMessage", () => {
+  test("strips null fields", () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "hello" });
+    const compact = compactMessage(msg);
+    expect(compact.space).toBeUndefined();
+    expect(compact.metadata).toBeUndefined();
+    expect(compact.content).toBe("hello");
+  });
+});
+
+describe("parseMentions", () => {
+  test("extracts unique mentions", () => {
+    expect(parseMentions("hey @alice and @bob")).toEqual(["alice", "bob"]);
+  });
+  test("deduplicates mentions (case insensitive)", () => {
+    expect(parseMentions("@Alice and @alice")).toEqual(["alice"]);
+  });
+  test("returns empty for no mentions", () => {
+    expect(parseMentions("no mentions here")).toEqual([]);
+  });
+});
+
+describe("listUnreadCounts", () => {
+  test("returns unread counts per space for agent", () => {
+    createSpace("dev", "admin");
+    joinSpace("dev", "bob");
+    // Space messages with to_agent="" or to_agent=null count as unread for all members
+    sendMessage({ from: "a", to: "", space: "dev", content: "hello world" });
+    const counts = listUnreadCounts("bob");
+    expect(counts.length).toBeGreaterThanOrEqual(1);
+    const dev = counts.find((c) => c.space === "dev");
+    expect(dev).toBeDefined();
+    expect(dev!.unread_count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("returns all spaces when no agent specified", () => {
+    createSpace("general", "admin");
+    sendMessage({ from: "a", to: "general", space: "general", content: "hi there" });
+    const counts = listUnreadCounts();
+    expect(counts.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("listUnreadCountsWithMentions", () => {
+  test("returns mention counts", () => {
+    createSpace("proj", "admin");
+    joinSpace("proj", "carol");
+    sendMessage({ from: "a", to: "proj", space: "proj", content: "hey @carol check this" });
+    const counts = listUnreadCountsWithMentions("carol");
+    expect(counts.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("getMessagesForAgent", () => {
+  test("returns messages mentioning agent", async () => {
+    createSpace("team", "admin");
+    sendMessage({ from: "a", to: "team", space: "team", content: "ping @dave" });
+    // processMentions is async — give it time
+    await new Promise((r) => setTimeout(r, 100));
+    const result = getMessagesForAgent("dave");
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].mention_id).toBeDefined();
+  });
+
+  test("filters by space", async () => {
+    createSpace("s1", "admin");
+    createSpace("s2", "admin");
+    sendMessage({ from: "a", to: "s1", space: "s1", content: "in s1 @eve" });
+    sendMessage({ from: "a", to: "s2", space: "s2", content: "in s2 @eve" });
+    await new Promise((r) => setTimeout(r, 100));
+    const result = getMessagesForAgent("eve", { space: "s1" });
+    expect(result.length).toBe(1);
+  });
+});
+
+describe("markMentionsRead", () => {
+  test("marks all mentions as read", async () => {
+    createSpace("ch", "admin");
+    sendMessage({ from: "a", to: "ch", space: "ch", content: "@frank check this" });
+    await new Promise((r) => setTimeout(r, 100));
+    const changed = markMentionsRead("frank");
+    expect(changed).toBeGreaterThanOrEqual(1);
+  });
+
+  test("marks mentions in specific space", async () => {
+    createSpace("sp", "admin");
+    sendMessage({ from: "a", to: "sp", space: "sp", content: "@grace look here" });
+    await new Promise((r) => setTimeout(r, 100));
+    const changed = markMentionsRead("grace", "sp");
+    expect(changed).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("markUnread / markUnreadByIds", () => {
+  test("markUnread resets read_at", () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "hi" });
+    markRead([msg.id], "b");
+    expect(getMessageById(msg.id)!.read_at).not.toBeNull();
+    markUnread(msg.id);
+    expect(getMessageById(msg.id)!.read_at).toBeNull();
+  });
+
+  test("markUnreadByIds resets multiple", () => {
+    const m1 = sendMessage({ from: "a", to: "b", content: "1" });
+    const m2 = sendMessage({ from: "a", to: "b", content: "2" });
+    markRead([m1.id, m2.id], "b");
+    markUnreadByIds([m1.id, m2.id]);
+    expect(getMessageById(m1.id)!.read_at).toBeNull();
+    expect(getMessageById(m2.id)!.read_at).toBeNull();
+  });
+
+  test("markUnreadByIds handles empty array", () => {
+    expect(markUnreadByIds([])).toBe(0);
+  });
+});
+
+describe("recordReadReceipt / getReadReceipts / getMessageReadStatus", () => {
+  test("records and retrieves receipts", () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "hi" });
+    recordReadReceipt(msg.id, "Bob");
+    const receipts = getReadReceipts(msg.id);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0].agent).toBe("bob");
+    expect(receipts[0].read_at).toBeTruthy();
+  });
+
+  test("batch records receipts", () => {
+    const m1 = sendMessage({ from: "a", to: "b", content: "1" });
+    const m2 = sendMessage({ from: "a", to: "b", content: "2" });
+    recordReadReceiptsBatch([m1.id, m2.id], "Charlie");
+    expect(getReadReceipts(m1.id).length).toBe(1);
+    expect(getReadReceipts(m2.id).length).toBe(1);
+  });
+
+  test("batch handles empty input", () => {
+    recordReadReceiptsBatch([], "x");
+    // no error
+  });
+
+  test("getMessageReadStatus shows unread members", () => {
+    createSpace("rs", "admin");
+    joinSpace("rs", "alice");
+    joinSpace("rs", "bob");
+    const msg = sendMessage({ from: "alice", to: "rs", space: "rs", content: "hey" });
+    recordReadReceipt(msg.id, "alice");
+    const status = getMessageReadStatus(msg.id, "rs");
+    expect(status.receipts.length).toBe(1);
+    expect(status.unread_by).toContain("bob");
+    expect(status.unread_by).not.toContain("alice");
   });
 });

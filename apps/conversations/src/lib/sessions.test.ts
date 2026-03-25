@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { listSessions, getSession } from "./sessions";
+import { listSessions, getSession, getSessionActivity } from "./sessions";
 import { sendMessage } from "./messages";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
@@ -89,5 +89,28 @@ describe("getSession", () => {
     expect(session!.message_count).toBe(1);
     expect(session!.participants).toContain("alice");
     expect(session!.participants).toContain("bob");
+  });
+});
+
+describe("getSessionActivity", () => {
+  test("returns null for non-existent session", () => {
+    expect(getSessionActivity("nonexistent")).toBeNull();
+  });
+
+  test("returns activity metrics for a session", () => {
+    sendMessage({ from: "alice", to: "bob", content: "hello", session_id: "act1" });
+    sendMessage({ from: "bob", to: "alice", content: "hi back", session_id: "act1" });
+    sendMessage({ from: "alice", to: "bob", content: "reply", session_id: "act1", reply_to: 1 });
+
+    const activity = getSessionActivity("act1");
+    expect(activity).not.toBeNull();
+    expect(activity!.session_id).toBe("act1");
+    expect(activity!.msgs_last_1h).toBeGreaterThanOrEqual(3);
+    expect(activity!.msgs_last_24h).toBeGreaterThanOrEqual(3);
+    expect(activity!.unique_agents).toBe(2);
+    expect(activity!.reply_ratio).toBeGreaterThan(0);
+    expect(activity!.avg_priority).toBe("normal");
+    expect(typeof activity!.reaction_count).toBe("number");
+    expect(typeof activity!.is_trending).toBe("boolean");
   });
 });

@@ -97,7 +97,7 @@ export function registerAgent(
 
     const created = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
     return { agent: parsePresence(created), created: true, took_over: false };
-  }).immediate();
+  });
 
   return result;
 }

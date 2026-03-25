@@ -87,6 +87,17 @@ describe("startPolling", () => {
     expect(received.every((m) => m.space === "general")).toBe(true);
   });
 
+  test("handles callback errors gracefully", async () => {
+    const { stop } = startPolling({
+      interval_ms: 50,
+      on_messages: () => { throw new Error("callback error"); },
+    });
+    sendMessage({ from: "a", to: "b", content: "trigger" });
+    await new Promise((r) => setTimeout(r, 200));
+    stop();
+    // Should not throw — error is caught internally
+  });
+
   test("stop prevents further callbacks", async () => {
     let callCount = 0;
 

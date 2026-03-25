@@ -111,4 +111,30 @@ describe("fireWebhooks", () => {
     // Message to bob, webhook scoped to charlie — should not match
     fireWebhooks(makeMessage({ to_agent: "bob" }));
   });
+
+  test("fires webhook for agent-scoped space message", () => {
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["space"], agent: "charlie" }],
+    }));
+    // Space messages are not filtered by agent scope (only DMs are)
+    fireWebhooks(makeMessage({ space: "general", to_agent: "general" }));
+  });
+
+  test("mention event does not match when agent not mentioned", () => {
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["mention"], agent: "bob" }],
+    }));
+    fireWebhooks(makeMessage({ content: "no mentions here" }));
+  });
+
+  test("handles fetch failure silently", () => {
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => { throw new Error("network error"); };
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "http://localhost:9999/hook", events: ["dm"] }],
+    }));
+    // Should not throw even though fetch fails
+    fireWebhooks(makeMessage());
+    globalThis.fetch = originalFetch;
+  });
 });

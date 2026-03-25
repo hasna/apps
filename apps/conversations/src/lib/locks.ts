@@ -80,7 +80,7 @@ export function acquireLock(
     `).get(resourceType, resourceId, lockType) as ResourceLock;
 
     return { acquired: true, lock };
-  }).immediate();
+  });
 }
 
 export function bulkAcquireLock(
@@ -128,7 +128,7 @@ export function bulkAcquireLock(
     }
 
     return { acquired: true, locks: acquired };
-  }).immediate() as BulkAcquireResult;
+  }) as BulkAcquireResult;
 }
 
 // Wrap bulkAcquireLock to catch conflict throws from the transaction

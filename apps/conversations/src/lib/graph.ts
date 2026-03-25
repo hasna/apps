@@ -74,7 +74,7 @@ export function buildGraph(): { edges_created: number; edges_updated: number } {
       updated_at = excluded.updated_at
   `);
 
-  const insertOrUpdate = db.transaction(() => {
+  db.transaction(() => {
     // Agent-to-agent communication (DMs)
     const dmPairs = db.prepare(`
       SELECT from_agent, to_agent, COUNT(*) as cnt, MAX(created_at) as last_at
@@ -129,7 +129,6 @@ export function buildGraph(): { edges_created: number; edges_updated: number } {
     }
   });
 
-  insertOrUpdate();
   return { edges_created: created, edges_updated: updated };
 }
 
