@@ -18,6 +18,7 @@ import { buildGraph, getAgentNetwork, getGraphStats } from "../lib/graph.js";
 import { renderContent } from "../lib/terminal-markdown.js";
 import { App } from "./components/App.js";
 import { registerBrainsCommand } from "./brains.js";
+import { registerCloudCommands } from "@hasna/cloud";
 import pkg from "../../package.json";
 
 const program = new Command();
@@ -2046,6 +2047,9 @@ program
 
 // ---- brains ----
 registerBrainsCommand(program);
+
+// ---- cloud sync/push/pull/feedback ----
+registerCloudCommands(program as any, "conversations");
 
 // ---- default: TUI ----
 program
