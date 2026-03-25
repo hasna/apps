@@ -16,7 +16,8 @@ import { scaleScreenshot } from "../lib/scale.js";
 import { loadConfig } from "../lib/config.js";
 import { checkAction } from "./safety.js";
 import { screenshotsMatch } from "../lib/diff.js";
-import { logAction, createSession, updateSession } from "../db/index.js";
+import { logAction, createSession, updateSession, getActionLogs } from "../db/index.js";
+import { runPostSessionIntegrations } from "../lib/integrations.js";
 
 const DEFAULT_MAX_STEPS = 50;
 
@@ -133,6 +134,9 @@ export async function runTask(options: RunOptions): Promise<Session> {
 
         await updateSession(session);
         onStep?.(step, response, { success: true, duration_ms: 0 });
+        // Run optional ecosystem integrations
+        const logs = getActionLogs(sessionId);
+        await runPostSessionIntegrations(session, logs).catch(() => {});
         onDone?.(session);
         await driver.dispose();
         return session;
@@ -218,6 +222,8 @@ export async function runTask(options: RunOptions): Promise<Session> {
     session.completed_at = new Date().toISOString();
     session.error = `Reached max steps (${maxSteps})`;
     await updateSession(session);
+    const endLogs = getActionLogs(sessionId);
+    await runPostSessionIntegrations(session, endLogs).catch(() => {});
     onDone?.(session);
     await driver.dispose();
     return session;
@@ -227,6 +233,8 @@ export async function runTask(options: RunOptions): Promise<Session> {
     session.total_duration_ms = Date.now() - startTime;
     session.completed_at = new Date().toISOString();
     await updateSession(session);
+    const errLogs = getActionLogs(sessionId);
+    await runPostSessionIntegrations(session, errLogs).catch(() => {});
     onDone?.(session);
     await driver.dispose();
     return session;

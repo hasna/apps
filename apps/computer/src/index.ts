@@ -35,6 +35,9 @@ export { executeAction } from "./drivers/mac/input.js";
 // Providers
 export { createProvider, createAnthropicProvider, createOpenAIProvider } from "./providers/index.js";
 
+// Integrations
+export { runPostSessionIntegrations, saveToRecordings, registerWithSessions, pushToLogs } from "./lib/integrations.js";
+
 // Agents
 export { registerAgent, heartbeat, setFocus, getAgent, listAgents } from "./db/agents.js";
 export type { Agent } from "./db/agents.js";
