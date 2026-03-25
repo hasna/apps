@@ -39,10 +39,16 @@ export async function getCredentials(service: string): Promise<Credential | null
     }
   } catch { /* secrets vault not available */ }
 
-  // 2. Fall back to ~/.secrets env file
+  // 2. Fall back to ~/.secrets env file (only if it's a file, not a directory)
   const secretsPath = join(homedir(), ".secrets");
   if (existsSync(secretsPath)) {
-    const content = readFileSync(secretsPath, "utf8");
+    let content: string;
+    try {
+      content = readFileSync(secretsPath, "utf8");
+    } catch {
+      // ~/.secrets is a directory or unreadable — skip
+      content = "";
+    }
     const lines = content.split("\n");
     const prefix = service.toUpperCase().replace(/[^A-Z0-9]/g, "_");
     const vars: Record<string, string> = {};

@@ -377,7 +377,7 @@ function runMigrations(db: Database): void {
       db.transaction(() => {
         db.exec(m.sql);
         db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(m.version);
-      })();
+      });
     }
   }
 }
