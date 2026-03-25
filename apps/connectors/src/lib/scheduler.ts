@@ -14,7 +14,7 @@ import { listEnabledJobs, createJobRun, finishJobRun, touchJobLastRun, type Conn
 import { maybeStrip } from "./strip.js";
 
 /** Next cron fire time relative to a Date (simplified matcher) */
-function cronMatches(cron: string, d: Date): boolean {
+export function cronMatches(cron: string, d: Date): boolean {
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return false;
   const [min, hour, dom, mon, dow] = parts;

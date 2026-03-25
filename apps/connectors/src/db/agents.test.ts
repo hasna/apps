@@ -6,6 +6,8 @@ import {
   getAgent,
   getAgentByName,
   updateAgentActivity,
+  heartbeat,
+  setFocus,
   deleteAgent,
   isAgentConflict,
 } from "./agents.js";
@@ -18,6 +20,7 @@ function makeDb(): Database {
       name TEXT UNIQUE NOT NULL,
       session_id TEXT,
       role TEXT NOT NULL DEFAULT 'agent',
+      project_id TEXT,
       last_seen_at TEXT NOT NULL,
       created_at TEXT NOT NULL
     )
@@ -174,5 +177,51 @@ describe("isAgentConflict", () => {
     const db = makeDb();
     const result = registerAgent({ name: "titus" }, db);
     expect(isAgentConflict(result)).toBe(false);
+  });
+});
+
+describe("heartbeat", () => {
+  test("updates last_seen_at and returns agent", async () => {
+    const db = makeDb();
+    const reg = registerAgent({ name: "hb-agent" }, db);
+    if (isAgentConflict(reg)) return;
+    const before = reg.last_seen_at;
+    await new Promise((r) => setTimeout(r, 5));
+    const agent = heartbeat(reg.id, db);
+    expect(agent).not.toBeNull();
+    expect(agent!.id).toBe(reg.id);
+    expect(agent!.last_seen_at >= before).toBe(true);
+  });
+
+  test("returns null for unknown agent id", () => {
+    const db = makeDb();
+    const result = heartbeat("unknown-id", db);
+    expect(result).toBeNull();
+  });
+});
+
+describe("setFocus", () => {
+  test("sets project_id on agent", () => {
+    const db = makeDb();
+    const reg = registerAgent({ name: "focus-agent" }, db);
+    if (isAgentConflict(reg)) return;
+    const agent = setFocus(reg.id, "proj-abc", db);
+    expect(agent).not.toBeNull();
+    expect(agent!.project_id).toBe("proj-abc");
+  });
+
+  test("clears project_id when null passed", () => {
+    const db = makeDb();
+    const reg = registerAgent({ name: "focus-agent2" }, db);
+    if (isAgentConflict(reg)) return;
+    setFocus(reg.id, "proj-xyz", db);
+    const cleared = setFocus(reg.id, null, db);
+    expect(cleared!.project_id).toBeNull();
+  });
+
+  test("returns null for unknown agent id", () => {
+    const db = makeDb();
+    const result = setFocus("unknown-id", "proj-1", db);
+    expect(result).toBeNull();
   });
 });

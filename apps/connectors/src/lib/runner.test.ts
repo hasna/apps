@@ -181,3 +181,16 @@ describe("Runner", () => {
     });
   });
 });
+
+describe("runConnectorCommand error path", () => {
+  test("returns failure when connector binary not found (stderr path)", async () => {
+    // Use a connector that doesn't exist — should fail gracefully
+    const result = await runConnectorCommand("zznonexistent", ["--help"], 5000);
+    // Should not throw — returns { stdout, stderr, exitCode, success }
+    expect(result).toHaveProperty("stdout");
+    expect(result).toHaveProperty("stderr");
+    expect(result).toHaveProperty("exitCode");
+    expect(result).toHaveProperty("success");
+    expect(result.success).toBe(false);
+  });
+});
