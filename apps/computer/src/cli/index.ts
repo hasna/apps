@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { runTask } from "../agent/loop.js";
-import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
+import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions } from "../db/index.js";
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
@@ -202,6 +202,29 @@ program
     console.log(`  Sessions:  ${stats.total_sessions} (${chalk.green(stats.completed + " completed")}, ${chalk.red(stats.failed + " failed")})`);
     console.log(`  Steps:     ${stats.total_steps}`);
     console.log(`  Tokens:    ${stats.total_tokens.toLocaleString()}`);
+  });
+
+// ── search ───────────────────────────────────────────────────────────
+program
+  .command("search")
+  .description("Search sessions by task text")
+  .argument("<query>", "Search query")
+  .option("-n, --limit <n>", "Max results", "20")
+  .action(async (query: string, opts: any) => {
+    const sessions = searchSessions(query, parseInt(opts.limit));
+    if (sessions.length === 0) {
+      console.log(chalk.dim("No sessions found."));
+      return;
+    }
+    for (const s of sessions) {
+      const statusColor =
+        s.status === "completed" ? chalk.green :
+        s.status === "failed" ? chalk.red : chalk.dim;
+      console.log(
+        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps  ${chalk.dim(s.created_at)}`
+      );
+      console.log(chalk.dim(`  ${s.task.slice(0, 100)}`));
+    }
   });
 
 // ── config ───────────────────────────────────────────────────────────

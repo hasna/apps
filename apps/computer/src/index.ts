@@ -60,4 +60,6 @@ export {
   getActionLogs,
   deleteSession,
   getStats,
+  searchSessions,
+  searchActionLogs,
 } from "./db/index.js";

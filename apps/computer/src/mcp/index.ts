@@ -5,7 +5,7 @@ import { z } from "zod";
 import { runTask } from "../agent/loop.js";
 import { captureScreenshot, saveScreenshotToFile, getScreenSize } from "../drivers/mac/screenshot.js";
 import { executeAction } from "../drivers/mac/input.js";
-import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
+import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, searchActionLogs } from "../db/index.js";
 import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 
 const server = new McpServer({
@@ -267,6 +267,27 @@ server.tool(
   async (params) => {
     const deleted = deleteSession(params.id);
     return { content: [{ type: "text", text: deleted ? "Session deleted" : "Session not found" }] };
+  }
+);
+
+// ── computer_search ──────────────────────────────────────────────────
+server.tool(
+  "computer_search",
+  "Full-text search across sessions (by task) and action logs (by reasoning)",
+  {
+    query: z.string().describe("Search query"),
+    scope: z.enum(["sessions", "actions", "both"]).default("both").describe("Where to search"),
+    limit: z.number().default(20).describe("Max results"),
+  },
+  async (params) => {
+    const results: any = {};
+    if (params.scope === "sessions" || params.scope === "both") {
+      results.sessions = searchSessions(params.query, params.limit);
+    }
+    if (params.scope === "actions" || params.scope === "both") {
+      results.action_logs = searchActionLogs(params.query, params.limit);
+    }
+    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
   }
 );
 

@@ -53,6 +53,30 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_action_logs_session ON action_logs(session_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
     CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
+
+    -- FTS5 full-text search on sessions (task text)
+    CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+      task, content='sessions', content_rowid='rowid'
+    );
+
+    -- FTS5 full-text search on action logs (reasoning text)
+    CREATE VIRTUAL TABLE IF NOT EXISTS action_logs_fts USING fts5(
+      reasoning, content='action_logs', content_rowid='id'
+    );
+
+    -- Triggers to keep FTS indexes in sync
+    CREATE TRIGGER IF NOT EXISTS sessions_ai AFTER INSERT ON sessions BEGIN
+      INSERT INTO sessions_fts(rowid, task) VALUES (NEW.rowid, NEW.task);
+    END;
+    CREATE TRIGGER IF NOT EXISTS sessions_ad AFTER DELETE ON sessions BEGIN
+      INSERT INTO sessions_fts(sessions_fts, rowid, task) VALUES ('delete', OLD.rowid, OLD.task);
+    END;
+    CREATE TRIGGER IF NOT EXISTS action_logs_ai AFTER INSERT ON action_logs BEGIN
+      INSERT INTO action_logs_fts(rowid, reasoning) VALUES (NEW.id, NEW.reasoning);
+    END;
+    CREATE TRIGGER IF NOT EXISTS action_logs_ad AFTER DELETE ON action_logs BEGIN
+      INSERT INTO action_logs_fts(action_logs_fts, rowid, reasoning) VALUES ('delete', OLD.id, OLD.reasoning);
+    END;
   `);
 
   return db;
@@ -166,6 +190,48 @@ export function listSessions(opts?: {
   }
 
   return (d.prepare(sql).all(...params) as any[]).map(rowToSession);
+}
+
+/** Search sessions by task text (FTS5) */
+export function searchSessions(query: string, limit: number = 20): Session[] {
+  const d = getDb();
+  const rows = d.prepare(`
+    SELECT s.* FROM sessions s
+    JOIN sessions_fts fts ON s.rowid = fts.rowid
+    WHERE sessions_fts MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(query, limit) as any[];
+  return rows.map(rowToSession);
+}
+
+/** Search action logs by reasoning text (FTS5) */
+export function searchActionLogs(
+  query: string,
+  limit: number = 50
+): ActionLog[] {
+  const d = getDb();
+  const rows = d.prepare(`
+    SELECT al.* FROM action_logs al
+    JOIN action_logs_fts fts ON al.id = fts.rowid
+    WHERE action_logs_fts MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(query, limit) as any[];
+  return rows.map((row) => ({
+    id: row.id,
+    session_id: row.session_id,
+    step: row.step,
+    action: JSON.parse(row.action_data),
+    reasoning: row.reasoning,
+    screenshot_path: row.screenshot_path,
+    success: !!row.success,
+    error: row.error,
+    duration_ms: row.duration_ms,
+    tokens_in: row.tokens_in,
+    tokens_out: row.tokens_out,
+    created_at: row.created_at,
+  }));
 }
 
 /** Get action logs for a session */
