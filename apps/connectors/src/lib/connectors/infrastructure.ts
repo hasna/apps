@@ -1,0 +1,89 @@
+import type { ConnectorMeta } from "../registry.js";
+
+// Infrastructure
+export const connectors: ConnectorMeta[] = [
+  {
+    name: "kafka",
+    displayName: "Apache Kafka",
+    description: "Distributed event streaming platform",
+    category: "Infrastructure",
+    tags: ["streaming", "messaging", "events", "distributed"],
+  },
+  {
+    name: "ldap",
+    displayName: "LDAP",
+    description: "Lightweight Directory Access Protocol for directory services",
+    category: "Infrastructure",
+    tags: ["directory", "authentication", "ldap", "identity"],
+  },
+  {
+    name: "microsoftazuremonitor",
+    displayName: "Microsoft Azure Monitor",
+    description: "Azure cloud monitoring, metrics, and diagnostics",
+    category: "Infrastructure",
+    tags: ["azure", "monitoring", "metrics", "cloud", "microsoft"],
+  },
+  {
+    name: "mist",
+    displayName: "Mist",
+    description: "Juniper Mist AI-driven wireless network management",
+    category: "Infrastructure",
+    tags: ["wifi", "networking", "juniper", "ai"],
+  },
+  {
+    name: "mxtoolbox",
+    displayName: "MXToolbox",
+    description: "DNS, email, and network diagnostic tools",
+    category: "Infrastructure",
+    tags: ["dns", "email", "diagnostics", "network", "mx"],
+  },
+  {
+    name: "pinata",
+    displayName: "Pinata",
+    description: "IPFS file storage and pinning service for Web3",
+    category: "Infrastructure",
+    tags: ["ipfs", "web3", "storage", "pinning", "decentralized"],
+  },
+  {
+    name: "pulsetic",
+    displayName: "Pulsetic",
+    description: "Website uptime monitoring and status page service",
+    category: "Infrastructure",
+    tags: ["monitoring", "uptime", "status", "alerts", "website"],
+  },
+  {
+    name: "rabbitmq",
+    displayName: "RabbitMQ",
+    description: "Open-source message broker for reliable asynchronous messaging",
+    category: "Infrastructure",
+    tags: ["message-queue", "messaging", "amqp", "async", "broker"],
+  },
+  {
+    name: "runpod",
+    displayName: "RunPod",
+    description: "Cloud GPU infrastructure for AI and machine learning workloads",
+    category: "Infrastructure",
+    tags: ["gpu", "cloud", "ai", "ml", "compute"],
+  },
+  {
+    name: "s3",
+    displayName: "Amazon S3",
+    description: "AWS Simple Storage Service for scalable object storage",
+    category: "Infrastructure",
+    tags: ["storage", "aws", "cloud", "object-storage", "files"],
+  },
+  {
+    name: "spike",
+    displayName: "Spike",
+    description: "Incident management and on-call alerting platform",
+    category: "Infrastructure",
+    tags: ["incident management", "alerts", "on-call", "monitoring", "devops"],
+  },
+  {
+    name: "statuscake",
+    displayName: "StatusCake",
+    description: "Website uptime monitoring and performance testing platform",
+    category: "Infrastructure",
+    tags: ["monitoring", "uptime", "performance", "alerts", "website"],
+  },
+];
