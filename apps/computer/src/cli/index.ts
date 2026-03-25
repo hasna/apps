@@ -489,6 +489,59 @@ program
     );
   });
 
+// ── record ───────────────────────────────────────────────────────────
+program
+  .command("record")
+  .description("Record mouse/keyboard events as a replayable macro")
+  .option("-d, --duration <seconds>", "Max recording duration in seconds", "60")
+  .option("-o, --output <file>", "Save recording to JSON file")
+  .action(async (opts: any) => {
+    const { join, dirname } = await import("path");
+    const { fileURLToPath } = await import("url");
+    const { existsSync, writeFileSync } = await import("fs");
+
+    // Find record helper binary
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      join(__dirname, "..", "..", "helpers", "record"),
+      join(__dirname, "..", "helpers", "record"),
+      join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "record"),
+    ];
+    const helperPath = candidates.find((c) => existsSync(c));
+    if (!helperPath) {
+      console.log(chalk.red("Record helper not found. Run: swiftc helpers/record.swift -o helpers/record -framework CoreGraphics"));
+      process.exit(1);
+    }
+
+    console.log(chalk.bold.cyan("computer record") + ` — max ${opts.duration}s`);
+    console.log(chalk.dim("Move your mouse, click, type. Press Ctrl+C to stop.\n"));
+
+    const proc = Bun.spawn([helperPath, "--duration", opts.duration], {
+      stdout: "pipe",
+      stderr: "inherit", // Show progress to terminal
+    });
+
+    await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+
+    if (stdout.trim()) {
+      if (opts.output) {
+        writeFileSync(opts.output, stdout);
+        console.log(chalk.green(`Recording saved to ${opts.output}`));
+      } else {
+        // Save to default location
+        const { getDataDir } = await import("@hasna/cloud");
+        const dir = getDataDir("computer");
+        const filename = `recording-${Date.now()}.json`;
+        const path = join(dir, "recordings", filename);
+        const { mkdirSync } = await import("fs");
+        mkdirSync(join(dir, "recordings"), { recursive: true });
+        writeFileSync(path, stdout);
+        console.log(chalk.green(`Recording saved: ${path}`));
+      }
+    }
+  });
+
 // ── completions ──────────────────────────────────────────────────────
 program
   .command("completions")
