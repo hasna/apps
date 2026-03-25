@@ -2241,7 +2241,7 @@ server.tool(
 if (shouldRegisterTool("create_template")) {
 server.tool(
   "create_template",
-  "Create a reusable task template.",
+  "Create a reusable task template. Optionally include a tasks array to define a multi-task template with dependencies and variable placeholders ({name} syntax).",
   {
     name: z.string(),
     title_pattern: z.string(),
@@ -2250,12 +2250,24 @@ server.tool(
     tags: z.array(z.string()).optional(),
     project_id: z.string().optional(),
     plan_id: z.string().optional(),
+    tasks: z.array(z.object({
+      title_pattern: z.string().describe("Title pattern with optional {variable} placeholders"),
+      description: z.string().optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      tags: z.array(z.string()).optional(),
+      task_type: z.string().optional(),
+      depends_on: z.array(z.number()).optional().describe("Position indices (0-based) of tasks this task depends on"),
+      metadata: z.record(z.unknown()).optional(),
+    })).optional().describe("Multi-task template: ordered list of tasks to create together with dependencies"),
   },
   async (params) => {
     try {
-      const { createTemplate } = await import("../db/templates.js");
+      const { createTemplate, getTemplateWithTasks } = await import("../db/templates.js");
       const t = createTemplate(params);
-      return { content: [{ type: "text" as const, text: `Template created: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}"` }] };
+      const withTasks = getTemplateWithTasks(t.id);
+      const taskCount = withTasks?.tasks.length ?? 0;
+      const taskInfo = taskCount > 0 ? ` | ${taskCount} task(s)` : "";
+      return { content: [{ type: "text" as const, text: `Template created: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}"${taskInfo}` }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
@@ -2283,22 +2295,41 @@ server.tool(
 if (shouldRegisterTool("create_task_from_template")) {
 server.tool(
   "create_task_from_template",
-  "Create a task from a template with optional overrides.",
+  "Create task(s) from a template. For multi-task templates, creates all tasks with dependencies wired. Supports {variable} substitution in titles/descriptions.",
   {
     template_id: z.string(),
-    title: z.string().optional(),
-    description: z.string().optional(),
+    title: z.string().optional().describe("Override title (single-task templates only)"),
+    description: z.string().optional().describe("Override description (single-task templates only)"),
     priority: z.enum(["low", "medium", "high", "critical"]).optional(),
     assigned_to: z.string().optional(),
     project_id: z.string().optional(),
+    task_list_id: z.string().optional(),
+    variables: z.record(z.string()).optional().describe("Variable substitution map for {name} placeholders in multi-task templates"),
   },
   async (params) => {
     try {
-      const { taskFromTemplate } = await import("../db/templates.js");
+      const { taskFromTemplate, getTemplateWithTasks, tasksFromTemplate } = await import("../db/templates.js");
       const resolvedTemplateId = resolveId(params.template_id, "task_templates");
+
+      // Check if this is a multi-task template
+      const templateWithTasks = getTemplateWithTasks(resolvedTemplateId);
+      if (templateWithTasks && templateWithTasks.tasks.length > 0) {
+        // Multi-task template — use tasksFromTemplate
+        const tasks = tasksFromTemplate(
+          resolvedTemplateId,
+          params.project_id || templateWithTasks.project_id || "",
+          params.variables,
+          params.task_list_id,
+        );
+        const text = tasks.map(t => `${t.id.slice(0, 8)} | ${t.priority} | ${t.title}`).join("\n");
+        return { content: [{ type: "text" as const, text: `${tasks.length} task(s) created from template:\n${text}` }] };
+      }
+
+      // Single-task template — use existing behavior
       const input = taskFromTemplate(resolvedTemplateId, {
         title: params.title, description: params.description,
-        priority: params.priority as any, assigned_to: params.assigned_to, project_id: params.project_id,
+        priority: params.priority as any, assigned_to: params.assigned_to,
+        project_id: params.project_id, task_list_id: params.task_list_id,
       });
       const task = createTask(input);
       return { content: [{ type: "text" as const, text: `Task created from template:\n${task.id.slice(0, 8)} | ${task.priority} | ${task.title}` }] };
@@ -3665,9 +3696,9 @@ server.tool(
       delete_webhook: "Delete a webhook by ID.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
 
       // Templates
-      create_template: "Create a reusable task template.\n  Params: name(string, req), title_pattern(string, req — e.g. 'Fix: {description}'), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string)\n  Example: {name: 'Bug Report', title_pattern: 'Bug: {description}', priority: 'high', tags: ['bug']}",
+      create_template: "Create a reusable task template. Supports multi-task templates with dependencies.\n  Params: name(string, req), title_pattern(string, req), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string), tasks(array of {title_pattern, description, priority, tags, task_type, depends_on(number[]), metadata})\n  Example single: {name: 'Bug Report', title_pattern: 'Bug: {description}', priority: 'high', tags: ['bug']}\n  Example multi: {name: 'Feature', title_pattern: 'Feature: {name}', tasks: [{title_pattern: 'Design {name}'}, {title_pattern: 'Implement {name}', depends_on: [0]}, {title_pattern: 'Test {name}', depends_on: [1]}]}",
       list_templates: "List all task templates. No params.",
-      create_task_from_template: "Create a task from a template with optional overrides.\n  Params: template_id(string, req), title(string), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string)\n  Example: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}",
+      create_task_from_template: "Create task(s) from a template. Multi-task templates create all tasks with dependencies wired. Supports {variable} substitution.\n  Params: template_id(string, req), title(string — single-task override), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string), task_list_id(string), variables(Record<string,string> — {name} substitution)\n  Example single: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}\n  Example multi: {template_id: 'a1b2c3d4', project_id: 'proj1', variables: {name: 'OAuth login'}}",
       delete_template: "Delete a task template.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
       update_template: "Update a task template's name, title pattern, or other fields.\n  Params: id(string, req), name(string), title_pattern(string), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string)\n  Example: {id: 'a1b2c3d4', name: 'Renamed Template', priority: 'critical'}",
 

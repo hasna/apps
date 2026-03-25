@@ -546,6 +546,36 @@ export interface CreateTemplateInput {
   project_id?: string;
   plan_id?: string;
   metadata?: Record<string, unknown>;
+  tasks?: TemplateTaskInput[];
+}
+
+// Template task — a single step in a multi-task template
+export interface TemplateTask {
+  id: string;
+  template_id: string;
+  position: number;
+  title_pattern: string;
+  description: string | null;
+  priority: TaskPriority;
+  tags: string[];
+  task_type: string | null;
+  depends_on_positions: number[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TemplateTaskInput {
+  title_pattern: string;
+  description?: string;
+  priority?: TaskPriority;
+  tags?: string[];
+  task_type?: string;
+  depends_on?: number[];  // position indices this task depends on
+  metadata?: Record<string, unknown>;
+}
+
+export interface TemplateWithTasks extends TaskTemplate {
+  tasks: TemplateTask[];
 }
 
 // Version conflict error

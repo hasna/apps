@@ -574,4 +574,23 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (36) ON CONFLICT DO NOTHING;
   `,
+  // Migration 37: Multi-task templates — ordered steps with dependencies per template
+  `
+  CREATE TABLE IF NOT EXISTS template_tasks (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    title_pattern TEXT NOT NULL,
+    description TEXT,
+    priority TEXT DEFAULT 'medium',
+    tags TEXT DEFAULT '[]',
+    task_type TEXT,
+    depends_on_positions TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_template_tasks_template ON template_tasks(template_id);
+
+  INSERT INTO _migrations (id) VALUES (37) ON CONFLICT DO NOTHING;
+  `,
 ];

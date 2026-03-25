@@ -142,7 +142,7 @@ export {
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
 
 // Templates
-export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } from "./db/templates.js";
+export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate } from "./db/templates.js";
 
 // Checklists
 export {
@@ -283,6 +283,9 @@ export type {
   CreateWebhookInput,
   TaskTemplate,
   CreateTemplateInput,
+  TemplateTask,
+  TemplateTaskInput,
+  TemplateWithTasks,
   Org,
   CreateOrgInput,
 } from "./types/index.js";

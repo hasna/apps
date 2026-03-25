@@ -659,6 +659,25 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (36);
   `,
+  // Migration 37: Multi-task templates — ordered steps with dependencies per template
+  `
+  CREATE TABLE IF NOT EXISTS template_tasks (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    title_pattern TEXT NOT NULL,
+    description TEXT,
+    priority TEXT DEFAULT 'medium',
+    tags TEXT DEFAULT '[]',
+    task_type TEXT,
+    depends_on_positions TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_template_tasks_template ON template_tasks(template_id);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (37);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -804,6 +823,21 @@ function ensureSchema(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
 
+  ensureTable("template_tasks", `
+    CREATE TABLE template_tasks (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      title_pattern TEXT NOT NULL,
+      description TEXT,
+      priority TEXT DEFAULT 'medium',
+      tags TEXT DEFAULT '[]',
+      task_type TEXT,
+      depends_on_positions TEXT DEFAULT '[]',
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
   ensureTable("task_checklists", `
     CREATE TABLE task_checklists (
       id TEXT PRIMARY KEY,
@@ -935,6 +969,9 @@ function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_source ON task_relationships(source_task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_target ON task_relationships(target_task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_rel_type ON task_relationships(relationship_type)");
+
+  // Template tasks indexes
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_template_tasks_template ON template_tasks(template_id)");
 
   // Knowledge graph indexes
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_source ON kg_edges(source_id, source_type)");
