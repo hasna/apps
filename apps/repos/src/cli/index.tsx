@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { execSync } from "node:child_process";
 import { program } from "commander";
 import chalk from "chalk";
 import {
@@ -15,6 +16,8 @@ import {
 import { scanRepos } from "../lib/scanner.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
 import { getActivityHeatmap, getContributorStats, getStaleRepos, getRecentActivity } from "../lib/analytics.js";
+import { buildGraph, queryNode, queryRelated, findPath, getDeps, getCrossOrgAuthors, getGraphStats } from "../lib/graph.js";
+import { findFile, whoIs, diffStats, fuzzyFindRepo, getDirtyRepos, getUnpushedRepos, getBehindRepos, getHealthReport, getRepoPath, getReport, getChurn, getLanguages, exportRepos, importFromOrg } from "../lib/utils.js";
 
 program
   .name("repos")
@@ -188,6 +191,8 @@ program
   .option("--repo <name>", "Filter by repo")
   .option("--state <state>", "Filter: open, closed, merged")
   .option("--author <author>", "Filter by author")
+  .option("--mine", "Show only your PRs (via gh)")
+  .option("--review", "Show PRs awaiting your review (via gh)")
   .option("--json", "Output as JSON")
   .action((opts) => {
     let repo_id: number | undefined;
@@ -196,7 +201,28 @@ program
       if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
       repo_id = repo.id;
     }
-    const prs = listPullRequests({ repo_id, state: opts.state, author: opts.author });
+    // Handle --mine and --review flags
+    let author = opts.author;
+    if (opts.mine || opts.review) {
+      try {
+        const ghUser = execSync("gh api user -q .login", { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+        if (opts.mine) author = ghUser;
+        if (opts.review) {
+          // For --review, get PRs where user is requested reviewer
+          const reviewJson = execSync(`gh search prs --review-requested=${ghUser} --state=open --limit=50 --json repository,number,title,author,createdAt,url`, { encoding: "utf-8", timeout: 30000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+          const reviews = JSON.parse(reviewJson || "[]");
+          if (opts.json) { console.log(JSON.stringify(reviews, null, 2)); return; }
+          if (reviews.length === 0) { console.log(chalk.dim("No PRs awaiting your review")); return; }
+          console.log(chalk.bold(`${reviews.length} PR(s) awaiting review:`));
+          for (const pr of reviews) {
+            console.log(`  ${chalk.green("[open]")} ${pr.repository.nameWithOwner}#${pr.number} ${pr.title}`);
+            console.log(chalk.dim(`    by ${pr.author?.login || "?"} ${pr.createdAt?.slice(0, 10) || ""}`));
+          }
+          return;
+        }
+      } catch { /* gh not available */ }
+    }
+    const prs = listPullRequests({ repo_id, state: opts.state, author });
     if (opts.json) {
       console.log(JSON.stringify(prs, null, 2));
     } else {
@@ -400,6 +426,367 @@ program
       if (meta.language) console.log(`Language: ${meta.language}`);
       console.log(`Stars: ${meta.stars}, Forks: ${meta.forks}`);
       if (meta.topics.length > 0) console.log(`Topics: ${meta.topics.join(", ")}`);
+    }
+  });
+
+// ── Find ──
+program
+  .command("find <file>")
+  .description("Find a file across all repos")
+  .option("-n, --limit <n>", "Max repos", "50")
+  .option("--json", "Output as JSON")
+  .action((file, opts) => {
+    const results = findFile(file, parseInt(opts.limit));
+    if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
+    if (results.length === 0) { console.log(chalk.dim("Not found in any repo")); return; }
+    for (const r of results) {
+      console.log(chalk.bold(r.repo_name));
+      for (const m of r.matches.slice(0, 5)) console.log(chalk.dim(`  ${m}`));
+      if (r.matches.length > 5) console.log(chalk.dim(`  ... and ${r.matches.length - 5} more`));
+    }
+    console.log(chalk.dim(`\nFound in ${results.length} repo(s)`));
+  });
+
+// ── Who ──
+program
+  .command("who <query>")
+  .description("Find author activity across all repos")
+  .option("--json", "Output as JSON")
+  .action((query, opts) => {
+    const results = whoIs(query);
+    if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
+    if (results.length === 0) { console.log(chalk.dim("No commits found for that author")); return; }
+    console.log(chalk.bold(`Author: ${query}`));
+    for (const r of results) {
+      console.log(`  ${chalk.bold(r.repo_name)}: ${r.commit_count} commits (+${r.insertions}/-${r.deletions})`);
+      console.log(chalk.dim(`    ${r.first_commit.slice(0, 10)} → ${r.last_commit.slice(0, 10)}`));
+    }
+  });
+
+// ── Diff Stats ──
+program
+  .command("diff-stats")
+  .description("What changed recently across repos")
+  .option("--today", "Today only")
+  .option("--week", "Last 7 days")
+  .option("--days <n>", "Custom days", "1")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const days = opts.week ? 7 : opts.today ? 1 : parseInt(opts.days);
+    const results = diffStats(days);
+    if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
+    if (results.length === 0) { console.log(chalk.dim(`No activity in last ${days} day(s)`)); return; }
+    console.log(chalk.bold(`Activity in last ${days} day(s):`));
+    for (const r of results) {
+      console.log(`  ${chalk.bold(r.repo_name)}: ${r.commit_count} commits (+${r.insertions}/-${r.deletions})`);
+      console.log(chalk.dim(`    Authors: ${r.authors.join(", ")}`));
+    }
+  });
+
+// ── Dirty ──
+program
+  .command("dirty")
+  .description("List repos with uncommitted changes")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const dirty = getDirtyRepos();
+    if (opts.json) { console.log(JSON.stringify(dirty, null, 2)); return; }
+    if (dirty.length === 0) { console.log(chalk.green("✓ All repos clean")); return; }
+    console.log(chalk.bold(`${dirty.length} dirty repo(s):`));
+    for (const r of dirty) {
+      const parts = [];
+      if (r.modified) parts.push(chalk.yellow(`${r.modified} modified`));
+      if (r.untracked) parts.push(chalk.red(`${r.untracked} untracked`));
+      if (r.staged) parts.push(chalk.green(`${r.staged} staged`));
+      console.log(`  ${chalk.bold(r.repo_name)}: ${parts.join(", ")}`);
+    }
+  });
+
+// ── Unpushed ──
+program
+  .command("unpushed")
+  .description("List repos with unpushed commits")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const unpushed = getUnpushedRepos();
+    if (opts.json) { console.log(JSON.stringify(unpushed, null, 2)); return; }
+    if (unpushed.length === 0) { console.log(chalk.green("✓ All repos pushed")); return; }
+    console.log(chalk.bold(`${unpushed.length} repo(s) with unpushed commits:`));
+    for (const r of unpushed) {
+      console.log(`  ${chalk.bold(r.repo_name)}: ${chalk.yellow(`${r.ahead} ahead`)} on ${r.branch}`);
+    }
+  });
+
+// ── Behind ──
+program
+  .command("behind")
+  .description("List repos behind remote")
+  .option("--fetch", "Fetch from remote first")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const behind = getBehindRepos(opts.fetch);
+    if (opts.json) { console.log(JSON.stringify(behind, null, 2)); return; }
+    if (behind.length === 0) { console.log(chalk.green("✓ All repos up to date")); return; }
+    console.log(chalk.bold(`${behind.length} repo(s) behind remote:`));
+    for (const r of behind) {
+      console.log(`  ${chalk.bold(r.repo_name)}: ${chalk.red(`${r.behind} behind`)} on ${r.branch}`);
+    }
+  });
+
+// ── Health ──
+program
+  .command("health")
+  .description("Combined health check: dirty + unpushed + behind + stale")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const report = getHealthReport();
+    if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
+
+    const issues = report.dirty.length + report.unpushed.length + report.behind.length + report.stale.length;
+    if (issues === 0) { console.log(chalk.green("✓ All repos healthy")); return; }
+
+    if (report.dirty.length > 0) {
+      console.log(chalk.yellow(`\n⚠ ${report.dirty.length} dirty repo(s):`));
+      for (const r of report.dirty.slice(0, 10)) console.log(`    ${r.repo_name} (${r.modified}M ${r.untracked}U ${r.staged}S)`);
+    }
+    if (report.unpushed.length > 0) {
+      console.log(chalk.yellow(`\n⚠ ${report.unpushed.length} repo(s) with unpushed commits:`));
+      for (const r of report.unpushed.slice(0, 10)) console.log(`    ${r.repo_name} (${r.ahead} ahead on ${r.branch})`);
+    }
+    if (report.behind.length > 0) {
+      console.log(chalk.red(`\n✗ ${report.behind.length} repo(s) behind remote:`));
+      for (const r of report.behind.slice(0, 10)) console.log(`    ${r.repo_name} (${r.behind} behind on ${r.branch})`);
+    }
+    if (report.stale.length > 0) {
+      console.log(chalk.dim(`\n○ ${report.stale.length} stale repo(s) (30+ days):`));
+      for (const r of report.stale.slice(0, 10)) console.log(`    ${r.repo_name} (${r.days_stale} days)`);
+    }
+  });
+
+// ── CD / Open ──
+program
+  .command("cd <name>")
+  .description("Print repo path (use: cd $(repos cd open-todos))")
+  .action((name) => {
+    const path = getRepoPath(name);
+    if (!path) { console.error("Repo not found"); process.exit(1); }
+    console.log(path);
+  });
+
+program
+  .command("open <name>")
+  .description("Open repo in VS Code")
+  .action((name) => {
+    const path = getRepoPath(name);
+    if (!path) { console.error("Repo not found"); process.exit(1); }
+    execSync(`code "${path}"`);
+  });
+
+// ── Report ──
+program
+  .command("report")
+  .description("Weekly summary report")
+  .option("--days <n>", "Look back N days", "7")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const report = getReport(parseInt(opts.days));
+    if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
+    console.log(chalk.bold(`Report: ${report.period}`));
+    console.log(`  Repos touched: ${report.repos_touched}`);
+    console.log(`  Commits: ${report.total_commits}`);
+    console.log(`  LOC: +${report.total_insertions} / -${report.total_deletions}`);
+    if (report.top_repos.length > 0) {
+      console.log(chalk.dim("\n  Top repos:"));
+      for (const r of report.top_repos.slice(0, 5)) console.log(`    ${r.name}: ${r.commits} commits`);
+    }
+    if (report.top_authors.length > 0) {
+      console.log(chalk.dim("\n  Top authors:"));
+      for (const a of report.top_authors.slice(0, 5)) console.log(`    ${a.author}: ${a.commits} commits`);
+    }
+  });
+
+// ── Churn ──
+program
+  .command("churn")
+  .description("Most frequently changed files across repos")
+  .option("--days <n>", "Look back N days", "30")
+  .option("-n, --limit <n>", "Max results", "20")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const results = getChurn(parseInt(opts.days), parseInt(opts.limit));
+    if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
+    if (results.length === 0) { console.log(chalk.dim("No file changes found")); return; }
+    console.log(chalk.bold("Most changed files:"));
+    for (const r of results) {
+      console.log(`  ${chalk.yellow(`${r.change_count}x`)} ${r.file} ${chalk.dim(`(${r.repo_name})`)}`);
+    }
+  });
+
+// ── Languages ──
+program
+  .command("languages")
+  .description("Language breakdown per org")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const languages = getLanguages();
+    if (opts.json) { console.log(JSON.stringify(languages, null, 2)); return; }
+    console.log(chalk.bold("Languages:"));
+    for (const l of languages) {
+      const orgStr = Object.entries(l.orgs).map(([o, c]) => `${o}:${c}`).join(", ");
+      console.log(`  ${chalk.cyan(l.language)}: ${l.repo_count} repos ${chalk.dim(`(${orgStr})`)}`);
+    }
+  });
+
+// ── Import / Export ──
+program
+  .command("export")
+  .description("Export repo list as JSON or CSV")
+  .option("--csv", "Export as CSV")
+  .option("--json", "Export as JSON (default)")
+  .action((opts) => {
+    console.log(exportRepos(opts.csv ? "csv" : "json"));
+  });
+
+program
+  .command("import <org>")
+  .description("Clone all repos from a GitHub org")
+  .option("--dir <path>", "Target directory", ".")
+  .option("--json", "Output as JSON")
+  .action((org, opts) => {
+    const result = importFromOrg(org, opts.dir, {
+      onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
+    });
+    if (opts.json) { console.log(JSON.stringify(result)); return; }
+    console.log(chalk.green(`\n✓ Cloned ${result.cloned}, skipped ${result.skipped}`));
+    if (result.errors.length > 0) console.log(chalk.yellow(`  ${result.errors.length} errors`));
+  });
+
+// ── Knowledge Graph ──
+const graph = program.command("graph").description("Knowledge graph commands");
+
+graph
+  .command("build")
+  .description("Build knowledge graph from repo data")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const result = buildGraph({
+      onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(result));
+    } else {
+      console.log(chalk.green(`\n✓ Graph built in ${(result.duration_ms / 1000).toFixed(1)}s — ${result.edges_created} edges`));
+    }
+  });
+
+graph
+  .command("query <type> <id>")
+  .description("Query a node (type: repo, author, org, language)")
+  .option("--json", "Output as JSON")
+  .action((type, id, opts) => {
+    const node = queryNode(type, id);
+    if (!node) { console.log(chalk.red("Node not found")); process.exit(1); }
+    if (opts.json) {
+      console.log(JSON.stringify(node, null, 2));
+    } else {
+      console.log(chalk.bold(`${node.type}: ${node.label}`));
+      console.log(chalk.dim(`  ${node.edges.length} connections:`));
+      for (const e of node.edges.slice(0, 20)) {
+        console.log(`    ${e.relation} → ${e.target_type}:${e.target_id} (weight: ${e.weight})`);
+      }
+    }
+  });
+
+graph
+  .command("related <repo>")
+  .description("Find related repos")
+  .option("-n, --limit <n>", "Max results", "10")
+  .option("--json", "Output as JSON")
+  .action((repo, opts) => {
+    const results = queryRelated(repo, parseInt(opts.limit));
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+    } else {
+      if (results.length === 0) { console.log(chalk.dim("No related repos found. Run: repos graph build")); return; }
+      console.log(chalk.bold(`Repos related to ${repo}:`));
+      for (const r of results) {
+        console.log(`  ${chalk.bold(r.repo_name)} — ${r.relation} (weight: ${r.weight})`);
+      }
+    }
+  });
+
+graph
+  .command("path <from-type> <from-id> <to-type> <to-id>")
+  .description("Find shortest path between two nodes")
+  .option("--json", "Output as JSON")
+  .action((fromType, fromId, toType, toId, opts) => {
+    const path = findPath(fromType, fromId, toType, toId);
+    if (!path) { console.log(chalk.red("No path found")); process.exit(1); }
+    if (opts.json) {
+      console.log(JSON.stringify(path, null, 2));
+    } else {
+      console.log(chalk.bold(`Path (${path.length} hops):`));
+      for (let i = 0; i < path.nodes.length; i++) {
+        const n = path.nodes[i]!;
+        console.log(`  ${chalk.cyan(n.type)}:${n.id}`);
+        if (i < path.edges.length) console.log(`    ↓ ${path.edges[i]!.relation}`);
+      }
+    }
+  });
+
+graph
+  .command("deps <repo>")
+  .description("Show dependency tree for a repo")
+  .option("--depth <n>", "Max depth", "3")
+  .option("--json", "Output as JSON")
+  .action((repo, opts) => {
+    const deps = getDeps(repo, parseInt(opts.depth));
+    if (opts.json) {
+      console.log(JSON.stringify(deps, null, 2));
+    } else {
+      if (deps.length === 0) { console.log(chalk.dim("No dependencies found")); return; }
+      console.log(chalk.bold(`Dependencies of ${repo}:`));
+      for (const d of deps) {
+        const indent = "  ".repeat(d.depth);
+        console.log(`${indent}└── ${d.repo_name}`);
+      }
+    }
+  });
+
+graph
+  .command("authors")
+  .description("Show authors who work across multiple orgs")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const authors = getCrossOrgAuthors();
+    if (opts.json) {
+      console.log(JSON.stringify(authors, null, 2));
+    } else {
+      console.log(chalk.bold("Cross-org authors:"));
+      for (const a of authors) {
+        console.log(`  ${chalk.bold(a.author_email)} — ${a.orgs.join(", ")} (${a.total_commits} commits)`);
+      }
+    }
+  });
+
+graph
+  .command("stats")
+  .description("Show graph statistics")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const stats = getGraphStats();
+    if (opts.json) {
+      console.log(JSON.stringify(stats, null, 2));
+    } else {
+      console.log(chalk.bold(`Graph: ${stats.total_edges} edges`));
+      console.log(chalk.dim("\nBy relation:"));
+      for (const [rel, count] of Object.entries(stats.by_relation)) {
+        console.log(`  ${rel}: ${count}`);
+      }
+      console.log(chalk.dim("\nBy source type:"));
+      for (const [type, count] of Object.entries(stats.by_source_type)) {
+        console.log(`  ${type}: ${count}`);
+      }
     }
   });
 

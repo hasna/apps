@@ -19,6 +19,7 @@ import {
 } from "../db/repos.js";
 import { scanRepos } from "../lib/scanner.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
+import { buildGraph, queryNode, queryRelated, findPath, getDeps, getCrossOrgAuthors, getGraphStats } from "../lib/graph.js";
 import { getDb } from "../db/database.js";
 
 const server = new McpServer({
@@ -190,6 +191,54 @@ server.tool("fetch_repo_metadata", "Fetch GitHub metadata (stars, topics, langua
   const meta = fetchRepoMetadata(repo);
   if (!meta) return { content: [{ type: "text", text: "Cannot fetch metadata" }] };
   return { content: [{ type: "text", text: JSON.stringify(meta, null, 2) }] };
+});
+
+// ── Knowledge Graph ──
+
+server.tool("graph_build", "Build knowledge graph from repo data", {}, async () => {
+  const result = buildGraph();
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
+server.tool("graph_query", "Query a node and its connections", {
+  type: z.string().describe("Node type: repo, author, org, language"),
+  id: z.string().describe("Node ID"),
+}, async ({ type, id }) => {
+  const node = queryNode(type, id);
+  if (!node) return { content: [{ type: "text", text: "Node not found" }] };
+  return { content: [{ type: "text", text: JSON.stringify(node, null, 2) }] };
+});
+
+server.tool("graph_related", "Find repos related to a given repo", {
+  repo: z.string().describe("Repo name or ID"),
+  limit: z.number().optional().describe("Max results (default 10)"),
+}, async ({ repo, limit }) => {
+  const results = queryRelated(repo, limit);
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+});
+
+server.tool("graph_path", "Find shortest path between two nodes", {
+  from_type: z.string().describe("Source node type"),
+  from_id: z.string().describe("Source node ID"),
+  to_type: z.string().describe("Target node type"),
+  to_id: z.string().describe("Target node ID"),
+}, async ({ from_type, from_id, to_type, to_id }) => {
+  const path = findPath(from_type, from_id, to_type, to_id);
+  if (!path) return { content: [{ type: "text", text: "No path found" }] };
+  return { content: [{ type: "text", text: JSON.stringify(path, null, 2) }] };
+});
+
+server.tool("graph_deps", "Show dependency tree for a repo", {
+  repo: z.string().describe("Repo name or ID"),
+  depth: z.number().optional().describe("Max depth (default 3)"),
+}, async ({ repo, depth }) => {
+  const deps = getDeps(repo, depth);
+  return { content: [{ type: "text", text: JSON.stringify(deps, null, 2) }] };
+});
+
+server.tool("graph_stats", "Get knowledge graph statistics", {}, async () => {
+  const stats = getGraphStats();
+  return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
 });
 
 // ── Agent Support ──

@@ -261,4 +261,24 @@ const MIGRATIONS = [
       END;
     `,
   },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        weight REAL DEFAULT 1.0,
+        metadata TEXT,
+        UNIQUE(source_type, source_id, relation, target_type, target_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_type, source_id);
+      CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_type, target_id);
+      CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
+    `,
+  },
 ];
