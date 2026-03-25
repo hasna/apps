@@ -3848,4 +3848,71 @@ program.action(async () => {
 import { makeBrainsCommand } from "./brains.js";
 program.addCommand(makeBrainsCommand());
 
+// ── db subcommand ────────────────────────────────────────────────────────────
+const dbCmd = program
+  .command("db")
+  .description("Database management commands");
+
+dbCmd
+  .command("migrate-pg")
+  .description("Apply PostgreSQL migrations to the configured RDS instance")
+  .option("--connection-string <url>", "PostgreSQL connection string (overrides cloud config)")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+
+    let connStr: string;
+    if (opts.connectionString) {
+      connStr = opts.connectionString;
+    } else {
+      try {
+        const { getConnectionString } = await import("@hasna/cloud");
+        connStr = getConnectionString("todos");
+      } catch (e) {
+        const msg = "Cloud RDS not configured. Use --connection-string or run `cloud setup`.";
+        if (useJson) {
+          console.log(JSON.stringify({ error: msg }));
+        } else {
+          console.error(chalk.red(msg));
+        }
+        process.exit(1);
+      }
+    }
+
+    try {
+      const { applyPgMigrations } = await import("../db/pg-migrate.js");
+      const result = await applyPgMigrations(connStr);
+
+      if (useJson) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (result.applied.length > 0) {
+        console.log(chalk.green(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`));
+      }
+      if (result.alreadyApplied.length > 0) {
+        console.log(chalk.dim(`Already applied: ${result.alreadyApplied.length} migration(s)`));
+      }
+      if (result.errors.length > 0) {
+        for (const err of result.errors) {
+          console.error(chalk.red(`  Error: ${err}`));
+        }
+        process.exit(1);
+      }
+      if (result.applied.length === 0 && result.errors.length === 0) {
+        console.log(chalk.dim("Schema is up to date."));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) {
+        console.log(JSON.stringify({ error: msg }));
+      } else {
+        console.error(chalk.red(`Migration failed: ${msg}`));
+      }
+      process.exit(1);
+    }
+  });
+
 program.parse();

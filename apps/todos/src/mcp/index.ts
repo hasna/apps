@@ -4660,6 +4660,57 @@ server.resource(
   },
 );
 
+// === PG MIGRATIONS ===
+
+if (shouldRegisterTool("migrate_pg")) {
+server.tool(
+  "migrate_pg",
+  "Apply PostgreSQL schema migrations to the configured RDS instance",
+  {
+    connection_string: z.string().optional().describe("PostgreSQL connection string (overrides cloud config)"),
+  },
+  async ({ connection_string }) => {
+    try {
+      let connStr: string;
+      if (connection_string) {
+        connStr = connection_string;
+      } else {
+        const { getConnectionString } = await import("@hasna/cloud");
+        connStr = getConnectionString("todos");
+      }
+
+      const { applyPgMigrations } = await import("../db/pg-migrate.js");
+      const result = await applyPgMigrations(connStr);
+
+      const lines: string[] = [];
+      if (result.applied.length > 0) {
+        lines.push(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`);
+      }
+      if (result.alreadyApplied.length > 0) {
+        lines.push(`Already applied: ${result.alreadyApplied.length} migration(s)`);
+      }
+      if (result.errors.length > 0) {
+        lines.push(`Errors:\n${result.errors.join("\n")}`);
+      }
+      if (result.applied.length === 0 && result.errors.length === 0) {
+        lines.push("Schema is up to date.");
+      }
+      lines.push(`Total migrations: ${result.totalMigrations}`);
+
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        isError: result.errors.length > 0,
+      };
+    } catch (e: any) {
+      return {
+        content: [{ type: "text" as const, text: `Migration failed: ${e?.message ?? String(e)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+}
+
 // === CLOUD ===
 
 registerCloudTools(server, "todos");
