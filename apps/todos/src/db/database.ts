@@ -700,6 +700,40 @@ const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (39);
   `,
+  // Migration 40: Dispatch — send tasks/task-lists to tmux windows
+  `
+  CREATE TABLE IF NOT EXISTS dispatches (
+    id TEXT PRIMARY KEY,
+    title TEXT,
+    target_window TEXT NOT NULL,
+    task_ids TEXT NOT NULL DEFAULT '[]',
+    task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL,
+    message TEXT,
+    delay_ms INTEGER,
+    scheduled_at TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'cancelled')),
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    sent_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_dispatches_status ON dispatches(status);
+  CREATE INDEX IF NOT EXISTS idx_dispatches_scheduled ON dispatches(scheduled_at);
+  CREATE INDEX IF NOT EXISTS idx_dispatches_task_list ON dispatches(task_list_id);
+
+  CREATE TABLE IF NOT EXISTS dispatch_logs (
+    id TEXT PRIMARY KEY,
+    dispatch_id TEXT NOT NULL REFERENCES dispatches(id) ON DELETE CASCADE,
+    target_window TEXT NOT NULL,
+    message TEXT NOT NULL,
+    delay_ms INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('sent', 'failed')),
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_dispatch_logs_dispatch ON dispatch_logs(dispatch_id);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (40);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -975,6 +1009,38 @@ function ensureSchema(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_template_versions_template ON template_versions(template_id)");
+
+  ensureTable("dispatches", `
+    CREATE TABLE dispatches (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      target_window TEXT NOT NULL,
+      task_ids TEXT NOT NULL DEFAULT '[]',
+      task_list_id TEXT REFERENCES task_lists(id) ON DELETE SET NULL,
+      message TEXT,
+      delay_ms INTEGER,
+      scheduled_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed', 'cancelled')),
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      sent_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_dispatches_status ON dispatches(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_dispatches_scheduled ON dispatches(scheduled_at)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_dispatches_task_list ON dispatches(task_list_id)");
+
+  ensureTable("dispatch_logs", `
+    CREATE TABLE dispatch_logs (
+      id TEXT PRIMARY KEY,
+      dispatch_id TEXT NOT NULL REFERENCES dispatches(id) ON DELETE CASCADE,
+      target_window TEXT NOT NULL,
+      message TEXT NOT NULL,
+      delay_ms INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('sent', 'failed')),
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_dispatch_logs_dispatch ON dispatch_logs(dispatch_id)");
 
   // Webhooks — scoped subscriptions
   ensureColumn("webhooks", "project_id", "TEXT");

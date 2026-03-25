@@ -708,3 +708,88 @@ export class CompletionGuardError extends Error {
     this.name = "CompletionGuardError";
   }
 }
+
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+
+export const DISPATCH_STATUSES = ["pending", "sent", "failed", "cancelled"] as const;
+export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+
+/** Parsed tmux target: session:window.pane (all parts optional except window) */
+export interface TmuxTarget {
+  session: string | null;
+  window: string;
+  pane: string | null;
+  /** Original spec string, e.g. "main", "work:1", "work:1.0" */
+  raw: string;
+}
+
+export interface Dispatch {
+  id: string;
+  title: string | null;
+  target_window: string;
+  task_ids: string[];
+  task_list_id: string | null;
+  /** Pre-formatted message, or null to format at send time */
+  message: string | null;
+  /** Delay in ms between send and Enter. null = auto-calculated */
+  delay_ms: number | null;
+  scheduled_at: string | null;
+  status: DispatchStatus;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface DispatchRow {
+  id: string;
+  title: string | null;
+  target_window: string;
+  task_ids: string;
+  task_list_id: string | null;
+  message: string | null;
+  delay_ms: number | null;
+  scheduled_at: string | null;
+  status: string;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface DispatchLog {
+  id: string;
+  dispatch_id: string;
+  target_window: string;
+  message: string;
+  delay_ms: number;
+  status: "sent" | "failed";
+  error: string | null;
+  created_at: string;
+}
+
+export interface CreateDispatchInput {
+  title?: string;
+  target_window: string;
+  task_ids?: string[];
+  task_list_id?: string;
+  /** Pre-format the message. If omitted, formatted at send time from task_ids/task_list_id. */
+  message?: string;
+  /** Explicit delay in ms. If omitted, auto-calculated from message length. */
+  delay_ms?: number;
+  /** ISO string. If omitted, dispatch is immediate. */
+  scheduled_at?: string;
+}
+
+export interface ListDispatchesFilter {
+  status?: DispatchStatus | DispatchStatus[];
+  limit?: number;
+  offset?: number;
+}
+
+export class DispatchNotFoundError extends Error {
+  static readonly code = "DISPATCH_NOT_FOUND";
+  static readonly suggestion = "Check the dispatch ID with list_dispatches.";
+  constructor(public dispatchId: string) {
+    super(`Dispatch not found: ${dispatchId}`);
+    this.name = "DispatchNotFoundError";
+  }
+}

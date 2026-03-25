@@ -302,6 +302,7 @@ export {
   TASK_STATUSES,
   TASK_PRIORITIES,
   PLAN_STATUSES,
+  DISPATCH_STATUSES,
   VersionConflictError,
   TaskNotFoundError,
   ProjectNotFoundError,
@@ -311,4 +312,37 @@ export {
   AgentNotFoundError,
   TaskListNotFoundError,
   CompletionGuardError,
+  DispatchNotFoundError,
 } from "./types/index.js";
+
+// Dispatch types
+export type {
+  Dispatch,
+  DispatchStatus,
+  DispatchLog,
+  TmuxTarget,
+  CreateDispatchInput,
+  ListDispatchesFilter,
+} from "./types/index.js";
+
+// Dispatch DB functions
+export {
+  createDispatch,
+  getDispatch,
+  listDispatches,
+  cancelDispatch,
+  updateDispatchStatus,
+  createDispatchLog,
+  listDispatchLogs,
+  getDueDispatches,
+} from "./db/dispatches.js";
+
+// Dispatch engine
+export { executeDispatch, runDueDispatches, dispatchToMultiple } from "./lib/dispatch.js";
+
+// Dispatch formatter
+export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
+export type { FormatOpts } from "./lib/dispatch-formatter.js";
+
+// tmux primitives
+export { parseTmuxTarget, formatTmuxTarget, validateTmuxTarget, sendToTmux, calculateDelay, DELAY_MIN, DELAY_MAX } from "./lib/tmux.js";

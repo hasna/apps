@@ -150,7 +150,7 @@ bun:sqlite with WAL mode, foreign keys enabled, 5-second busy timeout.
 
 Test files: `tasks.test.ts`, `projects.test.ts`, `agents.test.ts`, `task-lists.test.ts`, `plans.test.ts`, `comments.test.ts`, `sessions.test.ts`, `database.test.ts`, `search.test.ts`, `recurrence.test.ts`, `mcp.test.ts`, `errors.test.ts`, `describe.test.ts`, `cli.test.ts`, `completion-guard.test.ts`, `cli-qol.test.ts`, `serve.test.ts`, `agentic.test.ts`.
 
-## MCP Tools (59)
+## MCP Tools (65)
 
 Use `TODOS_PROFILE=minimal|standard|full` to control which tools are registered (reduces cold-start tokens).
 
@@ -182,6 +182,32 @@ Tasks can have a `recurrence_rule` (e.g. "every day", "every weekday", "every mo
 
 `dispatchWebhook` fires on: `task.created`, `task.started`, `task.completed`, `task.failed`, `task.assigned`, `task.status_changed`. HMAC-signed. Register via `create_webhook`.
 
+## Dispatch
+
+Send tasks or task lists to tmux windows — useful for multi-agent workflows where one agent queues work for another.
+
+**Architecture:**
+- `src/db/dispatches.ts` — CRUD for dispatch jobs and delivery logs (`dispatches`, `dispatch_logs` tables)
+- `src/lib/tmux.ts` — `parseTmuxTarget`, `validateTmuxTarget`, `sendToTmux`, `calculateDelay` (3–5s auto-scaling by message length)
+- `src/lib/dispatch-formatter.ts` — `formatDispatchMessage` (task/list → clean numbered text)
+- `src/lib/dispatch.ts` — `executeDispatch`, `runDueDispatches`, `dispatchToMultiple`
+
+**CLI:**
+```bash
+todos dispatch <target> --tasks <id,...>       # Dispatch specific tasks
+todos dispatch <target> --list <list-id>       # Dispatch a task list
+todos dispatch <target> --tasks <id> --at <iso-datetime>  # Scheduled
+todos dispatch <target> --tasks <id> --dry-run # Preview only
+todos dispatch <target> --tasks <id> --multiple <t1,t2>  # Fan-out
+todos dispatch run [--dry-run]                 # Fire all due dispatches
+todos dispatches [--status pending|sent|failed|cancelled] [--limit 20]
+todos dispatches --cancel <dispatch-id>
+```
+
+**MCP tools:** `dispatch_tasks`, `dispatch_task_list`, `dispatch_to_multiple`, `list_dispatches`, `cancel_dispatch`, `run_due_dispatches`
+
+**Target formats:** `window`, `session:window`, `session:window.pane`
+
 ## CLI Agent Commands
 
 ```bash
@@ -202,7 +228,7 @@ todos done <id> --attach-ids a,b --commit-hash abc --notes "..."
 
 ## Error Classes
 
-Custom errors in `src/types/`: `VersionConflictError`, `TaskNotFoundError`, `ProjectNotFoundError`, `PlanNotFoundError`, `LockError`, `DependencyCycleError`, `AgentNotFoundError`, `TaskListNotFoundError`. All three surfaces catch and format these consistently.
+Custom errors in `src/types/`: `VersionConflictError`, `TaskNotFoundError`, `ProjectNotFoundError`, `PlanNotFoundError`, `LockError`, `DependencyCycleError`, `AgentNotFoundError`, `TaskListNotFoundError`, `DispatchNotFoundError`. All three surfaces catch and format these consistently.
 
 ## TypeScript
 
