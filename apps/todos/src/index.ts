@@ -203,6 +203,10 @@ export type { SearchOptions } from "./lib/search.js";
 export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js";
 export type { SyncResult } from "./lib/sync-types.js";
 
+// PG Migrations
+export { applyPgMigrations } from "./db/pg-migrate.js";
+export type { PgMigrationResult } from "./db/pg-migrate.js";
+
 // Extract
 export { extractTodos, extractFromSource, tagToPriority, EXTRACT_TAGS } from "./lib/extract.js";
 
