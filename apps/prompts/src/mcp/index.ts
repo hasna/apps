@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { registerCloudTools } from "@hasna/cloud"
 import { z } from "zod"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
@@ -1085,4 +1086,5 @@ server.tool(
 );
 
 const transport = new StdioServerTransport()
+registerCloudTools(server, "prompts")
 await server.connect(transport)
