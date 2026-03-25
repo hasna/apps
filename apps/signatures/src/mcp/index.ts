@@ -5,6 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 
 import {
@@ -799,6 +800,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main() {
   const transport = new StdioServerTransport();
+  registerCloudTools(server, "signatures");
   await server.connect(transport);
 }
 
