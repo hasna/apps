@@ -141,6 +141,8 @@ export interface RunOptions {
   dryRun?: boolean;
   /** Tags for this session */
   tags?: string[];
+  /** Display number to capture (1=main, 2=secondary, etc.) */
+  displayNumber?: number;
   /** Callback for each step */
   onStep?: (step: number, response: ModelResponse, result: ActionResult) => void;
   /** Callback when done */

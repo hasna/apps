@@ -36,12 +36,13 @@ export async function runTask(options: RunOptions): Promise<Session> {
     screenshotMaxWidth,
     dryRun = false,
     tags,
+    displayNumber,
     onStep,
     onDone,
   } = options;
 
   // Initialize driver, provider, and safety config
-  const driver = createMacDriver();
+  const driver = createMacDriver({ displayNumber });
   const provider = createProvider(providerName, { model });
   const config = loadConfig();
   const safetyConfig = config.safety;

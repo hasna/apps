@@ -7,12 +7,18 @@ import { executeAction } from "./input.js";
  * Requires: macOS, cliclick (brew install cliclick), Accessibility permissions.
  */
 export class MacDriver implements ComputerDriver {
+  private displayNumber?: number;
+
+  constructor(opts?: { displayNumber?: number }) {
+    this.displayNumber = opts?.displayNumber;
+  }
+
   async getScreenSize(): Promise<ScreenSize> {
     return getScreenSize();
   }
 
   async screenshot(): Promise<Screenshot> {
-    return captureScreenshot();
+    return captureScreenshot(this.displayNumber);
   }
 
   async execute(action: DriverAction): Promise<ActionResult> {
@@ -25,6 +31,6 @@ export class MacDriver implements ComputerDriver {
 }
 
 /** Create a macOS driver */
-export function createMacDriver(): ComputerDriver {
-  return new MacDriver();
+export function createMacDriver(opts?: { displayNumber?: number }): ComputerDriver {
+  return new MacDriver(opts);
 }

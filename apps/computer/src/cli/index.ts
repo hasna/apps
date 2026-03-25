@@ -32,6 +32,7 @@ program
   .option("--dry-run", "Plan actions without executing them", false)
   .option("--no-preview", "Disable inline screenshot preview in terminal")
   .option("--tag <tags...>", "Tag this session (can specify multiple)")
+  .option("--display <n>", "Display number to capture (1=main, 2=secondary)")
   .action(async (task: string, opts: any) => {
     const cfg = loadConfig();
     const provider = opts.provider ?? cfg.provider;
@@ -54,6 +55,7 @@ program
       screenshotMaxWidth: maxWidth,
       dryRun: opts.dryRun,
       tags: opts.tag,
+      displayNumber: opts.display ? parseInt(opts.display) : undefined,
       onStep: (step, response, result) => {
         const status = result.success ? chalk.green("OK") : chalk.red("FAIL");
         const actionDesc = response.action

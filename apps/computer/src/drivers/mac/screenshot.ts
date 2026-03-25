@@ -7,11 +7,17 @@ import type { Screenshot, ScreenSize } from "../../types/index.js";
  * Capture a screenshot using macOS screencapture.
  * Returns base64 PNG data and screen dimensions.
  */
-export async function captureScreenshot(): Promise<Screenshot> {
+export async function captureScreenshot(displayNumber?: number): Promise<Screenshot> {
   const timestamp = Date.now();
   const tmpPath = join(tmpdir(), `computer-screenshot-${timestamp}.png`);
 
-  const proc = Bun.spawn(["screencapture", "-x", "-C", "-t", "png", tmpPath], {
+  const args = ["screencapture", "-x", "-C", "-t", "png"];
+  if (displayNumber) {
+    args.push(`-D${displayNumber}`);
+  }
+  args.push(tmpPath);
+
+  const proc = Bun.spawn(args, {
     stdout: "pipe",
     stderr: "pipe",
   });
