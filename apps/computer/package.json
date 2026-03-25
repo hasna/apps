@@ -1,6 +1,6 @@
 {
   "name": "@hasna/computer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open-source computer use for AI agents — control your Mac with Anthropic or OpenAI. CLI + MCP server + REST API + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -20,6 +20,7 @@
     "dist",
     "helpers/scroll",
     "helpers/scroll.swift",
+    "src/db/migrations",
     "dashboard/dist",
     "LICENSE",
     "README.md"

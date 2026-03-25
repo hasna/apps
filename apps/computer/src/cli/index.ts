@@ -6,6 +6,7 @@ import { listSessions, getSession, getActionLogs, deleteSession, getStats, searc
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
+import { registerCloudCommands } from "@hasna/cloud";
 import type { Provider } from "../types/index.js";
 
 const program = new Command();
@@ -296,5 +297,8 @@ configCmd
     saveConfig(DEFAULT_CONFIG);
     console.log(chalk.green("Config reset to defaults."));
   });
+
+// ── Cloud commands (sync, feedback) ──────────────────────────────────
+registerCloudCommands(program, "computer");
 
 program.parse();

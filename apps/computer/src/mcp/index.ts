@@ -6,6 +6,7 @@ import { runTask } from "../agent/loop.js";
 import { captureScreenshot, saveScreenshotToFile, getScreenSize } from "../drivers/mac/screenshot.js";
 import { executeAction } from "../drivers/mac/input.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, searchActionLogs } from "../db/index.js";
+import { registerCloudTools } from "@hasna/cloud";
 import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 
 const server = new McpServer({
@@ -301,6 +302,9 @@ server.tool(
     return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
   }
 );
+
+// ── Cloud tools (sync, feedback) ─────────────────────────────────────
+registerCloudTools(server, "computer");
 
 // ── Start server ─────────────────────────────────────────────────────
 async function main() {
