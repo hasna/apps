@@ -7,6 +7,7 @@ import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
+import { registerCloudTools } from "@hasna/cloud";
 import type { Period, Agent } from '../types/index.js'
 
 const db = openDatabase()
@@ -294,4 +295,5 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 const _econAgents = new Map<string, { id: string; name: string; last_seen_at: string }>();
 
 const transport = new StdioServerTransport()
+registerCloudTools(server, "economy");
 await server.connect(transport)
