@@ -19,6 +19,7 @@ import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
+import { registerCloudTools } from "@hasna/cloud";
 
 // --- helpers ---
 
@@ -563,6 +564,7 @@ export function createMcpServer() {
 
 export async function startMcpServer(transport = new StdioServerTransport()) {
   const server = createMcpServer();
+  registerCloudTools(server, "brains");
   await server.connect(transport);
   return server;
 }
