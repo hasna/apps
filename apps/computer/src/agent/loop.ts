@@ -16,7 +16,7 @@ import { scaleScreenshot } from "../lib/scale.js";
 import { loadConfig } from "../lib/config.js";
 import { checkAction } from "./safety.js";
 import { screenshotsMatch } from "../lib/diff.js";
-import { getDb, logAction, createSession, updateSession } from "../db/index.js";
+import { logAction, createSession, updateSession } from "../db/index.js";
 
 const DEFAULT_MAX_STEPS = 50;
 

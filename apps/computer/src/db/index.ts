@@ -1,24 +1,26 @@
-import { Database } from "bun:sqlite";
-import { join } from "path";
-import { mkdirSync } from "fs";
+import { SqliteAdapter, type DbAdapter } from "@hasna/cloud";
+import { getDbPath, getDataDir } from "@hasna/cloud";
 import type { Session, ActionLog, DriverAction, SessionStatus } from "../types/index.js";
 
-const DB_DIR = join(process.env.HOME ?? "~", ".hasna", "computer");
-const DB_PATH = join(DB_DIR, "computer.db");
+const SERVICE_NAME = "computer";
 
-let db: Database | null = null;
+let db: DbAdapter | null = null;
 
-/** Get or create the SQLite database */
-export function getDb(): Database {
+/** Get or create the database via @hasna/cloud adapter */
+export function getDb(): DbAdapter {
   if (db) return db;
 
-  mkdirSync(DB_DIR, { recursive: true });
-  db = new Database(DB_PATH, { create: true });
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
+  // Ensure data dir exists
+  getDataDir(SERVICE_NAME);
+
+  const dbPath = getDbPath(SERVICE_NAME);
+  const adapter = new SqliteAdapter(dbPath);
+
+  adapter.exec("PRAGMA journal_mode = WAL");
+  adapter.exec("PRAGMA foreign_keys = ON");
 
   // Create tables
-  db.exec(`
+  adapter.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       task TEXT NOT NULL,
@@ -79,6 +81,7 @@ export function getDb(): Database {
     END;
   `);
 
+  db = adapter;
   return db;
 }
 
