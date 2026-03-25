@@ -1,0 +1,187 @@
+import type { Command } from "commander";
+import chalk from "chalk";
+import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../../lib/projects.js";
+import { closeDb } from "../../lib/db.js";
+import { resolveIdentity } from "../../lib/identity.js";
+
+export function registerProjectCommands(program: Command): void {
+  const project = program
+    .command("project")
+    .description("Manage projects");
+
+  project
+    .command("create")
+    .description("Create a new project")
+    .argument("<name>", "Project name")
+    .option("--description <text>", "Project description")
+    .option("--path <path>", "Project path on disk")
+    .option("--repository <url>", "Repository URL")
+    .option("--tags <json>", "JSON array of tags")
+    .option("--from <agent>", "Creator agent ID")
+    .option("--json", "Output as JSON")
+    .action((name, opts) => {
+      const agent = resolveIdentity(opts.from).trim();
+      const projectName = typeof name === "string" ? name.trim() : "";
+      if (!agent) {
+        console.error(chalk.red("Creator identity is required."));
+        process.exit(1);
+      }
+      if (!projectName) {
+        console.error(chalk.red("Project name cannot be empty."));
+        process.exit(1);
+      }
+
+      let tags: string[] | undefined;
+      if (opts.tags) {
+        try {
+          tags = JSON.parse(opts.tags);
+        } catch {
+          console.error(chalk.red("Invalid --tags JSON. Expected array of strings."));
+          process.exit(1);
+        }
+      }
+
+      try {
+        const p = createProject({
+          name: projectName,
+          created_by: agent,
+          description: opts.description,
+          path: opts.path,
+          repository: opts.repository,
+          tags,
+        });
+        if (opts.json) {
+          console.log(JSON.stringify(p, null, 2));
+        } else {
+          console.log(chalk.green(`Project "${p.name}" created`) + chalk.dim(` (id: ${p.id})`));
+        }
+      } catch (e: any) {
+        if (e.message?.includes("UNIQUE constraint")) {
+          console.error(chalk.red(`Project "${projectName}" already exists.`));
+          process.exit(1);
+        }
+        console.error(chalk.red(e.message));
+        process.exit(1);
+      }
+      closeDb();
+    });
+
+  project
+    .command("list")
+    .description("List all projects")
+    .option("--status <status>", "Filter by status (active/archived)")
+    .option("--json", "Output as JSON")
+    .action((opts) => {
+      const status = opts.status === "active" || opts.status === "archived" ? opts.status : undefined;
+      const projects = listProjects(status ? { status } : undefined);
+
+      if (opts.json) {
+        console.log(JSON.stringify(projects, null, 2));
+      } else {
+        if (projects.length === 0) {
+          console.log(chalk.dim("No projects found."));
+        } else {
+          for (const p of projects) {
+            const desc = p.description ? chalk.dim(` — ${p.description}`) : "";
+            const statusBadge = p.status === "archived" ? chalk.yellow(" [archived]") : "";
+            console.log(`${chalk.bold(p.name)}${desc}${statusBadge}  ${p.space_count} spaces`);
+          }
+        }
+      }
+      closeDb();
+    });
+
+  project
+    .command("get")
+    .description("Get project details")
+    .argument("<id-or-name>", "Project ID or name")
+    .option("--json", "Output as JSON")
+    .action((idOrName, opts) => {
+      let p = getProject(idOrName);
+      if (!p) p = getProjectByName(idOrName);
+
+      if (!p) {
+        console.error(chalk.red(`Project "${idOrName}" not found.`));
+        process.exit(1);
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify(p, null, 2));
+      } else {
+        console.log(chalk.bold(p.name));
+        if (p.description) console.log(`  Description: ${p.description}`);
+        if (p.path) console.log(`  Path: ${p.path}`);
+        if (p.repository) console.log(`  Repository: ${p.repository}`);
+        console.log(`  Status: ${p.status}`);
+        console.log(`  Spaces: ${p.space_count}`);
+        if (p.tags.length > 0) console.log(`  Tags: ${p.tags.join(", ")}`);
+        console.log(`  Created by: ${p.created_by} on ${p.created_at.slice(0, 10)}`);
+      }
+      closeDb();
+    });
+
+  project
+    .command("update")
+    .description("Update a project")
+    .argument("<id>", "Project ID")
+    .option("--name <name>", "New name")
+    .option("--description <text>", "New description")
+    .option("--path <path>", "New path")
+    .option("--status <status>", "New status (active/archived)")
+    .option("--repository <url>", "New repository URL")
+    .option("--tags <json>", "New tags (JSON array)")
+    .option("--json", "Output as JSON")
+    .action((id, opts) => {
+      const updates: Record<string, unknown> = {};
+      if (opts.name) updates.name = opts.name;
+      if (opts.description) updates.description = opts.description;
+      if (opts.path) updates.path = opts.path;
+      if (opts.status) updates.status = opts.status;
+      if (opts.repository) updates.repository = opts.repository;
+      if (opts.tags) {
+        try {
+          updates.tags = JSON.parse(opts.tags);
+        } catch {
+          console.error(chalk.red("Invalid --tags JSON."));
+          process.exit(1);
+        }
+      }
+
+      try {
+        const p = updateProject(id, updates as any);
+        if (opts.json) {
+          console.log(JSON.stringify(p, null, 2));
+        } else {
+          console.log(chalk.green(`Project "${p.name}" updated.`));
+        }
+      } catch (e: any) {
+        console.error(chalk.red(e.message));
+        process.exit(1);
+      }
+      closeDb();
+    });
+
+  project
+    .command("delete")
+    .description("Delete a project")
+    .argument("<id>", "Project ID")
+    .option("--json", "Output as JSON")
+    .action((id, opts) => {
+      try {
+        const deleted = deleteProject(id);
+        if (!deleted) {
+          console.error(chalk.red(`Project "${id}" not found.`));
+          process.exit(1);
+        }
+        if (opts.json) {
+          console.log(JSON.stringify({ id, deleted: true }));
+        } else {
+          console.log(chalk.green(`Project deleted.`));
+        }
+      } catch (e: any) {
+        console.error(chalk.red(e.message));
+        process.exit(1);
+      }
+      closeDb();
+    });
+}
