@@ -35,6 +35,10 @@ export { executeAction } from "./drivers/mac/input.js";
 // Providers
 export { createProvider, createAnthropicProvider, createOpenAIProvider } from "./providers/index.js";
 
+// Agents
+export { registerAgent, heartbeat, setFocus, getAgent, listAgents } from "./db/agents.js";
+export type { Agent } from "./db/agents.js";
+
 // Safety
 export { checkAction, resetRateLimiter } from "./agent/safety.js";
 export type { SafetyCheckResult } from "./agent/safety.js";

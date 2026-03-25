@@ -6,6 +6,7 @@ import { runTask } from "../agent/loop.js";
 import { captureScreenshot, saveScreenshotToFile, getScreenSize } from "../drivers/mac/screenshot.js";
 import { executeAction } from "../drivers/mac/input.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, searchActionLogs } from "../db/index.js";
+import { registerAgent, heartbeat as agentHeartbeat, setFocus, listAgents } from "../db/agents.js";
 import { registerCloudTools } from "@hasna/cloud";
 import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 
@@ -300,6 +301,59 @@ server.tool(
   async () => {
     const stats = getStats();
     return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+  }
+);
+
+// ── computer_register_agent ──────────────────────────────────────────
+server.tool(
+  "computer_register_agent",
+  "Register an agent for multi-agent coordination",
+  {
+    name: z.string().describe("Agent name"),
+    description: z.string().optional().describe("Agent description"),
+    capabilities: z.array(z.string()).optional().describe("Agent capabilities"),
+  },
+  async (params) => {
+    const agent = registerAgent(params);
+    return { content: [{ type: "text", text: JSON.stringify(agent, null, 2) }] };
+  }
+);
+
+// ── computer_heartbeat ───────────────────────────────────────────────
+server.tool(
+  "computer_heartbeat",
+  "Send a heartbeat to mark an agent as active",
+  {
+    agent_id: z.string().describe("Agent ID"),
+  },
+  async (params) => {
+    const ok = agentHeartbeat(params.agent_id);
+    return { content: [{ type: "text", text: ok ? "Heartbeat received" : "Agent not found" }] };
+  }
+);
+
+// ── computer_set_focus ───────────────────────────────────────────────
+server.tool(
+  "computer_set_focus",
+  "Set what an agent is currently focused on",
+  {
+    agent_id: z.string().describe("Agent ID"),
+    focus: z.string().describe("Current focus description"),
+  },
+  async (params) => {
+    const ok = setFocus(params.agent_id, params.focus);
+    return { content: [{ type: "text", text: ok ? "Focus updated" : "Agent not found" }] };
+  }
+);
+
+// ── computer_list_agents ─────────────────────────────────────────────
+server.tool(
+  "computer_list_agents",
+  "List all registered agents",
+  {},
+  async () => {
+    const agents = listAgents();
+    return { content: [{ type: "text", text: JSON.stringify(agents, null, 2) }] };
   }
 );
 
