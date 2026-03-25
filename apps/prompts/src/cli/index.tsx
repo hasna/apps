@@ -13,9 +13,8 @@ import { generateZshCompletion, generateBashCompletion } from "../lib/completion
 import { diffTexts } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
-import { isJson, output, handleError, fmtPrompt, getActiveProjectId } from "./utils.js"
+import { isJson, output, handleError, fmtPrompt } from "./utils.js"
 import { registerPromptCommands } from "./commands/prompts.js"
-import type { Prompt } from "../types/index.js"
 
 const require = createRequire(import.meta.url)
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
