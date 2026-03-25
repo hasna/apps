@@ -416,6 +416,77 @@ configCmd
     console.log(chalk.green("Config reset to defaults."));
   });
 
+// ── replay ───────────────────────────────────────────────────────────
+program
+  .command("replay")
+  .description("Replay a session — show actions and screenshots in sequence")
+  .argument("<id>", "Session ID (or prefix)")
+  .option("--speed <x>", "Replay speed multiplier (default: 2)", "2")
+  .option("--no-preview", "Disable inline screenshot preview")
+  .action(async (id: string, opts: any) => {
+    const sessions = listSessions({ limit: 1000 });
+    const session = sessions.find((s) => s.id.startsWith(id));
+    if (!session) {
+      console.log(chalk.red(`Session not found: ${id}`));
+      process.exit(1);
+    }
+
+    const logs = getActionLogs(session.id);
+    if (logs.length === 0) {
+      console.log(chalk.dim("No action logs for this session."));
+      process.exit(0);
+    }
+
+    const speed = parseFloat(opts.speed);
+    const totalCost = formatCost(calculateCost(session.model, session.total_tokens_in, session.total_tokens_out));
+
+    console.log(chalk.bold.cyan("computer replay") + ` — ${chalk.dim(session.id.slice(0, 8))}`);
+    console.log(chalk.dim(`Task: ${session.task}`));
+    console.log(chalk.dim(`Provider: ${session.provider} | ${logs.length} steps | Speed: ${speed}x\n`));
+
+    for (let i = 0; i < logs.length; i++) {
+      const log = logs[i];
+      const status = log.success ? chalk.green("OK") : chalk.red("FAIL");
+      console.log(
+        chalk.dim(`[${String(log.step + 1).padStart(3)}]`) +
+        ` ${status} ${chalk.yellow(log.action.type)}` +
+        chalk.dim(` (${log.duration_ms}ms)`)
+      );
+      if (log.reasoning) {
+        const short = log.reasoning.slice(0, 120).replace(/\n/g, " ");
+        console.log(chalk.dim(`      ${short}${log.reasoning.length > 120 ? "..." : ""}`));
+      }
+      if (log.error) {
+        console.log(chalk.red(`      Error: ${log.error}`));
+      }
+
+      // Show saved screenshot if available
+      if (opts.preview !== false && log.screenshot_path && supportsInlineImages()) {
+        try {
+          const { readFileSync } = await import("fs");
+          const imgData = readFileSync(log.screenshot_path);
+          const b64 = imgData.toString("base64");
+          const img = renderInlineImage(b64, { width: 40, height: 12 });
+          if (img) process.stdout.write(img);
+        } catch {
+          // Screenshot file may not exist
+        }
+      }
+
+      // Delay between steps based on original timing and speed
+      if (i < logs.length - 1) {
+        const nextLog = logs[i + 1];
+        const delay = Math.max(100, Math.round(log.duration_ms / speed));
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+
+    console.log();
+    console.log(
+      chalk.dim(`Replay complete. ${logs.length} steps | Cost: ${totalCost} | Duration: ${(session.total_duration_ms / 1000).toFixed(1)}s`)
+    );
+  });
+
 // ── completions ──────────────────────────────────────────────────────
 program
   .command("completions")
