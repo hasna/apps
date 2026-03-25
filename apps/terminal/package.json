@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@hasna/cloud": "0.1.5",
+    "@hasna/cloud": "^0.1.24",
     "@hasna/mementos": "^0.10.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@typescript/vfs": "^1.6.4",
