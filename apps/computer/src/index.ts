@@ -35,6 +35,10 @@ export { executeAction } from "./drivers/mac/input.js";
 // Providers
 export { createProvider, createAnthropicProvider, createOpenAIProvider } from "./providers/index.js";
 
+// Headless
+export { hasDisplay, isScreenSharingEnabled, isLumeInstalled, getHeadlessStatus } from "./drivers/mac/headless.js";
+export type { HeadlessConfig } from "./drivers/mac/headless.js";
+
 // Accessibility
 export { queryAccessibilityTree, summarizeAccessibilityTree } from "./drivers/mac/accessibility.js";
 export type { AXElement } from "./drivers/mac/accessibility.js";

@@ -489,6 +489,22 @@ program
     );
   });
 
+// ── headless ─────────────────────────────────────────────────────────
+program
+  .command("headless")
+  .description("Check headless mode status and available strategies")
+  .action(async () => {
+    const { getHeadlessStatus } = await import("../drivers/mac/headless.js");
+    const status = await getHeadlessStatus();
+
+    console.log(chalk.bold("Headless Mode Status\n"));
+    console.log(`  Display attached:  ${status.display ? chalk.green("yes") : chalk.red("no")}`);
+    console.log(`  Screen Sharing:    ${status.screenSharing ? chalk.green("enabled") : chalk.dim("disabled")}`);
+    console.log(`  Lume (CUA VMs):    ${status.lume ? chalk.green("installed") : chalk.dim("not installed")}`);
+    console.log();
+    console.log(status.recommendation);
+  });
+
 // ── record ───────────────────────────────────────────────────────────
 program
   .command("record")
