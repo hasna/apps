@@ -17,8 +17,8 @@ import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/githu
 import { getActivityHeatmap, getContributorStats, getStaleRepos, getRecentActivity } from "../lib/analytics.js";
 
 program
-  .name("git-local")
-  .description("Local git intelligence — track all repos, search commits, PRs, branches")
+  .name("repos")
+  .description("Local repo intelligence — track all repos, search commits, PRs, branches")
   .version("0.1.0");
 
 // ── Scan ──
@@ -57,7 +57,7 @@ program
     if (opts.json) {
       console.log(JSON.stringify(repos, null, 2));
     } else {
-      if (repos.length === 0) { console.log(chalk.dim("No repos found. Run: git-local scan")); return; }
+      if (repos.length === 0) { console.log(chalk.dim("No repos found. Run: repos scan")); return; }
       for (const r of repos) {
         const org = r.org ? chalk.blue(`[${r.org}]`) : "";
         console.log(`${chalk.bold(r.name)} ${org} ${chalk.dim(r.path)}`);

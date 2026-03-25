@@ -26,7 +26,7 @@ function createTestRepo(name: string, commits = 1): string {
 
 beforeEach(() => {
   closeDb();
-  process.env["HASNA_GIT_DB_PATH"] = ":memory:";
+  process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
   getDb(":memory:");
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
@@ -35,7 +35,7 @@ beforeEach(() => {
 afterAll(() => {
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
-  delete process.env["HASNA_GIT_DB_PATH"];
+  delete process.env["HASNA_REPOS_DB_PATH"];
 });
 
 describe("scanner", () => {

@@ -16,7 +16,7 @@ import {
 } from "../db/repos.js";
 import { scanRepos } from "../lib/scanner.js";
 
-const PORT = parseInt(process.env["GIT_LOCAL_PORT"] || "19450");
+const PORT = parseInt(process.env["REPOS_PORT"] || "19450");
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -145,4 +145,4 @@ Bun.serve({
   },
 });
 
-console.log(`git-local server running on http://localhost:${PORT}`);
+console.log(`repos server running on http://localhost:${PORT}`);

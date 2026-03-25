@@ -75,7 +75,7 @@ export function App() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <FolderGit2 className="w-6 h-6" /> git-local
+          <FolderGit2 className="w-6 h-6" /> repos
         </h1>
         <div className="flex items-center gap-2">
           <button onClick={doScan} disabled={scanning}

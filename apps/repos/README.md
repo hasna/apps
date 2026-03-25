@@ -1,58 +1,58 @@
-# @hasna/git
+# @hasna/repos
 
-Local git intelligence platform for AI agents. Track all repos on your machine, search commits, PRs, branches across every repository. CLI + MCP server + Web dashboard.
+Local repo intelligence platform for AI agents. Track all repos on your machine, search commits, PRs, branches across every repository. CLI + MCP server + Web dashboard.
 
 ## Install
 
 ```bash
-bun install -g @hasna/git
+bun install -g @hasna/repos
 ```
 
 ## Quick Start
 
 ```bash
 # Scan all repos under ~/Workspace
-git-local scan
+repos scan
 
 # List all tracked repos
-git-local repos
+repos repos
 
 # Search across everything
-git-local search "authentication"
+repos search "authentication"
 
 # Show stats
-git-local stats
+repos stats
 
 # Start the dashboard
-git-local-serve  # http://localhost:19450
+repos-serve  # http://localhost:19450
 ```
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `git-local scan` | Discover and index all git repos |
-| `git-local repos` | List repositories |
-| `git-local repo <name>` | Get repo details |
-| `git-local commits` | List commits |
-| `git-local branches` | List branches |
-| `git-local tags` | List tags |
-| `git-local prs` | List pull requests |
-| `git-local search <query>` | Unified search across all entities |
-| `git-local stats` | Global statistics |
-| `git-local activity` | Recent commit activity |
-| `git-local contributors` | Top contributors |
-| `git-local stale` | Stale repos with no recent commits |
-| `git-local heatmap` | Commit activity heatmap |
-| `git-local sync-github` | Sync PRs from GitHub |
-| `git-local gh-info <name>` | Fetch GitHub metadata |
+| `repos scan` | Discover and index all git repos |
+| `repos repos` | List repositories |
+| `repos repo <name>` | Get repo details |
+| `repos commits` | List commits |
+| `repos branches` | List branches |
+| `repos tags` | List tags |
+| `repos prs` | List pull requests |
+| `repos search <query>` | Unified search across all entities |
+| `repos stats` | Global statistics |
+| `repos activity` | Recent commit activity |
+| `repos contributors` | Top contributors |
+| `repos stale` | Stale repos with no recent commits |
+| `repos heatmap` | Commit activity heatmap |
+| `repos sync-github` | Sync PRs from GitHub |
+| `repos gh-info <name>` | Fetch GitHub metadata |
 
 All commands support `--json` for machine-readable output.
 
 ## MCP Server
 
 ```bash
-git-local-mcp
+repos-mcp
 ```
 
 19 tools available for AI agents:
@@ -71,7 +71,7 @@ git-local-mcp
 ## REST API
 
 ```bash
-git-local-serve  # Default port: 19450
+repos-serve  # Default port: 19450
 ```
 
 | Endpoint | Method | Description |
@@ -91,7 +91,7 @@ git-local-serve  # Default port: 19450
 ## SDK
 
 ```typescript
-import { scanRepos, searchAll, listRepos, getGlobalStats } from "@hasna/git";
+import { scanRepos, searchAll, listRepos, getGlobalStats } from "@hasna/repos";
 
 const result = scanRepos(["/home/user/code"]);
 const repos = listRepos({ org: "myorg" });
@@ -100,7 +100,7 @@ const results = searchAll("authentication");
 
 ## Data Storage
 
-SQLite database at `~/.hasna/git/git-local.db` with WAL mode and FTS5 full-text search.
+SQLite database at `~/.hasna/repos/repos.db` with WAL mode and FTS5 full-text search.
 
 ## License
 

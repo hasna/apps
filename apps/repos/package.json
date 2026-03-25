@@ -1,14 +1,14 @@
 {
-  "name": "@hasna/git",
-  "version": "0.1.2",
-  "description": "Local git intelligence platform for AI agents — track all repos, search commits, PRs, branches across your machine. CLI + MCP + Web dashboard.",
+  "name": "@hasna/repos",
+  "version": "0.1.0",
+  "description": "Local repo intelligence platform for AI agents — track all repos, search commits, PRs, branches across your machine. CLI + MCP + Web dashboard.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "git-local": "dist/cli/index.js",
-    "git-local-mcp": "dist/mcp/index.js",
-    "git-local-serve": "dist/server/index.js"
+    "repos": "dist/cli/index.js",
+    "repos-mcp": "dist/mcp/index.js",
+    "repos-serve": "dist/server/index.js"
   },
   "exports": {
     ".": {
@@ -31,11 +31,11 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/git 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/repos 2>/dev/null || true"
   },
   "keywords": [
-    "git",
     "repos",
+    "git",
     "mcp",
     "ai",
     "coding-agent",
@@ -55,11 +55,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/git.git"
+    "url": "https://github.com/hasna/repos.git"
   },
-  "homepage": "https://github.com/hasna/git",
+  "homepage": "https://github.com/hasna/repos",
   "bugs": {
-    "url": "https://github.com/hasna/git/issues"
+    "url": "https://github.com/hasna/repos/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

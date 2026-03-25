@@ -3,12 +3,12 @@ import { getDb, closeDb } from "./database";
 
 describe("database", () => {
   beforeAll(() => {
-    process.env["HASNA_GIT_DB_PATH"] = ":memory:";
+    process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
   });
 
   afterAll(() => {
     closeDb();
-    delete process.env["HASNA_GIT_DB_PATH"];
+    delete process.env["HASNA_REPOS_DB_PATH"];
   });
 
   it("should initialize with WAL mode (or memory for in-memory)", () => {

@@ -22,7 +22,7 @@ import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/githu
 import { getDb } from "../db/database.js";
 
 const server = new McpServer({
-  name: "git-local",
+  name: "repos",
   version: "0.1.0",
 });
 

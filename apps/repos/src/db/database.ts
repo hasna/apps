@@ -4,10 +4,10 @@ import { SqliteAdapter as _SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-function findNearestGitLocalDb(startDir: string): string | null {
+function findNearestReposDb(startDir: string): string | null {
   let dir = resolve(startDir);
   while (true) {
-    const candidate = join(dir, ".git-local", "git-local.db");
+    const candidate = join(dir, ".repos", "repos.db");
     if (existsSync(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) break;
@@ -17,20 +17,20 @@ function findNearestGitLocalDb(startDir: string): string | null {
 }
 
 function getDbPath(): string {
-  if (process.env["HASNA_GIT_DB_PATH"]) {
-    return process.env["HASNA_GIT_DB_PATH"];
+  if (process.env["HASNA_REPOS_DB_PATH"]) {
+    return process.env["HASNA_REPOS_DB_PATH"];
   }
-  if (process.env["GIT_LOCAL_DB_PATH"]) {
-    return process.env["GIT_LOCAL_DB_PATH"];
+  if (process.env["REPOS_DB_PATH"]) {
+    return process.env["REPOS_DB_PATH"];
   }
 
   const cwd = process.cwd();
-  const nearest = findNearestGitLocalDb(cwd);
+  const nearest = findNearestReposDb(cwd);
   if (nearest) return nearest;
 
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const newPath = join(home, ".hasna", "git", "git-local.db");
-  const legacyPath = join(home, ".git-local", "git-local.db");
+  const newPath = join(home, ".hasna", "repos", "repos.db");
+  const legacyPath = join(home, ".git-local", "repos.db");
 
   if (existsSync(legacyPath) && !existsSync(newPath)) {
     return legacyPath;

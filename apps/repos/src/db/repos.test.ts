@@ -28,13 +28,13 @@ let db: ReturnType<typeof getDb>;
 
 beforeEach(() => {
   closeDb();
-  process.env["HASNA_GIT_DB_PATH"] = ":memory:";
+  process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
   db = getDb(":memory:");
 });
 
 afterAll(() => {
   closeDb();
-  delete process.env["HASNA_GIT_DB_PATH"];
+  delete process.env["HASNA_REPOS_DB_PATH"];
 });
 
 describe("repos", () => {
