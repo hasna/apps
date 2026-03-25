@@ -35,6 +35,10 @@ export { executeAction } from "./drivers/mac/input.js";
 // Providers
 export { createProvider, createAnthropicProvider, createOpenAIProvider } from "./providers/index.js";
 
+// Config
+export { loadConfig, saveConfig, getConfigValue, setConfigValue, getConfigPath, DEFAULT_CONFIG } from "./lib/config.js";
+export type { ComputerConfig } from "./lib/config.js";
+
 // Utilities
 export { scaleScreenshot, getScaledSize, RECOMMENDED_WIDTHS } from "./lib/scale.js";
 

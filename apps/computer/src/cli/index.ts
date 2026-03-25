@@ -4,6 +4,7 @@ import chalk from "chalk";
 import { runTask } from "../agent/loop.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
+import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import type { Provider } from "../types/index.js";
 
 const program = new Command();
@@ -26,20 +27,25 @@ program
   .option("--system-prompt <prompt>", "Custom system prompt")
   .option("--max-width <px>", "Max screenshot width for AI model (default: 1280)", "1280")
   .action(async (task: string, opts: any) => {
+    const cfg = loadConfig();
+    const provider = opts.provider ?? cfg.provider;
+    const maxSteps = parseInt(opts.maxSteps) || cfg.maxSteps;
+    const maxWidth = parseInt(opts.maxWidth) || cfg.screenshotMaxWidth;
+
     console.log(chalk.bold.cyan("computer") + " — starting task");
-    console.log(chalk.dim(`Provider: ${opts.provider} | Max steps: ${opts.maxSteps} | Max width: ${opts.maxWidth}px`));
+    console.log(chalk.dim(`Provider: ${provider} | Max steps: ${maxSteps} | Max width: ${maxWidth}px`));
     console.log(chalk.dim(`Task: ${task}`));
     console.log();
 
     const session = await runTask({
       task,
-      provider: opts.provider as Provider,
-      model: opts.model,
-      maxSteps: parseInt(opts.maxSteps),
-      saveScreenshots: opts.saveScreenshots,
-      screenshotsDir: opts.screenshotsDir,
+      provider: provider as Provider,
+      model: opts.model ?? cfg.model,
+      maxSteps,
+      saveScreenshots: opts.saveScreenshots ?? cfg.saveScreenshots,
+      screenshotsDir: opts.screenshotsDir ?? cfg.screenshotsDir,
       systemPrompt: opts.systemPrompt,
-      screenshotMaxWidth: parseInt(opts.maxWidth),
+      screenshotMaxWidth: maxWidth,
       onStep: (step, response, result) => {
         const status = result.success ? chalk.green("OK") : chalk.red("FAIL");
         const actionDesc = response.action
@@ -188,6 +194,76 @@ program
     console.log(`  Sessions:  ${stats.total_sessions} (${chalk.green(stats.completed + " completed")}, ${chalk.red(stats.failed + " failed")})`);
     console.log(`  Steps:     ${stats.total_steps}`);
     console.log(`  Tokens:    ${stats.total_tokens.toLocaleString()}`);
+  });
+
+// ── config ───────────────────────────────────────────────────────────
+const configCmd = program
+  .command("config")
+  .description("View or modify configuration");
+
+configCmd
+  .command("show")
+  .description("Show current configuration")
+  .action(async () => {
+    const config = loadConfig();
+    console.log(chalk.bold("Config: ") + getConfigPath());
+    console.log(JSON.stringify(config, null, 2));
+  });
+
+configCmd
+  .command("get")
+  .description("Get a config value")
+  .argument("<key>", "Config key (e.g. provider, safety.blockedApps)")
+  .action(async (key: string) => {
+    const value = getConfigValue(key);
+    if (value === undefined) {
+      console.log(chalk.red(`Key not found: ${key}`));
+      process.exit(1);
+    }
+    console.log(typeof value === "object" ? JSON.stringify(value, null, 2) : String(value));
+  });
+
+configCmd
+  .command("set")
+  .description("Set a config value")
+  .argument("<key>", "Config key (e.g. provider, maxSteps)")
+  .argument("<value>", "Value to set")
+  .action(async (key: string, value: string) => {
+    setConfigValue(key, value);
+    console.log(chalk.green(`Set ${key} = ${value}`));
+  });
+
+configCmd
+  .command("path")
+  .description("Show config file path")
+  .action(async () => {
+    console.log(getConfigPath());
+  });
+
+configCmd
+  .command("edit")
+  .description("Open config in $EDITOR")
+  .action(async () => {
+    const editor = process.env.EDITOR ?? "nano";
+    // Ensure config file exists
+    const config = loadConfig();
+    const { saveConfig } = await import("../lib/config.js");
+    saveConfig(config);
+    const proc = Bun.spawn([editor, getConfigPath()], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    await proc.exited;
+  });
+
+configCmd
+  .command("reset")
+  .description("Reset config to defaults")
+  .action(async () => {
+    const { DEFAULT_CONFIG, saveConfig } = await import("../lib/config.js");
+    saveConfig(DEFAULT_CONFIG);
+    console.log(chalk.green("Config reset to defaults."));
   });
 
 program.parse();
