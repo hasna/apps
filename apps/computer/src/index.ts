@@ -48,6 +48,7 @@ export { calculateCost, formatCost, stepCost, listPricing } from "./lib/pricing.
 
 // Utilities
 export { scaleScreenshot, getScaledSize, RECOMMENDED_WIDTHS } from "./lib/scale.js";
+export { screenshotsMatch, computeScreenHash, compareHashes } from "./lib/diff.js";
 
 // Database
 export {

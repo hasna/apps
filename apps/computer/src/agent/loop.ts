@@ -15,6 +15,7 @@ import { saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { scaleScreenshot } from "../lib/scale.js";
 import { loadConfig } from "../lib/config.js";
 import { checkAction } from "./safety.js";
+import { screenshotsMatch } from "../lib/diff.js";
 import { getDb, logAction, createSession, updateSession } from "../db/index.js";
 
 const DEFAULT_MAX_STEPS = 50;
@@ -194,6 +195,17 @@ export async function runTask(options: RunOptions): Promise<Session> {
           reasoning: `Action failed: ${result.error}`,
           done: false,
         });
+      }
+
+      // 9. Screenshot diff — detect if screen didn't change after action
+      if (!dryRun && result.screenshot && response.action?.type !== "screenshot") {
+        if (screenshotsMatch(screenshot, result.screenshot)) {
+          history.push({
+            action: null,
+            reasoning: "NOTE: The screen did not visibly change after your action. It may not have worked, or the UI may need more time to update. Consider waiting or trying a different approach.",
+            done: false,
+          });
+        }
       }
     }
 
