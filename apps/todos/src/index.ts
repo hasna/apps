@@ -142,7 +142,7 @@ export {
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
 
 // Templates
-export { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./db/templates.js";
+export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } from "./db/templates.js";
 
 // Checklists
 export {

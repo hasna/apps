@@ -108,7 +108,7 @@ const MINIMAL_TOOLS = new Set([
 const STANDARD_EXCLUDED = new Set([
   "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
-  "create_template", "list_templates", "create_task_from_template", "delete_template",
+  "create_template", "list_templates", "create_task_from_template", "delete_template", "update_template",
   "approve_task",
 ]);
 
@@ -2295,7 +2295,8 @@ server.tool(
   async (params) => {
     try {
       const { taskFromTemplate } = await import("../db/templates.js");
-      const input = taskFromTemplate(params.template_id, {
+      const resolvedTemplateId = resolveId(params.template_id, "task_templates");
+      const input = taskFromTemplate(resolvedTemplateId, {
         title: params.title, description: params.description,
         priority: params.priority as any, assigned_to: params.assigned_to, project_id: params.project_id,
       });
@@ -2315,8 +2316,36 @@ server.tool(
   async ({ id }) => {
     try {
       const { deleteTemplate } = await import("../db/templates.js");
-      const deleted = deleteTemplate(id);
+      const resolvedId = resolveId(id, "task_templates");
+      const deleted = deleteTemplate(resolvedId);
       return { content: [{ type: "text" as const, text: deleted ? "Template deleted." : "Template not found." }] };
+    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+  },
+);
+}
+
+// update_template
+if (shouldRegisterTool("update_template")) {
+server.tool(
+  "update_template",
+  "Update a task template's name, title pattern, description, priority, tags, or other fields.",
+  {
+    id: z.string(),
+    name: z.string().optional(),
+    title_pattern: z.string().optional(),
+    description: z.string().optional(),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+    tags: z.array(z.string()).optional(),
+    project_id: z.string().optional(),
+    plan_id: z.string().optional(),
+  },
+  async ({ id, ...updates }) => {
+    try {
+      const { updateTemplate } = await import("../db/templates.js");
+      const resolvedId = resolveId(id, "task_templates");
+      const t = updateTemplate(resolvedId, updates);
+      if (!t) return { content: [{ type: "text" as const, text: `Template not found: ${id}` }], isError: true };
+      return { content: [{ type: "text" as const, text: `Template updated: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}" | ${t.priority}` }] };
     } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
   },
 );
@@ -3518,7 +3547,7 @@ server.tool(
       "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
       "get_task_history","get_recent_activity","recap","task_context","standup","burndown","blame","import_github_issue",
       "create_webhook","list_webhooks","delete_webhook",
-      "create_template","list_templates","create_task_from_template","delete_template",
+      "create_template","list_templates","create_task_from_template","delete_template","update_template",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health","bootstrap",
       "decompose_task",
@@ -3640,6 +3669,7 @@ server.tool(
       list_templates: "List all task templates. No params.",
       create_task_from_template: "Create a task from a template with optional overrides.\n  Params: template_id(string, req), title(string), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string)\n  Example: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}",
       delete_template: "Delete a task template.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+      update_template: "Update a task template's name, title pattern, or other fields.\n  Params: id(string, req), name(string), title_pattern(string), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string)\n  Example: {id: 'a1b2c3d4', name: 'Renamed Template', priority: 'critical'}",
 
       // Active work
       get_active_work: "See all in-progress tasks and who is working on them.\n  Params: project_id(string, optional), task_list_id(string, optional)\n  Example: {project_id: 'a1b2c3d4'}",

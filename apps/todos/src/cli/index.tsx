@@ -1019,10 +1019,11 @@ program
   .option("-p, --priority <level>", "Default priority")
   .option("-t, --tags <tags>", "Default tags (comma-separated)")
   .option("--delete <id>", "Delete a template")
+  .option("--update <id>", "Update a template")
   .option("--use <id>", "Create a task from a template")
   .action((opts) => {
     const globalOpts = program.opts();
-    const { createTemplate, listTemplates, deleteTemplate, taskFromTemplate } = require("../db/templates.js");
+    const { createTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } = require("../db/templates.js");
 
     if (opts.add) {
       if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
@@ -1045,6 +1046,20 @@ program
       if (globalOpts.json) { output({ deleted }, true); }
       else if (deleted) { console.log(chalk.green("Template deleted.")); }
       else { console.error(chalk.red("Template not found.")); process.exit(1); }
+      return;
+    }
+
+    if (opts.update) {
+      const updates: Record<string, any> = {};
+      if (opts.add) updates.name = opts.add;
+      if (opts.title) updates.title_pattern = opts.title;
+      if (opts.description) updates.description = opts.description;
+      if (opts.priority) updates.priority = opts.priority;
+      if (opts.tags) updates.tags = opts.tags.split(",").map((t: string) => t.trim());
+      const updated = updateTemplate(opts.update, updates);
+      if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+      if (globalOpts.json) { output(updated, true); }
+      else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
       return;
     }
 

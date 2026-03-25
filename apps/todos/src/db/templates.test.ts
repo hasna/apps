@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./templates.js";
+import { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } from "./templates.js";
 import { createTask } from "./tasks.js";
 
 let db: Database;
@@ -85,6 +85,23 @@ describe("getTemplate", () => {
     expect(Array.isArray(found!.tags)).toBe(true);
     expect(found!.tags).toEqual(["a", "b"]);
   });
+
+  it("should resolve partial ID (first 8 chars)", () => {
+    const t = createTemplate({ name: "Partial", title_pattern: "P" }, db);
+    const found = getTemplate(t.id.slice(0, 8), db);
+    expect(found).not.toBeNull();
+    expect(found!.id).toBe(t.id);
+    expect(found!.name).toBe("Partial");
+  });
+
+  it("should return null for ambiguous partial ID", () => {
+    // Insert two templates with same prefix by manually inserting
+    const t1 = createTemplate({ name: "A", title_pattern: "A" }, db);
+    const t2 = createTemplate({ name: "B", title_pattern: "B" }, db);
+    // These have different UUIDs so partial matching with full prefix works individually
+    expect(getTemplate(t1.id.slice(0, 8), db)).not.toBeNull();
+    expect(getTemplate(t2.id.slice(0, 8), db)).not.toBeNull();
+  });
 });
 
 describe("listTemplates", () => {
@@ -124,6 +141,92 @@ describe("deleteTemplate", () => {
     deleteTemplate(t2.id, db);
     expect(listTemplates(db).length).toBe(1);
     expect(getTemplate(t1.id, db)).not.toBeNull();
+  });
+
+  it("should delete by partial ID", () => {
+    const t = createTemplate({ name: "PartialDel", title_pattern: "PD" }, db);
+    expect(deleteTemplate(t.id.slice(0, 8), db)).toBe(true);
+    expect(listTemplates(db).length).toBe(0);
+  });
+});
+
+describe("updateTemplate", () => {
+  it("should update name", () => {
+    const t = createTemplate({ name: "Old", title_pattern: "T" }, db);
+    const updated = updateTemplate(t.id, { name: "New" }, db);
+    expect(updated).not.toBeNull();
+    expect(updated!.name).toBe("New");
+  });
+
+  it("should update title_pattern", () => {
+    const t = createTemplate({ name: "T", title_pattern: "Old: {x}" }, db);
+    const updated = updateTemplate(t.id, { title_pattern: "New: {y}" }, db);
+    expect(updated!.title_pattern).toBe("New: {y}");
+  });
+
+  it("should update description", () => {
+    const t = createTemplate({ name: "T", title_pattern: "T" }, db);
+    const updated = updateTemplate(t.id, { description: "Updated desc" }, db);
+    expect(updated!.description).toBe("Updated desc");
+  });
+
+  it("should update priority", () => {
+    const t = createTemplate({ name: "T", title_pattern: "T", priority: "low" }, db);
+    const updated = updateTemplate(t.id, { priority: "critical" }, db);
+    expect(updated!.priority).toBe("critical");
+  });
+
+  it("should update tags", () => {
+    const t = createTemplate({ name: "T", title_pattern: "T", tags: ["a"] }, db);
+    const updated = updateTemplate(t.id, { tags: ["b", "c"] }, db);
+    expect(updated!.tags).toEqual(["b", "c"]);
+  });
+
+  it("should update metadata", () => {
+    const t = createTemplate({ name: "T", title_pattern: "T" }, db);
+    const updated = updateTemplate(t.id, { metadata: { foo: "bar" } }, db);
+    expect(updated!.metadata).toEqual({ foo: "bar" });
+  });
+
+  it("should update multiple fields at once", () => {
+    const t = createTemplate({ name: "Old", title_pattern: "Old", priority: "low" }, db);
+    const updated = updateTemplate(t.id, { name: "New", title_pattern: "New", priority: "high" }, db);
+    expect(updated!.name).toBe("New");
+    expect(updated!.title_pattern).toBe("New");
+    expect(updated!.priority).toBe("high");
+  });
+
+  it("should return null for non-existent template", () => {
+    expect(updateTemplate("nonexistent", { name: "X" }, db)).toBeNull();
+  });
+
+  it("should return unchanged template when no updates provided", () => {
+    const t = createTemplate({ name: "T", title_pattern: "T" }, db);
+    const updated = updateTemplate(t.id, {}, db);
+    expect(updated).not.toBeNull();
+    expect(updated!.name).toBe("T");
+  });
+
+  it("should resolve partial ID", () => {
+    const t = createTemplate({ name: "Partial", title_pattern: "P" }, db);
+    const updated = updateTemplate(t.id.slice(0, 8), { name: "Updated" }, db);
+    expect(updated).not.toBeNull();
+    expect(updated!.name).toBe("Updated");
+    expect(updated!.id).toBe(t.id);
+  });
+
+  it("should set description to null", () => {
+    const t = createTemplate({ name: "T", title_pattern: "T", description: "Has desc" }, db);
+    const updated = updateTemplate(t.id, { description: null }, db);
+    expect(updated!.description).toBeNull();
+  });
+
+  it("should not affect other fields when updating one", () => {
+    const t = createTemplate({ name: "T", title_pattern: "Pattern", priority: "high", tags: ["a"] }, db);
+    const updated = updateTemplate(t.id, { name: "NewName" }, db);
+    expect(updated!.title_pattern).toBe("Pattern");
+    expect(updated!.priority).toBe("high");
+    expect(updated!.tags).toEqual(["a"]);
   });
 });
 
@@ -184,5 +287,12 @@ describe("taskFromTemplate", () => {
     const t = createTemplate({ name: "Proj", title_pattern: "T" }, db);
     const input = taskFromTemplate(t.id, { project_id: "proj-456" }, db);
     expect(input.project_id).toBe("proj-456");
+  });
+
+  it("should resolve partial ID for taskFromTemplate", () => {
+    const t = createTemplate({ name: "Partial", title_pattern: "Partial: {x}", priority: "high" }, db);
+    const input = taskFromTemplate(t.id.slice(0, 8), {}, db);
+    expect(input.title).toBe("Partial: {x}");
+    expect(input.priority).toBe("high");
   });
 });
