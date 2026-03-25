@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "child_process";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../db/database.js";
 import { listEnabledJobs, createJobRun, finishJobRun, touchJobLastRun, type ConnectorJob } from "../db/jobs.js";
 import { maybeStrip } from "./strip.js";
 

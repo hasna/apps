@@ -9,8 +9,7 @@
  *   token     — OAuth token refresh operations
  */
 
-import type { Database } from "bun:sqlite";
-import { getDatabase, now, shortUuid } from "./database.js";
+import { getDatabase, now, shortUuid, type Database } from "./database.js";
 
 export type ResourceType = "connector" | "agent" | "profile" | "token";
 export type LockType = "advisory" | "exclusive";

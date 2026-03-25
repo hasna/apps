@@ -1,5 +1,4 @@
-import type { Database } from "bun:sqlite";
-import { getDatabase, now } from "./database.js";
+import { getDatabase, now, type Database } from "./database.js";
 
 export function promoteConnector(name: string, db?: Database): void {
   const d = db ?? getDatabase();

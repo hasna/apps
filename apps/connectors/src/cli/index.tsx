@@ -41,6 +41,7 @@ import { getConnectorsHome } from "../db/database.js";
 import { TEST_ENDPOINTS } from "../lib/test-endpoints.js";
 import { createInterface } from "readline";
 import { getConnectorOperations, runConnectorCommand, getConnectorCommandHelp, getConnectorCliPath } from "../lib/runner.js";
+import { registerCloudCommands } from "@hasna/cloud";
 
 // Load versions from connector package.json files
 loadConnectorVersions();
@@ -2875,5 +2876,7 @@ llmCmd
       console.log(`  ${chalk.cyan(p.name.padEnd(12))} ${p.defaultModel.padEnd(30)} ${chalk.dim(p.baseUrl)}`);
     }
   });
+
+registerCloudCommands(program as any, "connectors");
 
 program.parse();

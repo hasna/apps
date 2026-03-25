@@ -11,8 +11,7 @@
  * The window resets every WINDOW_SECONDS (default: 60s = per-minute rate).
  */
 
-import type { Database } from "bun:sqlite";
-import { getDatabase, now } from "./database.js";
+import { getDatabase, now, type Database } from "./database.js";
 
 /** How long an agent is considered active (ms) — matches agent heartbeat window */
 const AGENT_ACTIVE_WINDOW_MS = 30 * 60 * 1000;

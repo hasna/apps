@@ -1,5 +1,4 @@
-import type { Database } from "bun:sqlite";
-import { getDatabase, now } from "./database.js";
+import { getDatabase, now, type Database } from "./database.js";
 
 /** 30 minutes — after this an agent is considered stale and its name can be taken over */
 const AGENT_ACTIVE_WINDOW_MS = 30 * 60 * 1000;

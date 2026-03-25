@@ -1,4 +1,6 @@
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteAdapter } from "@hasna/cloud";
+
+export type Database = SqliteAdapter;
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
@@ -40,13 +42,13 @@ export function getConnectorsHome(): string {
 const DB_DIR = getConnectorsHome();
 const DB_PATH = join(DB_DIR, "connectors.db");
 
-let _db: Database | null = null;
+let _db: SqliteAdapter | null = null;
 
-export function getDatabase(path?: string): Database {
+export function getDatabase(path?: string): SqliteAdapter {
   if (_db) return _db;
   const dbPath = path ?? DB_PATH;
   mkdirSync(join(dbPath, ".."), { recursive: true });
-  _db = new Database(dbPath);
+  _db = new SqliteAdapter(dbPath);
   _db.run("PRAGMA journal_mode = WAL");
   migrate(_db);
   return _db;

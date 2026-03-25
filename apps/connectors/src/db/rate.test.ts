@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import { checkRateBudget, getRateBudget, cleanExpiredRateWindows, isRateExceeded, ensureRateTable } from "./rate.js";
 
 function makeDb(): Database {

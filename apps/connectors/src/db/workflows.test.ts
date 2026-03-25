@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { Database } from "bun:sqlite";
+import { SqliteAdapter as Database } from "@hasna/cloud";
 import {
   createWorkflow, getWorkflow, getWorkflowByName,
   listWorkflows, updateWorkflow, deleteWorkflow,
