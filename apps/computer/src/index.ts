@@ -35,6 +35,10 @@ export { executeAction } from "./drivers/mac/input.js";
 // Providers
 export { createProvider, createAnthropicProvider, createOpenAIProvider } from "./providers/index.js";
 
+// Accessibility
+export { queryAccessibilityTree, summarizeAccessibilityTree } from "./drivers/mac/accessibility.js";
+export type { AXElement } from "./drivers/mac/accessibility.js";
+
 // Integrations
 export { runPostSessionIntegrations, saveToRecordings, registerWithSessions, pushToLogs } from "./lib/integrations.js";
 

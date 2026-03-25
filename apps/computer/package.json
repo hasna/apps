@@ -20,6 +20,8 @@
     "dist",
     "helpers/scroll",
     "helpers/scroll.swift",
+    "helpers/accessibility",
+    "helpers/accessibility.swift",
     "src/db/migrations",
     "dashboard/dist",
     "LICENSE",

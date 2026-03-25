@@ -7,6 +7,7 @@ import { captureScreenshot, saveScreenshotToFile, getScreenSize } from "../drive
 import { executeAction } from "../drivers/mac/input.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, searchActionLogs } from "../db/index.js";
 import { registerAgent, heartbeat as agentHeartbeat, setFocus, listAgents } from "../db/agents.js";
+import { queryAccessibilityTree, summarizeAccessibilityTree } from "../drivers/mac/accessibility.js";
 import { registerCloudTools } from "@hasna/cloud";
 import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 
@@ -301,6 +302,33 @@ server.tool(
   async () => {
     const stats = getStats();
     return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+  }
+);
+
+// ── computer_accessibility ───────────────────────────────────────────
+server.tool(
+  "computer_accessibility",
+  "Query the macOS accessibility tree — get structured UI elements (buttons, fields, labels) with positions. Much more precise than pixel-guessing from screenshots.",
+  {
+    app: z.string().optional().describe("App name to query (default: frontmost)"),
+    focused_only: z.boolean().default(false).describe("Only get focused element's subtree"),
+    depth: z.number().default(3).describe("Max tree traversal depth"),
+    format: z.enum(["json", "summary"]).default("summary").describe("Output format"),
+  },
+  async (params) => {
+    try {
+      const elements = await queryAccessibilityTree({
+        app: params.app,
+        focusedOnly: params.focused_only,
+        depth: params.depth,
+      });
+      const text = params.format === "json"
+        ? JSON.stringify(elements, null, 2)
+        : summarizeAccessibilityTree(elements);
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Accessibility query failed: ${err instanceof Error ? err.message : err}` }] };
+    }
   }
 );
 
