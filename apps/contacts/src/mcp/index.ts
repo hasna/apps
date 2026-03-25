@@ -5,6 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { registerCloudTools } from "@hasna/cloud";
 import type {
   CreateContactInput,
   UpdateContactInput,
@@ -3606,6 +3607,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main() {
   const transport = new StdioServerTransport();
+  registerCloudTools(server, "contacts");
   await server.connect(transport);
   console.error("Contacts MCP server running on stdio");
 }
