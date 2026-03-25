@@ -31,6 +31,7 @@ export function getDb(): DbAdapter {
       total_tokens_in INTEGER NOT NULL DEFAULT 0,
       total_tokens_out INTEGER NOT NULL DEFAULT 0,
       total_duration_ms INTEGER NOT NULL DEFAULT 0,
+      tags TEXT,
       error TEXT,
       created_at TEXT NOT NULL,
       completed_at TEXT
@@ -89,8 +90,8 @@ export function getDb(): DbAdapter {
 export async function createSession(session: Session): Promise<void> {
   const d = getDb();
   d.prepare(`
-    INSERT INTO sessions (id, task, provider, model, status, steps, total_tokens_in, total_tokens_out, total_duration_ms, error, created_at, completed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, task, provider, model, status, steps, total_tokens_in, total_tokens_out, total_duration_ms, tags, error, created_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id,
     session.task,
@@ -101,6 +102,7 @@ export async function createSession(session: Session): Promise<void> {
     session.total_tokens_in,
     session.total_tokens_out,
     session.total_duration_ms,
+    session.tags?.length ? JSON.stringify(session.tags) : null,
     session.error ?? null,
     session.created_at,
     session.completed_at ?? null
@@ -169,16 +171,25 @@ export function getSession(id: string): Session | null {
 /** List sessions */
 export function listSessions(opts?: {
   status?: SessionStatus;
+  tag?: string;
   limit?: number;
   offset?: number;
 }): Session[] {
   const d = getDb();
   let sql = "SELECT * FROM sessions";
   const params: any[] = [];
+  const conditions: string[] = [];
 
   if (opts?.status) {
-    sql += " WHERE status = ?";
+    conditions.push("status = ?");
     params.push(opts.status);
+  }
+  if (opts?.tag) {
+    conditions.push("tags LIKE ?");
+    params.push(`%"${opts.tag}"%`);
+  }
+  if (conditions.length > 0) {
+    sql += " WHERE " + conditions.join(" AND ");
   }
 
   sql += " ORDER BY created_at DESC";
@@ -307,6 +318,7 @@ function rowToSession(row: any): Session {
     total_tokens_in: row.total_tokens_in,
     total_tokens_out: row.total_tokens_out,
     total_duration_ms: row.total_duration_ms,
+    tags: row.tags ? JSON.parse(row.tags) : undefined,
     error: row.error,
     created_at: row.created_at,
     completed_at: row.completed_at,

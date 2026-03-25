@@ -35,6 +35,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
     systemPrompt,
     screenshotMaxWidth,
     dryRun = false,
+    tags,
     onStep,
     onDone,
   } = options;
@@ -53,6 +54,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
     provider: providerName,
     model: model ?? (providerName === "anthropic" ? "claude-sonnet-4-5-20250514" : "computer-use-preview"),
     status: "running",
+    tags,
     steps: 0,
     total_tokens_in: 0,
     total_tokens_out: 0,

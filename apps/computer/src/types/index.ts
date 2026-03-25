@@ -113,6 +113,7 @@ export interface Session {
   total_tokens_in: number;
   total_tokens_out: number;
   total_duration_ms: number;
+  tags?: string[];
   error?: string;
   created_at: string;
   completed_at?: string;
@@ -138,6 +139,8 @@ export interface RunOptions {
   screenshotMaxWidth?: number;
   /** Dry-run mode — model plans actions but they are not executed */
   dryRun?: boolean;
+  /** Tags for this session */
+  tags?: string[];
   /** Callback for each step */
   onStep?: (step: number, response: ModelResponse, result: ActionResult) => void;
   /** Callback when done */

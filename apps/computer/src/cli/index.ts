@@ -31,6 +31,7 @@ program
   .option("--max-width <px>", "Max screenshot width for AI model (default: 1280)", "1280")
   .option("--dry-run", "Plan actions without executing them", false)
   .option("--no-preview", "Disable inline screenshot preview in terminal")
+  .option("--tag <tags...>", "Tag this session (can specify multiple)")
   .action(async (task: string, opts: any) => {
     const cfg = loadConfig();
     const provider = opts.provider ?? cfg.provider;
@@ -52,6 +53,7 @@ program
       systemPrompt: opts.systemPrompt,
       screenshotMaxWidth: maxWidth,
       dryRun: opts.dryRun,
+      tags: opts.tag,
       onStep: (step, response, result) => {
         const status = result.success ? chalk.green("OK") : chalk.red("FAIL");
         const actionDesc = response.action
@@ -120,10 +122,12 @@ program
   .description("List computer use sessions")
   .option("-n, --limit <n>", "Number of sessions to show", "20")
   .option("--status <status>", "Filter by status")
+  .option("--tag <tag>", "Filter by tag")
   .action(async (opts: any) => {
     const sessions = listSessions({
       limit: parseInt(opts.limit),
       status: opts.status,
+      tag: opts.tag,
     });
 
     if (sessions.length === 0) {
@@ -137,8 +141,9 @@ program
         s.status === "failed" ? chalk.red :
         s.status === "running" ? chalk.yellow : chalk.dim;
 
+      const tagStr = s.tags?.length ? chalk.magenta(` [${s.tags.join(", ")}]`) : "";
       console.log(
-        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps  ${chalk.dim(s.created_at)}`
+        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps${tagStr}  ${chalk.dim(s.created_at)}`
       );
       console.log(chalk.dim(`  ${s.task.slice(0, 100)}`));
     }
@@ -228,8 +233,9 @@ program
       const statusColor =
         s.status === "completed" ? chalk.green :
         s.status === "failed" ? chalk.red : chalk.dim;
+      const tagStr = s.tags?.length ? chalk.magenta(` [${s.tags.join(", ")}]`) : "";
       console.log(
-        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps  ${chalk.dim(s.created_at)}`
+        `${chalk.dim(s.id.slice(0, 8))} ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.provider.padEnd(10))} ${s.steps} steps${tagStr}  ${chalk.dim(s.created_at)}`
       );
       console.log(chalk.dim(`  ${s.task.slice(0, 100)}`));
     }
