@@ -88,17 +88,19 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
         try {
           const { taskFromTemplate, getTemplateWithTasks, tasksFromTemplate } = await import("../../db/templates.js");
           const resolvedTemplateId = resolveId(params.template_id, "task_templates");
+          const resolvedProjectId = params.project_id ? resolveId(params.project_id, "projects") : undefined;
+          const resolvedTaskListId = params.task_list_id ? resolveId(params.task_list_id, "task_lists") : undefined;
           const templateWithTasks = getTemplateWithTasks(resolvedTemplateId);
           if (templateWithTasks && templateWithTasks.tasks.length > 0) {
-            const effectiveProjectId = params.project_id || templateWithTasks.project_id || undefined;
-            const tasks = tasksFromTemplate(resolvedTemplateId, effectiveProjectId, params.variables, params.task_list_id);
+            const effectiveProjectId = resolvedProjectId || templateWithTasks.project_id || undefined;
+            const tasks = tasksFromTemplate(resolvedTemplateId, effectiveProjectId, params.variables, resolvedTaskListId);
             const text = tasks.map(t => `${t.id.slice(0, 8)} | ${t.priority} | ${t.title}`).join("\n");
             return { content: [{ type: "text" as const, text: `${tasks.length} task(s) created from template:\n${text}` }] };
           }
           const input = taskFromTemplate(resolvedTemplateId, {
             title: params.title, description: params.description,
             priority: params.priority as any, assigned_to: params.assigned_to,
-            project_id: params.project_id, task_list_id: params.task_list_id,
+            project_id: resolvedProjectId, task_list_id: resolvedTaskListId,
           });
           const task = createTask(input);
           return { content: [{ type: "text" as const, text: `Task created from template:\n${task.id.slice(0, 8)} | ${task.priority} | ${task.title}` }] };
