@@ -59,6 +59,8 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@aws-sdk/client-route-53": "^3.1017.0",
+    "@aws-sdk/client-route-53-domains": "^3.1017.0",
     "@hasna/cloud": "^0.1.24",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^13.1.0",

@@ -7,6 +7,7 @@
 import type { Domain, CreateDomainInput, UpdateDomainInput } from "../db/domains.js";
 import * as namecheap from "./namecheap.js";
 import * as godaddy from "./godaddy.js";
+import { createRoute53Provider } from "./route53.js";
 
 // ============================================================
 // Types
@@ -257,12 +258,14 @@ function createGoDaddyProvider(): RegistrarProvider {
 // Provider Factory
 // ============================================================
 
-export function getProvider(name: "namecheap" | "godaddy"): RegistrarProvider {
+export function getProvider(name: "namecheap" | "godaddy" | "route53"): RegistrarProvider {
   switch (name) {
     case "namecheap":
       return createNamecheapProvider();
     case "godaddy":
       return createGoDaddyProvider();
+    case "route53":
+      return createRoute53Provider();
     default:
       throw new Error(`Unknown registrar provider: ${name}`);
   }
@@ -285,6 +288,11 @@ export function getAvailableProviders(): ProviderInfo[] {
       envVars: ["GODADDY_API_KEY", "GODADDY_API_SECRET"],
     },
     {
+      name: "route53",
+      configured: !!(process.env["AWS_ACCESS_KEY_ID"] && process.env["AWS_SECRET_ACCESS_KEY"]),
+      envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
+    },
+    {
       name: "brandsight",
       configured: !!process.env["BRANDSIGHT_API_KEY"],
       envVars: ["BRANDSIGHT_API_KEY"],
@@ -294,7 +302,7 @@ export function getAvailableProviders(): ProviderInfo[] {
 
 export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
   const available = getAvailableProviders().filter(
-    (p) => p.configured && (p.name === "namecheap" || p.name === "godaddy")
+    (p) => p.configured && (p.name === "namecheap" || p.name === "godaddy" || p.name === "route53")
   );
 
   const result: SyncAllResult = {
@@ -305,7 +313,7 @@ export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
 
   for (const info of available) {
     try {
-      const provider = getProvider(info.name as "namecheap" | "godaddy");
+      const provider = getProvider(info.name as "namecheap" | "godaddy" | "route53");
       const syncResult = await provider.syncToLocalDb(dbFns);
       result.providers.push({ name: info.name, result: syncResult });
       result.totalSynced += syncResult.synced;
@@ -326,12 +334,13 @@ export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
 export function autoDetectRegistrar(
   domain: string,
   getDomainByName: (name: string) => Domain | null
-): "namecheap" | "godaddy" | null {
+): "namecheap" | "godaddy" | "route53" | null {
   const dbDomain = getDomainByName(domain);
   if (!dbDomain || !dbDomain.registrar) return null;
 
   const registrar = dbDomain.registrar.toLowerCase();
   if (registrar.includes("namecheap")) return "namecheap";
   if (registrar.includes("godaddy")) return "godaddy";
+  if (registrar.includes("route 53") || registrar.includes("route53") || registrar.includes("aws")) return "route53";
   return null;
 }

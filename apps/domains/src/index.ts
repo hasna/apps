@@ -63,3 +63,43 @@ export {
 } from "./db/domains.js";
 
 export { getDatabase, closeDatabase } from "./db/database.js";
+
+// Registrar providers
+export {
+  getProvider,
+  getAvailableProviders,
+  syncAll,
+  autoDetectRegistrar,
+  type RegistrarProvider,
+  type ProviderDnsRecord,
+  type ProviderDomainInfo,
+  type ProviderAvailability,
+  type ProviderInfo,
+  type SyncAllResult,
+} from "./lib/registrar.js";
+
+// Route 53
+export {
+  checkAvailability as r53CheckAvailability,
+  registerDomain as r53RegisterDomain,
+  getRegistrationStatus as r53GetRegistrationStatus,
+  listRegisteredDomains as r53ListRegisteredDomains,
+  createHostedZone as r53CreateHostedZone,
+  listHostedZones as r53ListHostedZones,
+  getHostedZone as r53GetHostedZone,
+  deleteHostedZone as r53DeleteHostedZone,
+  findHostedZoneByDomain as r53FindHostedZoneByDomain,
+  listRecords as r53ListRecords,
+  upsertRecord as r53UpsertRecord,
+  upsertRecords as r53UpsertRecords,
+  deleteRecord as r53DeleteRecord,
+  createRoute53Provider,
+  getConfig as r53GetConfig,
+  type Route53Config,
+  type DomainContactInfo,
+  type DomainAvailability,
+  type RegisteredDomain,
+  type HostedZoneInfo,
+  type Route53Record,
+  type Route53RecordInput,
+} from "./lib/route53.js";

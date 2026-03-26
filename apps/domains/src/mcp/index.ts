@@ -768,6 +768,294 @@ server.registerTool(
   }
 );
 
+// --- Route 53 Tools ---
+
+import {
+  checkAvailability as r53CheckAvailability,
+  registerDomain as r53RegisterDomain,
+  getRegistrationStatus as r53GetRegistrationStatus,
+  listRegisteredDomains as r53ListRegisteredDomains,
+  createHostedZone as r53CreateHostedZone,
+  listHostedZones as r53ListHostedZones,
+  getHostedZone as r53GetHostedZone,
+  deleteHostedZone as r53DeleteHostedZone,
+  findHostedZoneByDomain as r53FindHostedZoneByDomain,
+  listRecords as r53ListRecords,
+  upsertRecord as r53UpsertRecord,
+  deleteRecord as r53DeleteRecord,
+  createRoute53Provider,
+} from "../lib/route53.js";
+
+server.registerTool(
+  "r53_check_availability",
+  {
+    title: "Check Domain Availability (Route 53)",
+    description: "Check if a domain is available for purchase via AWS Route 53. Returns availability and pricing.",
+    inputSchema: {
+      domain: z.string().describe("Domain to check (e.g. example.com)"),
+    },
+  },
+  async ({ domain }) => {
+    try {
+      const result = await r53CheckAvailability(domain);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_register_domain",
+  {
+    title: "Register Domain (Route 53)",
+    description: "Purchase and register a domain via AWS Route 53. Returns an operation ID to track progress.",
+    inputSchema: {
+      domain: z.string().describe("Domain to register"),
+      first_name: z.string(),
+      last_name: z.string(),
+      email: z.string(),
+      phone: z.string().describe("E.164 format, e.g. +1.5551234567"),
+      address_line_1: z.string(),
+      city: z.string(),
+      state: z.string(),
+      country_code: z.string().describe("Two-letter country code, e.g. US"),
+      zip_code: z.string(),
+      organization_name: z.string().optional(),
+      duration_years: z.number().min(1).max(10).optional().describe("Registration years (default: 1)"),
+      auto_renew: z.boolean().optional().describe("Auto-renew (default: true)"),
+    },
+  },
+  async (params) => {
+    try {
+      const result = await r53RegisterDomain(
+        params.domain,
+        {
+          first_name: params.first_name,
+          last_name: params.last_name,
+          email: params.email,
+          phone: params.phone,
+          address_line_1: params.address_line_1,
+          city: params.city,
+          state: params.state,
+          country_code: params.country_code,
+          zip_code: params.zip_code,
+          organization_name: params.organization_name,
+        },
+        params.duration_years ?? 1,
+        params.auto_renew ?? true,
+      );
+      return { content: [{ type: "text", text: JSON.stringify({ domain: params.domain, ...result }, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_registration_status",
+  {
+    title: "Registration Status (Route 53)",
+    description: "Check the status of a domain registration operation.",
+    inputSchema: {
+      operation_id: z.string().describe("Operation ID from r53_register_domain"),
+    },
+  },
+  async ({ operation_id }) => {
+    try {
+      const result = await r53GetRegistrationStatus(operation_id);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_list_registered_domains",
+  {
+    title: "List Registered Domains (Route 53)",
+    description: "List all domains registered via AWS Route 53.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const domains = await r53ListRegisteredDomains();
+      return { content: [{ type: "text", text: JSON.stringify(domains, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_create_hosted_zone",
+  {
+    title: "Create Hosted Zone (Route 53)",
+    description: "Create a Route 53 hosted zone for a domain. Returns zone ID and name servers.",
+    inputSchema: {
+      domain: z.string().describe("Domain name"),
+      comment: z.string().optional().describe("Zone comment"),
+    },
+  },
+  async ({ domain, comment }) => {
+    try {
+      const zone = await r53CreateHostedZone(domain, comment);
+      return { content: [{ type: "text", text: JSON.stringify(zone, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_list_hosted_zones",
+  {
+    title: "List Hosted Zones (Route 53)",
+    description: "List all Route 53 hosted zones.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const zones = await r53ListHostedZones();
+      return { content: [{ type: "text", text: JSON.stringify(zones, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_get_hosted_zone",
+  {
+    title: "Get Hosted Zone (Route 53)",
+    description: "Get details of a Route 53 hosted zone including name servers.",
+    inputSchema: {
+      hosted_zone_id: z.string().describe("Hosted zone ID"),
+    },
+  },
+  async ({ hosted_zone_id }) => {
+    try {
+      const zone = await r53GetHostedZone(hosted_zone_id);
+      return { content: [{ type: "text", text: JSON.stringify(zone, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_delete_hosted_zone",
+  {
+    title: "Delete Hosted Zone (Route 53)",
+    description: "Delete a Route 53 hosted zone.",
+    inputSchema: {
+      hosted_zone_id: z.string().describe("Hosted zone ID"),
+    },
+  },
+  async ({ hosted_zone_id }) => {
+    try {
+      await r53DeleteHostedZone(hosted_zone_id);
+      return { content: [{ type: "text", text: `Hosted zone ${hosted_zone_id} deleted.` }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_list_records",
+  {
+    title: "List DNS Records (Route 53)",
+    description: "List all DNS records in a Route 53 hosted zone for a domain.",
+    inputSchema: {
+      domain: z.string().describe("Domain name (will find the hosted zone automatically)"),
+    },
+  },
+  async ({ domain }) => {
+    try {
+      const zone = await r53FindHostedZoneByDomain(domain);
+      if (!zone) throw new Error(`No hosted zone found for ${domain}`);
+      const records = await r53ListRecords(zone.id);
+      return { content: [{ type: "text", text: JSON.stringify(records, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_upsert_record",
+  {
+    title: "Upsert DNS Record (Route 53)",
+    description: "Create or update a DNS record in a Route 53 hosted zone.",
+    inputSchema: {
+      domain: z.string().describe("Domain name (hosted zone)"),
+      record_type: z.string().describe("Record type (A, AAAA, CNAME, TXT, MX, NS)"),
+      record_name: z.string().describe("Record name (FQDN)"),
+      record_value: z.string().describe("Record value"),
+      ttl: z.number().optional().describe("TTL in seconds (default: 300)"),
+    },
+  },
+  async ({ domain, record_type, record_name, record_value, ttl }) => {
+    try {
+      const zone = await r53FindHostedZoneByDomain(domain);
+      if (!zone) throw new Error(`No hosted zone found for ${domain}`);
+      await r53UpsertRecord(zone.id, { name: record_name, type: record_type, ttl: ttl ?? 300, values: [record_value] });
+      return { content: [{ type: "text", text: `Record upserted: ${record_type} ${record_name}` }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_delete_record",
+  {
+    title: "Delete DNS Record (Route 53)",
+    description: "Delete a DNS record from a Route 53 hosted zone.",
+    inputSchema: {
+      domain: z.string().describe("Domain name (hosted zone)"),
+      record_type: z.string().describe("Record type"),
+      record_name: z.string().describe("Record name (FQDN)"),
+      record_value: z.string().describe("Record value"),
+      ttl: z.number().optional().describe("TTL (must match existing)"),
+    },
+  },
+  async ({ domain, record_type, record_name, record_value, ttl }) => {
+    try {
+      const zone = await r53FindHostedZoneByDomain(domain);
+      if (!zone) throw new Error(`No hosted zone found for ${domain}`);
+      await r53DeleteRecord(zone.id, { name: record_name, type: record_type, ttl: ttl ?? 300, values: [record_value] });
+      return { content: [{ type: "text", text: `Record deleted: ${record_type} ${record_name}` }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "sync_route53",
+  {
+    title: "Sync Route 53",
+    description: "Sync domains registered in AWS Route 53 to the local database.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const provider = createRoute53Provider();
+      const result = await provider.syncToLocalDb({
+        getDomainByName,
+        createDomain,
+        updateDomain,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Sync failed: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
 // --- Start ---
 async function main() {
   const transport = new StdioServerTransport();
