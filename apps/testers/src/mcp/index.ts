@@ -16,7 +16,7 @@ import { matchFilesToScenarios } from "../lib/affected.js";
 import { listScanIssues, getScanIssue, resolveScanIssue } from "../db/scan-issues.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
-import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
+import { createSchedule, listSchedules, updateSchedule, deleteSchedule, getSchedule } from "../db/schedules.js";
 import { getNextRunTime } from "../lib/scheduler.js";
 import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
@@ -2053,6 +2053,195 @@ server.tool(
       }
 
       return json({ scenario, runInfo, message: autoRun ? "Scenario created and run started." : "Scenario created. Use run_scenarios to run it." });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 59. wait_for_run ────────────────────────────────────────────────────────
+
+server.tool(
+  "wait_for_run",
+  "Poll a run until it reaches a terminal state (passed/failed/cancelled) and return the final results summary. Synchronous — blocks until complete or timeout.",
+  {
+    runId: z.string().describe("Run ID to wait for"),
+    timeoutMs: z.number().optional().default(300000).describe("Max wait time in ms (default 5 minutes)"),
+    pollIntervalMs: z.number().optional().default(2000).describe("Polling interval in ms (default 2s)"),
+  },
+  async ({ runId, timeoutMs = 300000, pollIntervalMs = 2000 }) => {
+    try {
+      const run = getRun(runId);
+      if (!run) return errorResponse(notFoundErr(runId, "Run"));
+
+      const deadline = Date.now() + (timeoutMs ?? 300000);
+      const interval = Math.max(500, pollIntervalMs ?? 2000);
+
+      const poll = (): Promise<typeof run> =>
+        new Promise((resolve, reject) => {
+          const check = () => {
+            const current = getRun(runId);
+            if (!current) return reject(new Error(`Run ${runId} disappeared`));
+            const terminal = ["passed", "failed", "cancelled"].includes(current.status);
+            if (terminal) return resolve(current);
+            if (Date.now() >= deadline) return reject(new Error(`wait_for_run timed out after ${timeoutMs}ms`));
+            setTimeout(check, interval);
+          };
+          check();
+        });
+
+      const finalRun = await poll();
+      const results = getResultsByRun(runId);
+      const failedResults = results.filter((r) => r.status !== "passed" && r.status !== "skipped");
+
+      return json({
+        runId,
+        status: finalRun.status,
+        passed: finalRun.passed,
+        failed: finalRun.failed,
+        total: finalRun.total,
+        durationMs: finalRun.finishedAt
+          ? new Date(finalRun.finishedAt).getTime() - new Date(finalRun.startedAt).getTime()
+          : null,
+        failedScenarios: failedResults.map((r) => ({
+          scenarioId: r.scenarioId,
+          status: r.status,
+          error: r.error ?? r.reasoning,
+        })),
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 60. create_schedule ─────────────────────────────────────────────────────
+
+server.tool(
+  "create_schedule",
+  "Create a recurring test schedule (cron-based). The scheduler picks up enabled schedules and runs them automatically.",
+  {
+    name: z.string().describe("Schedule name"),
+    cronExpression: z.string().describe("Cron expression (e.g. '0 2 * * *' for daily at 2am)"),
+    url: z.string().describe("Target URL to test against"),
+    tags: z.array(z.string()).optional().describe("Run scenarios matching these tags"),
+    scenarioIds: z.array(z.string()).optional().describe("Run specific scenario IDs"),
+    projectId: z.string().optional().describe("Filter scenarios by project ID"),
+    model: z.string().optional().describe(MODEL_DESC),
+    parallel: z.number().optional().describe("Number of parallel workers"),
+    timeoutMs: z.number().optional().describe("Per-scenario timeout in ms"),
+  },
+  async ({ name, cronExpression, url, tags, scenarioIds, projectId, model, parallel, timeoutMs }) => {
+    try {
+      const schedule = createSchedule({
+        name,
+        cronExpression,
+        url,
+        scenarioFilter: { tags, scenarioIds },
+        projectId,
+        model,
+        parallel,
+        timeoutMs,
+      });
+      const nextRun = getNextRunTime(schedule.cronExpression);
+      return json({ ...schedule, nextRunAt: nextRun?.toISOString() ?? null });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 61. list_schedules ───────────────────────────────────────────────────────
+
+server.tool(
+  "list_schedules",
+  "List test schedules with optional filters",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+    enabled: z.boolean().optional().describe("Filter by enabled status"),
+  },
+  async ({ projectId, enabled }) => {
+    try {
+      const schedules = listSchedules({ projectId, enabled });
+      const enriched = schedules.map((s) => ({
+        ...s,
+        nextRunAt: getNextRunTime(s.cronExpression)?.toISOString() ?? null,
+      }));
+      return json({ items: enriched, total: enriched.length });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 62. delete_schedule ─────────────────────────────────────────────────────
+
+server.tool(
+  "delete_schedule",
+  "Delete a schedule by ID",
+  { id: z.string().describe("Schedule ID") },
+  async ({ id }) => {
+    try {
+      const deleted = deleteSchedule(id);
+      if (!deleted) return errorResponse(notFoundErr(id, "Schedule"));
+      return json({ deleted: true, id });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 63. enable_schedule / disable_schedule ───────────────────────────────────
+
+server.tool(
+  "enable_schedule",
+  "Enable a paused schedule",
+  { id: z.string().describe("Schedule ID") },
+  async ({ id }) => {
+    try {
+      const schedule = updateSchedule(id, { enabled: true });
+      return json(schedule);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+server.tool(
+  "disable_schedule",
+  "Pause a schedule without deleting it",
+  { id: z.string().describe("Schedule ID") },
+  async ({ id }) => {
+    try {
+      const schedule = updateSchedule(id, { enabled: false });
+      return json(schedule);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 64. import_from_todos ───────────────────────────────────────────────────
+
+server.tool(
+  "import_from_todos",
+  "Import pending tasks from open-todos as test scenarios — converts each task into a regression scenario that verifies the feature/fix is working",
+  {
+    projectId: z.string().optional().describe("Testers project ID to assign imported scenarios to"),
+    tags: z.array(z.string()).optional().describe("Filter todos tasks by tags before importing"),
+    dryRun: z.boolean().optional().describe("Preview what would be imported without creating scenarios"),
+    todosProjectId: z.string().optional().describe("open-todos project ID to import from (defaults to config.todosProjectId)"),
+  },
+  async ({ projectId, tags, dryRun, todosProjectId }) => {
+    try {
+      if (dryRun) {
+        // Preview: pull tasks without creating scenarios
+        const { pullTasks } = await import("../lib/todos-connector.js");
+        const tasks = pullTasks({ tags: tags ?? ["qa", "test", "testing"] });
+        return json({ dryRun: true, wouldImport: tasks.length, tasks: tasks.slice(0, 20) });
+      }
+      const result = importFromTodos({ projectId, tags, projectName: todosProjectId });
+      return json(result);
     } catch (e) {
       return errorResponse(e);
     }
