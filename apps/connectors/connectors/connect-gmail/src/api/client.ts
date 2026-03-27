@@ -12,11 +12,19 @@ export interface RequestOptions {
   format?: OutputFormat;
 }
 
+export interface GmailClientOptions {
+  /** Custom token provider — if set, used instead of file-based auth */
+  tokenProvider?: () => Promise<string>;
+}
+
 export class GmailClient {
   private accessToken?: string;
   private userId: string = 'me'; // Default to authenticated user
+  private readonly tokenProvider?: () => Promise<string>;
 
-  constructor() {}
+  constructor(options?: GmailClientOptions) {
+    this.tokenProvider = options?.tokenProvider;
+  }
 
   setUserId(userId: string): void {
     this.userId = userId;
@@ -43,8 +51,10 @@ export class GmailClient {
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', params, body, headers = {} } = options;
 
-    // Get fresh access token (handles refresh automatically)
-    const accessToken = await getValidAccessToken();
+    // Get fresh access token — use injected tokenProvider if available, otherwise file-based auth
+    const accessToken = this.tokenProvider
+      ? await this.tokenProvider()
+      : await getValidAccessToken();
 
     const url = this.buildUrl(path, params);
 

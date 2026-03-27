@@ -101,21 +101,15 @@ export async function exchangeCodeForTokens(code: string): Promise<OAuth2Tokens>
 }
 
 /**
- * Refresh the access token using the refresh token
+ * Pure function to refresh an OAuth2 access token using provided credentials.
+ * Does NOT touch the file system — no saveTokens, no loadTokens.
  */
-export async function refreshAccessToken(): Promise<OAuth2Tokens> {
-  const clientId = getClientId();
-  const clientSecret = getClientSecret();
-  const currentTokens = loadTokens();
-
-  if (!clientId || !clientSecret) {
-    throw new Error('OAuth credentials not configured');
-  }
-
-  if (!currentTokens?.refreshToken) {
-    throw new Error('No refresh token available. Please login again.');
-  }
-
+export async function refreshTokens(
+  clientId: string,
+  clientSecret: string,
+  refreshToken: string,
+  currentScope?: string,
+): Promise<OAuth2Tokens> {
   const response = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: {
@@ -124,7 +118,7 @@ export async function refreshAccessToken(): Promise<OAuth2Tokens> {
     body: new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
-      refresh_token: currentTokens.refreshToken,
+      refresh_token: refreshToken,
       grant_type: 'refresh_token',
     }),
   });
@@ -145,14 +139,33 @@ export async function refreshAccessToken(): Promise<OAuth2Tokens> {
 
   const data = await response.json();
 
-  const tokens: OAuth2Tokens = {
+  return {
     accessToken: data.access_token,
-    refreshToken: currentTokens.refreshToken, // Keep the original refresh token
+    refreshToken, // Keep the original refresh token
     expiresAt: Date.now() + data.expires_in * 1000,
     tokenType: data.token_type,
-    scope: data.scope || currentTokens.scope,
+    scope: data.scope || currentScope || '',
   };
+}
 
+/**
+ * Refresh the access token using the refresh token (file-based auth).
+ * Thin wrapper around refreshTokens() that reads/writes config files.
+ */
+export async function refreshAccessToken(): Promise<OAuth2Tokens> {
+  const clientId = getClientId();
+  const clientSecret = getClientSecret();
+  const currentTokens = loadTokens();
+
+  if (!clientId || !clientSecret) {
+    throw new Error('OAuth credentials not configured');
+  }
+
+  if (!currentTokens?.refreshToken) {
+    throw new Error('No refresh token available. Please login again.');
+  }
+
+  const tokens = await refreshTokens(clientId, clientSecret, currentTokens.refreshToken, currentTokens.scope);
   saveTokens(tokens);
   return tokens;
 }

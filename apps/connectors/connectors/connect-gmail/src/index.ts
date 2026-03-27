@@ -2,6 +2,7 @@
 // A TypeScript wrapper for Gmail with OAuth2 authentication
 
 export { Gmail } from './api';
+export type { GmailTokens } from './api';
 export * from './types';
 
 // Re-export individual API classes for advanced usage

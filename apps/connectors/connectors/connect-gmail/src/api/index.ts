@@ -8,6 +8,17 @@ import { FiltersApi } from './filters';
 import { AttachmentsApi } from './attachments';
 import { ExportApi } from './export';
 import { BulkApi } from './bulk';
+import { refreshTokens } from '../utils/auth';
+
+/** Tokens passed to Gmail.createWithTokens() */
+export interface GmailTokens {
+  accessToken: string;
+  refreshToken: string;
+  clientId: string;
+  clientSecret: string;
+  /** Unix timestamp (ms) when accessToken expires. If omitted, token is always refreshed. */
+  expiresAt?: number;
+}
 
 export class Gmail {
   private readonly client: GmailClient;
@@ -23,8 +34,8 @@ export class Gmail {
   public readonly export: ExportApi;
   public readonly bulk: BulkApi;
 
-  constructor() {
-    this.client = new GmailClient();
+  constructor(client?: GmailClient) {
+    this.client = client ?? new GmailClient();
     this.messages = new MessagesApi(this.client);
     this.labels = new LabelsApi(this.client);
     this.threads = new ThreadsApi(this.client);
@@ -37,10 +48,54 @@ export class Gmail {
   }
 
   /**
-   * Create a Gmail client - tokens are loaded automatically from config
+   * Create a Gmail client — tokens are loaded automatically from config
    */
   static create(): Gmail {
     return new Gmail();
+  }
+
+  /**
+   * Create a Gmail client using explicit tokens instead of file-based auth.
+   * Automatically refreshes the access token when expired and notifies via onRefresh.
+   *
+   * @param tokens - Initial token set (accessToken, refreshToken, clientId, clientSecret, expiresAt?)
+   * @param onRefresh - Called whenever tokens are refreshed so callers can persist the new tokens
+   */
+  static createWithTokens(
+    tokens: GmailTokens,
+    onRefresh?: (newTokens: GmailTokens) => void,
+  ): Gmail {
+    // Mutable state for the closure — updated on each refresh
+    let current = { ...tokens };
+
+    const tokenProvider = async (): Promise<string> => {
+      const isExpired =
+        current.expiresAt === undefined ||
+        Date.now() >= current.expiresAt - 5 * 60 * 1000;
+
+      if (isExpired) {
+        const refreshed = await refreshTokens(
+          current.clientId,
+          current.clientSecret,
+          current.refreshToken,
+        );
+
+        current = {
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+          clientId: current.clientId,
+          clientSecret: current.clientSecret,
+          expiresAt: refreshed.expiresAt,
+        };
+
+        onRefresh?.(current);
+      }
+
+      return current.accessToken;
+    };
+
+    const client = new GmailClient({ tokenProvider });
+    return new Gmail(client);
   }
 
   /**
