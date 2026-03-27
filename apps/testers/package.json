@@ -24,10 +24,10 @@
   ],
   "scripts": {
     "build": "bun run build:dashboard && bun run build:cli && bun run build:mcp && bun run build:server && bun run build:lib && bun run build:types",
-    "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @anthropic-ai/sdk --external playwright",
-    "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @anthropic-ai/sdk --external playwright",
-    "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --external @anthropic-ai/sdk --external playwright",
-    "build:lib": "bun build src/index.ts --outdir dist --target bun --external playwright --external @anthropic-ai/sdk --external @modelcontextprotocol/sdk",
+    "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @anthropic-ai/sdk --external playwright --external @hasna/browser",
+    "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @anthropic-ai/sdk --external playwright --external @hasna/browser",
+    "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --external @anthropic-ai/sdk --external playwright --external @hasna/browser",
+    "build:lib": "bun build src/index.ts --outdir dist --target bun --external playwright --external @anthropic-ai/sdk --external @modelcontextprotocol/sdk --external @hasna/browser",
     "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
+    "@hasna/browser": "^0.3.8",
     "@hasna/cloud": "^0.1.24",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

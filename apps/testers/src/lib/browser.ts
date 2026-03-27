@@ -1,6 +1,13 @@
-import { chromium, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
+// Use @hasna/browser for the Playwright engine launch/close — avoids reimplementing
+// the same chromium launch logic and keeps us in sync with open-browser improvements.
+import {
+  launchPlaywright,
+  getPage as getBrowserPage,
+  closeBrowser as closeBrowserBase,
+} from "@hasna/browser";
 
 export type BrowserEngine = "playwright" | "lightpanda" | "bun";
 
@@ -61,18 +68,12 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
     } as unknown as Browser;
   }
 
-  // Default: Playwright
+  // Default: Playwright — delegate to @hasna/browser
   const headless = options?.headless ?? true;
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
-    const browser = await chromium.launch({
-      headless,
-      args: [
-        `--window-size=${viewport.width},${viewport.height}`,
-      ],
-    });
-    return browser;
+    return await launchPlaywright({ headless, viewport });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to launch browser: ${message}`);
@@ -104,13 +105,8 @@ export async function getPage(
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
-    const context = await browser.newContext({
-      viewport,
-      userAgent: options?.userAgent,
-      locale: options?.locale,
-    });
-    const page = await context.newPage();
-    return page;
+    // Delegate to @hasna/browser's getPage which handles context creation
+    return await getBrowserPage(browser, { viewport, userAgent: options?.userAgent, locale: options?.locale });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to create page: ${message}`);
@@ -133,7 +129,7 @@ export async function closeBrowser(browser: Browser, engine?: BrowserEngine): Pr
   }
 
   try {
-    await browser.close();
+    await closeBrowserBase(browser);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to close browser: ${message}`);
@@ -251,11 +247,8 @@ export async function launchBrowserEngine(
   if (engine === "bun") {
     return launchBrowser({ headless: config.headless, viewport: config.viewport, engine: "bun" });
   }
-  // Default: playwright chromium
-  return chromium.launch({
-    headless: config.headless,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  // Default: playwright chromium — delegate to @hasna/browser
+  return launchPlaywright({ headless: config.headless, viewport: config.viewport });
 }
 
 /**
