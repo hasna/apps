@@ -1068,6 +1068,241 @@ server.registerTool(
   async () => ok(listAgents())
 )
 
+// ── prompts_bulk_tag ──────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_bulk_tag",
+  {
+    description: "Add and/or remove tags on multiple prompts in one call.",
+    inputSchema: {
+      ids: z.array(z.string()).describe("Prompt IDs or slugs"),
+      add: z.array(z.string()).optional().describe("Tags to add"),
+      remove: z.array(z.string()).optional().describe("Tags to remove"),
+    },
+  },
+  async ({ ids, add = [], remove = [] }) => {
+    const results: Array<{ id: string; slug: string; tags: string[] }> = []
+    for (const idOrSlug of ids) {
+      try {
+        const prompt = getPrompt(idOrSlug)
+        if (!prompt) continue
+        let tags = [...prompt.tags]
+        for (const t of add) { if (!tags.includes(t)) tags.push(t) }
+        for (const t of remove) { tags = tags.filter((x) => x !== t) }
+        updatePrompt(prompt.id, { tags })
+        results.push({ id: prompt.id, slug: prompt.slug, tags })
+      } catch { /* skip failed */ }
+    }
+    return ok({ updated: results.length, results })
+  }
+)
+
+// ── prompts_bulk_move ─────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_bulk_move",
+  {
+    description: "Move multiple prompts to a different collection.",
+    inputSchema: {
+      ids: z.array(z.string()).describe("Prompt IDs or slugs"),
+      collection: z.string().describe("Target collection name"),
+    },
+  },
+  async ({ ids, collection }) => {
+    const results: Array<{ id: string; slug: string; ok: boolean; error?: string }> = []
+    for (const idOrSlug of ids) {
+      try {
+        movePrompt(idOrSlug, collection)
+        const p = getPrompt(idOrSlug)
+        results.push({ id: p?.id ?? idOrSlug, slug: p?.slug ?? idOrSlug, ok: true })
+      } catch (e) {
+        results.push({ id: idOrSlug, slug: idOrSlug, ok: false, error: e instanceof Error ? e.message : String(e) })
+      }
+    }
+    return ok({ moved: results.filter((r) => r.ok).length, results })
+  }
+)
+
+// ── prompts_config_list ───────────────────────────────────────────────────────
+const AGENT_CONFIGS_MCP: Record<string, { global: string; local: string; label: string }> = {
+  claude:  { global: ".claude/CLAUDE.md",         local: "CLAUDE.md",                  label: "Claude Code" },
+  agents:  { global: ".agents/AGENTS.md",          local: "AGENTS.md",                  label: "OpenAI Agents SDK" },
+  gemini:  { global: ".gemini/GEMINI.md",           local: ".gemini/GEMINI.md",           label: "Gemini CLI" },
+  codex:   { global: ".codex/CODEX.md",             local: "CODEX.md",                   label: "OpenAI Codex CLI" },
+  cursor:  { global: ".cursor/rules",               local: ".cursorrules",               label: "Cursor" },
+  aider:   { global: ".aider/CONVENTIONS.md",       local: ".aider.conventions.md",      label: "Aider" },
+}
+
+import { homedir } from "os"
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdirSync as fsMkdir, readdirSync as fsReaddir, statSync as fsStat } from "fs"
+import { join as pathJoin, resolve as pathResolve, dirname as pathDirname } from "path"
+
+function cfgPath(agent: string, global_: boolean): string | null {
+  const cfg = AGENT_CONFIGS_MCP[agent.toLowerCase()]
+  if (!cfg) return null
+  return global_ ? pathJoin(homedir(), cfg.global) : pathResolve(process.cwd(), cfg.local)
+}
+
+server.registerTool(
+  "prompts_config_list",
+  {
+    description: "List all known AI agent config files (CLAUDE.md, AGENTS.md, GEMINI.md, etc.) showing which exist globally and in the current project directory.",
+    inputSchema: {},
+  },
+  async () => {
+    const rows = []
+    for (const [key, cfg] of Object.entries(AGENT_CONFIGS_MCP)) {
+      const globalPath = pathJoin(homedir(), cfg.global)
+      const localPath = pathResolve(process.cwd(), cfg.local)
+      rows.push({
+        agent: key, label: cfg.label,
+        global: { path: globalPath, exists: fsExists(globalPath), size: fsExists(globalPath) ? fsStat(globalPath).size : null },
+        local: globalPath === localPath ? null : { path: localPath, exists: fsExists(localPath), size: fsExists(localPath) ? fsStat(localPath).size : null },
+      })
+    }
+    return ok(rows)
+  }
+)
+
+// ── prompts_config_get ────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_config_get",
+  {
+    description: "Read the contents of an AI agent config file (CLAUDE.md, AGENTS.md, etc.).",
+    inputSchema: {
+      agent: z.enum(["claude", "agents", "gemini", "codex", "cursor", "aider"]).describe("Which agent's config to read"),
+      global: z.boolean().optional().default(false).describe("Read global (~/) config instead of project-local"),
+    },
+  },
+  async ({ agent, global: g }) => {
+    const path = cfgPath(agent, g ?? false)
+    if (!path) return err(`Unknown agent: ${agent}`)
+    if (!fsExists(path)) return err(`Config file not found: ${path}`)
+    return ok({ agent, path, content: fsRead(path, "utf-8") })
+  }
+)
+
+// ── prompts_config_set ────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_config_set",
+  {
+    description: "Write content to an AI agent config file. Creates parent directories if needed.",
+    inputSchema: {
+      agent: z.enum(["claude", "agents", "gemini", "codex", "cursor", "aider"]).describe("Which agent's config to write"),
+      content: z.string().describe("Full content to write"),
+      global: z.boolean().optional().default(false).describe("Write to global (~/) config instead of project-local"),
+    },
+  },
+  async ({ agent, content, global: g }) => {
+    const path = cfgPath(agent, g ?? false)
+    if (!path) return err(`Unknown agent: ${agent}`)
+    fsMkdir(pathDirname(path), { recursive: true })
+    fsWrite(path, content)
+    return ok({ written: true, agent, path, bytes: content.length })
+  }
+)
+
+// ── prompts_config_inject ─────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_config_inject",
+  {
+    description: "Append a saved prompt's body into an AI agent config file. Optionally inject under a specific markdown section heading.",
+    inputSchema: {
+      slug: z.string().describe("Prompt ID or slug to inject"),
+      agent: z.enum(["claude", "agents", "gemini", "codex", "cursor", "aider"]).describe("Target agent config file"),
+      global: z.boolean().optional().default(false).describe("Inject into global config instead of project-local"),
+      section: z.string().optional().describe("Markdown heading to inject under (## Heading). Creates section if missing."),
+      replace: z.boolean().optional().describe("Replace section content instead of appending (requires section)"),
+    },
+  },
+  async ({ slug, agent, global: g, section, replace }) => {
+    const prompt = getPrompt(slug)
+    if (!prompt) return err(`Prompt not found: ${slug}`)
+    const path = cfgPath(agent, g ?? false)
+    if (!path) return err(`Unknown agent: ${agent}`)
+    fsMkdir(pathDirname(path), { recursive: true })
+
+    let existing = fsExists(path) ? fsRead(path, "utf-8") : ""
+    const injection = `\n${prompt.body}\n`
+
+    if (section) {
+      const heading = `## ${section}`
+      const idx = existing.indexOf(heading)
+      if (idx === -1) {
+        existing = existing.trimEnd() + `\n\n${heading}\n${injection}`
+      } else if (replace) {
+        const afterHeading = idx + heading.length
+        const nextSection = existing.indexOf("\n## ", afterHeading)
+        const sectionEnd = nextSection === -1 ? existing.length : nextSection
+        existing = existing.slice(0, afterHeading) + `\n${injection}` + existing.slice(sectionEnd)
+      } else {
+        const afterHeading = idx + heading.length
+        const nextSection = existing.indexOf("\n## ", afterHeading)
+        const insertAt = nextSection === -1 ? existing.length : nextSection
+        existing = existing.slice(0, insertAt).trimEnd() + `\n${injection}\n` + existing.slice(insertAt)
+      }
+    } else {
+      existing = existing.trimEnd() + `\n${injection}`
+    }
+
+    fsWrite(path, existing)
+    return ok({ injected: true, slug: prompt.slug, path, section: section ?? null })
+  }
+)
+
+// ── prompts_config_scan ───────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_config_scan",
+  {
+    description: "Scan a workspace directory for git repos and report which AI agent config files are present or missing in each.",
+    inputSchema: {
+      workspace: z.string().optional().describe("Workspace directory to scan (default: ~/workspace)"),
+      agents: z.array(z.string()).optional().describe("Agent names to check (default: all)"),
+      depth: z.number().optional().default(3).describe("Max directory depth to scan for git repos"),
+      missing_only: z.boolean().optional().describe("Only return repos with missing configs"),
+    },
+  },
+  async ({ workspace, agents, depth = 3, missing_only }) => {
+    const wsDir = workspace ? pathResolve(workspace) : pathResolve(homedir(), "workspace")
+    if (!fsExists(wsDir)) return err(`Workspace not found: ${wsDir}`)
+
+    const agentFilter = agents?.map((a) => a.toLowerCase()) ?? Object.keys(AGENT_CONFIGS_MCP)
+    const repos: string[] = []
+
+    function scanDir(dir: string, d: number) {
+      if (d > depth) return
+      try {
+        const entries = fsReaddir(dir, { withFileTypes: true })
+        if (entries.some((e) => e.name === ".git" && e.isDirectory())) { repos.push(dir); return }
+        for (const entry of entries) {
+          if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+            scanDir(pathJoin(dir, entry.name), d + 1)
+          }
+        }
+      } catch { /* skip */ }
+    }
+    scanDir(wsDir, 0)
+
+    const reports = []
+    for (const repo of repos) {
+      const configs: Record<string, { present: boolean; path: string; size: number | null }> = {}
+      let missingCount = 0
+      let presentCount = 0
+      for (const key of agentFilter) {
+        const cfg = AGENT_CONFIGS_MCP[key]
+        if (!cfg) continue
+        const p = pathJoin(repo, cfg.local)
+        const exists = fsExists(p)
+        configs[key] = { present: exists, path: p, size: exists ? fsStat(p).size : null }
+        if (exists) presentCount++; else missingCount++
+      }
+      if (!missing_only || missingCount > 0) {
+        reports.push({ repo, configs, missing_count: missingCount, present_count: presentCount })
+      }
+    }
+
+    return ok({ workspace: wsDir, repos_scanned: repos.length, reports })
+  }
+)
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.tool(

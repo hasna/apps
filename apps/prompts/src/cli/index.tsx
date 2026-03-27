@@ -14,6 +14,8 @@ import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib
 import { isJson, output, handleError, fmtPrompt } from "./utils.js"
 import { registerPromptCommands } from "./commands/prompts.js"
 import { registerVersionCommands } from "./commands/versions.js"
+import { registerQolCommands } from "./commands/qol.js"
+import { registerConfigCommands } from "./commands/config.js"
 
 const require = createRequire(import.meta.url)
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -32,6 +34,12 @@ registerPromptCommands(program)
 
 // ── version / history / diff commands ─────────────────────────────────────────
 registerVersionCommands(program)
+
+// ── qol commands ──────────────────────────────────────────────────────────────
+registerQolCommands(program)
+
+// ── config management commands ────────────────────────────────────────────────
+registerConfigCommands(program)
 
 // ── collections ───────────────────────────────────────────────────────────────
 program
@@ -510,24 +518,63 @@ program
   .option("-c, --collection <name>", "Collection to import into", "watched")
   .option("--agent <name>", "Attribution")
   .action(async (dir: string | undefined, opts: Record<string, string>) => {
-    const { existsSync, mkdirSync } = await import("fs")
-    const { resolve, join } = await import("path")
+    const { existsSync, mkdirSync, readFileSync, statSync } = await import("fs")
+    const { resolve, join, basename } = await import("path")
     const watchDir = resolve(dir ?? join(process.cwd(), ".prompts"))
     if (!existsSync(watchDir)) mkdirSync(watchDir, { recursive: true })
     console.log(chalk.bold(`Watching ${watchDir} for .md changes…`) + chalk.gray(" (Ctrl+C to stop)"))
 
     const { importFromMarkdown } = await import("../lib/importer.js")
-    const { readFileSync } = await import("fs")
+    const { getPrompt } = await import("../db/prompts.js")
+    const { searchPrompts } = await import("../lib/search.js")
+
+    // Track known files so we can detect renames/deletes
+    const knownFiles = new Map<string, string>() // filename -> slug
+    // Seed with existing .md files
+    try {
+      const { readdirSync } = await import("fs")
+      for (const f of readdirSync(watchDir)) {
+        if (f.endsWith(".md")) knownFiles.set(f, f.replace(/\.md$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-"))
+      }
+    } catch { /* ignore */ }
 
     const fsWatch = (await import("fs")).watch
     fsWatch(watchDir, { persistent: true }, async (_event, filename) => {
       if (!filename?.endsWith(".md")) return
       const filePath = join(watchDir, filename)
+      const ts = chalk.gray(new Date().toLocaleTimeString())
+
       try {
+        const exists = existsSync(filePath) && (() => { try { statSync(filePath); return true } catch { return false } })()
+
+        if (!exists) {
+          // File was deleted or renamed away — archive the prompt
+          const slug = knownFiles.get(filename)
+          if (slug) {
+            const prompt = getPrompt(slug) ?? searchPrompts(slug).find((r) => r.prompt.slug === slug)?.prompt
+            if (prompt) {
+              // Mark as stale by noting deletion in description rather than hard-deleting
+              const { updatePrompt } = await import("../db/prompts.js")
+              updatePrompt(prompt.id, {
+                description: `[watch: source file deleted at ${new Date().toISOString()}] ${prompt.description ?? ""}`.trim(),
+                tags: [...new Set([...prompt.tags, "watch-deleted"])],
+              })
+              console.log(`${chalk.red("Deleted")} ${chalk.bold(filename.replace(".md", ""))}  ${ts}`)
+            }
+            knownFiles.delete(filename)
+          }
+          return
+        }
+
         const content = readFileSync(filePath, "utf-8")
         const result = importFromMarkdown([{ filename, content }], opts["agent"])
         const action = result.created > 0 ? chalk.green("Created") : chalk.yellow("Updated")
-        console.log(`${action}: ${chalk.bold(filename.replace(".md", ""))}  ${chalk.gray(new Date().toLocaleTimeString())}`)
+        // Track this file's slug
+        if (result.created > 0 || result.updated > 0) {
+          const slug = basename(filename, ".md").toLowerCase().replace(/[^a-z0-9]+/g, "-")
+          knownFiles.set(filename, slug)
+        }
+        console.log(`${action}: ${chalk.bold(filename.replace(".md", ""))}  ${ts}`)
       } catch {
         console.error(chalk.red(`Failed to import: ${filename}`))
       }
