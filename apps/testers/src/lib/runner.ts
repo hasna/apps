@@ -12,7 +12,7 @@ import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
 import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
-import { ensurePersonaAuthenticated } from "./persona-auth.js";
+import { ensurePersonaAuthenticated, loginWithAuthConfig } from "./persona-auth.js";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
 import { createFailureTasks, notifyFailureToConversations, notifyRunToConversations } from "./failure-pipeline.js";
@@ -195,13 +195,25 @@ export async function runSingleScenario(
     page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
     page.on("pageerror", (err) => { consoleErrors.push(err.message); });
 
-    // Authenticate persona before running the scenario (if credentials are configured)
+    // Authenticate using persona credentials (if persona has auth configured)
     if (persona?.auth) {
       const loginResult = await ensurePersonaAuthenticated(page, persona, options.url);
       if (!loginResult.success) {
         const updatedResult = updateResult(result.id, {
           status: "error",
           error: `Persona auth failed (${loginResult.method}): ${loginResult.error}`,
+          durationMs: Date.now() - new Date(result.createdAt).getTime(),
+        });
+        emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: updatedResult.error ?? "", runId });
+        return updatedResult;
+      }
+    } else if (scenario.requiresAuth && scenario.authConfig) {
+      // Authenticate using the scenario's authConfig (email/password or token-based)
+      const loginResult = await loginWithAuthConfig(page, scenario.authConfig, options.url);
+      if (!loginResult.success && loginResult.method !== "none") {
+        const updatedResult = updateResult(result.id, {
+          status: "error",
+          error: `Auth failed (${loginResult.method}): ${loginResult.error}`,
           durationMs: Date.now() - new Date(result.createdAt).getTime(),
         });
         emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: updatedResult.error ?? "", runId });

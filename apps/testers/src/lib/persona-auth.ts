@@ -222,6 +222,48 @@ async function performLogin(
 }
 
 /**
+ * Perform login using a raw AuthConfig (e.g. from scenario.authConfig or an auth preset).
+ * Resolves credentials via resolveCredential() supporting @secrets: and $ENV references.
+ */
+export async function loginWithAuthConfig(
+  page: Page,
+  config: { email?: string; password?: string; loginPath?: string; token?: string; tokenHeader?: string },
+  baseUrl: string,
+): Promise<LoginResult> {
+  // Token-based auth: inject Authorization header instead of form login
+  if (config.token || config.tokenHeader) {
+    const token = resolveCredential(config.token ?? null);
+    if (!token) return { success: false, method: "login", error: "Auth token reference could not be resolved" };
+    // Token is injected at the page level via route interception — set it as a storage item
+    // so the AI agent loop can use it when making requests
+    await page.evaluate(({ header, tok }) => {
+      window.sessionStorage.setItem("__testers_auth_header", header);
+      window.sessionStorage.setItem("__testers_auth_token", tok);
+    }, { header: config.tokenHeader ?? "Authorization", tok: token });
+    return { success: true, method: "cookies" };
+  }
+
+  if (!config.email || !config.password) {
+    return { success: false, method: "none", error: "authConfig has no credentials (no email/password or token)" };
+  }
+
+  // Build a minimal persona-like auth object and delegate to performLogin
+  const syntheticPersona = {
+    id: "__auth_config__",
+    name: "authConfig",
+    updatedAt: new Date(0).toISOString(),
+    auth: {
+      email: config.email,
+      password: config.password,
+      loginPath: config.loginPath ?? "/login",
+      cookies: null,
+    },
+  } as unknown as import("../types/index.js").Persona;
+
+  return performLogin(page, syntheticPersona, baseUrl);
+}
+
+/**
  * Ensures a persona is authenticated before a scenario runs. Flow:
  * 1. If the persona has no auth credentials → skip (return none).
  * 2. If saved cookies exist and are fresh → restore them (fast path).
