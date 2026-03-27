@@ -123,6 +123,27 @@ export interface UpdatePlanInput {
   agent_id?: string;
 }
 
+// Machine
+export interface Machine {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  last_seen_at: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface MachineRow {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  last_seen_at: string;
+  metadata: string | null;
+  created_at: string;
+}
+
 // Agent
 export type AgentStatus = "active" | "archived";
 

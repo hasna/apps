@@ -173,6 +173,9 @@ export type { TaskFile, AddTaskFileInput } from "./db/task-files.js";
 export { acquireLock, releaseLock, checkLock, cleanExpiredLocks } from "./db/locks.js";
 export type { ResourceLock } from "./db/locks.js";
 
+// Machines
+export { getOrCreateLocalMachine, getMachineId, resetMachineId, getMachine, getMachineByName, listMachines, deleteMachine } from "./db/machines.js";
+
 // Orgs
 export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
 

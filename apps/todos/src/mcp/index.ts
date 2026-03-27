@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { registerCloudTools } from "@hasna/cloud";
+import { registerCloudSyncTools } from "./tools/cloud.js";
 import {
   createTask,
   getTask,
@@ -4159,7 +4159,7 @@ registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === CLOUD ===
 
-registerCloudTools(server, "todos");
+registerCloudSyncTools(server, { shouldRegisterTool, formatError });
 
 // === START SERVER ===
 

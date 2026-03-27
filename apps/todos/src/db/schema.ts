@@ -660,6 +660,58 @@ export const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (40);
   `,
+  // Migration 41: Machine registry + machine_id/synced_at on all entity tables
+  `
+  CREATE TABLE IF NOT EXISTS machines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    hostname TEXT,
+    platform TEXT,
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  ALTER TABLE projects ADD COLUMN machine_id TEXT;
+  ALTER TABLE projects ADD COLUMN synced_at TEXT;
+  ALTER TABLE tasks ADD COLUMN machine_id TEXT;
+  ALTER TABLE tasks ADD COLUMN synced_at TEXT;
+  ALTER TABLE agents ADD COLUMN machine_id TEXT;
+  ALTER TABLE agents ADD COLUMN synced_at TEXT;
+  ALTER TABLE task_lists ADD COLUMN machine_id TEXT;
+  ALTER TABLE task_lists ADD COLUMN synced_at TEXT;
+  ALTER TABLE plans ADD COLUMN machine_id TEXT;
+  ALTER TABLE plans ADD COLUMN synced_at TEXT;
+  ALTER TABLE task_comments ADD COLUMN machine_id TEXT;
+  ALTER TABLE task_comments ADD COLUMN synced_at TEXT;
+  ALTER TABLE sessions ADD COLUMN machine_id TEXT;
+  ALTER TABLE sessions ADD COLUMN synced_at TEXT;
+  ALTER TABLE task_history ADD COLUMN machine_id TEXT;
+  ALTER TABLE webhooks ADD COLUMN machine_id TEXT;
+  ALTER TABLE webhooks ADD COLUMN synced_at TEXT;
+  ALTER TABLE task_templates ADD COLUMN machine_id TEXT;
+  ALTER TABLE task_templates ADD COLUMN synced_at TEXT;
+  ALTER TABLE orgs ADD COLUMN machine_id TEXT;
+  ALTER TABLE orgs ADD COLUMN synced_at TEXT;
+  ALTER TABLE handoffs ADD COLUMN machine_id TEXT;
+  ALTER TABLE handoffs ADD COLUMN synced_at TEXT;
+  ALTER TABLE task_checklists ADD COLUMN machine_id TEXT;
+  ALTER TABLE project_sources ADD COLUMN machine_id TEXT;
+  ALTER TABLE project_sources ADD COLUMN synced_at TEXT;
+  ALTER TABLE task_files ADD COLUMN machine_id TEXT;
+  ALTER TABLE task_relationships ADD COLUMN machine_id TEXT;
+  ALTER TABLE kg_edges ADD COLUMN machine_id TEXT;
+  ALTER TABLE project_agent_roles ADD COLUMN machine_id TEXT;
+  ALTER TABLE dispatches ADD COLUMN machine_id TEXT;
+  ALTER TABLE dispatches ADD COLUMN synced_at TEXT;
+
+  CREATE INDEX IF NOT EXISTS idx_tasks_machine ON tasks(machine_id);
+  CREATE INDEX IF NOT EXISTS idx_tasks_synced ON tasks(synced_at);
+  CREATE INDEX IF NOT EXISTS idx_projects_machine ON projects(machine_id);
+  CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine_id);
+
+  INSERT OR IGNORE INTO _migrations (id) VALUES (41);
+  `,
 ];
 
 export function runMigrations(db: Database): void {
@@ -848,6 +900,15 @@ export function ensureSchema(db: Database): void {
       UNIQUE(source_id, source_type, target_id, target_type, relation_type)
     )`);
 
+  // Machine registry
+  ensureTable("machines", `
+    CREATE TABLE machines (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, hostname TEXT, platform TEXT,
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+
   // ── Columns (ALTER TABLE is not idempotent in SQLite, so check first) ──
 
   // Projects
@@ -971,6 +1032,40 @@ export function ensureSchema(db: Database): void {
   ensureColumn("task_comments", "type", "TEXT DEFAULT 'comment'");
   ensureColumn("task_comments", "progress_pct", "INTEGER");
 
+  // Machine tracking — machine_id + synced_at on all entity tables
+  ensureColumn("projects", "machine_id", "TEXT");
+  ensureColumn("projects", "synced_at", "TEXT");
+  ensureColumn("tasks", "machine_id", "TEXT");
+  ensureColumn("tasks", "synced_at", "TEXT");
+  ensureColumn("agents", "machine_id", "TEXT");
+  ensureColumn("agents", "synced_at", "TEXT");
+  ensureColumn("task_lists", "machine_id", "TEXT");
+  ensureColumn("task_lists", "synced_at", "TEXT");
+  ensureColumn("plans", "machine_id", "TEXT");
+  ensureColumn("plans", "synced_at", "TEXT");
+  ensureColumn("task_comments", "machine_id", "TEXT");
+  ensureColumn("task_comments", "synced_at", "TEXT");
+  ensureColumn("sessions", "machine_id", "TEXT");
+  ensureColumn("sessions", "synced_at", "TEXT");
+  ensureColumn("task_history", "machine_id", "TEXT");
+  ensureColumn("webhooks", "machine_id", "TEXT");
+  ensureColumn("webhooks", "synced_at", "TEXT");
+  ensureColumn("task_templates", "machine_id", "TEXT");
+  ensureColumn("task_templates", "synced_at", "TEXT");
+  ensureColumn("orgs", "machine_id", "TEXT");
+  ensureColumn("orgs", "synced_at", "TEXT");
+  ensureColumn("handoffs", "machine_id", "TEXT");
+  ensureColumn("handoffs", "synced_at", "TEXT");
+  ensureColumn("task_checklists", "machine_id", "TEXT");
+  ensureColumn("project_sources", "machine_id", "TEXT");
+  ensureColumn("project_sources", "synced_at", "TEXT");
+  ensureColumn("task_files", "machine_id", "TEXT");
+  ensureColumn("task_relationships", "machine_id", "TEXT");
+  ensureColumn("kg_edges", "machine_id", "TEXT");
+  ensureColumn("project_agent_roles", "machine_id", "TEXT");
+  ensureColumn("dispatches", "machine_id", "TEXT");
+  ensureColumn("dispatches", "synced_at", "TEXT");
+
   // ── Indexes ──
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_task_list ON tasks(task_list_id)");
@@ -1006,6 +1101,12 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_source ON kg_edges(source_id, source_type)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_target ON kg_edges(target_id, target_type)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_kg_relation ON kg_edges(relation_type)");
+
+  // Machine tracking indexes
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_machine ON tasks(machine_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_synced ON tasks(synced_at)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_projects_machine ON projects(machine_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine_id)");
 }
 
 export function backfillTaskTags(db: Database): void {

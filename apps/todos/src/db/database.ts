@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runMigrations, backfillTaskTags } from "./schema.js";
+import { backfillMachineId } from "./machines.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -93,6 +94,7 @@ export function getDatabase(dbPath?: string): Database {
   // Run migrations
   runMigrations(_db);
   backfillTaskTags(_db);
+  backfillMachineId(_db);
 
   return _db;
 }
