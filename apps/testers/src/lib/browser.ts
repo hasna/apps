@@ -1,15 +1,15 @@
 import type { Browser, Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
+import type { BrowserEngine } from "../types/index.js";
 // Use @hasna/browser for the Playwright engine launch/close — avoids reimplementing
 // the same chromium launch logic and keeps us in sync with open-browser improvements.
 import {
   launchPlaywright,
   getPage as getBrowserPage,
   closeBrowser as closeBrowserBase,
+  connectToExistingBrowser,
 } from "@hasna/browser";
-
-export type BrowserEngine = "playwright" | "lightpanda" | "bun";
 
 interface ViewportSize {
   width: number;
@@ -47,6 +47,21 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
       throw new BrowserError("Lightpanda not installed. Run: testers install-browser --engine lightpanda");
     }
     return launchLightpanda({ viewport: options?.viewport });
+  }
+
+  if (engine === "cdp") {
+    // CDP engine: connect to an existing Chrome with remote debugging enabled.
+    // Set TESTERS_CDP_URL (e.g. http://localhost:9222); falls back to Playwright if unset.
+    const cdpUrl = process.env["TESTERS_CDP_URL"];
+    if (!cdpUrl) {
+      return launchPlaywright({ headless: options?.headless ?? true, viewport: options?.viewport ?? DEFAULT_VIEWPORT });
+    }
+    try {
+      return await connectToExistingBrowser(cdpUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BrowserError(`CDP connect to ${cdpUrl} failed: ${message}. Start Chrome with --remote-debugging-port=9222`);
+    }
   }
 
   if (engine === "bun") {

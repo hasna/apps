@@ -4,7 +4,7 @@ export type ScenarioPriority = "low" | "medium" | "high" | "critical";
 export type RunStatus = "pending" | "running" | "passed" | "failed" | "cancelled";
 export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
 export type ModelPreset = "quick" | "thorough" | "deep" | "cerebras-fast" | "cerebras-smart";
-export type BrowserEngine = "playwright" | "lightpanda" | "bun";
+export type BrowserEngine = "playwright" | "lightpanda" | "bun" | "cdp";
 
 export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations";
 

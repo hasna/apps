@@ -13,6 +13,7 @@ import { Screenshotter } from "./screenshotter.js";
 import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
 import { ensurePersonaAuthenticated, loginWithAuthConfig } from "./persona-auth.js";
+import { enableNetworkLogging } from "@hasna/browser";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
 import { createFailureTasks, notifyFailureToConversations, notifyRunToConversations } from "./failure-pipeline.js";
@@ -177,6 +178,8 @@ export async function runSingleScenario(
 
   let browser: Browser | null = null;
   let page: Page | null = null;
+  let stopNetworkLogging: (() => void) | null = null;
+  const networkErrors: Array<{ url: string; status: number; method: string }> = [];
 
   try {
     browser = await launchBrowser({ headless: !(effectiveOptions.headed ?? false), engine: effectiveOptions.engine });
@@ -189,6 +192,21 @@ export async function runSingleScenario(
       : options.url;
 
     const scenarioTimeout = scenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
+
+    // Capture network errors (4xx/5xx) per scenario using @hasna/browser network logging
+    try {
+      // Use result ID as session ID so network events are linked to this result
+      stopNetworkLogging = enableNetworkLogging(page, result.id);
+    } catch {
+      // Non-fatal — network logging is best-effort
+    }
+    // Also capture high-level request failures directly for metadata
+    page.on("response", (response) => {
+      const status = response.status();
+      if (status >= 400 && !response.url().includes("favicon")) {
+        networkErrors.push({ url: response.url(), status, method: response.request().method() });
+      }
+    });
 
     // Attach listeners BEFORE page.goto() to capture initial page load events
     const consoleErrors: string[] = [];
@@ -293,7 +311,11 @@ export async function runSingleScenario(
       }
     }
 
+    // Stop network logging cleanup
+    if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
+
     const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : options.engine === "bun" ? " (Running with Bun.WebView — native, ~11x faster)" : "";
+    const networkMeta = networkErrors.length > 0 ? { networkErrors: networkErrors.slice(0, 20) } : {};
     let updatedResult = updateResult(result.id, {
       status: agentResult.status,
       reasoning: agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || undefined,
@@ -301,6 +323,7 @@ export async function runSingleScenario(
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
       tokensUsed: agentResult.tokensUsed,
       costCents: estimateCost(model, agentResult.tokensUsed),
+      metadata: networkErrors.length > 0 ? networkMeta : undefined,
     });
 
     // Wire failure analysis for non-passing results
@@ -325,6 +348,7 @@ export async function runSingleScenario(
 
     return updatedResult;
   } catch (error) {
+    if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
     const errorMsg = error instanceof Error ? error.message : String(error);
     let updatedResult = updateResult(result.id, {
       status: "error",
