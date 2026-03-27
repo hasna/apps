@@ -1,0 +1,77 @@
+{
+  "name": "@hasna/evals",
+  "version": "0.1.0",
+  "description": "Open source AI evaluation framework — LLM-as-judge + assertion-based evals for any AI app. CLI + MCP server.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "evals": "dist/cli/index.js",
+    "evals-mcp": "dist/mcp/index.js",
+    "evals-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "datasets/examples",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:serve": "bun run src/server/index.ts",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/evals 2>/dev/null || true"
+  },
+  "keywords": [
+    "evals",
+    "llm",
+    "ai",
+    "testing",
+    "evaluation",
+    "mcp",
+    "claude",
+    "llm-as-judge",
+    "typescript",
+    "cli"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/open-evals.git"
+  },
+  "homepage": "https://github.com/hasna/open-evals",
+  "bugs": {
+    "url": "https://github.com/hasna/open-evals/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ajv": "^8.18.0",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "openai": "^4.98.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}
