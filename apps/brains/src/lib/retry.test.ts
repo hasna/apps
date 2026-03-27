@@ -102,4 +102,74 @@ describe("withRetry", () => {
     );
     expect(retries).toEqual([1, 2]);
   });
+
+  test("retries on fetch failed (network error)", async () => {
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts++;
+        if (attempts < 2) throw new Error("fetch failed: connection refused");
+        return "ok";
+      },
+      { maxAttempts: 3, baseDelayMs: 1 }
+    );
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  test("retries on ECONNRESET", async () => {
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts++;
+        if (attempts < 2) throw new Error("ECONNRESET");
+        return "ok";
+      },
+      { maxAttempts: 3, baseDelayMs: 1 }
+    );
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  test("retries on ETIMEDOUT", async () => {
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts++;
+        if (attempts < 2) throw new Error("ETIMEDOUT");
+        return "ok";
+      },
+      { maxAttempts: 3, baseDelayMs: 1 }
+    );
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  test("does NOT retry on Thinker Labs 401 error", async () => {
+    let attempts = 0;
+    await expect(
+      withRetry(
+        async () => {
+          attempts++;
+          throw new Error("Thinker Labs API error 401: unauthorized");
+        },
+        { maxAttempts: 3, baseDelayMs: 1 }
+      )
+    ).rejects.toThrow("Thinker Labs API error 401");
+    expect(attempts).toBe(1);
+  });
+
+  test("does NOT retry non-Error throws", async () => {
+    let attempts = 0;
+    await expect(
+      withRetry(
+        async () => {
+          attempts++;
+          throw "string error";
+        },
+        { maxAttempts: 3, baseDelayMs: 1 }
+      )
+    ).rejects.toThrow("string error");
+    expect(attempts).toBe(1);
+  });
 });
