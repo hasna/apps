@@ -78,7 +78,7 @@ export async function validateTmuxTarget(spec: string): Promise<void> {
 
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
+    const stderr = await new Response(proc.stderr as any).text();
     throw new Error(
       `tmux target "${targetStr}" not found: ${stderr.trim() || "unknown error"}`,
     );

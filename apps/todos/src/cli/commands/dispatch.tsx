@@ -44,6 +44,7 @@ export function registerDispatchCommands(program: Command): void {
           const resolvedListId = resolvePartialId(db, "task_lists", opts.list);
           if (!resolvedListId) throw new Error(`Task list not found: ${opts.list}`);
           const taskList = getTaskList(resolvedListId, db);
+          if (!taskList) throw new Error(`Task list not found: ${opts.list}`);
           listName = taskList.name;
           const statuses = (opts.filterStatus as string).split(",").map((s: string) => s.trim());
           tasks = listTasks({ task_list_id: resolvedListId, status: statuses } as any, db);

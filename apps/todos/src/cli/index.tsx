@@ -48,7 +48,6 @@ import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
 import { getAgentTaskListId, loadConfig } from "../lib/config.js";
 import type { Project, Task, TaskStatus, TaskPriority } from "../types/index.js";
-import { getTaskList } from "../db/task-lists.js";
 import { registerDispatchCommands } from "./commands/dispatch.js";
 
 function getPackageVersion(): string {

@@ -74,6 +74,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
           const db = getDatabase();
           const resolvedListId = resolveId(task_list_id, "task_lists");
           const taskList = getTaskList(resolvedListId, db);
+          if (!taskList) throw new Error(`Task list not found: ${task_list_id}`);
           const statuses = filter_status ?? ["pending"];
           const tasks = listTasks({ task_list_id: resolvedListId, status: statuses } as any, db);
 

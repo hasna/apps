@@ -53,11 +53,11 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../db/agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
-import { getAgentTaskListId, getAgentPoolForProject } from "../lib/config.js";
+import { getAgentTaskListId } from "../lib/config.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import {
   getChecklist,

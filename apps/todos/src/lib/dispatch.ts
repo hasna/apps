@@ -1,18 +1,18 @@
 import type { Database } from "bun:sqlite";
-import { getDatabase } from "../db/database.ts";
+import { getDatabase } from "../db/database.js";
 import {
   createDispatchLog,
   getDueDispatches,
   updateDispatchStatus,
-} from "../db/dispatches.ts";
-import { listTasks } from "../db/tasks.ts";
-import { now } from "../db/database.ts";
-import { formatDispatchMessage } from "./dispatch-formatter.ts";
-import { calculateDelay, sendToTmux } from "./tmux.ts";
-import type { CreateDispatchInput, Dispatch, FormatOpts } from "../types/index.ts";
+} from "../db/dispatches.js";
+import { listTasks } from "../db/tasks.js";
+import { now } from "../db/database.js";
+import { formatDispatchMessage } from "./dispatch-formatter.js";
+import { calculateDelay, sendToTmux } from "./tmux.js";
+import type { CreateDispatchInput, Dispatch } from "../types/index.js";
 
 // Re-export FormatOpts isn't defined on types yet — define it here for convenience
-export type { FormatOpts } from "./dispatch-formatter.ts";
+export type { FormatOpts } from "./dispatch-formatter.js";
 
 /**
  * Execute a single dispatch: resolve tasks, format, send to tmux, update status.
@@ -112,7 +112,7 @@ export async function dispatchToMultiple(
   db?: Database,
 ): Promise<Dispatch[]> {
   const _db = db ?? getDatabase();
-  const { createDispatch } = await import("../db/dispatches.ts");
+  const { createDispatch } = await import("../db/dispatches.js");
   const { targets, stagger_ms = 500, ...baseInput } = input;
 
   const dispatches: Dispatch[] = [];

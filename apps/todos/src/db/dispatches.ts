@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { getDatabase, now, uuid } from "./database.ts";
+import { getDatabase, now, uuid } from "./database.js";
 import type {
   CreateDispatchInput,
   Dispatch,
@@ -7,8 +7,8 @@ import type {
   DispatchRow,
   DispatchStatus,
   ListDispatchesFilter,
-} from "../types/index.ts";
-import { DispatchNotFoundError } from "../types/index.ts";
+} from "../types/index.js";
+import { DispatchNotFoundError } from "../types/index.js";
 
 function rowToDispatch(row: DispatchRow): Dispatch {
   return {
@@ -74,7 +74,7 @@ export function listDispatches(filter: ListDispatchesFilter = {}, db?: Database)
 
   const rows = _db
     .query(`SELECT * FROM dispatches ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as DispatchRow[];
+    .all(...[...params, limit, offset] as any) as DispatchRow[];
 
   return rows.map(rowToDispatch);
 }
