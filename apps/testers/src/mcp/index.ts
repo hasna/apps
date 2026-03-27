@@ -2248,6 +2248,33 @@ server.tool(
   },
 );
 
+// ─── 65. run_with_army ───────────────────────────────────────────────────────
+
+server.tool(
+  "run_with_army",
+  "Dispatch scenarios across multiple concurrent worker processes for maximum parallelism. Each worker runs a slice of scenarios independently. Returns immediately — poll with get_run or wait_for_run.",
+  {
+    url: z.string().describe("Target URL to test against"),
+    workers: z.number().int().min(1).max(20).optional().default(4).describe("Number of worker processes to spawn (default 4, max 20)"),
+    parallel: z.number().int().min(1).max(10).optional().default(2).describe("Parallel browsers per worker (default 2)"),
+    scenarioIds: z.array(z.string()).optional().describe("Specific scenario IDs to run (default: all)"),
+    tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
+    projectId: z.string().optional().describe("Filter scenarios by project ID"),
+    model: z.string().optional().describe(MODEL_DESC),
+    timeout: z.number().optional().describe("Per-scenario timeout in ms"),
+    personaId: z.string().optional().describe("Run all scenarios under this persona"),
+  },
+  async ({ url, workers, parallel, scenarioIds, tags, projectId, model, timeout, personaId }) => {
+    try {
+      const { runWithArmy } = await import("../lib/army-runner.js");
+      const result = await runWithArmy({ url, workers: workers ?? 4, parallel: parallel ?? 2, scenarioIds, tags, projectId, model, timeout, personaId });
+      return json(result);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
 // ─── Cloud ────────────────────────────────────────────────────────────────────
 
 registerCloudTools(server, "testers");

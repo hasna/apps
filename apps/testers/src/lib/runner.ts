@@ -14,6 +14,7 @@ import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js
 import { loadConfig } from "./config.js";
 import { ensurePersonaAuthenticated, loginWithAuthConfig } from "./persona-auth.js";
 import { enableNetworkLogging } from "@hasna/browser";
+import { registerSession, closeSession as closeTrackedSession } from "./session-tracker.js";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
 import { createFailureTasks, notifyFailureToConversations, notifyRunToConversations } from "./failure-pipeline.js";
@@ -193,6 +194,15 @@ export async function runSingleScenario(
 
     const scenarioTimeout = scenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
 
+    // Register session in open-browser's session DB (enables cross-tool session visibility)
+    registerSession({
+      resultId: result.id,
+      runId,
+      scenarioId: scenario.id,
+      engine: effectiveOptions.engine ?? "playwright",
+      startUrl: targetUrl,
+    });
+
     // Capture network errors (4xx/5xx) per scenario using @hasna/browser network logging
     try {
       // Use result ID as session ID so network events are linked to this result
@@ -311,8 +321,9 @@ export async function runSingleScenario(
       }
     }
 
-    // Stop network logging cleanup
+    // Stop network logging and close session tracking
     if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
+    closeTrackedSession(result.id);
 
     const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : options.engine === "bun" ? " (Running with Bun.WebView — native, ~11x faster)" : "";
     const networkMeta = networkErrors.length > 0 ? { networkErrors: networkErrors.slice(0, 20) } : {};
@@ -349,6 +360,7 @@ export async function runSingleScenario(
     return updatedResult;
   } catch (error) {
     if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
+    closeTrackedSession(result.id);
     const errorMsg = error instanceof Error ? error.message : String(error);
     let updatedResult = updateResult(result.id, {
       status: "error",
