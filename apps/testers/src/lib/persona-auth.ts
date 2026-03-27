@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import type { Persona } from "../types/index.js";
 import { savePersonaAuthCookies } from "../db/personas.js";
+import { resolveCredential } from "./secrets-resolver.js";
 
 const COOKIE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 
@@ -74,6 +75,19 @@ async function performLogin(
   baseUrl: string,
 ): Promise<LoginResult> {
   const auth = persona.auth!;
+
+  // Resolve credentials — support @secrets:<key> and $ENV_VAR references
+  const email = resolveCredential(auth.email);
+  const password = resolveCredential(auth.password);
+
+  if (!email || !password) {
+    return {
+      success: false,
+      method: "login",
+      error: `Could not resolve credentials for persona "${persona.name}". Check that @secrets: keys or $ENV_VAR references are correct.`,
+    };
+  }
+
   const loginUrl = auth.loginPath.startsWith("http")
     ? auth.loginPath
     : `${baseUrl.replace(/\/$/, "")}${auth.loginPath}`;
@@ -121,7 +135,7 @@ async function performLogin(
     try {
       const el = page.locator(sel).first();
       if (await el.isVisible({ timeout: 2_000 })) {
-        await el.fill(auth.email, { timeout: 5_000 });
+        await el.fill(email, { timeout: 5_000 });
         emailFilled = true;
         break;
       }
@@ -138,7 +152,7 @@ async function performLogin(
     try {
       const el = page.locator(sel).first();
       if (await el.isVisible({ timeout: 2_000 })) {
-        await el.fill(auth.password, { timeout: 5_000 });
+        await el.fill(password, { timeout: 5_000 });
         passwordFilled = true;
         break;
       }

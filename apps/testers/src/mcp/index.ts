@@ -1295,8 +1295,8 @@ server.tool(
     traits: z.array(z.string()).optional().describe("Personality traits (e.g. impatient, curious, detail-oriented)"),
     goals: z.array(z.string()).optional().describe("Goals the persona is trying to accomplish"),
     projectId: z.string().nullable().optional().describe("Project ID (null = global persona)"),
-    authEmail: z.string().optional().describe("Login email for multi-user session pool"),
-    authPassword: z.string().optional().describe("Login password for multi-user session pool"),
+    authEmail: z.string().optional().describe("Login email for multi-user session pool. Supports @secrets:<key> (vault lookup) or $ENV_VAR references."),
+    authPassword: z.string().optional().describe("Login password. Supports @secrets:<key> (e.g. '@secrets:hasnastudio/alumia/platform/test/admin/password') or $ENV_VAR references."),
     authLoginPath: z.string().optional().describe("Login page path (default: /login)"),
   },
   async ({ name, role, description, instructions, traits, goals, projectId, authEmail, authPassword, authLoginPath }) => {

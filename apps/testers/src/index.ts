@@ -279,3 +279,7 @@ export type { Webhook, WebhookPayload } from "./lib/webhooks.js";
 
 export { writeRunMeta, writeScenarioMeta } from "./lib/screenshotter.js";
 export type { CaptureResult } from "./lib/screenshotter.js";
+
+export { resolveCredential, isCredentialReference } from "./lib/secrets-resolver.js";
+export { ensurePersonaAuthenticated } from "./lib/persona-auth.js";
+export type { LoginResult } from "./lib/persona-auth.js";
