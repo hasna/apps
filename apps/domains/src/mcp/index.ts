@@ -667,7 +667,7 @@ server.registerTool(
   "sync_all_providers",
   {
     title: "Sync All Providers",
-    description: "Sync domains from all configured registrar providers (Namecheap, GoDaddy) to local database.",
+    description: "Sync domains from all configured registrar providers (Namecheap, GoDaddy, Route 53) to local database.",
     inputSchema: {},
   },
   async () => {
@@ -993,16 +993,25 @@ server.registerTool(
       domain: z.string().describe("Domain name (hosted zone)"),
       record_type: z.string().describe("Record type (A, AAAA, CNAME, TXT, MX, NS)"),
       record_name: z.string().describe("Record name (FQDN)"),
-      record_value: z.string().describe("Record value"),
-      ttl: z.number().optional().describe("TTL in seconds (default: 300)"),
+      record_values: z.array(z.string()).optional().describe("Record values (one or more). Omit when using alias_target."),
+      ttl: z.number().optional().describe("TTL in seconds (default: 300). Ignored for alias records."),
+      alias_hosted_zone_id: z.string().optional().describe("For alias records: hosted zone ID of the target (e.g. Z2FDTNDATAQYW2 for CloudFront)"),
+      alias_dns_name: z.string().optional().describe("For alias records: DNS name of the alias target (e.g. d1234.cloudfront.net)"),
     },
   },
-  async ({ domain, record_type, record_name, record_value, ttl }) => {
+  async ({ domain, record_type, record_name, record_values, ttl, alias_hosted_zone_id, alias_dns_name }) => {
     try {
+      if (!record_values?.length && !(alias_hosted_zone_id && alias_dns_name)) {
+        throw new Error("Provide either record_values or both alias_hosted_zone_id and alias_dns_name.");
+      }
       const zone = await r53FindHostedZoneByDomain(domain);
       if (!zone) throw new Error(`No hosted zone found for ${domain}`);
-      await r53UpsertRecord(zone.id, { name: record_name, type: record_type, ttl: ttl ?? 300, values: [record_value] });
-      return { content: [{ type: "text", text: `Record upserted: ${record_type} ${record_name}` }] };
+      const aliasTarget = alias_hosted_zone_id && alias_dns_name
+        ? { hosted_zone_id: alias_hosted_zone_id, dns_name: alias_dns_name }
+        : undefined;
+      await r53UpsertRecord(zone.id, { name: record_name, type: record_type, ttl: ttl ?? 300, values: record_values ?? [], alias_target: aliasTarget });
+      const desc = aliasTarget ? `alias → ${aliasTarget.dns_name}` : `${record_values!.length} value(s)`;
+      return { content: [{ type: "text", text: `Record upserted: ${record_type} ${record_name} (${desc})` }] };
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }

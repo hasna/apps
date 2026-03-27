@@ -238,17 +238,26 @@ export function registerRoute53Commands(program: Command): void {
     .description("Add or update a DNS record")
     .requiredOption("--type <type>", "Record type (A, AAAA, CNAME, TXT, MX, NS)")
     .requiredOption("--name <name>", "Record name (FQDN)")
-    .requiredOption("--value <value>", "Record value")
+    .option("--value <value>", "Record value (repeatable for multi-value records)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
     .option("--ttl <seconds>", "TTL", "300")
-    .action(async (domain: string, opts: { type: string; name: string; value: string; ttl: string }) => {
+    .option("--alias-zone <zoneId>", "Alias target hosted zone ID (e.g. Z2FDTNDATAQYW2 for CloudFront)")
+    .option("--alias-dns <name>", "Alias target DNS name (e.g. d1234.cloudfront.net)")
+    .action(async (domain: string, opts: { type: string; name: string; value: string[]; ttl: string; aliasZone?: string; aliasDns?: string }) => {
       try {
+        const isAlias = !!(opts.aliasZone && opts.aliasDns);
+        if (!isAlias && (!opts.value || opts.value.length === 0)) {
+          console.error("Error: provide --value (repeatable) or both --alias-zone and --alias-dns");
+          process.exit(1);
+        }
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
           console.error(`No hosted zone found for ${domain}`);
           process.exit(1);
         }
-        await upsertRecord(zone.id, { name: opts.name, type: opts.type, ttl: parseInt(opts.ttl), values: [opts.value] });
-        console.log(`✓ Record upserted: ${opts.type} ${opts.name}`);
+        const aliasTarget = isAlias ? { hosted_zone_id: opts.aliasZone!, dns_name: opts.aliasDns! } : undefined;
+        await upsertRecord(zone.id, { name: opts.name, type: opts.type, ttl: parseInt(opts.ttl), values: opts.value, alias_target: aliasTarget });
+        const desc = isAlias ? `alias → ${opts.aliasDns}` : `${opts.value.length} value(s)`;
+        console.log(`✓ Record upserted: ${opts.type} ${opts.name} (${desc})`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -316,10 +325,11 @@ export function registerRoute53Commands(program: Command): void {
     .requiredOption("--zip <zip>", "ZIP code")
     .option("--org <name>", "Organization name")
     .option("--years <n>", "Registration years", "1")
+    .option("--wait", "Poll until registration completes (or fails)")
     .action(async (domain: string, opts: {
       email: string; firstName: string; lastName: string;
       phone: string; address: string; city: string; state: string;
-      country: string; zip: string; org?: string; years: string;
+      country: string; zip: string; org?: string; years: string; wait?: boolean;
     }) => {
       try {
         // 1. Check
@@ -344,6 +354,23 @@ export function registerRoute53Commands(program: Command): void {
         const reg = await registerDomain(domain, contact, parseInt(opts.years));
         console.log(`  ✓ Submitted (operation: ${reg.operationId})`);
 
+        if (opts.wait) {
+          console.log(`  Waiting for registration to complete...`);
+          let status = "IN_PROGRESS";
+          while (status === "IN_PROGRESS" || status === "SUBMITTED") {
+            await new Promise((r) => setTimeout(r, 10_000));
+            const s = await getRegistrationStatus(reg.operationId);
+            status = s.status;
+            process.stdout.write(`  Status: ${status}\r`);
+          }
+          console.log();
+          if (status !== "SUCCESSFUL") {
+            console.error(`✗ Registration ${status}`);
+            process.exit(1);
+          }
+          console.log(`  ✓ Registration complete`);
+        }
+
         // 3. Create hosted zone
         console.log(`[3/4] Creating hosted zone...`);
         const zone = await createHostedZone(domain, `Managed by @hasna/domains`);
@@ -362,7 +389,7 @@ export function registerRoute53Commands(program: Command): void {
 
         // Summary
         console.log(`\n✓ Full setup complete for ${domain}`);
-        console.log(`  Registration may take a few minutes.`);
+        if (!opts.wait) console.log(`  Registration may take a few minutes.`);
         console.log(`  Check: domains r53 status ${reg.operationId}`);
         if (zone.name_servers && zone.name_servers.length > 0) {
           console.log(`\n  Name servers:`);

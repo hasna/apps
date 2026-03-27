@@ -25,8 +25,10 @@ import {
   CheckDomainAvailabilityCommand,
   RegisterDomainCommand,
   GetOperationDetailCommand,
+  GetDomainDetailCommand,
   ListDomainsCommand,
   ListPricesCommand,
+  type CountryCode,
 } from "@aws-sdk/client-route-53-domains";
 import type {
   RegistrarProvider,
@@ -88,11 +90,20 @@ export interface Route53Record {
   values: string[];
 }
 
+export interface Route53AliasTarget {
+  /** Hosted zone ID of the alias target (e.g. Z2FDTNDATAQYW2 for CloudFront) */
+  hosted_zone_id: string;
+  /** DNS name of the alias target (e.g. d1234.cloudfront.net) */
+  dns_name: string;
+}
+
 export interface Route53RecordInput {
   name: string;
   type: string;
   ttl?: number;
   values: string[];
+  /** When set, creates an alias record instead of a standard record. TTL and values are ignored. */
+  alias_target?: Route53AliasTarget;
 }
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -105,8 +116,22 @@ export function getConfig(): Route53Config {
   };
 }
 
+function checkCredentials(cfg: Route53Config): void {
+  // When explicit keys are provided in config, always accept them.
+  if (cfg.accessKeyId && cfg.secretAccessKey) return;
+  // Otherwise fall back to env vars — if neither source has both keys, fail early.
+  const hasEnv = !!(process.env["AWS_ACCESS_KEY_ID"] && process.env["AWS_SECRET_ACCESS_KEY"]);
+  const hasProfile = !!process.env["AWS_PROFILE"];
+  if (!hasEnv && !hasProfile) {
+    throw new Error(
+      "AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (or AWS_PROFILE) environment variables.",
+    );
+  }
+}
+
 function makeClients(config?: Route53Config) {
   const cfg = config ?? getConfig();
+  checkCredentials(cfg);
   const region = cfg.region || "us-east-1";
   const credentials = cfg.accessKeyId && cfg.secretAccessKey
     ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey }
@@ -165,7 +190,7 @@ export async function registerDomain(
     AddressLine1: contact.address_line_1,
     City: contact.city,
     State: contact.state,
-    CountryCode: contact.country_code,
+    CountryCode: contact.country_code as CountryCode,
     ZipCode: contact.zip_code,
     ContactType: contact.organization_name ? "COMPANY" as const : "PERSON" as const,
     ...(contact.organization_name ? { OrganizationName: contact.organization_name } : {}),
@@ -203,21 +228,54 @@ export async function getRegistrationStatus(
   };
 }
 
+export interface DomainDetail extends RegisteredDomain {
+  created: string;
+  nameservers: string[];
+}
+
+export async function getDomainDetail(domain: string, config?: Route53Config): Promise<DomainDetail> {
+  const { domains } = makeClients(config);
+  const result = await domains.send(new GetDomainDetailCommand({ DomainName: domain }));
+  return {
+    domain: result.DomainName ?? domain,
+    expiry: result.ExpirationDate?.toISOString() ?? "",
+    auto_renew: result.AutoRenew ?? false,
+    transfer_lock: result.StatusList?.includes("TRANSFER_LOCK") ?? false,
+    created: result.CreationDate?.toISOString() ?? "",
+    nameservers: (result.Nameservers ?? []).map((ns) => ns.Name ?? "").filter(Boolean),
+  };
+}
+
 export async function listRegisteredDomains(config?: Route53Config): Promise<RegisteredDomain[]> {
   const { domains } = makeClients(config);
-  const result = await domains.send(new ListDomainsCommand({}));
-  return (result.Domains ?? []).map((d) => ({
-    domain: d.DomainName ?? "",
-    expiry: d.Expiry?.toISOString() ?? "",
-    auto_renew: d.AutoRenew ?? false,
-    transfer_lock: d.TransferLock ?? false,
-  }));
+  const all: RegisteredDomain[] = [];
+  let nextPageMarker: string | undefined;
+
+  do {
+    const result = await domains.send(new ListDomainsCommand({ Marker: nextPageMarker }));
+    for (const d of result.Domains ?? []) {
+      all.push({
+        domain: d.DomainName ?? "",
+        expiry: d.Expiry?.toISOString() ?? "",
+        auto_renew: d.AutoRenew ?? false,
+        transfer_lock: d.TransferLock ?? false,
+      });
+    }
+    nextPageMarker = result.NextPageMarker;
+  } while (nextPageMarker);
+
+  return all;
 }
 
 // ─── Hosted Zones ────────────────────────────────────────────────────────────
 
 function cleanZoneId(id: string): string {
   return id.replace("/hostedzone/", "");
+}
+
+// Normalize user-provided zone IDs — strip the "/hostedzone/" prefix if pasted from the console
+function normalizeZoneId(id: string): string {
+  return cleanZoneId(id.trim());
 }
 
 export async function createHostedZone(
@@ -247,13 +305,23 @@ export async function createHostedZone(
 
 export async function listHostedZones(config?: Route53Config): Promise<HostedZoneInfo[]> {
   const { route53 } = makeClients(config);
-  const result = await route53.send(new ListHostedZonesCommand({}));
-  return (result.HostedZones ?? []).map((z) => ({
-    id: cleanZoneId(z.Id ?? ""),
-    name: z.Name ?? "",
-    record_count: z.ResourceRecordSetCount ?? 0,
-    comment: z.Config?.Comment,
-  }));
+  const zones: HostedZoneInfo[] = [];
+  let marker: string | undefined;
+
+  do {
+    const result = await route53.send(new ListHostedZonesCommand({ Marker: marker }));
+    for (const z of result.HostedZones ?? []) {
+      zones.push({
+        id: cleanZoneId(z.Id ?? ""),
+        name: z.Name ?? "",
+        record_count: z.ResourceRecordSetCount ?? 0,
+        comment: z.Config?.Comment,
+      });
+    }
+    marker = result.IsTruncated ? result.NextMarker : undefined;
+  } while (marker);
+
+  return zones;
 }
 
 export async function getHostedZone(
@@ -262,7 +330,7 @@ export async function getHostedZone(
 ): Promise<HostedZoneInfo & { name_servers: string[] }> {
   const { route53 } = makeClients(config);
   const result = await route53.send(
-    new GetHostedZoneCommand({ Id: hostedZoneId }),
+    new GetHostedZoneCommand({ Id: normalizeZoneId(hostedZoneId) }),
   );
   return {
     id: cleanZoneId(result.HostedZone?.Id ?? ""),
@@ -275,7 +343,7 @@ export async function getHostedZone(
 
 export async function deleteHostedZone(hostedZoneId: string, config?: Route53Config): Promise<void> {
   const { route53 } = makeClients(config);
-  await route53.send(new DeleteHostedZoneCommand({ Id: hostedZoneId }));
+  await route53.send(new DeleteHostedZoneCommand({ Id: normalizeZoneId(hostedZoneId) }));
 }
 
 export async function findHostedZoneByDomain(domain: string, config?: Route53Config): Promise<HostedZoneInfo | null> {
@@ -296,6 +364,17 @@ function rrsToRecord(rrs: ResourceRecordSet): Route53Record {
 }
 
 function recordToRrs(record: Route53RecordInput): ResourceRecordSet {
+  if (record.alias_target) {
+    return {
+      Name: record.name,
+      Type: record.type as ResourceRecordSet["Type"],
+      AliasTarget: {
+        HostedZoneId: record.alias_target.hosted_zone_id,
+        DNSName: record.alias_target.dns_name,
+        EvaluateTargetHealth: false,
+      },
+    };
+  }
   return {
     Name: record.name,
     Type: record.type as ResourceRecordSet["Type"],
@@ -306,10 +385,31 @@ function recordToRrs(record: Route53RecordInput): ResourceRecordSet {
 
 export async function listRecords(hostedZoneId: string, config?: Route53Config): Promise<Route53Record[]> {
   const { route53 } = makeClients(config);
-  const result = await route53.send(
-    new ListResourceRecordSetsCommand({ HostedZoneId: hostedZoneId }),
-  );
-  return (result.ResourceRecordSets ?? []).map(rrsToRecord);
+  const records: Route53Record[] = [];
+  let nextName: string | undefined;
+  let nextType: string | undefined;
+
+  do {
+    const result = await route53.send(
+      new ListResourceRecordSetsCommand({
+        HostedZoneId: normalizeZoneId(hostedZoneId),
+        StartRecordName: nextName,
+        StartRecordType: nextType as ResourceRecordSet["Type"] | undefined,
+      }),
+    );
+    for (const rrs of result.ResourceRecordSets ?? []) {
+      records.push(rrsToRecord(rrs));
+    }
+    if (result.IsTruncated) {
+      nextName = result.NextRecordName;
+      nextType = result.NextRecordType;
+    } else {
+      nextName = undefined;
+      nextType = undefined;
+    }
+  } while (nextName);
+
+  return records;
 }
 
 export async function upsertRecord(
@@ -320,7 +420,7 @@ export async function upsertRecord(
   const { route53 } = makeClients(config);
   await route53.send(
     new ChangeResourceRecordSetsCommand({
-      HostedZoneId: hostedZoneId,
+      HostedZoneId: normalizeZoneId(hostedZoneId),
       ChangeBatch: {
         Changes: [{ Action: "UPSERT", ResourceRecordSet: recordToRrs(record) }],
       },
@@ -336,7 +436,7 @@ export async function deleteRecord(
   const { route53 } = makeClients(config);
   await route53.send(
     new ChangeResourceRecordSetsCommand({
-      HostedZoneId: hostedZoneId,
+      HostedZoneId: normalizeZoneId(hostedZoneId),
       ChangeBatch: {
         Changes: [{ Action: "DELETE", ResourceRecordSet: recordToRrs(record) }],
       },
@@ -357,7 +457,7 @@ export async function upsertRecords(
   }));
   await route53.send(
     new ChangeResourceRecordSetsCommand({
-      HostedZoneId: hostedZoneId,
+      HostedZoneId: normalizeZoneId(hostedZoneId),
       ChangeBatch: { Changes: changes },
     }),
   );
@@ -385,17 +485,15 @@ export function createRoute53Provider(config?: Route53Config): RegistrarProvider
     },
 
     async getDomainInfo(domain: string): Promise<ProviderDomainInfo> {
-      const domains = await listRegisteredDomains(cfg);
-      const found = domains.find((d) => d.domain === domain);
-      if (!found) throw new Error(`Domain not found in Route 53: ${domain}`);
+      const detail = await getDomainDetail(domain, cfg);
       return {
-        domain: found.domain,
+        domain: detail.domain,
         registrar: "AWS Route 53",
-        created: "",
-        expires: found.expiry,
-        nameservers: [],
+        created: detail.created,
+        expires: detail.expiry,
+        nameservers: detail.nameservers,
         status: "active",
-        auto_renew: found.auto_renew,
+        auto_renew: detail.auto_renew,
       };
     },
 
