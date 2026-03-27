@@ -19,8 +19,11 @@ export {
   getAuthUrl,
   startCallbackServer,
   refreshAccessToken,
+  refreshTokens,
   getValidAccessToken,
 } from './utils/auth';
+
+export type { GmailClientOptions } from './api/client';
 
 // Export config utilities
 export {

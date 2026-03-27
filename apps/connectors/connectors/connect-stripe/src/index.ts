@@ -1,7 +1,7 @@
 // Stripe Connector API
 // A TypeScript wrapper for the Stripe API
 
-export { Connector } from './api';
+export { Connector, Connector as Stripe } from './api';
 export * from './types';
 
 // Re-export individual API classes for advanced usage

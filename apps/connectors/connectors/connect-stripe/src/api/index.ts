@@ -68,8 +68,15 @@ export class Connector {
   }
 
   /**
-   * Create a client from environment variables
-   * Looks for STRIPE_API_KEY and optionally STRIPE_API_SECRET
+   * Create a client from an API key directly.
+   */
+  static fromApiKey(apiKey: string, options?: Omit<ConnectorConfig, 'apiKey'>): Connector {
+    return new Connector({ apiKey, ...options });
+  }
+
+  /**
+   * Create a client from environment variables.
+   * Looks for STRIPE_API_KEY and optionally STRIPE_API_SECRET.
    */
   static fromEnv(): Connector {
     const apiKey = process.env.STRIPE_API_KEY;

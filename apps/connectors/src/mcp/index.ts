@@ -328,39 +328,90 @@ server.registerTool(
   "configure_auth",
   {
     title: "Configure Auth",
-    description: "Save an API key or token for a connector.",
+    description: "Save an API key or token for a connector. Use 'fields' to save multiple credentials at once (e.g. OAuth clientId + clientSecret).",
     inputSchema: {
       name: z.string(),
-      key: z.string().describe("The API key or token VALUE to save"),
+      key: z.string().optional().describe("The API key or token VALUE to save (for single-field auth)"),
       field: z.string().optional().describe("Config field name to save as (e.g. apiKey, clientId, clientSecret). Defaults to auto-detected field."),
+      fields: z.record(z.string()).optional().describe("Multiple credentials to save at once, e.g. { clientId: '...', clientSecret: '...' }"),
     },
   },
-  async ({ name, key, field }) => {
+  async ({ name, key, field, fields }) => {
     try {
+      if (fields && Object.keys(fields).length > 0) {
+        // Multi-field save: iterate over each key-value pair
+        for (const [f, v] of Object.entries(fields)) {
+          await saveApiKey(name, v, f);
+        }
+        // Also save single key if provided alongside fields
+        if (key) await saveApiKey(name, key, field);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: true, connector: name, fields: Object.keys(fields) }, null, 2),
+          }],
+        };
+      }
+
+      if (!key) {
+        return {
+          content: [{ type: "text", text: "Provide either 'key' or 'fields'" }],
+          isError: true,
+        };
+      }
+
       await saveApiKey(name, key, field);
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { success: true, connector: name, field: field || "apiKey" },
-              null,
-              2
-            ),
-          },
-        ],
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: true, connector: name, field: field || "apiKey" }, null, 2),
+        }],
       };
     } catch (error) {
       return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to save key for '${name}': ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
+        content: [{
+          type: "text",
+          text: `Failed to save key for '${name}': ${error instanceof Error ? error.message : String(error)}`,
+        }],
         isError: true,
       };
     }
+  }
+);
+
+// --- Tool: update_connector ---
+server.registerTool(
+  "update_connector",
+  {
+    title: "Update Connector",
+    description: "Reinstall a connector to get the latest version from the package. Preserves existing auth credentials.",
+    inputSchema: {
+      name: z.string().describe("Connector name to update (e.g. stripe, gmail)"),
+    },
+  },
+  async ({ name }) => {
+    const meta = getConnector(name);
+    if (!meta) {
+      return {
+        content: [{ type: "text", text: `Connector '${name}' not found.` }],
+        isError: true,
+      };
+    }
+
+    const result = installConnector(name, { overwrite: true });
+    if (!result.success) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ success: false, connector: name, error: result.error }, null, 2) }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({ success: true, connector: name, path: result.path, message: `Updated to latest version` }, null, 2),
+      }],
+    };
   }
 );
 
@@ -683,7 +734,7 @@ server.registerTool(
   async ({ query }) => {
     const all = [
       "search_connectors", "list_connectors", "connector_docs",
-      "install_connector", "remove_connector", "list_installed",
+      "install_connector", "remove_connector", "update_connector", "list_installed",
       "connector_info", "connector_auth_status", "configure_auth",
       "setup_connector", "list_categories", "list_connector_operations",
       "run_connector_operation", "search_tools", "describe_tools",

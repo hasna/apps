@@ -55,6 +55,46 @@ export class Gmail {
   }
 
   /**
+   * Create a Gmail client from environment variables.
+   *
+   * Supports two modes:
+   * - Full OAuth: GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET
+   *   (optionally GMAIL_ACCESS_TOKEN + GMAIL_TOKEN_EXPIRES_AT to skip initial refresh)
+   * - Static token: GMAIL_ACCESS_TOKEN only (no auto-refresh)
+   */
+  static fromEnv(): Gmail {
+    const accessToken = process.env.GMAIL_ACCESS_TOKEN;
+    const refreshToken = process.env.GMAIL_REFRESH_TOKEN;
+    const clientId = process.env.GMAIL_CLIENT_ID;
+    const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+    const expiresAt = process.env.GMAIL_TOKEN_EXPIRES_AT
+      ? parseInt(process.env.GMAIL_TOKEN_EXPIRES_AT, 10)
+      : undefined;
+
+    if (refreshToken && clientId && clientSecret) {
+      return Gmail.createWithTokens({
+        accessToken: accessToken ?? '',
+        refreshToken,
+        clientId,
+        clientSecret,
+        // Force immediate refresh if no access token was provided
+        expiresAt: accessToken ? expiresAt : 0,
+      });
+    }
+
+    if (accessToken) {
+      // Static token only — no auto-refresh
+      const client = new GmailClient({ tokenProvider: async () => accessToken });
+      return new Gmail(client);
+    }
+
+    throw new Error(
+      'Missing Gmail env vars. Provide GMAIL_ACCESS_TOKEN, ' +
+      'or GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET',
+    );
+  }
+
+  /**
    * Create a Gmail client using explicit tokens instead of file-based auth.
    * Automatically refreshes the access token when expired and notifies via onRefresh.
    *
