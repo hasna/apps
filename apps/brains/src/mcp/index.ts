@@ -19,7 +19,7 @@ import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
-import { registerCloudTools } from "@hasna/cloud";
+import { registerCloudTools, sendFeedback } from "@hasna/cloud";
 
 // --- helpers ---
 
@@ -182,11 +182,6 @@ export function createMcpServer() {
             email: {
               type: "string",
               description: "Contact email (optional)",
-            },
-            category: {
-              type: "string",
-              enum: ["bug", "feature", "general"],
-              description: "Feedback category",
             },
           },
           required: ["message"],
@@ -506,19 +501,15 @@ export function createMcpServer() {
       }
 
       case "send_feedback": {
-        const { message, email, category } = args as {
-          message: string;
-          email?: string;
-          category?: string;
-        };
+        const { message, email } = args as { message: string; email?: string };
         const rawDb = getRawDb();
-        rawDb.run(
-          "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-          message, email || null, category || "general", MCP_SERVER_INFO.version
+        const result = await sendFeedback(
+          { service: "brains", message, email, version: MCP_SERVER_INFO.version },
+          rawDb
         );
         rawDb.close();
         return {
-          content: [{ type: "text", text: "Feedback saved. Thank you!" }],
+          content: [{ type: "text", text: result.sent ? "Feedback sent. Thank you!" : "Feedback saved locally. Thank you!" }],
         };
       }
 

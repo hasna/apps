@@ -1,53 +1,16 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { SqliteAdapter } from "@hasna/cloud";
-import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
-import { dirname, join, resolve } from "path";
-import { homedir } from "os";
+import { createDatabase, migrateDotfile, SqliteAdapter, ensureFeedbackTable } from "@hasna/cloud";
+import { resolve } from "path";
 import * as schema from "./schema.js";
 
 export * from "./schema.js";
 
-function resolveDefaultDbPath(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const newDir = join(home, ".hasna", "brains");
-  const oldDir = join(home, ".brains");
-
-  // Auto-migrate: if old dir exists and new doesn't, copy files over
-  if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
-    try {
-      for (const file of readdirSync(oldDir)) {
-        const oldPath = join(oldDir, file);
-        const newPath = join(newDir, file);
-        try {
-          if (statSync(oldPath).isFile()) {
-            copyFileSync(oldPath, newPath);
-          }
-        } catch {
-          // Skip files that can't be copied
-        }
-      }
-    } catch {
-      // If we can't read old directory, continue with new
-    }
-  }
-
-  mkdirSync(newDir, { recursive: true });
-  return join(newDir, "brains.db");
-}
-
-const DEFAULT_DB_PATH = resolveDefaultDbPath();
-
-function ensureDir(filePath: string) {
-  mkdirSync(dirname(filePath), { recursive: true });
-}
-
+// Migrate ~/.brains/ → ~/.hasna/brains/ on first run
+migrateDotfile("brains");
 
 export function getDb(dbPath?: string) {
-  const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
-  ensureDir(resolvedPath);
-  const adapter = new SqliteAdapter(resolvedPath);
+  const adapter = (dbPath ? new SqliteAdapter(dbPath) : createDatabase({ service: "brains" })) as SqliteAdapter;
   const sqlite = adapter.raw;
   const db = drizzle(sqlite, { schema });
 
@@ -95,25 +58,13 @@ export function getDb(dbPath?: string) {
     `);
   }
 
-  // Ensure feedback table exists (not managed by drizzle migrations)
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS feedback (
-      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-      message TEXT NOT NULL,
-      email TEXT,
-      category TEXT DEFAULT 'general',
-      version TEXT,
-      machine_id TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
+  // Ensure feedback table exists (uses @hasna/cloud standard schema)
+  ensureFeedbackTable(adapter);
 
   return db;
 }
 
 /** Get a raw SqliteAdapter for direct SQL queries (e.g. feedback table). */
 export function getRawDb(dbPath?: string): SqliteAdapter {
-  const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
-  ensureDir(resolvedPath);
-  return new SqliteAdapter(resolvedPath);
+  return (dbPath ? new SqliteAdapter(dbPath) : createDatabase({ service: "brains" })) as SqliteAdapter;
 }
