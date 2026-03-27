@@ -775,6 +775,7 @@ import {
   registerDomain as r53RegisterDomain,
   getRegistrationStatus as r53GetRegistrationStatus,
   listRegisteredDomains as r53ListRegisteredDomains,
+  getDomainDetail as r53GetDomainDetail,
   createHostedZone as r53CreateHostedZone,
   listHostedZones as r53ListHostedZones,
   getHostedZone as r53GetHostedZone,
@@ -783,6 +784,7 @@ import {
   listRecords as r53ListRecords,
   upsertRecord as r53UpsertRecord,
   deleteRecord as r53DeleteRecord,
+  upsertRecords as r53UpsertRecords,
   createRoute53Provider,
 } from "../lib/route53.js";
 
@@ -790,15 +792,18 @@ server.registerTool(
   "r53_check_availability",
   {
     title: "Check Domain Availability (Route 53)",
-    description: "Check if a domain is available for purchase via AWS Route 53. Returns availability and pricing.",
+    description: "Check if one or more domains are available for purchase via AWS Route 53. Returns availability, registration, renewal, and transfer pricing.",
     inputSchema: {
-      domain: z.string().describe("Domain to check (e.g. example.com)"),
+      domains: z.array(z.string()).describe("One or more domains to check (e.g. [\"example.com\", \"example.io\"])"),
     },
   },
-  async ({ domain }) => {
+  async ({ domains }) => {
     try {
-      const result = await r53CheckAvailability(domain);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      const results = await Promise.allSettled(domains.map((d) => r53CheckAvailability(d)));
+      const output = results.map((r, i) =>
+        r.status === "fulfilled" ? r.value : { domain: domains[i], error: r.reason instanceof Error ? r.reason.message : String(r.reason) }
+      );
+      return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }
@@ -882,6 +887,25 @@ server.registerTool(
     try {
       const domains = await r53ListRegisteredDomains();
       return { content: [{ type: "text", text: JSON.stringify(domains, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_get_domain_detail",
+  {
+    title: "Get Domain Detail (Route 53)",
+    description: "Get full details for a Route 53 registered domain: nameservers, created/expiry dates, auto-renew, transfer lock.",
+    inputSchema: {
+      domain: z.string().describe("Domain name (e.g. example.com)"),
+    },
+  },
+  async ({ domain }) => {
+    try {
+      const detail = await r53GetDomainDetail(domain);
+      return { content: [{ type: "text", text: JSON.stringify(detail, null, 2) }] };
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }
@@ -1022,21 +1046,69 @@ server.registerTool(
   "r53_delete_record",
   {
     title: "Delete DNS Record (Route 53)",
-    description: "Delete a DNS record from a Route 53 hosted zone.",
+    description: "Delete a DNS record from a Route 53 hosted zone. Fetches the existing record set automatically to ensure an exact match (required by AWS).",
     inputSchema: {
       domain: z.string().describe("Domain name (hosted zone)"),
-      record_type: z.string().describe("Record type"),
+      record_type: z.string().describe("Record type (A, AAAA, CNAME, TXT, MX, NS)"),
       record_name: z.string().describe("Record name (FQDN)"),
-      record_value: z.string().describe("Record value"),
-      ttl: z.number().optional().describe("TTL (must match existing)"),
     },
   },
-  async ({ domain, record_type, record_name, record_value, ttl }) => {
+  async ({ domain, record_type, record_name }) => {
     try {
       const zone = await r53FindHostedZoneByDomain(domain);
       if (!zone) throw new Error(`No hosted zone found for ${domain}`);
-      await r53DeleteRecord(zone.id, { name: record_name, type: record_type, ttl: ttl ?? 300, values: [record_value] });
-      return { content: [{ type: "text", text: `Record deleted: ${record_type} ${record_name}` }] };
+      const records = await r53ListRecords(zone.id);
+      const normName = record_name.endsWith(".") ? record_name : `${record_name}.`;
+      const existing = records.find(
+        (r) => r.type === record_type.toUpperCase() && (r.name === record_name || r.name === normName),
+      );
+      if (!existing) throw new Error(`No ${record_type} record found for ${record_name}`);
+      await r53DeleteRecord(zone.id, {
+        name: existing.name,
+        type: existing.type,
+        ttl: existing.ttl,
+        values: existing.values,
+        alias_target: existing.alias_target,
+      });
+      return { content: [{ type: "text", text: `Record deleted: ${existing.type} ${existing.name}` }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "r53_upsert_records",
+  {
+    title: "Batch Upsert DNS Records (Route 53)",
+    description: "Create or update multiple DNS records in a single Route 53 API call. More efficient than calling r53_upsert_record repeatedly.",
+    inputSchema: {
+      domain: z.string().describe("Domain name (hosted zone)"),
+      records: z.array(z.object({
+        record_type: z.string().describe("Record type (A, AAAA, CNAME, TXT, MX, NS)"),
+        record_name: z.string().describe("Record name (FQDN)"),
+        record_values: z.array(z.string()).describe("Record values"),
+        ttl: z.number().optional().describe("TTL in seconds (default: 300)"),
+        alias_hosted_zone_id: z.string().optional().describe("Alias target hosted zone ID"),
+        alias_dns_name: z.string().optional().describe("Alias target DNS name"),
+      })).describe("Records to upsert"),
+    },
+  },
+  async ({ domain, records }) => {
+    try {
+      const zone = await r53FindHostedZoneByDomain(domain);
+      if (!zone) throw new Error(`No hosted zone found for ${domain}`);
+      const r53Records = records.map((r) => ({
+        name: r.record_name,
+        type: r.record_type,
+        ttl: r.ttl ?? 300,
+        values: r.record_values,
+        alias_target: r.alias_hosted_zone_id && r.alias_dns_name
+          ? { hosted_zone_id: r.alias_hosted_zone_id, dns_name: r.alias_dns_name }
+          : undefined,
+      }));
+      await r53UpsertRecords(zone.id, r53Records);
+      return { content: [{ type: "text", text: `Upserted ${records.length} record(s) in ${domain}` }] };
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }

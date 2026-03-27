@@ -65,6 +65,8 @@ export interface DomainAvailability {
   domain: string;
   available: boolean;
   price?: string;
+  renewal_price?: string;
+  transfer_price?: string;
   currency?: string;
 }
 
@@ -88,6 +90,8 @@ export interface Route53Record {
   type: string;
   ttl: number;
   values: string[];
+  /** Present when this is an alias record — values will be [] and ttl will be 0 */
+  alias_target?: Route53AliasTarget;
 }
 
 export interface Route53AliasTarget {
@@ -162,9 +166,16 @@ export async function checkAvailability(domain: string, config?: Route53Config):
     const tld = domain.split(".").slice(1).join(".");
     const prices = await domains.send(new ListPricesCommand({ Tld: tld, MaxItems: 1 }));
     const price = prices.Prices?.[0];
-    if (price?.RegistrationPrice) {
-      availability.price = price.RegistrationPrice.Price?.toString();
-      availability.currency = price.RegistrationPrice.Currency;
+    if (price) {
+      availability.currency = price.RegistrationPrice?.Currency
+        ?? price.RenewalPrice?.Currency
+        ?? price.TransferPrice?.Currency;
+      if (price.RegistrationPrice?.Price != null)
+        availability.price = price.RegistrationPrice.Price.toString();
+      if (price.RenewalPrice?.Price != null)
+        availability.renewal_price = price.RenewalPrice.Price.toString();
+      if (price.TransferPrice?.Price != null)
+        availability.transfer_price = price.TransferPrice.Price.toString();
     }
   } catch {
     // Pricing not critical
@@ -355,6 +366,18 @@ export async function findHostedZoneByDomain(domain: string, config?: Route53Con
 // ─── DNS Records ─────────────────────────────────────────────────────────────
 
 function rrsToRecord(rrs: ResourceRecordSet): Route53Record {
+  if (rrs.AliasTarget) {
+    return {
+      name: rrs.Name ?? "",
+      type: rrs.Type ?? "",
+      ttl: 0,
+      values: [],
+      alias_target: {
+        hosted_zone_id: rrs.AliasTarget.HostedZoneId ?? "",
+        dns_name: rrs.AliasTarget.DNSName ?? "",
+      },
+    };
+  }
   return {
     name: rrs.Name ?? "",
     type: rrs.Type ?? "",
@@ -506,24 +529,35 @@ export function createRoute53Provider(config?: Route53Config): RegistrarProvider
       const zone = await findHostedZoneByDomain(domain, cfg);
       if (!zone) return [];
       const records = await listRecords(zone.id, cfg);
-      return records.map((r) => ({
-        type: r.type,
-        name: r.name,
-        value: r.values.join(", "),
-        ttl: r.ttl,
-      }));
+      // Expand multi-value record sets into individual ProviderDnsRecords
+      const result: ProviderDnsRecord[] = [];
+      for (const r of records) {
+        if (r.alias_target) {
+          result.push({ type: r.type, name: r.name, value: r.alias_target.dns_name, ttl: 0 });
+        } else {
+          for (const v of r.values) {
+            result.push({ type: r.type, name: r.name, value: v, ttl: r.ttl });
+          }
+        }
+      }
+      return result;
     },
 
     async setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean> {
       const zone = await findHostedZoneByDomain(domain, cfg);
       if (!zone) throw new Error(`No hosted zone found for ${domain}`);
-      const r53Records = records.map((r) => ({
-        name: r.name,
-        type: r.type,
-        ttl: r.ttl,
-        values: [r.value],
-      }));
-      await upsertRecords(zone.id, r53Records, cfg);
+      // Group by name+type to reassemble multi-value record sets
+      const grouped = new Map<string, { name: string; type: string; ttl: number; values: string[] }>();
+      for (const r of records) {
+        const key = `${r.name}|${r.type}`;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.values.push(r.value);
+        } else {
+          grouped.set(key, { name: r.name, type: r.type, ttl: r.ttl, values: [r.value] });
+        }
+      }
+      await upsertRecords(zone.id, Array.from(grouped.values()), cfg);
       return true;
     },
 

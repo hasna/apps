@@ -1,9 +1,11 @@
 import type { Command } from "commander";
+import { readFileSync } from "node:fs";
 import {
   checkAvailability,
   registerDomain,
   getRegistrationStatus,
   listRegisteredDomains,
+  getDomainDetail,
   createHostedZone,
   listHostedZones,
   getHostedZone,
@@ -11,6 +13,7 @@ import {
   findHostedZoneByDomain,
   listRecords,
   upsertRecord,
+  upsertRecords,
   deleteRecord,
   createRoute53Provider,
 } from "../../lib/route53.js";
@@ -23,17 +26,33 @@ export function registerRoute53Commands(program: Command): void {
   // ─── Domain Availability ───────────────────────────────────────────────
 
   r53
-    .command("check <domain>")
-    .description("Check if a domain is available for purchase")
-    .action(async (domain: string) => {
+    .command("check <domains...>")
+    .description("Check if one or more domains are available for purchase")
+    .action(async (domains: string[]) => {
       try {
-        const result = await checkAvailability(domain);
-        if (result.available) {
-          const price = result.price ? ` — ${result.currency ?? "USD"} ${result.price}/yr` : "";
-          console.log(`✓ ${domain} is available${price}`);
-        } else {
-          console.log(`✗ ${domain} is not available`);
+        const results = await Promise.allSettled(domains.map((d) => checkAvailability(d)));
+        let anyError = false;
+        for (let i = 0; i < domains.length; i++) {
+          const r = results[i]!;
+          if (r.status === "rejected") {
+            const reason = (r as PromiseRejectedResult).reason;
+            console.error(`✗ ${domains[i]}: ${reason instanceof Error ? reason.message : String(reason)}`);
+            anyError = true;
+            continue;
+          }
+          const result = (r as PromiseFulfilledResult<typeof r extends PromiseFulfilledResult<infer T> ? T : never>).value as Awaited<ReturnType<typeof checkAvailability>>;
+          if (result.available) {
+            const cur = result.currency ?? "USD";
+            const reg = result.price ? `register ${cur} ${result.price}` : "";
+            const ren = result.renewal_price ? `renew ${cur} ${result.renewal_price}` : "";
+            const xfr = result.transfer_price ? `transfer ${cur} ${result.transfer_price}` : "";
+            const pricing = [reg, ren, xfr].filter(Boolean).join("  /  ");
+            console.log(`✓ ${result.domain} is available${pricing ? `  (${pricing})` : ""}`);
+          } else {
+            console.log(`✗ ${result.domain} is not available`);
+          }
         }
+        if (anyError) process.exit(1);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -127,7 +146,35 @@ export function registerRoute53Commands(program: Command): void {
         for (const d of domains) {
           const expiry = d.expiry ? ` (expires ${d.expiry.split("T")[0]})` : "";
           const renew = d.auto_renew ? " [auto-renew]" : "";
-          console.log(`  ${d.domain}${expiry}${renew}`);
+          const lock = d.transfer_lock ? " [locked]" : "";
+          console.log(`  ${d.domain}${expiry}${renew}${lock}`);
+        }
+        console.log();
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  r53
+    .command("domain-info <domain>")
+    .description("Get full details for a Route 53 registered domain")
+    .option("--json", "Output JSON")
+    .action(async (domain: string, opts: { json?: boolean }) => {
+      try {
+        const detail = await getDomainDetail(domain);
+        if (opts.json) {
+          console.log(JSON.stringify(detail, null, 2));
+          return;
+        }
+        console.log(`\nDomain: ${detail.domain}`);
+        console.log(`  Created:       ${detail.created ? detail.created.split("T")[0] : "—"}`);
+        console.log(`  Expires:       ${detail.expiry ? detail.expiry.split("T")[0] : "—"}`);
+        console.log(`  Auto-renew:    ${detail.auto_renew ? "yes" : "no"}`);
+        console.log(`  Transfer lock: ${detail.transfer_lock ? "yes" : "no"}`);
+        if (detail.nameservers.length > 0) {
+          console.log(`  Name servers:`);
+          for (const ns of detail.nameservers) console.log(`    ${ns}`);
         }
         console.log();
       } catch (e) {
@@ -188,12 +235,50 @@ export function registerRoute53Commands(program: Command): void {
     });
 
   r53
-    .command("zone-delete <zoneId>")
-    .description("Delete a hosted zone")
-    .action(async (zoneId: string) => {
+    .command("zone-info <zoneId>")
+    .description("Get details of a hosted zone including name servers")
+    .option("--json", "Output JSON")
+    .action(async (zoneId: string, opts: { json?: boolean }) => {
       try {
+        const zone = await getHostedZone(zoneId);
+        if (opts.json) {
+          console.log(JSON.stringify(zone, null, 2));
+          return;
+        }
+        console.log(`\nHosted Zone: ${zone.name}`);
+        console.log(`  ID:      ${zone.id}`);
+        console.log(`  Records: ${zone.record_count}`);
+        if (zone.comment) console.log(`  Comment: ${zone.comment}`);
+        if (zone.name_servers && zone.name_servers.length > 0) {
+          console.log(`  Name servers:`);
+          for (const ns of zone.name_servers) {
+            console.log(`    ${ns}`);
+          }
+        }
+        console.log();
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  r53
+    .command("zone-delete <zoneId>")
+    .description("Delete a hosted zone (irreversible — requires --force)")
+    .option("--force", "Confirm deletion")
+    .action(async (zoneId: string, opts: { force?: boolean }) => {
+      try {
+        const zone = await getHostedZone(zoneId);
+        if (!opts.force) {
+          console.log(`Would delete hosted zone:`);
+          console.log(`  ID:      ${zone.id}`);
+          console.log(`  Domain:  ${zone.name}`);
+          console.log(`  Records: ${zone.record_count}`);
+          console.log(`\nThis is irreversible. Re-run with --force to confirm.`);
+          process.exit(0);
+        }
         await deleteHostedZone(zoneId);
-        console.log(`✓ Hosted zone deleted: ${zoneId}`);
+        console.log(`✓ Hosted zone deleted: ${zone.name} (${zone.id})`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -224,7 +309,11 @@ export function registerRoute53Commands(program: Command): void {
         }
         console.log(`\nDNS Records for ${domain}:`);
         for (const r of records) {
-          console.log(`  ${r.type.padEnd(6)} ${r.name.padEnd(40)} TTL:${r.ttl}  ${r.values.join(", ")}`);
+          const val = r.alias_target
+            ? `ALIAS → ${r.alias_target.dns_name}`
+            : r.values.join(", ");
+          const ttl = r.alias_target ? "" : `  TTL:${r.ttl}`;
+          console.log(`  ${r.type.padEnd(6)} ${r.name.padEnd(40)}${ttl}  ${val}`);
         }
         console.log();
       } catch (e) {
@@ -266,20 +355,65 @@ export function registerRoute53Commands(program: Command): void {
 
   r53
     .command("record-rm <domain>")
-    .description("Delete a DNS record")
+    .description("Delete a DNS record (fetches existing record set to ensure exact match)")
     .requiredOption("--type <type>", "Record type")
-    .requiredOption("--name <name>", "Record name")
-    .requiredOption("--value <value>", "Record value")
-    .option("--ttl <seconds>", "TTL", "300")
-    .action(async (domain: string, opts: { type: string; name: string; value: string; ttl: string }) => {
+    .requiredOption("--name <name>", "Record name (FQDN)")
+    .action(async (domain: string, opts: { type: string; name: string }) => {
       try {
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
           console.error(`No hosted zone found for ${domain}`);
           process.exit(1);
         }
-        await deleteRecord(zone.id, { name: opts.name, type: opts.type, ttl: parseInt(opts.ttl), values: [opts.value] });
-        console.log(`✓ Record deleted: ${opts.type} ${opts.name}`);
+        // Fetch the existing record set — DELETE requires exact match of all values
+        const records = await listRecords(zone.id);
+        const normName = opts.name.endsWith(".") ? opts.name : `${opts.name}.`;
+        const existing = records.find(
+          (r) => r.type === opts.type.toUpperCase() && (r.name === opts.name || r.name === normName),
+        );
+        if (!existing) {
+          console.error(`✗ No ${opts.type} record found for ${opts.name} in zone ${domain}`);
+          process.exit(1);
+        }
+        await deleteRecord(zone.id, {
+          name: existing.name,
+          type: existing.type,
+          ttl: existing.ttl,
+          values: existing.values,
+          alias_target: existing.alias_target,
+        });
+        console.log(`✓ Record deleted: ${existing.type} ${existing.name}`);
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  r53
+    .command("records-import <domain>")
+    .description("Batch upsert DNS records from a JSON file in a single API call")
+    .requiredOption("--file <path>", "Path to JSON file — array of {type, name, values[], ttl?}")
+    .action(async (domain: string, opts: { file: string }) => {
+      try {
+        let raw: string;
+        try {
+          raw = readFileSync(opts.file, "utf-8");
+        } catch {
+          console.error(`Could not read file: ${opts.file}`);
+          process.exit(1);
+        }
+        const records = JSON.parse(raw) as Array<{ type: string; name: string; values: string[]; ttl?: number }>;
+        if (!Array.isArray(records)) {
+          console.error("JSON file must be an array of record objects");
+          process.exit(1);
+        }
+        const zone = await findHostedZoneByDomain(domain);
+        if (!zone) {
+          console.error(`No hosted zone found for ${domain}`);
+          process.exit(1);
+        }
+        await upsertRecords(zone.id, records);
+        console.log(`✓ Upserted ${records.length} record(s) in ${domain}`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -389,7 +523,11 @@ export function registerRoute53Commands(program: Command): void {
 
         // Summary
         console.log(`\n✓ Full setup complete for ${domain}`);
-        if (!opts.wait) console.log(`  Registration may take a few minutes.`);
+        if (!opts.wait) {
+          console.log(`  Registration may take a few minutes.`);
+          console.log(`  ⚠ Hosted zone created before registration confirmed.`);
+          console.log(`    If registration fails, clean up: domains r53 zone-delete ${zone.id} --force`);
+        }
         console.log(`  Check: domains r53 status ${reg.operationId}`);
         if (zone.name_servers && zone.name_servers.length > 0) {
           console.log(`\n  Name servers:`);
