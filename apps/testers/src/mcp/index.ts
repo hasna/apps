@@ -2248,7 +2248,50 @@ server.tool(
   },
 );
 
-// ─── 65. run_with_army ───────────────────────────────────────────────────────
+// ─── 65. import_personas_from_contacts ───────────────────────────────────────
+
+server.tool(
+  "import_personas_from_contacts",
+  "Import contacts tagged as test users from @hasna/contacts as personas. Skips contacts already linked to an existing persona.",
+  {
+    tags: z.array(z.string()).optional().default(["test-user", "tester", "qa"]).describe("Contact tags to filter by (default: test-user, tester, qa)"),
+    projectId: z.string().optional().describe("Project ID to assign imported personas to"),
+    dryRun: z.boolean().optional().describe("Preview what would be imported without creating personas"),
+  },
+  async ({ tags, projectId, dryRun }) => {
+    try {
+      const { importPersonasFromContacts } = await import("../lib/contacts-connector.js");
+      const result = importPersonasFromContacts({ tags: tags ?? ["test-user", "tester", "qa"], projectId, dryRun: dryRun ?? false });
+      return json({ ...result, dryRun: dryRun ?? false });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 66. sync_persona_from_contact ───────────────────────────────────────────
+
+server.tool(
+  "sync_persona_from_contact",
+  "Sync a persona's name/role/email from its linked @hasna/contacts contact record",
+  {
+    personaId: z.string().describe("Persona ID or short ID to sync"),
+  },
+  async ({ personaId }) => {
+    try {
+      const persona = getPersona(personaId);
+      if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
+      const { syncPersonaFromContact } = await import("../lib/contacts-connector.js");
+      const updated = syncPersonaFromContact(persona.id);
+      if (!updated) return json({ synced: false, message: "No linked contact found or no changes needed" });
+      return json({ synced: true, persona: updated });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 68. run_with_army ───────────────────────────────────────────────────────
 
 server.tool(
   "run_with_army",
