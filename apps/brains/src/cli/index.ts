@@ -2,15 +2,11 @@
 // brains CLI entry point
 
 import { Command } from "commander";
-import { eq, sql, desc } from "drizzle-orm";
-import { randomUUID } from "crypto";
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { eq } from "drizzle-orm";
+import { readFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
-import { getDb, getRawDb, fineTunedModels, trainingJobs, trainingDatasets } from "../db/index.js";
-import * as openaiProvider from "../lib/providers/openai.js";
-import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
-import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "./ui.js";
+import { getDb, getRawDb, fineTunedModels, trainingJobs } from "../db/index.js";
+import { printTable, printError, printSuccess, printInfo } from "./ui.js";
 import { registerModelsCommands } from "./commands/models.js";
 import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
