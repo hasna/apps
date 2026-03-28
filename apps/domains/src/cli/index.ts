@@ -13,7 +13,7 @@ const program = new Command();
 program
   .name("domains")
   .description("Domain portfolio and DNS management for AI agents")
-  .version("0.0.1");
+  .version("0.0.2");
 
 registerDomainCommands(program);
 registerDnsCommands(program);
