@@ -2934,7 +2934,6 @@ SCAN_COMMON_OPTIONS(
     .option("--endpoint <path>", "API endpoint path (default: /api/chat)", "/api/chat")
     .option("--seed <values>", "Comma-separated known PII values to watch for (e.g. 'user@example.com,555-1234')")
     .option("--input-field <path>", "JSON path to inject prompt (e.g. messages[0].content)")
-    .option("--timeout <ms>", "Request timeout in ms", "15000")
 ).action(async (url: string, opts) => {
   try {
     const { scanPiiEndpoint } = await import("../lib/scanners/pii-scanner.js");
