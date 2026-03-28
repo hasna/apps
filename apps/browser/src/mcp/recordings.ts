@@ -256,4 +256,23 @@ server.tool(
   }
 );
 
+// ── Export Recording ──────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_record_export",
+  "Export a recording as a Playwright test (.spec.ts), Puppeteer script, or JSON. Returns the generated code as text.",
+  {
+    recording_id: z.string().describe("ID of the recording to export"),
+    format: z.enum(["playwright", "puppeteer", "json"]).optional().default("playwright").describe("Export format"),
+  },
+  async ({ recording_id, format }) => {
+    try {
+      const { exportRecording } = await import("../lib/recorder.js");
+      const code = exportRecording(recording_id, format);
+      const ext = format === "json" ? ".json" : format === "playwright" ? ".spec.ts" : ".js";
+      return json({ format, filename: `recording-${recording_id}${ext}`, code });
+    } catch (e) { return err(e); }
+  }
+);
+
 } // end register

@@ -494,4 +494,58 @@ server.tool(
   }
 );
 
+// ── Performance Budget ────────────────────────────────────────────────────────
+
+server.tool(
+  "browser_performance_budget",
+  "Check page performance against a budget. Set thresholds for LCP, FCP, CLS, TTFB, DOM complete, and load event. Returns pass/fail per metric with actual values.",
+  {
+    session_id: z.string().optional(),
+    lcp_ms: z.number().optional().describe("Largest Contentful Paint budget in ms (good: <2500)"),
+    fcp_ms: z.number().optional().describe("First Contentful Paint budget in ms (good: <1800)"),
+    cls: z.number().optional().describe("Cumulative Layout Shift budget (good: <0.1)"),
+    ttfb_ms: z.number().optional().describe("Time to First Byte budget in ms (good: <800)"),
+    dom_complete_ms: z.number().optional().describe("DOM complete budget in ms"),
+    load_event_ms: z.number().optional().describe("Load event budget in ms"),
+    js_heap_mb: z.number().optional().describe("JS heap size budget in MB"),
+  },
+  async ({ session_id, lcp_ms, fcp_ms, cls, ttfb_ms, dom_complete_ms, load_event_ms, js_heap_mb }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const metrics = await getPerformanceMetrics(page);
+
+      const checks: Array<{ metric: string; budget: number; actual: number | undefined; passed: boolean }> = [];
+      let allPassed = true;
+
+      const check = (name: string, budget: number | undefined, actual: number | undefined) => {
+        if (budget === undefined) return;
+        const passed = actual !== undefined && actual <= budget;
+        if (!passed) allPassed = false;
+        checks.push({ metric: name, budget, actual, passed });
+      };
+
+      check("lcp", lcp_ms, metrics.lcp);
+      check("fcp", fcp_ms, metrics.fcp);
+      check("cls", cls, metrics.cls);
+      check("ttfb", ttfb_ms, metrics.ttfb);
+      check("dom_complete", dom_complete_ms, metrics.dom_complete);
+      check("load_event", load_event_ms, metrics.load_event);
+      if (js_heap_mb !== undefined && metrics.js_heap_size_used !== undefined) {
+        const heapMb = metrics.js_heap_size_used / (1024 * 1024);
+        const passed = heapMb <= js_heap_mb;
+        if (!passed) allPassed = false;
+        checks.push({ metric: "js_heap_mb", budget: js_heap_mb, actual: Math.round(heapMb * 100) / 100, passed });
+      }
+
+      return json({
+        passed: allPassed,
+        checks,
+        metrics,
+        url: page.url(),
+      });
+    } catch (e) { return err(e); }
+  }
+);
+
 } // end register

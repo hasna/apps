@@ -427,6 +427,7 @@ server.tool(
           { tool: "browser_pdf", description: "Generate a PDF of the page" },
           { tool: "browser_scroll_and_screenshot", description: "Scroll then screenshot in one call" },
           { tool: "browser_scroll_to_element", description: "Scroll element into view + screenshot" },
+          { tool: "browser_diff", description: "Visual diff between two URLs — highlights changes in red" },
         ],
         Storage: [
           { tool: "browser_cookies_get", description: "Get cookies" },
@@ -452,6 +453,7 @@ server.tool(
         ],
         Performance: [
           { tool: "browser_performance", description: "Get performance metrics" },
+          { tool: "browser_performance_budget", description: "Check perf against budget thresholds (LCP, FCP, CLS, TTFB)" },
         ],
         Console: [
           { tool: "browser_console_log", description: "Get console messages" },
@@ -464,6 +466,7 @@ server.tool(
           { tool: "browser_record_step", description: "Add a step to recording" },
           { tool: "browser_record_stop", description: "Stop and save recording" },
           { tool: "browser_record_replay", description: "Replay a recorded sequence" },
+          { tool: "browser_record_export", description: "Export recording as Playwright test, Puppeteer script, or JSON" },
           { tool: "browser_recordings_list", description: "List all recordings" },
         ],
         Auth: [

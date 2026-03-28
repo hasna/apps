@@ -497,4 +497,52 @@ server.tool(
   }
 );
 
+// ── Visual diff between two URLs ─────────────────────────────────────────────
+
+server.tool(
+  "browser_diff",
+  "Visual diff between two URLs or a URL and a gallery entry. Screenshots both, returns a pixel diff image highlighting changes in red.",
+  {
+    session_id: z.string().optional(),
+    url1: z.string().describe("First URL to screenshot"),
+    url2: z.string().describe("Second URL to screenshot"),
+    threshold: z.number().optional().default(10).describe("Pixel difference threshold (0-255, default 10)"),
+    wait_ms: z.number().optional().default(1000).describe("Wait time after navigation before screenshot (ms)"),
+  },
+  async ({ session_id, url1, url2, threshold, wait_ms }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+
+      // Screenshot URL 1
+      await page.goto(url1, { waitUntil: "domcontentloaded" });
+      await new Promise((r) => setTimeout(r, wait_ms));
+      const ss1 = await takeScreenshot(page, { maxWidth: 1280, compress: true, track: false });
+
+      // Screenshot URL 2
+      await page.goto(url2, { waitUntil: "domcontentloaded" });
+      await new Promise((r) => setTimeout(r, wait_ms));
+      const ss2 = await takeScreenshot(page, { maxWidth: 1280, compress: true, track: false });
+
+      // Diff the two screenshots
+      const { diffImages } = await import("../lib/gallery-diff.js");
+      const diff = await diffImages(ss1.path, ss2.path);
+
+      logEvent(sid, "diff", { url1, url2, changed_percent: diff.changed_percent });
+
+      return json({
+        url1,
+        url2,
+        changed_pixels: diff.changed_pixels,
+        total_pixels: diff.total_pixels,
+        changed_percent: Math.round(diff.changed_percent * 100) / 100,
+        diff_path: diff.diff_path,
+        diff_base64: diff.diff_base64.length > 50000 ? undefined : diff.diff_base64,
+        screenshot1_path: ss1.path,
+        screenshot2_path: ss2.path,
+      });
+    } catch (e) { return err(e); }
+  }
+);
+
 } // end register
