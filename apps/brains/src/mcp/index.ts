@@ -555,7 +555,13 @@ export function createMcpServer() {
 
 export async function startMcpServer(transport = new StdioServerTransport()) {
   const server = createMcpServer();
-  registerCloudTools(server, "brains");
+  // registerCloudTools expects FastMCP's server.tool() API, but we use the low-level Server class.
+  // Skip cloud tools registration until @hasna/cloud supports the low-level Server API.
+  try {
+    registerCloudTools(server as any, "brains");
+  } catch {
+    // Cloud tools not compatible with low-level Server — silently skip
+  }
   await server.connect(transport);
   return server;
 }
