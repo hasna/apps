@@ -1,8 +1,13 @@
 /**
- * Brandsight API integration for brand monitoring and threat detection
+ * Brandsight — GoDaddy's enterprise brand protection and domain registrar platform
  *
- * Requires environment variable:
+ * Two distinct capabilities:
+ *   1. Domain registrar (GoDaddy Corporate Domains via Brandsight)
+ *   2. Brand monitoring / threat detection
+ *
+ * Env vars:
  *   BRANDSIGHT_API_KEY — API key for Brandsight
+ *   BRANDSIGHT_ACCOUNT_ID — Account ID for corporate domain operations (optional)
  */
 
 // ============================================================
@@ -11,7 +16,24 @@
 
 export interface BrandsightConfig {
   apiKey: string;
+  accountId?: string;
   baseUrl?: string;
+}
+
+export interface BrandsightDomain {
+  domain: string;
+  status: string;
+  expires: string;
+  auto_renew: boolean;
+  locked: boolean;
+  nameservers: string[];
+}
+
+export interface BrandsightAvailability {
+  domain: string;
+  available: boolean;
+  price?: number;
+  currency?: string;
 }
 
 export interface BrandsightAlert {
@@ -79,10 +101,21 @@ export function getApiKey(): string {
   return key;
 }
 
-async function apiGet<T>(
+export function getConfig(): BrandsightConfig {
+  return {
+    apiKey: process.env["BRANDSIGHT_API_KEY"] ?? "",
+    accountId: process.env["BRANDSIGHT_ACCOUNT_ID"],
+  };
+}
+
+const BRANDSIGHT_BASE = "https://api.brandsight.com/v1";
+
+async function apiRequest<T>(
+  method: string,
   path: string,
   apiKey: string,
-  baseUrl: string = "https://api.brandsight.com/v1"
+  body?: unknown,
+  baseUrl: string = BRANDSIGHT_BASE
 ): Promise<{ data: T; stub: false } | { data: null; stub: true }> {
   const fetchFn = _fetchFn || globalThis.fetch;
   const url = `${baseUrl}${path}`;
@@ -90,7 +123,42 @@ async function apiGet<T>(
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
     Accept: "application/json",
-    "User-Agent": "open-domains/0.0.1",
+    "User-Agent": "open-domains/0.0.3",
+  };
+  try {
+    const response = await fetchFn(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      throw new BrandsightApiError(
+        `Brandsight API ${method} ${path} failed with status ${response.status}`,
+        response.status,
+        await response.text()
+      );
+    }
+    const data = (await response.json()) as T;
+    return { data, stub: false };
+  } catch (error) {
+    if (error instanceof BrandsightApiError) throw error;
+    return { data: null, stub: true };
+  }
+}
+
+async function apiGet<T>(
+  path: string,
+  apiKey: string,
+  baseUrl: string = BRANDSIGHT_BASE
+): Promise<{ data: T; stub: false } | { data: null; stub: true }> {
+  const fetchFn = _fetchFn || globalThis.fetch;
+  const url = `${baseUrl}${path}`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent": "open-domains/0.0.3",
   };
 
   try {
@@ -224,4 +292,133 @@ export async function getThreatAssessment(domain: string): Promise<ThreatAssessm
   }
 
   return { ...result.data!, stub: false };
+}
+
+// ============================================================
+// Registrar Functions (Brandsight Corporate Domains / GoDaddy)
+// ============================================================
+
+export async function listDomains(config?: BrandsightConfig): Promise<BrandsightDomain[]> {
+  const cfg = config ?? getConfig();
+  const result = await apiGet<{ domains: BrandsightDomain[] }>("/portfolio/domains", cfg.apiKey);
+  if (result.stub) return [];
+  return result.data!.domains ?? [];
+}
+
+export async function getDomainInfo(domain: string, config?: BrandsightConfig): Promise<BrandsightDomain | null> {
+  const cfg = config ?? getConfig();
+  const result = await apiGet<BrandsightDomain>(`/portfolio/domains/${encodeURIComponent(domain)}`, cfg.apiKey);
+  if (result.stub) return null;
+  return result.data;
+}
+
+export async function checkAvailability(domain: string, config?: BrandsightConfig): Promise<BrandsightAvailability> {
+  const cfg = config ?? getConfig();
+  const result = await apiGet<BrandsightAvailability>(`/domains/check?domain=${encodeURIComponent(domain)}`, cfg.apiKey);
+  if (result.stub) return { domain, available: false };
+  return result.data!;
+}
+
+export async function renewDomain(domain: string, years = 1, config?: BrandsightConfig): Promise<{ success: boolean; orderId?: string }> {
+  const cfg = config ?? getConfig();
+  const result = await apiRequest<{ orderId: string }>(
+    "POST", `/portfolio/domains/${encodeURIComponent(domain)}/renew`, cfg.apiKey, { years }
+  );
+  if (result.stub) return { success: false };
+  return { success: true, orderId: result.data!.orderId };
+}
+
+export async function syncToLocalDb(
+  dbFns: { getDomainByName: (name: string) => import("../db/domains.js").Domain | null; createDomain: (input: import("../db/domains.js").CreateDomainInput) => import("../db/domains.js").Domain; updateDomain: (id: string, input: import("../db/domains.js").UpdateDomainInput) => import("../db/domains.js").Domain | null; },
+  config?: BrandsightConfig
+): Promise<{ synced: number; created: number; updated: number; errors: string[] }> {
+  const domains = await listDomains(config);
+  let synced = 0, created = 0, updated = 0;
+  const errors: string[] = [];
+
+  for (const d of domains) {
+    try {
+      const existing = dbFns.getDomainByName(d.domain);
+      if (existing) {
+        dbFns.updateDomain(existing.id, {
+          registrar: "Brandsight",
+          expires_at: d.expires || undefined,
+          auto_renew: d.auto_renew,
+          status: "active",
+          nameservers: d.nameservers,
+        });
+        updated++;
+      } else {
+        dbFns.createDomain({
+          name: d.domain,
+          registrar: "Brandsight",
+          expires_at: d.expires || undefined,
+          auto_renew: d.auto_renew,
+          status: "active",
+          nameservers: d.nameservers,
+        });
+        created++;
+      }
+      synced++;
+    } catch (err) {
+      errors.push(`${d.domain}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return { synced, created, updated, errors };
+}
+
+// ============================================================
+// RegistrarProvider Adapter
+// ============================================================
+
+import type { RegistrarProvider, ProviderDomainInfo, ProviderRenewResult, ProviderAvailability, ProviderSyncResult, DbFunctions } from "./registrar.js";
+
+export function createBrandsightProvider(config?: BrandsightConfig): RegistrarProvider {
+  const cfg = config ?? getConfig();
+
+  return {
+    name: "brandsight",
+
+    async listDomains(): Promise<ProviderDomainInfo[]> {
+      const domains = await listDomains(cfg);
+      return domains.map((d) => ({
+        domain: d.domain,
+        registrar: "Brandsight",
+        created: "",
+        expires: d.expires,
+        nameservers: d.nameservers,
+        status: d.status === "ACTIVE" ? "active" : d.status.toLowerCase(),
+        auto_renew: d.auto_renew,
+      }));
+    },
+
+    async getDomainInfo(domain: string): Promise<ProviderDomainInfo> {
+      const d = await getDomainInfo(domain, cfg);
+      if (!d) throw new Error(`Domain not found in Brandsight: ${domain}`);
+      return {
+        domain: d.domain,
+        registrar: "Brandsight",
+        created: "",
+        expires: d.expires,
+        nameservers: d.nameservers,
+        status: d.status === "ACTIVE" ? "active" : d.status.toLowerCase(),
+        auto_renew: d.auto_renew,
+      };
+    },
+
+    async renewDomain(domain: string): Promise<ProviderRenewResult> {
+      const result = await renewDomain(domain, 1, cfg);
+      return { domain, success: result.success, orderId: result.orderId };
+    },
+
+    async checkAvailability(domain: string): Promise<ProviderAvailability> {
+      const result = await checkAvailability(domain, cfg);
+      return { domain: result.domain, available: result.available };
+    },
+
+    async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {
+      return syncToLocalDb(dbFns, cfg);
+    },
+  };
 }

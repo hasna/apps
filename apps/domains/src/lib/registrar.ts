@@ -9,6 +9,7 @@ import * as namecheap from "./namecheap.js";
 import * as godaddy from "./godaddy.js";
 import { createRoute53Provider } from "./route53.js";
 import { createCloudflareProvider } from "./cloudflare.js";
+import { createBrandsightProvider } from "./brandsight.js";
 
 // ============================================================
 // Types
@@ -315,8 +316,9 @@ const providerRegistry = new Map<string, RegistryEntry>([
     info: {
       name: "brandsight", type: "registrar" as const,
       configured: false,
-      envVars: ["BRANDSIGHT_API_KEY"],
+      envVars: ["BRANDSIGHT_API_KEY", "BRANDSIGHT_ACCOUNT_ID"],
     },
+    createRegistrar: createBrandsightProvider,
   }],
 ]);
 
@@ -389,5 +391,6 @@ export function autoDetectRegistrar(
   if (r.includes("godaddy")) return "godaddy";
   if (r.includes("route 53") || r.includes("route53") || r.includes("aws")) return "route53";
   if (r.includes("cloudflare")) return "cloudflare";
+  if (r.includes("brandsight")) return "brandsight";
   return null;
 }
