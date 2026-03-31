@@ -19,6 +19,7 @@ import {
 } from "../../lib/route53.js";
 import type { DomainContactInfo } from "../../lib/route53.js";
 import { createDomain, getDomainByName, updateDomain } from "../../db/domains.js";
+import { resolveContact } from "../../lib/config.js";
 
 export function registerRoute53Commands(program: Command): void {
   const r53 = program.command("r53").description("AWS Route 53 — domain purchase, hosted zones & DNS");
@@ -63,23 +64,23 @@ export function registerRoute53Commands(program: Command): void {
 
   r53
     .command("buy <domain>")
-    .description("Register (purchase) a domain via Route 53")
-    .requiredOption("--email <email>", "Registrant email")
-    .requiredOption("--first-name <name>", "First name")
-    .requiredOption("--last-name <name>", "Last name")
-    .requiredOption("--phone <phone>", "Phone (e.g. +1.5551234567)")
-    .requiredOption("--address <addr>", "Street address")
-    .requiredOption("--city <city>", "City")
-    .requiredOption("--state <state>", "State/province")
-    .requiredOption("--country <code>", "Country code (e.g. US, RO)")
-    .requiredOption("--zip <zip>", "ZIP/postal code")
+    .description("Register (purchase) a domain via Route 53 (contact defaults from: domains config set contact.*)")
+    .option("--email <email>", "Registrant email")
+    .option("--first-name <name>", "First name")
+    .option("--last-name <name>", "Last name")
+    .option("--phone <phone>", "Phone (e.g. +40.754013776)")
+    .option("--address <addr>", "Street address")
+    .option("--city <city>", "City")
+    .option("--state <state>", "State/province")
+    .option("--country <code>", "Country code (e.g. US, RO)")
+    .option("--zip <zip>", "ZIP/postal code")
     .option("--org <name>", "Organization name")
     .option("--years <n>", "Registration years", "1")
     .option("--no-auto-renew", "Disable auto-renewal")
     .action(async (domain: string, opts: {
-      email: string; firstName: string; lastName: string;
-      phone: string; address: string; city: string; state: string;
-      country: string; zip: string; org?: string; years: string; autoRenew: boolean;
+      email?: string; firstName?: string; lastName?: string;
+      phone?: string; address?: string; city?: string; state?: string;
+      country?: string; zip?: string; org?: string; years: string; autoRenew: boolean;
     }) => {
       try {
         const avail = await checkAvailability(domain);
@@ -88,18 +89,13 @@ export function registerRoute53Commands(program: Command): void {
           process.exit(1);
         }
 
-        const contact: DomainContactInfo = {
-          first_name: opts.firstName,
-          last_name: opts.lastName,
-          email: opts.email,
-          phone: opts.phone,
-          address_line_1: opts.address,
-          city: opts.city,
-          state: opts.state,
-          country_code: opts.country,
-          zip_code: opts.zip,
-          organization_name: opts.org,
-        };
+        let contact: DomainContactInfo;
+        try {
+          contact = resolveContact(opts);
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          process.exit(1);
+        }
 
         console.log(`Registering ${domain}...`);
         const result = await registerDomain(domain, contact, parseInt(opts.years), opts.autoRenew);
@@ -447,23 +443,23 @@ export function registerRoute53Commands(program: Command): void {
 
   r53
     .command("full-setup <domain>")
-    .description("Buy domain + create zone + sync to DB — all in one")
-    .requiredOption("--email <email>", "Registrant email")
-    .requiredOption("--first-name <name>", "First name")
-    .requiredOption("--last-name <name>", "Last name")
-    .requiredOption("--phone <phone>", "Phone")
-    .requiredOption("--address <addr>", "Street address")
-    .requiredOption("--city <city>", "City")
-    .requiredOption("--state <state>", "State/province")
-    .requiredOption("--country <code>", "Country code")
-    .requiredOption("--zip <zip>", "ZIP code")
+    .description("Buy domain + create zone + sync to DB — all in one (contact defaults from: domains config set contact.*)")
+    .option("--email <email>", "Registrant email")
+    .option("--first-name <name>", "First name")
+    .option("--last-name <name>", "Last name")
+    .option("--phone <phone>", "Phone")
+    .option("--address <addr>", "Street address")
+    .option("--city <city>", "City")
+    .option("--state <state>", "State/province")
+    .option("--country <code>", "Country code")
+    .option("--zip <zip>", "ZIP code")
     .option("--org <name>", "Organization name")
     .option("--years <n>", "Registration years", "1")
     .option("--wait", "Poll until registration completes (or fails)")
     .action(async (domain: string, opts: {
-      email: string; firstName: string; lastName: string;
-      phone: string; address: string; city: string; state: string;
-      country: string; zip: string; org?: string; years: string; wait?: boolean;
+      email?: string; firstName?: string; lastName?: string;
+      phone?: string; address?: string; city?: string; state?: string;
+      country?: string; zip?: string; org?: string; years: string; wait?: boolean;
     }) => {
       try {
         // 1. Check
@@ -478,13 +474,13 @@ export function registerRoute53Commands(program: Command): void {
 
         // 2. Register
         console.log(`[2/4] Registering domain...`);
-        const contact: DomainContactInfo = {
-          first_name: opts.firstName, last_name: opts.lastName,
-          email: opts.email, phone: opts.phone,
-          address_line_1: opts.address, city: opts.city,
-          state: opts.state, country_code: opts.country,
-          zip_code: opts.zip, organization_name: opts.org,
-        };
+        let contact: DomainContactInfo;
+        try {
+          contact = resolveContact(opts);
+        } catch (e) {
+          console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          process.exit(1);
+        }
         const reg = await registerDomain(domain, contact, parseInt(opts.years));
         console.log(`  ✓ Submitted (operation: ${reg.operationId})`);
 

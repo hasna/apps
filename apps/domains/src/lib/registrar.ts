@@ -8,6 +8,7 @@ import type { Domain, CreateDomainInput, UpdateDomainInput } from "../db/domains
 import * as namecheap from "./namecheap.js";
 import * as godaddy from "./godaddy.js";
 import { createRoute53Provider } from "./route53.js";
+import { createCloudflareProvider } from "./cloudflare.js";
 
 // ============================================================
 // Types
@@ -56,19 +57,29 @@ export type DbFunctions = {
   updateDomain: (id: string, input: UpdateDomainInput) => Domain | null;
 };
 
+/** Handles domain registration, renewal, and availability checks */
 export interface RegistrarProvider {
   name: string;
   listDomains(): Promise<ProviderDomainInfo[]>;
   getDomainInfo(domain: string): Promise<ProviderDomainInfo>;
   renewDomain(domain: string): Promise<ProviderRenewResult>;
-  getDnsRecords(domain: string): Promise<ProviderDnsRecord[]>;
-  setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean>;
   checkAvailability(domain: string): Promise<ProviderAvailability>;
   syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult>;
 }
 
+/** Handles DNS zone and record management */
+export interface DnsProvider {
+  name: string;
+  getDnsRecords(domain: string): Promise<ProviderDnsRecord[]>;
+  setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean>;
+}
+
+/** A provider that does both — e.g. Route 53 */
+export type FullProvider = RegistrarProvider & DnsProvider;
+
 export interface ProviderInfo {
   name: string;
+  type: "registrar" | "dns" | "full";
   configured: boolean;
   envVars: string[];
 }
@@ -83,7 +94,7 @@ export interface SyncAllResult {
 // Namecheap Provider Adapter
 // ============================================================
 
-function createNamecheapProvider(): RegistrarProvider {
+function createNamecheapProvider(): FullProvider {
   return {
     name: "namecheap",
 
@@ -174,7 +185,7 @@ function createNamecheapProvider(): RegistrarProvider {
 // GoDaddy Provider Adapter
 // ============================================================
 
-function createGoDaddyProvider(): RegistrarProvider {
+function createGoDaddyProvider(): FullProvider {
   return {
     name: "godaddy",
 
@@ -255,65 +266,103 @@ function createGoDaddyProvider(): RegistrarProvider {
 }
 
 // ============================================================
-// Provider Factory
+// Provider Registry (data-driven — add new providers here only)
 // ============================================================
 
-export function getProvider(name: "namecheap" | "godaddy" | "route53"): RegistrarProvider {
-  switch (name) {
-    case "namecheap":
-      return createNamecheapProvider();
-    case "godaddy":
-      return createGoDaddyProvider();
-    case "route53":
-      return createRoute53Provider();
-    default:
-      throw new Error(`Unknown registrar provider: ${name}`);
-  }
+interface RegistryEntry {
+  info: ProviderInfo;
+  createRegistrar?: () => RegistrarProvider;
+  createDns?: () => DnsProvider;
+}
+
+const providerRegistry = new Map<string, RegistryEntry>([
+  ["namecheap", {
+    info: {
+      name: "namecheap", type: "full" as const,
+      configured: false,
+      envVars: ["NAMECHEAP_API_KEY", "NAMECHEAP_USERNAME", "NAMECHEAP_CLIENT_IP"],
+    },
+    createRegistrar: createNamecheapProvider,
+    createDns: createNamecheapProvider,
+  }],
+  ["godaddy", {
+    info: {
+      name: "godaddy", type: "full" as const,
+      configured: false,
+      envVars: ["GODADDY_API_KEY", "GODADDY_API_SECRET"],
+    },
+    createRegistrar: createGoDaddyProvider,
+    createDns: createGoDaddyProvider,
+  }],
+  ["route53", {
+    info: {
+      name: "route53", type: "full",
+      configured: false,
+      envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
+    },
+    createRegistrar: () => createRoute53Provider() as unknown as RegistrarProvider,
+    createDns: () => createRoute53Provider() as unknown as DnsProvider,
+  }],
+  ["cloudflare", {
+    info: {
+      name: "cloudflare", type: "dns" as const,
+      configured: false,
+      envVars: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"],
+    },
+    createDns: createCloudflareProvider,
+  }],
+  ["brandsight", {
+    info: {
+      name: "brandsight", type: "registrar" as const,
+      configured: false,
+      envVars: ["BRANDSIGHT_API_KEY"],
+    },
+  }],
+]);
+
+function isConfigured(envVars: string[]): boolean {
+  // At least the first two env vars must be set (key + secret pattern)
+  return envVars.slice(0, 2).every((v) => !!process.env[v]);
+}
+
+export function registerProvider(entry: RegistryEntry): void {
+  providerRegistry.set(entry.info.name, entry);
 }
 
 export function getAvailableProviders(): ProviderInfo[] {
-  return [
-    {
-      name: "namecheap",
-      configured: !!(
-        process.env["NAMECHEAP_API_KEY"] &&
-        process.env["NAMECHEAP_USERNAME"] &&
-        process.env["NAMECHEAP_CLIENT_IP"]
-      ),
-      envVars: ["NAMECHEAP_API_KEY", "NAMECHEAP_USERNAME", "NAMECHEAP_CLIENT_IP"],
-    },
-    {
-      name: "godaddy",
-      configured: !!(process.env["GODADDY_API_KEY"] && process.env["GODADDY_API_SECRET"]),
-      envVars: ["GODADDY_API_KEY", "GODADDY_API_SECRET"],
-    },
-    {
-      name: "route53",
-      configured: !!(process.env["AWS_ACCESS_KEY_ID"] && process.env["AWS_SECRET_ACCESS_KEY"]),
-      envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
-    },
-    {
-      name: "brandsight",
-      configured: !!process.env["BRANDSIGHT_API_KEY"],
-      envVars: ["BRANDSIGHT_API_KEY"],
-    },
-  ];
+  return Array.from(providerRegistry.values()).map((e) => ({
+    ...e.info,
+    configured: isConfigured(e.info.envVars),
+  }));
+}
+
+export function getRegistrarProvider(name: string): RegistrarProvider {
+  const entry = providerRegistry.get(name);
+  if (!entry?.createRegistrar) throw new Error(`No registrar provider: ${name}`);
+  return entry.createRegistrar();
+}
+
+export function getDnsProvider(name: string): DnsProvider {
+  const entry = providerRegistry.get(name);
+  if (!entry?.createDns) throw new Error(`No DNS provider: ${name}`);
+  return entry.createDns();
+}
+
+/** @deprecated Use getRegistrarProvider() */
+export function getProvider(name: string): RegistrarProvider {
+  return getRegistrarProvider(name);
 }
 
 export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
   const available = getAvailableProviders().filter(
-    (p) => p.configured && (p.name === "namecheap" || p.name === "godaddy" || p.name === "route53")
+    (p) => p.configured && (p.type === "registrar" || p.type === "full") && p.name !== "brandsight"
   );
 
-  const result: SyncAllResult = {
-    providers: [],
-    totalSynced: 0,
-    totalErrors: [],
-  };
+  const result: SyncAllResult = { providers: [], totalSynced: 0, totalErrors: [] };
 
   for (const info of available) {
     try {
-      const provider = getProvider(info.name as "namecheap" | "godaddy" | "route53");
+      const provider = getRegistrarProvider(info.name);
       const syncResult = await provider.syncToLocalDb(dbFns);
       result.providers.push({ name: info.name, result: syncResult });
       result.totalSynced += syncResult.synced;
@@ -321,10 +370,7 @@ export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
     } catch (error) {
       const msg = `[${info.name}] Sync failed: ${error instanceof Error ? error.message : String(error)}`;
       result.totalErrors.push(msg);
-      result.providers.push({
-        name: info.name,
-        result: { synced: 0, created: 0, updated: 0, errors: [msg] },
-      });
+      result.providers.push({ name: info.name, result: { synced: 0, created: 0, updated: 0, errors: [msg] } });
     }
   }
 
@@ -334,13 +380,14 @@ export async function syncAll(dbFns: DbFunctions): Promise<SyncAllResult> {
 export function autoDetectRegistrar(
   domain: string,
   getDomainByName: (name: string) => Domain | null
-): "namecheap" | "godaddy" | "route53" | null {
+): string | null {
   const dbDomain = getDomainByName(domain);
-  if (!dbDomain || !dbDomain.registrar) return null;
+  if (!dbDomain?.registrar) return null;
 
-  const registrar = dbDomain.registrar.toLowerCase();
-  if (registrar.includes("namecheap")) return "namecheap";
-  if (registrar.includes("godaddy")) return "godaddy";
-  if (registrar.includes("route 53") || registrar.includes("route53") || registrar.includes("aws")) return "route53";
+  const r = dbDomain.registrar.toLowerCase();
+  if (r.includes("namecheap")) return "namecheap";
+  if (r.includes("godaddy")) return "godaddy";
+  if (r.includes("route 53") || r.includes("route53") || r.includes("aws")) return "route53";
+  if (r.includes("cloudflare")) return "cloudflare";
   return null;
 }

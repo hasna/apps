@@ -44,8 +44,12 @@ import {
 } from "../lib/godaddy.js";
 import {
   getAvailableProviders,
+  getRegistrarProvider,
+  getDnsProvider,
   syncAll,
 } from "../lib/registrar.js";
+import { loadConfig, resolveContact } from "../lib/config.js";
+import { createZone as cfCreateZone } from "../lib/cloudflare.js";
 import {
   monitorBrand,
   getSimilarDomains,
@@ -1109,6 +1113,136 @@ server.registerTool(
       }));
       await r53UpsertRecords(zone.id, r53Records);
       return { content: [{ type: "text", text: `Upserted ${records.length} record(s) in ${domain}` }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+// --- Unified Provider-Agnostic Tools ---
+
+server.registerTool(
+  "domain_check",
+  {
+    title: "Check Domain Availability",
+    description: "Check if one or more domains are available via the configured registrar provider.",
+    inputSchema: {
+      domains: z.array(z.string()).describe("Domain names to check"),
+      provider: z.string().optional().describe("Registrar provider name (default: config default-registrar or route53)"),
+    },
+  },
+  async ({ domains, provider }) => {
+    try {
+      const providerName = provider ?? loadConfig().default_registrar ?? "route53";
+      const reg = getRegistrarProvider(providerName);
+      const results = await Promise.allSettled(domains.map((d) => reg.checkAvailability(d)));
+      const output = results.map((r, i) =>
+        r.status === "fulfilled" ? r.value : { domain: domains[i], error: r.reason instanceof Error ? r.reason.message : String(r.reason) }
+      );
+      return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "domain_setup",
+  {
+    title: "Buy + Setup Domain",
+    description: "Full setup: buy domain via registrar, create DNS zone, return nameservers. Uses contact info from config.",
+    inputSchema: {
+      domain: z.string().describe("Domain to purchase and set up"),
+      registrar: z.string().optional().describe("Registrar provider (default: config default-registrar or route53)"),
+      dns: z.string().optional().describe("DNS provider for zone creation (default: config default-dns or route53)"),
+      years: z.number().optional().describe("Registration years (default: 1)"),
+      wait: z.boolean().optional().describe("Poll until registration completes before creating zone"),
+    },
+  },
+  async ({ domain, registrar, dns, years, wait }) => {
+    try {
+      const cfg = loadConfig();
+      const registrarName = registrar ?? cfg.default_registrar ?? "route53";
+      const dnsName = dns ?? cfg.default_dns ?? registrarName;
+
+      if (registrarName !== "route53") throw new Error("Direct purchase currently only supported via route53");
+
+      const contact = resolveContact({});
+      const { registerDomain: r53Register, checkAvailability: r53Check, getRegistrationStatus: r53Status, createHostedZone } = await import("../lib/route53.js");
+
+      const avail = await r53Check(domain);
+      if (!avail.available) throw new Error(`${domain} is not available`);
+
+      const reg = await r53Register(domain, contact, years ?? 1);
+
+      if (wait) {
+        let status = "IN_PROGRESS";
+        while (status === "IN_PROGRESS" || status === "SUBMITTED") {
+          await new Promise((r) => setTimeout(r, 10_000));
+          status = (await r53Status(reg.operationId)).status;
+        }
+        if (status !== "SUCCESSFUL") throw new Error(`Registration ${status}`);
+      }
+
+      let nameservers: string[] = [];
+      if (dnsName === "cloudflare") {
+        const zone = await cfCreateZone(domain);
+        nameservers = zone.nameservers ?? [];
+      } else {
+        const zone = await createHostedZone(domain, "Managed by @hasna/domains");
+        nameservers = zone.name_servers ?? [];
+      }
+
+      createDomain({ name: domain, registrar: "AWS Route 53", status: "active", auto_renew: true, nameservers });
+
+      return { content: [{ type: "text", text: JSON.stringify({ domain, operationId: reg.operationId, nameservers, dns_provider: dnsName }, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "dns_list",
+  {
+    title: "List DNS Records",
+    description: "List live DNS records for a domain from a DNS provider.",
+    inputSchema: {
+      domain: z.string().describe("Domain name"),
+      provider: z.string().optional().describe("DNS provider (route53, cloudflare — default: config default-dns)"),
+    },
+  },
+  async ({ domain, provider }) => {
+    try {
+      const providerName = provider ?? loadConfig().default_dns ?? "route53";
+      const dns = getDnsProvider(providerName);
+      const records = await dns.getDnsRecords(domain);
+      return { content: [{ type: "text", text: JSON.stringify(records, null, 2) }] };
+    } catch (error: unknown) {
+      return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  "dns_set",
+  {
+    title: "Set DNS Records",
+    description: "Create or update DNS records via a DNS provider.",
+    inputSchema: {
+      domain: z.string().describe("Domain name"),
+      records: z.array(z.object({
+        type: z.string(), name: z.string(), value: z.string(), ttl: z.number().optional(), priority: z.number().optional(),
+      })),
+      provider: z.string().optional().describe("DNS provider (default: config default-dns)"),
+    },
+  },
+  async ({ domain, records, provider }) => {
+    try {
+      const providerName = provider ?? loadConfig().default_dns ?? "route53";
+      const dns = getDnsProvider(providerName);
+      await dns.setDnsRecords(domain, records.map((r) => ({ ...r, ttl: r.ttl ?? 300 })));
+      return { content: [{ type: "text", text: `Set ${records.length} record(s) on ${domain} via ${providerName}` }] };
     } catch (error: unknown) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }

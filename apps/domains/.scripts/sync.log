@@ -1,1 +1,8 @@
 === 2026-03-31 00:04:01 ===
+[master 2b73c14] chore: auto-commit uncommitted changes before sync
+ 2 files changed, 2 insertions(+)
+ create mode 100644 .claude/scheduled_tasks.lock
+ create mode 100644 .scripts/sync.log
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.

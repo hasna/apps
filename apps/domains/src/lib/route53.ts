@@ -31,7 +31,7 @@ import {
   type CountryCode,
 } from "@aws-sdk/client-route-53-domains";
 import type {
-  RegistrarProvider,
+  FullProvider,
   ProviderDomainInfo,
   ProviderDnsRecord,
   ProviderRenewResult,
@@ -488,7 +488,7 @@ export async function upsertRecords(
 
 // ─── RegistrarProvider Adapter ───────────────────────────────────────────────
 
-export function createRoute53Provider(config?: Route53Config): RegistrarProvider {
+export function createRoute53Provider(config?: Route53Config): FullProvider {
   const cfg = config ?? getConfig();
 
   return {

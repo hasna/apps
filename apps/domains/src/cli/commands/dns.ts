@@ -9,8 +9,13 @@ import {
   importZoneFile,
   discoverSubdomains,
   validateDns,
+  getDomainByName,
+  createDomain,
+  updateDomain,
 } from "../../db/domains.js";
 import { readFileSync, writeFileSync } from "node:fs";
+import { getDnsProvider } from "../../lib/registrar.js";
+import { loadConfig } from "../../lib/config.js";
 
 export function registerDnsCommands(program: Command): void {
   const dnsCmd = program
@@ -237,6 +242,57 @@ export function registerDnsCommands(program: Command): void {
             console.log(`  [${prefix}] ${issue.message}`);
           }
         }
+      }
+    });
+
+  // ── pull: live provider → local DB ────────────────────────────────────
+
+  dnsCmd
+    .command("pull <domain>")
+    .description("Pull live DNS records from provider into local DB")
+    .option("--provider <name>", "DNS provider (route53, cloudflare) — defaults to config default-dns")
+    .action(async (domain: string, opts: { provider?: string }) => {
+      const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
+      try {
+        const provider = getDnsProvider(providerName);
+        const records = await provider.getDnsRecords(domain);
+        const dbDomain = getDomainByName(domain);
+        if (!dbDomain) {
+          console.error(`Domain '${domain}' not found in local DB. Add it first: domains domain add --name ${domain}`);
+          process.exit(1);
+        }
+        let count = 0;
+        for (const r of records) {
+          createDnsRecord({ domain_id: dbDomain.id, type: r.type as "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV", name: r.name, value: r.value, ttl: r.ttl, priority: r.priority });
+          count++;
+        }
+        console.log(`✓ Pulled ${count} record(s) from ${providerName} into local DB for ${domain}`);
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  // ── push: local DB → live provider ────────────────────────────────────
+
+  dnsCmd
+    .command("push <domain-id>")
+    .description("Push local DB records to live DNS provider")
+    .option("--provider <name>", "DNS provider — defaults to config default-dns")
+    .action(async (domainId: string, opts: { provider?: string }) => {
+      const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
+      try {
+        const records = listDnsRecords(domainId);
+        if (records.length === 0) { console.log("No local DNS records to push."); return; }
+        const dbDomain = getDomainByName(domainId) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
+        const provider = getDnsProvider(providerName);
+        await provider.setDnsRecords(dbDomain.name, records.map((r) => ({
+          type: r.type, name: r.name, value: r.value, ttl: r.ttl, priority: r.priority ?? undefined,
+        })));
+        console.log(`✓ Pushed ${records.length} record(s) to ${providerName} for ${dbDomain.name}`);
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
       }
     });
 }
