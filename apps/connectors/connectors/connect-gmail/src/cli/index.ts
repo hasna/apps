@@ -97,8 +97,9 @@ const authCmd = program
 
 authCmd
   .command('login')
-  .description('Login to Gmail via OAuth2 (opens browser) - auto-creates profile from email')
-  .action(async () => {
+  .description('Login to Gmail via OAuth2 - auto-creates profile from email')
+  .option('--no-browser', 'Print the auth URL instead of opening a browser')
+  .action(async (opts: { browser: boolean }) => {
     const clientId = getClientId();
     const clientSecret = getClientSecret();
 
@@ -109,17 +110,21 @@ authCmd
       process.exit(1);
     }
 
-    info('Starting OAuth2 authentication flow...');
-    info('A browser window will open for you to authorize the application.');
-
     // Start callback server first
     const serverPromise = startCallbackServer();
 
-    // Open browser to auth URL
     const authUrl = getAuthUrl();
-    await open(authUrl);
 
-    info('Waiting for authentication...');
+    if (opts.browser === false) {
+      info('Open this URL in your browser to authorize:');
+      console.log('\n' + authUrl + '\n');
+      info('Waiting for authentication (complete in the browser)...');
+    } else {
+      info('Starting OAuth2 authentication flow...');
+      info('A browser window will open for you to authorize the application.');
+      await open(authUrl);
+      info('Waiting for authentication...');
+    }
 
     const result = await serverPromise;
 
