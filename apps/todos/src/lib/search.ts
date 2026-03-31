@@ -14,7 +14,7 @@ function rowToTask(row: TaskRow): Task {
 }
 
 export interface SearchOptions {
-  query: string;
+  query?: string;
   project_id?: string;
   task_list_id?: string;
   status?: string | string[];
@@ -56,7 +56,7 @@ export function searchTasks(
 ): Task[] {
   // Support old signature for backward compatibility
   const opts: SearchOptions = typeof options === "string"
-    ? { query: options, project_id: projectId, task_list_id: taskListId }
+    ? { query: options || undefined, project_id: projectId, task_list_id: taskListId }
     : options;
 
   const d = db || getDatabase();
@@ -65,18 +65,25 @@ export function searchTasks(
   const params: SQLQueryBindings[] = [];
   let sql: string;
 
-  if (hasFts(d) && opts.query.trim()) {
+  const raw = opts.query?.trim() ?? "";
+  // "*" means "match everything" — treat as no query (filter-only mode)
+  const q = raw === "*" ? "" : raw;
+
+  if (hasFts(d) && q) {
     // FTS5 path — BM25-ranked full-text search
-    const ftsQuery = escapeFtsQuery(opts.query);
+    const ftsQuery = escapeFtsQuery(q);
     sql = `SELECT t.* FROM tasks t
       INNER JOIN tasks_fts fts ON fts.rowid = t.rowid
       WHERE tasks_fts MATCH ?`;
     params.push(ftsQuery);
-  } else {
-    // Fallback: LIKE pattern match (used for empty query or if FTS not available)
-    const pattern = `%${opts.query}%`;
+  } else if (q) {
+    // Fallback: LIKE pattern match
+    const pattern = `%${q}%`;
     sql = `SELECT * FROM tasks t WHERE (t.title LIKE ? OR t.description LIKE ? OR EXISTS (SELECT 1 FROM task_tags WHERE task_tags.task_id = t.id AND tag LIKE ?))`;
     params.push(pattern, pattern, pattern);
+  } else {
+    // No query — filter-only mode, return all tasks matching filters
+    sql = `SELECT * FROM tasks t WHERE 1=1`;
   }
 
   if (opts.project_id) {
@@ -141,7 +148,7 @@ export function searchTasks(
     sql += " AND t.id NOT IN (SELECT td.task_id FROM task_dependencies td JOIN tasks dep ON dep.id = td.depends_on WHERE dep.status != 'completed')";
   }
 
-  if (hasFts(d) && opts.query.trim()) {
+  if (hasFts(d) && q) {
     // FTS5: sort by BM25 relevance first, then priority, then recency
     sql += ` ORDER BY bm25(tasks_fts),
       CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,

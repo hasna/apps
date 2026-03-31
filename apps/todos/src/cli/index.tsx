@@ -1348,6 +1348,11 @@ program
       } else {
         project = createProject({ name, path: projectPath, task_list_id: opts.taskListId });
       }
+      // Auto-register machine-local path
+      try {
+        const { setMachineLocalPath } = require("../db/projects.js") as typeof import("../db/projects.js");
+        setMachineLocalPath(project.id, projectPath);
+      } catch {}
 
       if (globalOpts.json) {
         output(project, true);
@@ -1373,6 +1378,112 @@ program
     for (const p of projects) {
       const taskList = p.task_list_id ? chalk.cyan(` [${p.task_list_id}]`) : "";
       console.log(`${chalk.dim(p.id.slice(0, 8))} ${chalk.bold(p.name)} ${chalk.dim(p.path)}${taskList}${p.description ? ` - ${p.description}` : ""}`);
+    }
+  });
+
+// project rename
+program
+  .command("project-rename <id-or-slug> <new-slug>")
+  .description("Rename a project slug. Cascades to matching task lists. Task prefixes (e.g. APP-00001) are unchanged.")
+  .option("--name <name>", "Also update the project display name")
+  .option("--json", "Output as JSON")
+  .action((idOrSlug: string, newSlug: string, opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { renameProject } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      // Try resolve by ID first, then by task_list_id slug
+      let resolvedId = resolvePartialId(db, "projects", idOrSlug);
+      if (!resolvedId) {
+        const bySlug = db.query("SELECT id FROM projects WHERE task_list_id = ?").get(idOrSlug) as { id: string } | null;
+        resolvedId = bySlug?.id ?? null;
+      }
+      if (!resolvedId) {
+        console.error(chalk.red(`Project not found: ${idOrSlug}`));
+        process.exit(1);
+      }
+      const result = renameProject(resolvedId, { name: opts.name, new_slug: newSlug });
+      if (useJson) {
+        output({ project: result.project, task_lists_updated: result.task_lists_updated }, true);
+      } else {
+        console.log(chalk.green(`Project renamed: ${result.project.name} (slug: ${result.project.task_list_id})`));
+        if (result.task_lists_updated > 0) {
+          console.log(chalk.dim(`  Updated ${result.task_lists_updated} task list slug(s).`));
+        }
+      }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
+// projects path — machine-local path overrides
+const projectsPathCmd = program
+  .command("projects-path")
+  .description("Manage machine-local path overrides for projects");
+
+projectsPathCmd
+  .command("set <project-id> <path>")
+  .description("Set the local path for a project on this machine")
+  .option("--json", "Output as JSON")
+  .action((projectId: string, projectPath: string, opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { setMachineLocalPath } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "projects", projectId);
+      if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+      const entry = setMachineLocalPath(resolved, resolve(projectPath));
+      if (useJson) { output(entry, true); }
+      else { console.log(chalk.green(`Local path set: ${entry.path} (machine: ${entry.machine_id.slice(0, 8)})`)); }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
+projectsPathCmd
+  .command("list <project-id>")
+  .description("List all machine path overrides for a project")
+  .option("--json", "Output as JSON")
+  .action((projectId: string, opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { listMachineLocalPaths } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "projects", projectId);
+      if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+      const paths = listMachineLocalPaths(resolved);
+      if (useJson) { output(paths, true); return; }
+      if (paths.length === 0) { console.log(chalk.dim("No machine path overrides.")); return; }
+      for (const p of paths) {
+        console.log(`${chalk.dim(p.machine_id.slice(0, 8))} ${p.path}  ${chalk.dim(p.updated_at)}`);
+      }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
+projectsPathCmd
+  .command("remove <project-id>")
+  .description("Remove the local path override for a project on this machine")
+  .option("--machine <id>", "Machine ID to remove override for (default: this machine)")
+  .action((projectId: string, opts) => {
+    try {
+      const { removeMachineLocalPath } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "projects", projectId);
+      if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+      const removed = removeMachineLocalPath(resolved, opts.machine);
+      if (removed) { console.log(chalk.green("Machine path override removed.")); }
+      else { console.log(chalk.dim("No override found to remove.")); }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
     }
   });
 

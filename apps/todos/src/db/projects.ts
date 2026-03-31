@@ -2,6 +2,7 @@ import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { CreateProjectInput, CreateProjectSourceInput, Project, ProjectSource, ProjectSourceRow } from "../types/index.js";
 import { ProjectNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
+import { getMachineId } from "./machines.js";
 
 export function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -57,10 +58,18 @@ export function getProject(id: string, db?: Database): Project | null {
 
 export function getProjectByPath(path: string, db?: Database): Project | null {
   const d = db || getDatabase();
-  const row = d
-    .query("SELECT * FROM projects WHERE path = ?")
-    .get(path) as Project | null;
-  return row;
+  // Check machine-local path override first
+  try {
+    const machineId = getMachineId(d);
+    const machineRow = d.query(
+      `SELECT p.* FROM projects p
+       JOIN project_machine_paths pmp ON pmp.project_id = p.id
+       WHERE pmp.machine_id = ? AND pmp.path = ?`
+    ).get(machineId, path) as Project | null;
+    if (machineRow) return machineRow;
+  } catch {}
+  // Fall back to global path
+  return d.query("SELECT * FROM projects WHERE path = ?").get(path) as Project | null;
 }
 
 export function listProjects(db?: Database): Project[] {
@@ -72,7 +81,7 @@ export function listProjects(db?: Database): Project[] {
 
 export function updateProject(
   id: string,
-  input: Partial<Pick<Project, "name" | "description" | "task_list_id">>,
+  input: Partial<Pick<Project, "name" | "description" | "task_list_id" | "path">>,
   db?: Database,
 ): Project {
   const d = db || getDatabase();
@@ -94,11 +103,65 @@ export function updateProject(
     sets.push("task_list_id = ?");
     params.push(input.task_list_id);
   }
+  if (input.path !== undefined) {
+    sets.push("path = ?");
+    params.push(input.path);
+  }
 
   params.push(id);
   d.run(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`, params);
 
   return getProject(id, d)!;
+}
+
+/**
+ * Rename a project: update name and/or task_list_id (slug).
+ * Cascades slug change to any task_list whose slug matched the old task_list_id.
+ * Validates new slug is unique if provided.
+ */
+export function renameProject(
+  id: string,
+  input: { name?: string; new_slug?: string },
+  db?: Database,
+): { project: Project; task_lists_updated: number } {
+  const d = db || getDatabase();
+  const project = getProject(id, d);
+  if (!project) throw new ProjectNotFoundError(id);
+
+  let taskListsUpdated = 0;
+  const ts = now();
+
+  if (input.new_slug !== undefined) {
+    // Validate slug: lowercase, kebab-case only
+    const normalised = input.new_slug.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
+    if (!normalised) throw new Error("Invalid slug — must be non-empty kebab-case");
+
+    // Check uniqueness against other projects
+    const conflict = d.query(
+      "SELECT id FROM projects WHERE task_list_id = ? AND id != ?"
+    ).get(normalised, id);
+    if (conflict) throw new Error(`Slug "${normalised}" is already used by another project`);
+
+    const oldSlug = project.task_list_id;
+
+    // Update projects.task_list_id
+    d.run("UPDATE projects SET task_list_id = ?, updated_at = ? WHERE id = ?", [normalised, ts, id]);
+
+    // Cascade: update task_lists whose slug matched the old task_list_id
+    if (oldSlug) {
+      const result = d.run(
+        "UPDATE task_lists SET slug = ?, name = COALESCE(?, name), updated_at = ? WHERE project_id = ? AND slug = ?",
+        [normalised, input.name ?? null, ts, id, oldSlug],
+      );
+      taskListsUpdated = result.changes;
+    }
+  }
+
+  if (input.name !== undefined) {
+    d.run("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", [input.name, ts, id]);
+  }
+
+  return { project: getProject(id, d)!, task_lists_updated: taskListsUpdated };
 }
 
 export function deleteProject(id: string, db?: Database): boolean {
@@ -174,7 +237,92 @@ export function ensureProject(
       d.run("UPDATE projects SET task_prefix = ?, updated_at = ? WHERE id = ?", [prefix, now(), existing.id]);
       return getProject(existing.id, d)!;
     }
+    // Ensure machine-local path is registered
+    setMachineLocalPath(existing.id, path, d);
     return existing;
   }
-  return createProject({ name, path }, d);
+  const project = createProject({ name, path }, d);
+  setMachineLocalPath(project.id, path, d);
+  return project;
+}
+
+// ── Machine-local project paths ───────────────────────────────────────────────
+
+export interface ProjectMachinePath {
+  id: string;
+  project_id: string;
+  machine_id: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Set (upsert) the local path for a project on the current machine.
+ * Safe to call at any time — idempotent if path hasn't changed.
+ */
+export function setMachineLocalPath(projectId: string, path: string, db?: Database): ProjectMachinePath {
+  const d = db || getDatabase();
+  const machineId = getMachineId(d);
+  const ts = now();
+  const existing = d.query(
+    "SELECT * FROM project_machine_paths WHERE project_id = ? AND machine_id = ?"
+  ).get(projectId, machineId) as ProjectMachinePath | null;
+
+  if (existing) {
+    if (existing.path !== path) {
+      d.run(
+        "UPDATE project_machine_paths SET path = ?, updated_at = ? WHERE id = ?",
+        [path, ts, existing.id],
+      );
+    }
+    return d.query("SELECT * FROM project_machine_paths WHERE id = ?").get(existing.id) as ProjectMachinePath;
+  }
+
+  const id = uuid();
+  d.run(
+    "INSERT INTO project_machine_paths (id, project_id, machine_id, path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [id, projectId, machineId, path, ts, ts],
+  );
+  return d.query("SELECT * FROM project_machine_paths WHERE id = ?").get(id) as ProjectMachinePath;
+}
+
+/**
+ * Get the local path for a project on the current machine.
+ * Falls back to the project's global path if no override is set.
+ */
+export function getMachineLocalPath(projectId: string, db?: Database): string | null {
+  const d = db || getDatabase();
+  try {
+    const machineId = getMachineId(d);
+    const row = d.query(
+      "SELECT path FROM project_machine_paths WHERE project_id = ? AND machine_id = ?"
+    ).get(projectId, machineId) as { path: string } | null;
+    if (row) return row.path;
+  } catch {}
+  const project = getProject(projectId, d);
+  return project?.path ?? null;
+}
+
+/**
+ * List all machine path overrides for a project.
+ */
+export function listMachineLocalPaths(projectId: string, db?: Database): ProjectMachinePath[] {
+  const d = db || getDatabase();
+  return d.query(
+    "SELECT * FROM project_machine_paths WHERE project_id = ? ORDER BY machine_id"
+  ).all(projectId) as ProjectMachinePath[];
+}
+
+/**
+ * Remove the local path override for a project on a specific machine (default: current).
+ */
+export function removeMachineLocalPath(projectId: string, machineId?: string, db?: Database): boolean {
+  const d = db || getDatabase();
+  const mid = machineId ?? getMachineId(d);
+  const result = d.run(
+    "DELETE FROM project_machine_paths WHERE project_id = ? AND machine_id = ?",
+    [projectId, mid],
+  );
+  return result.changes > 0;
 }

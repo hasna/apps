@@ -252,11 +252,24 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           if (!agent) {
             return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
           }
+          const oldName = agent.name;
           const updated = updateAgent(agent.id, { name: new_name });
+
+          // Update assigned_to on tasks that reference the old name
+          const db = getDatabase();
+          const tasksResult = db.run(
+            "UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?",
+            [new_name, oldName],
+          );
+
+          const taskNote = tasksResult.changes > 0
+            ? `\nUpdated assigned_to on ${tasksResult.changes} task(s).`
+            : "";
+
           return {
             content: [{
               type: "text" as const,
-              text: `Agent renamed: ${agent.name} -> ${updated.name}\nID: ${updated.id}`,
+              text: `Agent renamed: ${oldName} -> ${updated.name}\nID: ${updated.id}${taskNote}`,
             }],
           };
         } catch (e) {

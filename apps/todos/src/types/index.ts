@@ -380,6 +380,7 @@ export interface UpdateTaskInput {
   requires_approval?: boolean;
   approved_by?: string;
   recurrence_rule?: string | null;
+  due_at?: string | null;
   version: number; // required for optimistic locking
   task_type?: string | null;
 }
@@ -402,6 +403,8 @@ export interface TaskFilter {
   offset?: number;
   /** Opaque cursor from a prior list_tasks response — stable pagination that survives concurrent mutations */
   cursor?: string;
+  /** When true, include archived tasks. Default: false (archived tasks excluded) */
+  include_archived?: boolean;
 }
 
 // Task dependency

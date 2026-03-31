@@ -44,6 +44,8 @@ export {
   setTaskPriority,
   redistributeStaleTasks,
   getOverdueTasks,
+  archiveTasks,
+  unarchiveTask,
 } from "./db/tasks.js";
 export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput } from "./db/tasks.js";
 
@@ -62,7 +64,13 @@ export {
   addProjectSource,
   removeProjectSource,
   listProjectSources,
+  renameProject,
+  setMachineLocalPath,
+  getMachineLocalPath,
+  listMachineLocalPaths,
+  removeMachineLocalPath,
 } from "./db/projects.js";
+export type { ProjectMachinePath } from "./db/projects.js";
 
 // Plans
 export {

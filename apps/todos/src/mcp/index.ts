@@ -36,12 +36,15 @@ import {
   setTaskStatus,
   setTaskPriority,
   redistributeStaleTasks,
+  archiveTasks,
 } from "../db/tasks.js";
 import { addComment, logProgress } from "../db/comments.js";
 import {
   createProject,
   getProject,
   listProjects,
+  updateProject,
+  renameProject,
   addProjectSource,
   removeProjectSource,
   listProjectSources,
@@ -265,6 +268,7 @@ function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
   if (task.parent_id) parts.push(`Parent: ${task.parent_id}`);
   if (task.project_id) parts.push(`Project: ${task.project_id}`);
   if (task.plan_id) parts.push(`Plan: ${task.plan_id}`);
+  if (task.due_at) parts.push(`Due: ${task.due_at.slice(0, 10)}`);
   if (task.tags.length > 0) parts.push(`Tags: ${task.tags.join(", ")}`);
   if (task.recurrence_rule) parts.push(`Recurrence: ${task.recurrence_rule}`);
   if (task.recurrence_parent_id) parts.push(`Recurrence parent: ${task.recurrence_parent_id}`);
@@ -304,6 +308,7 @@ server.tool(
     spawned_from_session: z.string().optional().describe("Session ID that created this task (for tracing task lineage)"),
     assigned_from_project: z.string().optional().describe("Override: project ID the assigning agent is working from. Auto-detected from agent focus if omitted."),
     task_type: z.string().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or any custom string"),
+    due_date: z.string().optional().describe("Due date as YYYY-MM-DD (e.g. '2026-04-15'). Stored as end-of-day ISO timestamp."),
   },
   async (params) => {
     try {
@@ -317,6 +322,11 @@ server.tool(
       if (resolved["parent_id"]) resolved["parent_id"] = resolveId(resolved["parent_id"] as string);
       if (resolved["plan_id"]) resolved["plan_id"] = resolveId(resolved["plan_id"] as string, "plans");
       if (resolved["task_list_id"]) resolved["task_list_id"] = resolveId(resolved["task_list_id"] as string, "task_lists");
+      // Convert due_date (YYYY-MM-DD) → due_at (ISO end-of-day)
+      if (resolved["due_date"]) {
+        resolved["due_at"] = `${resolved["due_date"]}T23:59:59.000Z`;
+        delete resolved["due_date"];
+      }
 
       // Auto-detect assigned_from_project from the calling agent's active focus/project
       if (!resolved["assigned_from_project"]) {
@@ -362,6 +372,7 @@ server.tool(
     offset: z.number().optional(),
     summary_only: z.boolean().optional().describe("When true, return only id, short_id, title, status, priority — minimal tokens for navigation"),
     cursor: z.string().optional().describe("Opaque cursor from a prior response for stable pagination. Use next_cursor from the previous page. Mutually exclusive with offset."),
+    include_archived: z.boolean().optional().describe("When true, include archived tasks. Default: false."),
   },
   async (params) => {
     try {
@@ -392,7 +403,8 @@ server.tool(
         const assigned = t.assigned_to ? ` -> ${t.assigned_to}` : "";
         const due = t.due_at ? ` due:${t.due_at.slice(0, 10)}` : "";
         const recur = t.recurrence_rule ? " [↻]" : "";
-        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}${due}${recur}`;
+        const list = t.task_list_id ? ` list:${t.task_list_id.slice(0, 8)}` : "";
+        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${list}${lock}${due}${recur}`;
       }).join("\n");
       const currentOffset = resolved.offset || 0;
       const hasMore = total > (resolved.cursor ? tasks.length : currentOffset + tasks.length);
@@ -485,7 +497,7 @@ server.tool(
   "Update task fields. Version required for optimistic locking.",
   {
     id: z.string(),
-    version: z.number(),
+    version: z.union([z.number(), z.string()]).transform((v) => Number(v)),
     title: z.string().optional(),
     description: z.string().optional(),
     status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
@@ -496,6 +508,7 @@ server.tool(
     plan_id: z.string().optional(),
     task_list_id: z.string().optional(),
     task_type: z.string().nullable().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or custom. null to clear."),
+    due_date: z.string().nullable().optional().describe("Due date as YYYY-MM-DD. null to clear. Stored as end-of-day ISO timestamp."),
   },
   async ({ id, ...rest }) => {
     try {
@@ -503,6 +516,11 @@ server.tool(
       const resolved = { ...rest } as Record<string, unknown>;
       if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id as string, "task_lists");
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id as string, "plans");
+      // Convert due_date → due_at
+      if ("due_date" in resolved) {
+        resolved["due_at"] = resolved["due_date"] ? `${resolved["due_date"]}T23:59:59.000Z` : null;
+        delete resolved["due_date"];
+      }
       const task = updateTask(resolvedId, resolved as unknown as Parameters<typeof updateTask>[1]);
       return { content: [{ type: "text" as const, text: `updated: ${formatTask(task)}` }] };
     } catch (e) {
@@ -817,6 +835,37 @@ server.tool(
           text: `Source added: ${source.id.slice(0, 8)} | [${source.type}] ${source.name} → ${source.uri}`,
         }],
       };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// update_project
+if (shouldRegisterTool("update_project")) {
+server.tool(
+  "update_project",
+  "Update project fields: name, description, path, task_list_id. Use new_slug to rename the project slug (cascades to task_lists).",
+  {
+    id: z.string().describe("Project ID"),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    path: z.string().optional().describe("Update global path (use projects-path set for machine-local overrides)"),
+    task_list_id: z.string().optional(),
+    new_slug: z.string().optional().describe("Rename the project slug (kebab-case). Cascades to matching task_list slugs."),
+  },
+  async ({ id, name, description, path, task_list_id, new_slug }) => {
+    try {
+      const resolvedId = resolveId(id, "projects");
+      if (new_slug || (name && !description && !path && !task_list_id)) {
+        // Use renameProject for slug/name changes that need cascade
+        const result = renameProject(resolvedId, { name, new_slug });
+        const note = result.task_lists_updated > 0 ? ` (${result.task_lists_updated} task list(s) slug updated)` : "";
+        return { content: [{ type: "text" as const, text: `Project updated: ${result.project.id.slice(0, 8)} | ${result.project.name}${note}` }] };
+      }
+      const updated = updateProject(resolvedId, { name, description, path, task_list_id });
+      return { content: [{ type: "text" as const, text: `Project updated: ${updated.id.slice(0, 8)} | ${updated.name}${updated.path ? ` (${updated.path})` : ""}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1157,9 +1206,9 @@ server.tool(
 if (shouldRegisterTool("search_tasks")) {
 server.tool(
   "search_tasks",
-  "Full-text search across tasks with filters.",
+  "Full-text search across tasks with filters. query is optional — if omitted, returns all tasks matching the given filters.",
   {
-    query: z.string(),
+    query: z.string().optional(),
     project_id: z.string().optional(),
     task_list_id: z.string().optional(),
     status: z.union([
@@ -1188,12 +1237,13 @@ server.tool(
         ...filters,
       });
       if (tasks.length === 0) {
-        return { content: [{ type: "text" as const, text: `No tasks matching "${query}".` }] };
+        return { content: [{ type: "text" as const, text: query ? `No tasks matching "${query}".` : "No tasks found." }] };
       }
       const text = tasks.map((t) =>
         `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}`,
       ).join("\n");
-      return { content: [{ type: "text" as const, text: `${tasks.length} result(s) for "${query}":\n${text}` }] };
+      const label = query ? `${tasks.length} result(s) for "${query}"` : `${tasks.length} task(s)`;
+      return { content: [{ type: "text" as const, text: `${label}:\n${text}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1314,9 +1364,17 @@ server.tool(
       if (lists.length === 0) {
         return { content: [{ type: "text" as const, text: "No task lists found." }] };
       }
+      const db = getDatabase();
       const text = lists.map((l) => {
         const project = l.project_id ? ` (project: ${l.project_id.slice(0, 8)})` : "";
-        return `${l.id.slice(0, 8)} | ${l.name} [${l.slug}]${project}${l.description ? ` - ${l.description}` : ""}`;
+        const counts = db.query(
+          `SELECT COUNT(*) as total,
+            SUM(CASE WHEN status IN ('pending','in_progress') THEN 1 ELSE 0 END) as active,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as done
+           FROM tasks WHERE task_list_id = ? AND archived_at IS NULL`
+        ).get(l.id) as { total: number; active: number; done: number };
+        const taskNote = ` [${counts.active} active, ${counts.done} done / ${counts.total} total]`;
+        return `${l.id.slice(0, 8)} | ${l.name} [${l.slug}]${taskNote}${project}${l.description ? ` - ${l.description}` : ""}`;
       }).join("\n");
       return { content: [{ type: "text" as const, text: `${lists.length} task list(s):\n${text}` }] };
     } catch (e) {
@@ -1970,6 +2028,51 @@ server.tool(
 );
 }
 
+// archive_completed
+if (shouldRegisterTool("archive_completed")) {
+server.tool(
+  "archive_completed",
+  "Archive completed/failed/cancelled tasks to reduce clutter. Archived tasks are hidden from list_tasks and search_tasks by default.",
+  {
+    project_id: z.string().optional().describe("Scope to a project"),
+    task_list_id: z.string().optional().describe("Scope to a task list"),
+    older_than_days: z.number().optional().describe("Only archive tasks last updated more than N days ago. Default: all matching tasks."),
+    status: z.array(z.enum(["completed", "failed", "cancelled"])).optional().describe("Statuses to archive. Default: completed, failed, cancelled."),
+    dry_run: z.boolean().optional().describe("Preview count without archiving. Default: false."),
+  },
+  async ({ project_id, task_list_id, older_than_days, status, dry_run }) => {
+    try {
+      const filters: Parameters<typeof archiveTasks>[0] = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+      if (older_than_days !== undefined) filters.older_than_days = older_than_days;
+      if (status) filters.status = status;
+
+      if (dry_run) {
+        // Count without archiving
+        const db = getDatabase();
+        const statuses = status ?? ["completed", "failed", "cancelled"];
+        const conditions = ["archived_at IS NULL", `status IN (${statuses.map(() => "?").join(",")})`];
+        const params: any[] = [...statuses];
+        if (filters.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+        if (filters.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+        if (older_than_days !== undefined) {
+          const cutoff = new Date(Date.now() - older_than_days * 86400000).toISOString();
+          conditions.push("updated_at < ?"); params.push(cutoff);
+        }
+        const count = (db.query(`SELECT COUNT(*) as c FROM tasks WHERE ${conditions.join(" AND ")}`).get(...params) as { c: number }).c;
+        return { content: [{ type: "text" as const, text: `Dry run: would archive ${count} task(s).` }] };
+      }
+
+      const result = archiveTasks(filters);
+      return { content: [{ type: "text" as const, text: `Archived ${result.archived} task(s).` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // bulk_update_tasks
 if (shouldRegisterTool("bulk_update_tasks")) {
 server.tool(
@@ -2093,7 +2196,33 @@ server.tool(
       if (project_id) filters.project_id = resolveId(project_id, "projects");
       if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
       if (agent_id) filters.agent_id = agent_id;
-      const stats = getTaskStats(Object.keys(filters).length > 0 ? filters : undefined);
+      const stats = getTaskStats(Object.keys(filters).length > 0 ? filters : undefined) as Record<string, unknown>;
+
+      // Add per-task-list breakdown when scoped to a project (or globally)
+      if (!task_list_id) {
+        const db = getDatabase();
+        const listRows = db.query(
+          `SELECT tl.id, tl.name, tl.slug,
+            COUNT(t.id) as total,
+            SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN t.status IN ('pending','in_progress') THEN 1 ELSE 0 END) as active
+           FROM task_lists tl
+           LEFT JOIN tasks t ON t.task_list_id = tl.id ${filters.project_id ? "AND t.project_id = ?" : ""}
+           ${filters.project_id ? "WHERE tl.project_id = ?" : ""}
+           GROUP BY tl.id ORDER BY tl.name`
+        ).all(...(filters.project_id ? [filters.project_id, filters.project_id] : [])) as { id: string; name: string; slug: string; total: number; completed: number; active: number }[];
+
+        stats.by_task_list = listRows.map(r => ({
+          id: r.id.slice(0, 8),
+          name: r.name,
+          slug: r.slug,
+          total: r.total,
+          completed: r.completed,
+          active: r.active,
+          completion_rate: r.total > 0 ? Math.round((r.completed / r.total) * 100) : 0,
+        }));
+      }
+
       return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

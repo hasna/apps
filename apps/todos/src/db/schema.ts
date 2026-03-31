@@ -712,6 +712,27 @@ export const MIGRATIONS = [
 
   INSERT OR IGNORE INTO _migrations (id) VALUES (41);
   `,
+  // Migration 42: Machine-local project paths
+  `
+  CREATE TABLE IF NOT EXISTS project_machine_paths (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    machine_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, machine_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_machine_paths_project ON project_machine_paths(project_id);
+  CREATE INDEX IF NOT EXISTS idx_project_machine_paths_machine ON project_machine_paths(machine_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (42);
+  `,
+  // Migration 43: Task archiving — soft-archive completed/failed tasks
+  `
+  ALTER TABLE tasks ADD COLUMN archived_at TEXT;
+  CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at) WHERE archived_at IS NOT NULL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (43);
+  `,
 ];
 
 export function runMigrations(db: Database): void {
@@ -900,6 +921,20 @@ export function ensureSchema(db: Database): void {
       UNIQUE(source_id, source_type, target_id, target_type, relation_type)
     )`);
 
+  // Machine-local project paths
+  ensureTable("project_machine_paths", `
+    CREATE TABLE project_machine_paths (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      machine_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, machine_id)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_machine_paths_project ON project_machine_paths(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_machine_paths_machine ON project_machine_paths(machine_id)");
+
   // Machine registry
   ensureTable("machines", `
     CREATE TABLE machines (
@@ -942,6 +977,7 @@ export function ensureSchema(db: Database): void {
   ensureColumn("tasks", "max_retries", "INTEGER DEFAULT 3");
   ensureColumn("tasks", "retry_after", "TEXT");
   ensureColumn("tasks", "sla_minutes", "INTEGER");
+  ensureColumn("tasks", "archived_at", "TEXT");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");

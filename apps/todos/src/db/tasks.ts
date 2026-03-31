@@ -283,6 +283,11 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     }
   }
 
+  // Exclude archived tasks by default
+  if (!filter.include_archived) {
+    conditions.push("archived_at IS NULL");
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   let limitClause = "";
@@ -1583,6 +1588,55 @@ export function bulkUpdateTasks(
   tx();
 
   return { updated, failed };
+}
+
+/**
+ * Archive tasks matching the criteria. Archives completed/failed/cancelled tasks
+ * older than `olderThanDays` days. Returns count of archived tasks.
+ */
+export function archiveTasks(options: {
+  project_id?: string;
+  task_list_id?: string;
+  older_than_days?: number;
+  status?: TaskStatus[];
+}, db?: Database): { archived: number } {
+  const d = db || getDatabase();
+  const conditions: string[] = ["archived_at IS NULL"];
+  const params: SQLQueryBindings[] = [];
+
+  const statuses = options.status ?? ["completed", "failed", "cancelled"];
+  conditions.push(`status IN (${statuses.map(() => "?").join(",")})`);
+  params.push(...statuses);
+
+  if (options.project_id) {
+    conditions.push("project_id = ?");
+    params.push(options.project_id);
+  }
+  if (options.task_list_id) {
+    conditions.push("task_list_id = ?");
+    params.push(options.task_list_id);
+  }
+  if (options.older_than_days !== undefined) {
+    const cutoff = new Date(Date.now() - options.older_than_days * 86400000).toISOString();
+    conditions.push("updated_at < ?");
+    params.push(cutoff);
+  }
+
+  const ts = now();
+  const result = d.run(
+    `UPDATE tasks SET archived_at = ? WHERE ${conditions.join(" AND ")}`,
+    [ts, ...params],
+  );
+  return { archived: result.changes };
+}
+
+/**
+ * Unarchive (restore) a specific task.
+ */
+export function unarchiveTask(id: string, db?: Database): Task | null {
+  const d = db || getDatabase();
+  d.run("UPDATE tasks SET archived_at = NULL WHERE id = ?", [id]);
+  return getTask(id, d);
 }
 
 export function getOverdueTasks(projectId?: string, db?: Database): Task[] {
