@@ -95,10 +95,10 @@ export function recomputeAllSignals(db?: Database): { updated: number } {
   _db.query(`
     UPDATE contacts SET
       engagement_status = CASE
-        WHEN interaction_count_30d > 3 THEN 'warm'
+        WHEN interaction_count_30d > 3 THEN 'warming'
         WHEN last_contacted_at IS NULL OR julianday('now') - julianday(last_contacted_at) > 180 THEN 'ghost'
         WHEN julianday('now') - julianday(last_contacted_at) > 60 THEN 'cooling'
-        ELSE 'active'
+        ELSE 'stable'
       END,
       updated_at = datetime('now')
     WHERE archived = 0

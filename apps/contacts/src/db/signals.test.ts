@@ -230,16 +230,16 @@ describe("recomputeAllSignals", () => {
     expect(row.engagement_status).toBe("cooling");
   });
 
-  it("throws CHECK constraint error for contacts that would get 'warm' status", () => {
-    // NOTE: recomputeAllSignals uses 'warm' and 'active' values which violate the
-    // CHECK constraint (allowed: 'warming','stable','cooling','ghost','new').
-    // This is a known bug in the source code.
+  it("sets warming status for contacts with high recent interaction count", () => {
     const contact = createContact({ display_name: "Warm" });
     setContactFields(contact.id, {
       last_contacted_at: new Date().toISOString(),
       interaction_count_30d: 5,
     });
-    expect(() => recomputeAllSignals()).toThrow();
+    recomputeAllSignals();
+    const db = getDatabase();
+    const row = db.query(`SELECT engagement_status FROM contacts WHERE id = ?`).get(contact.id) as { engagement_status: string };
+    expect(row.engagement_status).toBe("warming");
   });
 
   it("does not update archived contacts", () => {
