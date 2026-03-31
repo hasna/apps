@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { registerCloudCommands } from "@hasna/cloud";
 
 const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
 const program = new Command();
@@ -18,5 +19,6 @@ registerBrowse(program);
 registerSession(program);
 registerScript(program);
 registerTools(program);
+registerCloudCommands(program, "browser");
 
 program.parseAsync(process.argv);

@@ -56,8 +56,8 @@ export async function takeScreenshot(
     const timestamp = Date.now();
     const format = opts?.format ?? "webp";
     const compress = opts?.compress ?? true;
-    const maxWidth = opts?.maxWidth ?? 1280;
-    const quality = opts?.quality ?? (format === "webp" ? 82 : format === "jpeg" ? 85 : undefined);
+    const maxWidth = opts?.maxWidth ?? 1200;
+    const quality = opts?.quality ?? (format === "webp" ? 80 : format === "jpeg" ? 70 : undefined);
     const stem = String(timestamp);
 
     // Always capture raw PNG from Playwright first (lossless source)
@@ -91,12 +91,22 @@ export async function takeScreenshot(
     const originalSizeBytes = rawBuffer.length;
 
     // Compress via sharp pipeline — with fallback if sharp fails
+    // Guarantees output < 500KB for non-PNG formats via progressive quality reduction
+    const MAX_SIZE_BYTES = 500 * 1024;
     let finalBuffer: Buffer;
     let compressed = true;
     let fallback = false;
     try {
       if (compress && format !== "png") {
-        finalBuffer = await compressBuffer(rawBuffer, format, quality ?? 82, maxWidth);
+        finalBuffer = await compressBuffer(rawBuffer, format, quality ?? 70, maxWidth);
+        // If still over 500KB, progressively reduce quality until under limit
+        if (finalBuffer.length > MAX_SIZE_BYTES) {
+          const reducedFormat = format === "webp" ? "webp" : "jpeg";
+          for (const q of [60, 50, 40, 30]) {
+            const attempt = await compressBuffer(rawBuffer, reducedFormat, q, maxWidth);
+            if (attempt.length <= MAX_SIZE_BYTES) { finalBuffer = attempt; break; }
+          }
+        }
       } else if (compress && format === "png") {
         finalBuffer = await compressBuffer(rawBuffer, "png", quality ?? 9, maxWidth);
       } else {

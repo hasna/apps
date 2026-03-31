@@ -52,6 +52,13 @@ export function getDatabase(path?: string): TypedDb {
   _db.exec("PRAGMA foreign_keys=ON;");
 
   runMigrations(_db);
+  // Ensure feedback table has `service` column (handle old installs that had different schema)
+  try {
+    const cols = (_db.query("PRAGMA table_info(feedback)").all() as Array<{ name: string }>).map(c => c.name);
+    if (cols.length > 0 && !cols.includes("service")) {
+      _db.exec("ALTER TABLE feedback ADD COLUMN service TEXT NOT NULL DEFAULT 'browser'");
+    }
+  } catch {}
   return _db;
 }
 
@@ -361,12 +368,12 @@ function runMigrations(db: TypedDb): void {
       version: 10,
       sql: `
         CREATE TABLE IF NOT EXISTS feedback (
-          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          id TEXT PRIMARY KEY,
+          service TEXT NOT NULL DEFAULT 'browser',
+          version TEXT DEFAULT '',
           message TEXT NOT NULL,
-          email TEXT,
-          category TEXT DEFAULT 'general',
-          version TEXT,
-          machine_id TEXT,
+          email TEXT DEFAULT '',
+          machine_id TEXT DEFAULT '',
           created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
       `,

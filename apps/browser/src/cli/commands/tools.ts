@@ -589,4 +589,37 @@ program
     await import("../../server/index.js");
   });
 
+// ─── feedback ─────────────────────────────────────────────────────────────────
+
+const feedbackCmd = program.command("feedback").description("Send feedback about @hasna/browser");
+
+feedbackCmd
+  .command("send <message>")
+  .description("Send feedback or report a bug")
+  .option("--email <email>", "Your email (optional)")
+  .action(async (message: string, opts: { email?: string }) => {
+    const { saveFeedback } = await import("@hasna/cloud");
+    const { getDatabase } = await import("../../db/schema.js");
+    const db = getDatabase();
+    saveFeedback(db, { service: "browser", message, email: opts.email });
+    console.log(chalk.green("✓ Feedback saved. Thank you!"));
+  });
+
+feedbackCmd
+  .command("list")
+  .description("List saved feedback")
+  .action(async () => {
+    const { getDatabase } = await import("../../db/schema.js");
+    const db = getDatabase();
+    try {
+      const rows = db.prepare("SELECT id, message, email, created_at FROM feedback ORDER BY created_at DESC LIMIT 50").all() as Array<{ id: string; message: string; email?: string; created_at: string }>;
+      if (rows.length === 0) { console.log(chalk.gray("No feedback entries")); return; }
+      rows.forEach((r) => {
+        console.log(`${r.message}${r.email ? chalk.gray(` <${r.email}>`) : ""} ${chalk.gray(r.created_at)}`);
+      });
+    } catch {
+      console.log(chalk.gray("No feedback entries"));
+    }
+  });
+
 } // end register

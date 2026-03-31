@@ -271,12 +271,12 @@ export const PG_MIGRATIONS: string[] = [
 
   // Migration 10: Feedback table
   `CREATE TABLE IF NOT EXISTS feedback (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    id TEXT PRIMARY KEY,
+    service TEXT NOT NULL DEFAULT 'browser',
+    version TEXT DEFAULT '',
     message TEXT NOT NULL,
-    email TEXT,
-    category TEXT DEFAULT 'general',
-    version TEXT,
-    machine_id TEXT,
+    email TEXT DEFAULT '',
+    machine_id TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 

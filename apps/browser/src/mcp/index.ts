@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { registerCloudTools } from "@hasna/cloud";
 
 import { register as registerSessions } from "./sessions.js";
 import { register as registerActions } from "./actions.js";
@@ -16,34 +17,16 @@ const _pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json")
 
 const server = new McpServer({
   name: "@hasna/browser",
-  version: "0.0.1",
+  version: _pkg.version,
 });
 
 registerSessions(server);
 registerActions(server);
 registerCapture(server);
 registerNetwork(server);
-registerData(server);
+registerData(server);  // already includes meta, recordings, scripts
 registerTui(server);
-
-// --- send_feedback tool ---
-import { z } from "zod";
-import { getDatabase } from "../db/schema.js";
-
-server.tool(
-  "send_feedback",
-  "Send feedback about this service",
-  { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
-  async (params) => {
-    try {
-      const db = getDatabase();
-      db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(params.message, params.email || null, params.category || "general", _pkg.version);
-      return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
-    } catch (e) {
-      return { content: [{ type: "text", text: String(e) }], isError: true };
-    }
-  }
-);
+registerCloudTools(server, "browser");
 
 // Log version to stderr on startup so debugging is instant
 const _startupToolCount = Object.keys((server as any)._registeredTools ?? {}).length;
