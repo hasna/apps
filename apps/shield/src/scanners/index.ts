@@ -10,6 +10,9 @@ import { codeScanner } from "./code.js";
 import { gitHistoryScanner } from "./git-history.js";
 import { configScanner } from "./config.js";
 import { aiSafetyScanner } from "./ai-safety.js";
+import { iocScanner } from "./ioc.js";
+import { lockfileScanner } from "./lockfile.js";
+import { supplyChainScanner } from "./supply-chain.js";
 
 // --- Scanner registry ---
 
@@ -67,6 +70,9 @@ registerScanner(codeScanner);
 registerScanner(gitHistoryScanner);
 registerScanner(configScanner);
 registerScanner(aiSafetyScanner);
+registerScanner(iocScanner);
+registerScanner(lockfileScanner);
+registerScanner(supplyChainScanner);
 
 // --- Re-exports ---
 
@@ -76,5 +82,8 @@ export { codeScanner } from "./code.js";
 export { gitHistoryScanner } from "./git-history.js";
 export { configScanner } from "./config.js";
 export { aiSafetyScanner } from "./ai-safety.js";
+export { iocScanner } from "./ioc.js";
+export { lockfileScanner } from "./lockfile.js";
+export { supplyChainScanner } from "./supply-chain.js";
 export { SECRET_PATTERNS, shannonEntropy, walkDirectory, isBinaryFile, getCodeSnippet } from "./secrets.js";
 export { CODE_PATTERNS } from "./code.js";

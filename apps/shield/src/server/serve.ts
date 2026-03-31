@@ -45,11 +45,20 @@ import {
   analyzeFinding as llmAnalyze,
   isLLMAvailable,
 } from "../llm/index.js";
+import {
+  listAdvisories,
+  getAdvisory,
+  searchAdvisories,
+  isVersionAffected,
+  getIOCsForAdvisory,
+} from "../db/index.js";
+import { seedAdvisories } from "../data/advisories.js";
 import { ScannerType, ScanStatus, Severity } from "../types/index.js";
 import type { FindingInput } from "../types/index.js";
 
-// Seed builtin rules on startup
+// Seed builtin rules and advisory data on startup
 seedBuiltinRules();
+try { seedAdvisories(); } catch {}
 
 function getCodeContext(filePath: string, line: number, contextLines = 10): string {
   try {
@@ -558,6 +567,107 @@ export function startServer(port: number) {
         recent_scans: recentScans,
         score,
       });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // --- Advisories ---
+
+  // GET /api/advisories — list advisories
+  app.get("/api/advisories", (req: Request, res: Response) => {
+    try {
+      const options = {
+        ecosystem: req.query.ecosystem as string | undefined,
+        severity: req.query.severity as string | undefined,
+        attack_type: req.query.attack_type as string | undefined,
+        limit: req.query.limit ? parseInt(req.query.limit as string) : 50,
+      };
+      const advisories = listAdvisories(options);
+      res.json({ advisories, count: advisories.length });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // GET /api/advisories/search — search advisories
+  app.get("/api/advisories/search", (req: Request, res: Response) => {
+    try {
+      const q = req.query.q as string;
+      if (!q) {
+        res.status(400).json({ error: "q parameter is required" });
+        return;
+      }
+      const advisories = searchAdvisories(q);
+      res.json({ advisories, count: advisories.length });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // GET /api/advisories/:id — get advisory detail with IOCs
+  app.get("/api/advisories/:id", (req: Request, res: Response) => {
+    try {
+      const advisory = getAdvisory(req.params.id);
+      if (!advisory) {
+        res.status(404).json({ error: "Advisory not found" });
+        return;
+      }
+      const iocs = getIOCsForAdvisory(req.params.id);
+      res.json({ ...advisory, iocs });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  // GET /api/check-package — check if a package is safe
+  app.get("/api/check-package", (req: Request, res: Response) => {
+    try {
+      const name = req.query.name as string;
+      const version = req.query.version as string | undefined;
+      const ecosystem = (req.query.ecosystem as string) || "npm";
+
+      if (!name) {
+        res.status(400).json({ error: "name parameter is required" });
+        return;
+      }
+
+      if (version) {
+        const advisory = isVersionAffected(name, ecosystem, version);
+        if (advisory) {
+          const iocs = getIOCsForAdvisory(advisory.id);
+          res.json({
+            status: "COMPROMISED",
+            package: `${name}@${version}`,
+            advisory: {
+              id: advisory.id,
+              title: advisory.title,
+              attack_type: advisory.attack_type,
+              severity: advisory.severity,
+              safe_versions: advisory.safe_versions,
+            },
+            iocs: iocs.map((i) => ({ type: i.type, value: i.value, context: i.context })),
+          });
+          return;
+        }
+      }
+
+      const advisories = searchAdvisories(name).filter((a) => a.ecosystem === ecosystem);
+      if (advisories.length > 0) {
+        res.json({
+          status: "HAS_ADVISORIES",
+          package: name,
+          advisories: advisories.map((a) => ({
+            id: a.id,
+            title: a.title,
+            affected_versions: a.affected_versions,
+            safe_versions: a.safe_versions,
+          })),
+        });
+        return;
+      }
+
+      res.json({ status: "SAFE", package: version ? `${name}@${version}` : name });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }

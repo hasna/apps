@@ -20,6 +20,10 @@ export enum ScannerType {
   GitHistory = "git-history",
   Config = "config",
   AiSafety = "ai-safety",
+  SupplyChain = "supply-chain",
+  IOC = "ioc",
+  Lockfile = "lockfile",
+  CiCd = "ci-cd",
 }
 
 export enum ReportFormat {
@@ -187,3 +191,86 @@ export const SEVERITY_ORDER: Record<Severity, number> = {
   [Severity.Low]: 3,
   [Severity.Info]: 4,
 };
+
+// --- Supply Chain Types ---
+
+export enum AttackType {
+  MaintainerHijack = "maintainer-hijack",
+  CiCdCompromise = "ci-cd-compromise",
+  TagHijack = "tag-hijack",
+  Typosquatting = "typosquatting",
+  DependencyConfusion = "dependency-confusion",
+  MaliciousPackage = "malicious-package",
+  PostinstallExploit = "postinstall-exploit",
+  PthInjection = "pth-injection",
+}
+
+export enum Ecosystem {
+  Npm = "npm",
+  PyPI = "pypi",
+  Go = "go",
+  Crates = "crates.io",
+  GitHubActions = "github-actions",
+}
+
+export enum IOCType {
+  IP = "ip",
+  Domain = "domain",
+  FilePath = "file-path",
+  ProcessName = "process",
+  FileHash = "hash",
+  URL = "url",
+}
+
+export interface Advisory {
+  id: string;
+  package_name: string;
+  ecosystem: Ecosystem;
+  affected_versions: string[];
+  safe_versions: string[];
+  attack_type: AttackType;
+  severity: Severity;
+  title: string;
+  description: string;
+  source: string;
+  cve_id: string | null;
+  threat_actor: string | null;
+  detected_at: string;
+  resolved_at: string | null;
+  tweet_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdvisoryIOC {
+  id: string;
+  advisory_id: string;
+  type: IOCType;
+  value: string;
+  context: string | null;
+  platform: string | null; // "macos", "windows", "linux", null = all
+}
+
+export interface MonitoredPackage {
+  id: string;
+  name: string;
+  ecosystem: Ecosystem;
+  last_checked_at: string | null;
+  check_interval_ms: number;
+  status: "active" | "paused" | "compromised";
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface RegistryEvent {
+  id: string;
+  package_name: string;
+  version: string;
+  ecosystem: Ecosystem;
+  event_type: "publish" | "unpublish" | "maintainer-change" | "tag-update";
+  timestamp: string;
+  suspicious: boolean;
+  analysis: string | null;
+  advisory_id: string | null;
+  created_at: string;
+}

@@ -15,3 +15,20 @@ export { createRule, getRule, listRules, updateRule, toggleRule, seedBuiltinRule
 export { createPolicy, getPolicy, listPolicies, updatePolicy, getActivePolicy } from "./policies.js";
 export { createBaseline, listBaselines, isBaselined, deleteBaseline } from "./baselines.js";
 export { getCachedAnalysis, cacheAnalysis, invalidateCache } from "./llm-cache.js";
+export {
+  createAdvisory,
+  getAdvisory,
+  getAdvisoryByPackage,
+  listAdvisories,
+  searchAdvisories,
+  isVersionAffected,
+  createAdvisoryIOC,
+  getIOCsForAdvisory,
+  getAllIOCs,
+  findIOCByValue,
+  addMonitoredPackage,
+  listMonitoredPackages,
+  updateMonitoredPackage,
+  createRegistryEvent,
+  listRegistryEvents,
+} from "./advisories.js";

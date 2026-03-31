@@ -218,4 +218,73 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    name: "003_supply_chain",
+    sql: `
+      CREATE TABLE advisories (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        package_name TEXT NOT NULL,
+        ecosystem TEXT NOT NULL,
+        affected_versions TEXT NOT NULL DEFAULT '[]',
+        safe_versions TEXT NOT NULL DEFAULT '[]',
+        attack_type TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'critical',
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        cve_id TEXT,
+        threat_actor TEXT,
+        detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT,
+        tweet_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_advisories_package ON advisories(package_name, ecosystem);
+      CREATE INDEX idx_advisories_severity ON advisories(severity);
+      CREATE INDEX idx_advisories_attack_type ON advisories(attack_type);
+      CREATE INDEX idx_advisories_detected ON advisories(detected_at);
+
+      CREATE TABLE advisory_iocs (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        advisory_id TEXT NOT NULL REFERENCES advisories(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        value TEXT NOT NULL,
+        context TEXT,
+        platform TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_advisory_iocs_advisory ON advisory_iocs(advisory_id);
+      CREATE INDEX idx_advisory_iocs_type ON advisory_iocs(type);
+      CREATE INDEX idx_advisory_iocs_value ON advisory_iocs(value);
+
+      CREATE TABLE monitored_packages (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        name TEXT NOT NULL,
+        ecosystem TEXT NOT NULL,
+        last_checked_at TEXT,
+        check_interval_ms INTEGER NOT NULL DEFAULT 300000,
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE UNIQUE INDEX idx_monitored_packages_name ON monitored_packages(name, ecosystem);
+
+      CREATE TABLE registry_events (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        package_name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        ecosystem TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+        suspicious INTEGER NOT NULL DEFAULT 0,
+        analysis TEXT,
+        advisory_id TEXT REFERENCES advisories(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_registry_events_package ON registry_events(package_name, ecosystem);
+      CREATE INDEX idx_registry_events_suspicious ON registry_events(suspicious);
+      CREATE INDEX idx_registry_events_advisory ON registry_events(advisory_id);
+    `,
+  },
 ];
