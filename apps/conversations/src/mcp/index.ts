@@ -10,7 +10,6 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudTools } from "@hasna/cloud";
 import { getPresence } from "../lib/presence.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
@@ -18,6 +17,7 @@ import { registerSpaceTools } from "./tools/spaces.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
+import { registerCloudSyncTools } from "./tools/cloud.js";
 
 import pkg from "../../package.json";
 
@@ -54,7 +54,7 @@ registerAdvancedTools(server, pkg.version);
 
 export async function startMcpServer() {
   const transport = new StdioServerTransport();
-  registerCloudTools(server, "conversations");
+  registerCloudSyncTools(server);
   await server.connect(transport);
 }
 
