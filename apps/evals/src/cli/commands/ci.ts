@@ -12,9 +12,16 @@ export function ciCommand(): Command {
   cmd
     .command("run <dataset>")
     .description("Run and compare to baseline")
-    .option("--adapter <type>", "Adapter type", "http")
-    .option("--url <url>", "App URL")
-    .option("--model <model>", "Model name")
+    .option("--adapter <type>", "Adapter type: http|anthropic|openai|mcp|function|cli", "http")
+    .option("--url <url>", "App URL (for http adapter)")
+    .option("--model <model>", "Model name (for anthropic/openai adapter)")
+    .option("--system <prompt>", "System prompt (for anthropic/openai adapter)")
+    .option("--module <path>", "Module path (for function adapter)")
+    .option("--export <name>", "Export name (for function adapter)")
+    .option("--command <cmd>", "Shell command (for cli adapter)")
+    .option("--mcp-command <cmd>", "MCP server command (for mcp adapter)")
+    .option("--tool <name>", "MCP tool name (for mcp adapter)")
+    .option("--no-judge", "Skip LLM judge, assertions only")
     .option("--baseline <name>", "Baseline name to compare against", "main")
     .option("--fail-if-regression <pct>", "Fail if score drops by more than N%", "0")
     .option("--output <format>", "Output format: terminal|markdown", "terminal")
@@ -22,7 +29,7 @@ export function ciCommand(): Command {
     .action(async (dataset: string, opts: Record<string, string>) => {
       const { cases } = await loadDataset(dataset);
       const adapter = parseAdapterConfig(opts);
-      const run = await runEvals(cases, { dataset, adapter });
+      const run = await runEvals(cases, { dataset, adapter, skipJudge: (opts as unknown as Record<string, unknown>)["judge"] === false || (opts as unknown as Record<string, unknown>)["noJudge"] === true });
       saveRun(run);
 
       const baselineName = opts["baseline"] ?? "main";
