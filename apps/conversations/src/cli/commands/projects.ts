@@ -123,7 +123,7 @@ export function registerProjectCommands(program: Command): void {
   project
     .command("update")
     .description("Update a project")
-    .argument("<id>", "Project ID")
+    .argument("<id-or-name>", "Project ID or name")
     .option("--name <name>", "New name")
     .option("--description <text>", "New description")
     .option("--path <path>", "New path")
@@ -148,7 +148,10 @@ export function registerProjectCommands(program: Command): void {
       }
 
       try {
-        const p = updateProject(id, updates as any);
+        // Resolve by name if not a UUID
+        const isUuid = /^[0-9a-f-]{36}$/i.test(id);
+        const resolvedId = isUuid ? id : (getProjectByName(id)?.id ?? id);
+        const p = updateProject(resolvedId, updates as any);
         if (opts.json) {
           console.log(JSON.stringify(p, null, 2));
         } else {
@@ -164,11 +167,13 @@ export function registerProjectCommands(program: Command): void {
   project
     .command("delete")
     .description("Delete a project")
-    .argument("<id>", "Project ID")
+    .argument("<id-or-name>", "Project ID or name")
     .option("--json", "Output as JSON")
     .action((id, opts) => {
       try {
-        const deleted = deleteProject(id);
+        const isUuid = /^[0-9a-f-]{36}$/i.test(id);
+        const resolvedId = isUuid ? id : (getProjectByName(id)?.id ?? id);
+        const deleted = deleteProject(resolvedId);
         if (!deleted) {
           console.error(chalk.red(`Project "${id}" not found.`));
           process.exit(1);

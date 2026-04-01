@@ -13,7 +13,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("send")
     .description("Send a message to an agent")
     .argument("<message>", "Message content")
-    .requiredOption("--to <agent>", "Recipient agent ID")
+    .option("--to <agent>", "Recipient agent ID (required unless --space is used)")
     .option("--from <agent>", "Sender agent ID")
     .option("--session <id>", "Session ID (auto-generated if omitted)")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
@@ -21,11 +21,13 @@ export function registerMessagingCommands(program: Command): void {
     .option("--repository <repo>", "Repository context")
     .option("--branch <branch>", "Branch context")
     .option("--metadata <json>", "JSON metadata string")
+    .option("--space <name>", "Send to a space instead of a specific agent")
     .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
     .option("--json", "Output as JSON")
     .action((message, opts) => {
       const from = resolveIdentity(opts.from).trim();
       const to = typeof opts.to === "string" ? opts.to.trim() : "";
+      const space = typeof opts.space === "string" ? opts.space.trim() : "";
       const content = typeof message === "string" ? message : "";
       const session = typeof opts.session === "string" && opts.session.trim()
         ? opts.session.trim()
@@ -35,8 +37,8 @@ export function registerMessagingCommands(program: Command): void {
         console.error(chalk.red("Sender identity is required."));
         process.exit(1);
       }
-      if (!to) {
-        console.error(chalk.red("Recipient is required."));
+      if (!to && !space) {
+        console.error(chalk.red("Recipient is required: use --to <agent> or --space <name>."));
         process.exit(1);
       }
       if (!content.trim()) {
@@ -56,7 +58,8 @@ export function registerMessagingCommands(program: Command): void {
 
       const msg = sendMessage({
         from,
-        to,
+        to: to || from,
+        space: space || undefined,
         content,
         session_id: session,
         priority: opts.priority,
@@ -69,6 +72,8 @@ export function registerMessagingCommands(program: Command): void {
 
       if (opts.json) {
         console.log(JSON.stringify(msg, null, 2));
+      } else if (space) {
+        console.log(chalk.green(`Message sent to #${space}`) + chalk.dim(` (id: ${msg.id})`));
       } else {
         console.log(chalk.green(`Message sent`) + chalk.dim(` (id: ${msg.id}, session: ${msg.session_id})`));
       }
