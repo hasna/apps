@@ -615,4 +615,14 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (39) ON CONFLICT DO NOTHING;
   `,
+  // Migration 40: Per-machine short_id uniqueness — short_ids are human-readable local labels,
+  // not global identifiers. Canonical task identity is the nanoid UUID. Drop the global unique
+  // constraint and replace with per-machine uniqueness so synced tasks from different machines
+  // don't collide. New tasks no longer receive short_ids.
+  `
+  DROP INDEX IF EXISTS idx_tasks_short_id;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_short_id ON tasks(short_id, machine_id) WHERE short_id IS NOT NULL AND machine_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_short_id_lookup ON tasks(short_id) WHERE short_id IS NOT NULL;
+  INSERT INTO _migrations (id) VALUES (40) ON CONFLICT DO NOTHING;
+  `,
 ];

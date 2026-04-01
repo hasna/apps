@@ -733,6 +733,16 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at) WHERE archived_at IS NOT NULL;
   INSERT OR IGNORE INTO _migrations (id) VALUES (43);
   `,
+  // Migration 44: Per-machine short_id uniqueness — short_ids are human-readable local labels,
+  // not global identifiers. Canonical task identity is the nanoid UUID. Drop the global unique
+  // constraint and replace with per-machine uniqueness so tasks synced from different machines
+  // don't collide. New tasks no longer receive short_ids (createTask sets short_id = null).
+  `
+  DROP INDEX IF EXISTS idx_tasks_short_id;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_short_id ON tasks(short_id, machine_id) WHERE short_id IS NOT NULL AND machine_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_short_id_lookup ON tasks(short_id) WHERE short_id IS NOT NULL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (44);
+  `,
 ];
 
 export function runMigrations(db: Database): void {
