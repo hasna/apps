@@ -190,8 +190,11 @@ evals capture --app http://localhost:3000 --rate 0.1 --output datasets/captured.
 # Health check
 evals doctor
 
-# Register MCP server with Claude Code
-evals mcp --claude
+# Register MCP server with Claude Code / Codex / Gemini
+evals mcp register --claude      # Claude Code (~/.claude/mcp.json)
+evals mcp register --codex       # Codex (~/.codex/config.json)
+evals mcp register --gemini      # Gemini (~/.gemini/settings.json)
+evals mcp register --all         # all three at once
 ```
 
 ---
@@ -214,7 +217,7 @@ evals mcp --claude
 
 ## MCP tools (for agents)
 
-Register with Claude Code: `evals mcp --claude`
+Register with your agent: `evals mcp register --claude` (or `--codex`, `--gemini`, `--all`)
 
 | Tool | Description |
 |------|-------------|

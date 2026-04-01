@@ -6,9 +6,12 @@
 # Install globally
 bun install -g @hasna/evals
 
-# Register MCP server with Claude Code
-evals mcp --claude
-# Restart Claude Code — evals_* tools will be available
+# Register MCP server with your agent runtime
+evals mcp register --claude      # Claude Code
+evals mcp register --codex       # Codex CLI
+evals mcp register --gemini      # Gemini CLI
+evals mcp register --all         # all three at once
+# Restart your agent — evals_* tools will be available
 ```
 
 ## MCP tools
