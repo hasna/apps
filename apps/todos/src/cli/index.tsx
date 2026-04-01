@@ -1022,6 +1022,7 @@ program
   .option("--delete <id>", "Delete a template")
   .option("--update <id>", "Update a template")
   .option("--use <id>", "Create a task from a template")
+  .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
   .action((opts) => {
     const globalOpts = program.opts();
     const { createTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } = require("../db/templates.js");
@@ -1066,12 +1067,30 @@ program
 
     if (opts.use) {
       try {
+        // Parse --var key=value pairs
+        const variables: Record<string, string> = {};
+        if (opts.var) {
+          for (const v of (opts.var as string[])) {
+            const eq = v.indexOf("=");
+            if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+            variables[v.slice(0, eq)] = v.slice(eq + 1);
+          }
+        }
         const input = taskFromTemplate(opts.use, {
           title: opts.title,
           description: opts.description,
           priority: opts.priority,
         });
-        const task = createTask({ ...input, project_id: input.project_id || autoProject(globalOpts) });
+        // Substitute {var} placeholders in title
+        if (input.title) {
+          let title = input.title;
+          for (const [k, v] of Object.entries(variables)) {
+            title = title.replace(new RegExp(`\\{${k}\\}`, "g"), v);
+          }
+          // If unresolved placeholders remain, leave them (user can still create the task)
+          input.title = title;
+        }
+        const task = createTask({ ...input, agent_id: globalOpts.agent, project_id: input.project_id || autoProject(globalOpts) });
         if (globalOpts.json) { output(task, true); }
         else { console.log(chalk.green("Task created from template:")); console.log(formatTaskLine(task)); }
       } catch (e) { handleError(e); }
@@ -1161,17 +1180,18 @@ program
 
 // template import — import a template from JSON
 program
-  .command("template-import")
+  .command("template-import [file]")
   .alias("templates-import")
   .description("Import a template from a JSON file")
-  .option("--file <path>", "Path to template JSON file")
-  .action((opts: { file?: string }) => {
+  .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
+  .action((file: string | undefined, opts: { file?: string }) => {
     const globalOpts = program.opts();
     const { importTemplate } = require("../db/templates.js");
     const { readFileSync } = require("fs");
     try {
-      if (!opts.file) { console.error(chalk.red("--file is required")); process.exit(1); }
-      const content = readFileSync(opts.file, "utf-8");
+      const filePath = file || opts.file;
+      if (!filePath) { console.error(chalk.red("Provide a file path: todos template-import <file> or --file <path>")); process.exit(1); }
+      const content = readFileSync(filePath, "utf-8");
       const json = JSON.parse(content);
       const template = importTemplate(json);
       if (globalOpts.json) { output(template, true); }
@@ -2476,7 +2496,10 @@ program
   .option("--set <key=value>", "Set a config value (e.g. completion_guard.enabled=true)")
   .action((opts) => {
     const globalOpts = program.opts();
-    const configPath = join(process.env["HOME"] || "~", ".todos", "config.json");
+    const home = process.env["HOME"] || "~";
+    const newPath = join(home, ".hasna", "todos", "config.json");
+    const legacyPath = join(home, ".todos", "config.json");
+    const configPath = (!existsSync(newPath) && existsSync(legacyPath)) ? legacyPath : newPath;
 
     if (opts.get) {
       const config = loadConfig();

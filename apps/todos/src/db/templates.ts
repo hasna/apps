@@ -130,15 +130,19 @@ export function updateTemplate(id: string, updates: UpdateTemplateInput, db?: Da
 export function taskFromTemplate(templateId: string, overrides: Partial<CreateTaskInput> = {}, db?: Database): CreateTaskInput {
   const t = getTemplate(templateId, db);
   if (!t) throw new Error(`Template not found: ${templateId}`);
+  // Strip undefined values from overrides before spreading so they don't shadow template defaults
+  const cleanOverrides = Object.fromEntries(
+    Object.entries(overrides).filter(([, v]) => v !== undefined)
+  ) as Partial<CreateTaskInput>;
   return {
-    title: overrides.title || t.title_pattern,
-    description: overrides.description ?? t.description ?? undefined,
-    priority: overrides.priority ?? t.priority,
-    tags: overrides.tags ?? t.tags,
-    project_id: overrides.project_id ?? t.project_id ?? undefined,
-    plan_id: overrides.plan_id ?? t.plan_id ?? undefined,
-    metadata: overrides.metadata ?? t.metadata,
-    ...overrides,
+    title: cleanOverrides.title || t.title_pattern,
+    description: cleanOverrides.description ?? t.description ?? undefined,
+    priority: cleanOverrides.priority ?? t.priority,
+    tags: cleanOverrides.tags ?? t.tags,
+    project_id: cleanOverrides.project_id ?? t.project_id ?? undefined,
+    plan_id: cleanOverrides.plan_id ?? t.plan_id ?? undefined,
+    metadata: cleanOverrides.metadata ?? t.metadata,
+    ...cleanOverrides,
   };
 }
 
