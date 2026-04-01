@@ -144,7 +144,7 @@ const program = new Command();
 program
   .name("security")
   .description("AI-powered security scanner for git repos")
-  .version("0.1.0");
+  .version("0.1.4");
 
 // scan [path]
 program

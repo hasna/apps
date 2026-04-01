@@ -81,7 +81,7 @@ function getCodeContext(filePath: string, line: number, contextLines = 10): stri
 
 const server = new McpServer({
   name: "security",
-  version: "0.1.0",
+  version: "0.1.4",
 });
 
 // 1. scan_repo
@@ -848,7 +848,7 @@ server.tool(
   async (params: { message: string; email?: string; category?: string }) => {
     try {
       const db = getDb();
-      db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(params.message, params.email || null, params.category || "general", "0.1.0");
+      db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(params.message, params.email || null, params.category || "general", "0.1.4");
       return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: String(e) }], isError: true };
