@@ -6,10 +6,15 @@ import * as schema from "./schema.js";
 
 export * from "./schema.js";
 
-// Migrate ~/.brains/ → ~/.hasna/brains/ on first run
-migrateDotfile("brains");
+let _migrated = false;
+function ensureMigrated() {
+  if (_migrated) return;
+  migrateDotfile("brains");
+  _migrated = true;
+}
 
 export function getDb(dbPath?: string) {
+  ensureMigrated();
   const adapter = (dbPath ? new SqliteAdapter(dbPath) : createDatabase({ service: "brains" })) as SqliteAdapter;
   const sqlite = adapter.raw;
   const db = drizzle(sqlite, { schema });
@@ -66,5 +71,6 @@ export function getDb(dbPath?: string) {
 
 /** Get a raw SqliteAdapter for direct SQL queries (e.g. feedback table). */
 export function getRawDb(dbPath?: string): SqliteAdapter {
+  ensureMigrated();
   return (dbPath ? new SqliteAdapter(dbPath) : createDatabase({ service: "brains" })) as SqliteAdapter;
 }
