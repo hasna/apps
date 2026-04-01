@@ -2,10 +2,9 @@ import { Command } from "commander"
 import chalk from "chalk"
 import { getPrompt, updatePrompt } from "../../db/prompts.js"
 import { movePrompt } from "../../db/collections.js"
-import { findSimilar } from "../../lib/search.js"
-import { renderTemplate, extractVariableInfo, validateVars } from "../../lib/template.js"
+import { extractVariableInfo, validateVars } from "../../lib/template.js"
 import { lintPrompt } from "../../lib/lint.js"
-import { isJson, output, handleError, fmtPrompt } from "../utils.js"
+import { isJson, output, handleError } from "../utils.js"
 
 export function registerQolCommands(program: Command): void {
 
@@ -19,63 +18,6 @@ export function registerQolCommands(program: Command): void {
         if (!prompt) handleError(program, `Prompt not found: ${id}`)
         if (isJson(program)) output(program, { id: prompt!.id, slug: prompt!.slug, body: prompt!.body })
         else process.stdout.write(prompt!.body)
-      } catch (e) { handleError(program, e) }
-    })
-
-  // ── render ───────────────────────────────────────────────────────────────────
-  program
-    .command("render <id>")
-    .description("Render a template prompt with variable substitution")
-    .option("--var <kv>", "Variable as key=value (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc }, [] as string[])
-    .option("--vars <json>", "Variables as JSON object")
-    .action((id: string, opts: { var: string[]; vars?: string }) => {
-      try {
-        const prompt = getPrompt(id)
-        if (!prompt) handleError(program, `Prompt not found: ${id}`)
-
-        const vars: Record<string, string> = {}
-        if (opts.vars) {
-          Object.assign(vars, JSON.parse(opts.vars) as Record<string, string>)
-        }
-        for (const kv of opts.var) {
-          const eq = kv.indexOf("=")
-          if (eq === -1) handleError(program, `Invalid --var format (expected key=value): ${kv}`)
-          vars[kv.slice(0, eq)] = kv.slice(eq + 1)
-        }
-
-        const { rendered, missing_vars, used_defaults } = renderTemplate(prompt!.body, vars)
-
-        if (isJson(program)) {
-          output(program, { rendered, missing_vars, used_defaults })
-          return
-        }
-        if (missing_vars.length > 0) {
-          console.error(chalk.yellow(`Warning: unresolved variables: ${missing_vars.join(", ")}`))
-        }
-        if (used_defaults.length > 0 && !isJson(program)) {
-          console.error(chalk.gray(`Using defaults for: ${used_defaults.join(", ")}`))
-        }
-        process.stdout.write(rendered)
-      } catch (e) { handleError(program, e) }
-    })
-
-  // ── similar ──────────────────────────────────────────────────────────────────
-  program
-    .command("similar <id>")
-    .description("Find prompts similar to the given one (by tags and collection)")
-    .option("-n, --limit <n>", "Max results", "5")
-    .action((id: string, opts: { limit?: string }) => {
-      try {
-        const prompt = getPrompt(id)
-        if (!prompt) handleError(program, `Prompt not found: ${id}`)
-        const limit = parseInt(opts.limit ?? "5") || 5
-        const results = findSimilar(prompt!.id, limit)
-        if (isJson(program)) { output(program, results.map((r) => r.prompt)); return }
-        if (results.length === 0) { console.log(chalk.gray("No similar prompts found.")); return }
-        console.log(chalk.bold(`Similar to ${chalk.green(prompt!.slug)}:`))
-        for (const r of results) {
-          console.log(`  ${fmtPrompt(r.prompt)}  ${chalk.gray(`score:${r.score}`)}`)
-        }
       } catch (e) { handleError(program, e) }
     })
 
