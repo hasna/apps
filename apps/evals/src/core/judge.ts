@@ -1,6 +1,31 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import type { JudgeConfig, JudgeResult, Verdict } from "../types/index.js";
+
+/**
+ * Resolve an API key from env or ~/.secrets fallback.
+ * Auto-injects into process.env so the SDK picks it up.
+ */
+function resolveKey(envVar: string, secretsRelPath: string, secretsKey: string): string | undefined {
+  if (process.env[envVar]) return process.env[envVar];
+  const p = join(homedir(), ".secrets", secretsRelPath);
+  if (existsSync(p)) {
+    for (const line of readFileSync(p, "utf8").split("\n")) {
+      if (line.trim().startsWith(secretsKey + "=")) {
+        const v = line.trim().slice(secretsKey.length + 1).replace(/^["']|["']$/g, "");
+        if (v) { process.env[envVar] = v; return v; }
+      }
+    }
+  }
+  return undefined;
+}
+
+// Eagerly resolve on module load so all SDK instances pick it up
+resolveKey("ANTHROPIC_API_KEY", "hasnaxyz/anthropic/live.env", "HASNAXYZ_ANTHROPIC_LIVE_API_KEY");
+resolveKey("OPENAI_API_KEY", "hasnaxyz/openai/live.env", "HASNAXYZ_OPENAI_LIVE_API_KEY");
 
 // Judge is ALWAYS temperature=0 — deterministic, consistent verdicts.
 // Chain-of-thought reasoning is REQUIRED before verdict (never score first).
