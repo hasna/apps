@@ -653,6 +653,19 @@ logoCmd
     }
   });
 
+logoCmd
+  .command('remove <company-id>')
+  .description('Remove a company\'s logo')
+  .action((companyId: string) => {
+    const { deleteImage } = require('../../lib/images.js') as typeof import('../../lib/images.js');
+    const { updateCompany } = require('../../db/companies.js') as typeof import('../../db/companies.js');
+    const company = getCompany(companyId);
+    if (!company) { console.error(chalk.red('Company not found')); return; }
+    const deleted = deleteImage(companyId);
+    if (deleted) updateCompany(companyId, { logo_url: null });
+    console.log(deleted ? chalk.green(`Logo removed for ${company.name}`) : chalk.yellow(`No logo set for ${company.name}`));
+  });
+
 // ─── contacts set-sensitivity ─────────────────────────────────────────────────
 
 program
