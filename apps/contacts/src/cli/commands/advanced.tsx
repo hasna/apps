@@ -750,6 +750,15 @@ vaultCmd
 
 // ─── contacts docs ───────────────────────────────────────────────────────────
 
+function handleVaultError(err: unknown): never {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes('Vault is locked') || msg.includes('not initialized')) {
+    console.error(chalk.red(`\nVault is locked. Run: contacts vault unlock --passphrase <pass>\n`));
+    process.exit(1);
+  }
+  throw err;
+}
+
 const docsCmd = program.command('docs').description('Manage encrypted contact documents');
 
 docsCmd
@@ -763,15 +772,18 @@ docsCmd
   .action(async (contactId: string, opts: { type?: string; label?: string; value?: string; file?: string; expires?: string }) => {
     const { addDocument } = await import('../../db/documents.js');
     if (!opts.value) { console.error(chalk.red('--value is required')); process.exit(1); }
-    const doc = addDocument({
-      contact_id: contactId,
-      doc_type: (opts.type || 'other') as import('../../db/documents.js').DocumentType,
-      label: opts.label,
-      value: opts.value,
-      file_path: opts.file,
-      expires_at: opts.expires,
-    });
-    console.log(chalk.green(`\nDocument added: ${doc.doc_type} (${doc.id})\n`));
+    let doc;
+    try {
+      doc = addDocument({
+        contact_id: contactId,
+        doc_type: (opts.type || 'other') as import('../../db/documents.js').DocumentType,
+        label: opts.label,
+        value: opts.value,
+        file_path: opts.file,
+        expires_at: opts.expires,
+      });
+    } catch (err) { handleVaultError(err); }
+    console.log(chalk.green(`\nDocument added: ${doc!.doc_type} (${doc!.id})\n`));
   });
 
 docsCmd
@@ -860,7 +872,10 @@ healthCmd
   .action(async (id: string) => {
     const { getHealthData } = await import('../../db/health.js');
     const contact = getContact(id);
-    const health = getHealthData(id);
+    let health;
+    try {
+      health = getHealthData(id);
+    } catch (err) { handleVaultError(err); }
     if (!health) {
       console.log(chalk.gray(`\nNo health data for ${contact.display_name}.\n`));
       return;
@@ -914,7 +929,9 @@ healthCmd
     if (opts.physicianPhone) input.primary_physician_phone = opts.physicianPhone;
     if (opts.organDonor !== undefined) input.organ_donor = opts.organDonor;
     if (opts.notes) input.notes = opts.notes;
-    setHealthData(id, input as import('../../db/health.js').SetHealthInput);
+    try {
+      setHealthData(id, input as import('../../db/health.js').SetHealthInput);
+    } catch (err) { handleVaultError(err); }
     console.log(chalk.green(`\nHealth data updated for ${contact.display_name}\n`));
   });
 
@@ -924,7 +941,9 @@ healthCmd
   .action(async (id: string) => {
     const { deleteHealthData } = await import('../../db/health.js');
     const contact = getContact(id);
-    deleteHealthData(id);
+    try {
+      deleteHealthData(id);
+    } catch (err) { handleVaultError(err); }
     console.log(chalk.green(`\nHealth data cleared for ${contact.display_name}\n`));
   });
 

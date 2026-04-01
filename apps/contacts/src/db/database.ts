@@ -575,6 +575,11 @@ export function getDatabase(path?: string): Database {
   const db = new Database(dbPath, { create: true });
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
+  // Compatibility shim: older @hasna/cloud versions may lack .query().
+  // Polyfill it with .prepare() which has the same .get()/.all()/.run() API.
+  if (typeof (db as unknown as Record<string, unknown>)["query"] !== "function") {
+    (db as unknown as Record<string, unknown>)["query"] = (sql: string) => db.prepare(sql);
+  }
   runMigrations(db);
   _db = db;
   return db;
