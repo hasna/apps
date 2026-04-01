@@ -92,10 +92,12 @@ export function registerQolCommands(program: Command): void {
 
   // ── tag ──────────────────────────────────────────────────────────────────────
   program
-    .command("tag <id> [ops...]")
-    .description("Patch tags: +foo adds, -bar removes. Or --set foo,bar replaces all tags.")
+    .command("tag <id>")
+    .description("Patch tags on a prompt. Use --add/--remove, or --set to replace all.")
+    .option("-a, --add <tags>", "Comma-separated tags to add")
+    .option("-r, --remove <tags>", "Comma-separated tags to remove")
     .option("--set <tags>", "Replace all tags (comma-separated)")
-    .action((id: string, ops: string[], opts: { set?: string }) => {
+    .action((id: string, opts: { add?: string; remove?: string; set?: string }) => {
       try {
         const prompt = getPrompt(id)
         if (!prompt) handleError(program, `Prompt not found: ${id}`)
@@ -106,17 +108,14 @@ export function registerQolCommands(program: Command): void {
           tags = opts.set.split(",").map((t) => t.trim()).filter(Boolean)
         } else {
           tags = [...p.tags]
-          for (const op of ops) {
-            if (op.startsWith("+")) {
-              const tag = op.slice(1)
-              if (!tags.includes(tag)) tags.push(tag)
-            } else if (op.startsWith("-")) {
-              const tag = op.slice(1)
-              tags = tags.filter((t) => t !== tag)
-            } else {
-              // no prefix — treat as add
-              if (!tags.includes(op)) tags.push(op)
+          if (opts.add) {
+            for (const t of opts.add.split(",").map((x) => x.trim()).filter(Boolean)) {
+              if (!tags.includes(t)) tags.push(t)
             }
+          }
+          if (opts.remove) {
+            const toRemove = opts.remove.split(",").map((x) => x.trim())
+            tags = tags.filter((t) => !toRemove.includes(t))
           }
         }
 
@@ -295,9 +294,8 @@ export function registerQolCommands(program: Command): void {
 
   // ── bulk-tag ─────────────────────────────────────────────────────────────────
   program
-    .command("bulk-tag [ops...] [ids...]")
-    .description("Patch tags on multiple prompts. Leading ops start with + or -, rest are IDs. Or pipe IDs via stdin.")
-    .helpOption("-h, --help")
+    .command("bulk-tag [args...]")
+    .description("Patch tags on multiple prompts. Args starting with +/- are tag ops; rest are IDs. Pipe IDs via stdin too.")
     .addHelpText("after", `
 Examples:
   prompts bulk-tag +foo -bar PRMT-00001 PRMT-00002
