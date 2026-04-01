@@ -110,13 +110,16 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
   const replyTo = opts.reply_to || null;
 
+  const msgUuid = randomUUID().replace(/-/g, "");
+
   const stmt = db.prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, space, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (uuid, session_id, from_agent, to_agent, space, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
 
   const row = stmt.get(
+    msgUuid,
     sessionId,
     opts.from,
     opts.to,
