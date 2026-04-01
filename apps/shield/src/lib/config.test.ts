@@ -1,9 +1,16 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { loadConfig, saveConfig, initProject, getProjectConfigPath, getProjectConfigDir } from "./config.js";
-import { DEFAULT_CONFIG, ScannerType, Severity, ReportFormat } from "../types/index.js";
+import {
+  loadConfig,
+  saveConfig,
+  initProject,
+  getProjectConfigPath,
+  getProjectConfigDir,
+  getConfigPath,
+} from "./config.js";
+import { DEFAULT_CONFIG, Severity } from "../types/index.js";
 
 describe("config", () => {
   let tempDir: string;

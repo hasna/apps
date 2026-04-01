@@ -125,4 +125,50 @@ describe("lockfile forensics scanner", () => {
     expect(axiosFindings.length).toBeGreaterThanOrEqual(1);
     expect(axiosFindings[0].severity).toBe(Severity.Critical);
   });
+
+  test("detects compromised version in yarn.lock", async () => {
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "axios": "1.14.1" } }));
+    writeFileSync(join(tempDir, "yarn.lock"), `
+# yarn lockfile v1
+"axios@1.14.1":
+  version "1.14.1"
+  resolved "https://registry.yarnpkg.com/axios/-/axios-1.14.1.tgz#abc"
+  integrity sha512-abc==
+`);
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const compromised = findings.find((f) => f.rule_id.startsWith("lockfile-compromised") && f.message.includes("axios@1.14.1"));
+    expect(compromised).toBeDefined();
+    expect(compromised!.severity).toBe(Severity.Critical);
+  });
+
+  test("detects compromised version in pnpm-lock.yaml", async () => {
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "axios": "1.14.1" } }));
+    writeFileSync(join(tempDir, "pnpm-lock.yaml"), `
+lockfileVersion: '6.0'
+packages:
+  /axios@1.14.1:
+    resolution: {integrity: sha512-abc}
+    engines: {node: '>= 12.0.0'}
+`);
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const compromised = findings.find((f) => f.rule_id.startsWith("lockfile-compromised") && f.message.includes("axios"));
+    expect(compromised).toBeDefined();
+  });
+
+  test("detects compromised in package-lock.json v1/v2 format (dependencies key)", async () => {
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: { "axios": "1.14.1" } }));
+    writeFileSync(join(tempDir, "package-lock.json"), JSON.stringify({
+      lockfileVersion: 1,
+      dependencies: {
+        "axios": { version: "1.14.1", integrity: "sha512-abc" },
+      },
+    }));
+
+    const findings = await lockfileScanner.scan(tempDir);
+    const compromised = findings.find((f) => f.rule_id.startsWith("lockfile-compromised") && f.message.includes("axios@1.14.1"));
+    expect(compromised).toBeDefined();
+    expect(compromised!.severity).toBe(Severity.Critical);
+  });
 });
