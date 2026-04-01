@@ -21,13 +21,11 @@ import { getDb } from "../db/database.js";
 
 // --- Ensure advisory data is loaded ---
 
-let _seeded = false;
 function ensureSeeded(): void {
-  if (_seeded) return;
   try {
-    getDb();
-    seedAdvisories();
-    _seeded = true;
+    const db = getDb();
+    const count = (db.prepare("SELECT COUNT(*) as n FROM advisories").get() as any)?.n ?? 0;
+    if (count === 0) seedAdvisories();
   } catch {
     // DB not available — degrade gracefully
   }

@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach } from "bun:test";
-import { getTestDb, getDb } from "./database.js";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { setupTestDb } from "./test-helpers.js";
 import {
   createAdvisory,
   getAdvisory,
@@ -18,10 +18,17 @@ import {
 } from "./advisories.js";
 import { Severity, Ecosystem, AttackType, IOCType } from "../types/index.js";
 
-// Note: these tests use the real DB since advisories module uses getDb()
-// The seed data from previous test runs may be present
-
 describe("advisories DB", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    cleanup = setupTestDb();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
   test("createAdvisory and getAdvisory", () => {
     const advisory = createAdvisory({
       package_name: "test-pkg",
@@ -67,8 +74,11 @@ describe("advisories DB", () => {
   });
 
   test("listAdvisories with filters", () => {
+    createAdvisory({ package_name: "pkg-npm", ecosystem: Ecosystem.Npm, affected_versions: ["1.0.0"], safe_versions: [], attack_type: AttackType.MaliciousPackage, severity: Severity.Critical, title: "npm pkg", description: "", source: "" });
+    createAdvisory({ package_name: "pkg-pypi", ecosystem: Ecosystem.PyPI, affected_versions: ["1.0.0"], safe_versions: [], attack_type: AttackType.CiCdCompromise, severity: Severity.High, title: "pypi pkg", description: "", source: "" });
+
     const all = listAdvisories();
-    expect(all.length).toBeGreaterThan(0);
+    expect(all.length).toBeGreaterThanOrEqual(2);
 
     const npmOnly = listAdvisories({ ecosystem: Ecosystem.Npm });
     expect(npmOnly.every((a) => a.ecosystem === Ecosystem.Npm)).toBe(true);
@@ -78,23 +88,27 @@ describe("advisories DB", () => {
   });
 
   test("searchAdvisories finds by name and description", () => {
+    createAdvisory({ package_name: "axios", ecosystem: Ecosystem.Npm, affected_versions: ["1.14.1"], safe_versions: ["1.13.6"], attack_type: AttackType.MaintainerHijack, severity: Severity.Critical, title: "axios supply chain attack", description: "maintainer hijack", source: "" });
     const results = searchAdvisories("axios");
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results.some((a) => a.package_name === "axios")).toBe(true);
   });
 
   test("isVersionAffected returns advisory for bad version", () => {
+    createAdvisory({ package_name: "axios", ecosystem: Ecosystem.Npm, affected_versions: ["1.14.1"], safe_versions: ["1.13.6"], attack_type: AttackType.MaintainerHijack, severity: Severity.Critical, title: "axios attack", description: "", source: "" });
     const result = isVersionAffected("axios", "npm", "1.14.1");
     expect(result).not.toBeNull();
     expect(result!.package_name).toBe("axios");
   });
 
   test("isVersionAffected returns null for safe version", () => {
+    createAdvisory({ package_name: "axios", ecosystem: Ecosystem.Npm, affected_versions: ["1.14.1"], safe_versions: ["1.13.6"], attack_type: AttackType.MaintainerHijack, severity: Severity.Critical, title: "axios attack", description: "", source: "" });
     const result = isVersionAffected("axios", "npm", "1.13.6");
     expect(result).toBeNull();
   });
 
   test("isVersionAffected works for litellm on pypi", () => {
+    createAdvisory({ package_name: "litellm", ecosystem: Ecosystem.PyPI, affected_versions: ["1.82.7", "1.82.8"], safe_versions: ["1.82.6"], attack_type: AttackType.CiCdCompromise, severity: Severity.Critical, title: "litellm attack", description: "", source: "", threat_actor: "TeamPCP" });
     const result = isVersionAffected("litellm", "pypi", "1.82.8");
     expect(result).not.toBeNull();
     expect(result!.threat_actor).toBe("TeamPCP");
@@ -102,6 +116,10 @@ describe("advisories DB", () => {
 });
 
 describe("advisory IOCs", () => {
+  let cleanup: () => void;
+  beforeEach(() => { cleanup = setupTestDb(); });
+  afterEach(() => { cleanup(); });
+
   test("createAdvisoryIOC and getIOCsForAdvisory", () => {
     const advisory = createAdvisory({
       package_name: "ioc-test-pkg",
@@ -115,20 +133,8 @@ describe("advisory IOCs", () => {
       source: "",
     });
 
-    createAdvisoryIOC({
-      advisory_id: advisory.id,
-      type: IOCType.Domain,
-      value: "evil-test.example.com",
-      context: "Test C2 domain",
-    });
-
-    createAdvisoryIOC({
-      advisory_id: advisory.id,
-      type: IOCType.IP,
-      value: "10.0.0.1",
-      context: "Test C2 IP",
-      platform: "linux",
-    });
+    createAdvisoryIOC({ advisory_id: advisory.id, type: IOCType.Domain, value: "evil-test.example.com", context: "Test C2 domain" });
+    createAdvisoryIOC({ advisory_id: advisory.id, type: IOCType.IP, value: "10.0.0.1", context: "Test C2 IP", platform: "linux" });
 
     const iocs = getIOCsForAdvisory(advisory.id);
     expect(iocs.length).toBe(2);
@@ -137,11 +143,15 @@ describe("advisory IOCs", () => {
   });
 
   test("getAllIOCs returns all IOCs", () => {
+    const advisory = createAdvisory({ package_name: "ioc-all-test", ecosystem: Ecosystem.Npm, affected_versions: ["1.0.0"], safe_versions: [], attack_type: AttackType.MaliciousPackage, severity: Severity.Critical, title: "t", description: "", source: "" });
+    createAdvisoryIOC({ advisory_id: advisory.id, type: IOCType.Domain, value: "c2.example.com", context: null });
     const all = getAllIOCs();
     expect(all.length).toBeGreaterThan(0);
   });
 
   test("findIOCByValue finds matching IOCs", () => {
+    const advisory = createAdvisory({ package_name: "ioc-find-test", ecosystem: Ecosystem.Npm, affected_versions: ["1.0.0"], safe_versions: [], attack_type: AttackType.MaliciousPackage, severity: Severity.Critical, title: "t", description: "", source: "" });
+    createAdvisoryIOC({ advisory_id: advisory.id, type: IOCType.Domain, value: "sfrclak.com", context: "axios C2" });
     const results = findIOCByValue("sfrclak.com");
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0].value).toBe("sfrclak.com");
@@ -149,31 +159,26 @@ describe("advisory IOCs", () => {
 });
 
 describe("monitored packages", () => {
-  test("addMonitoredPackage and listMonitoredPackages", () => {
-    const uniqueName = `monitor-test-pkg-${Date.now()}`;
-    addMonitoredPackage({
-      name: uniqueName,
-      ecosystem: Ecosystem.Npm,
-      check_interval_ms: 60000,
-    });
+  let cleanup: () => void;
+  beforeEach(() => { cleanup = setupTestDb(); });
+  afterEach(() => { cleanup(); });
 
+  test("addMonitoredPackage and listMonitoredPackages", () => {
+    addMonitoredPackage({ name: "monitor-test-pkg", ecosystem: Ecosystem.Npm, check_interval_ms: 60000 });
     const all = listMonitoredPackages();
-    const found = all.find((p) => p.name === uniqueName);
+    const found = all.find((p) => p.name === "monitor-test-pkg");
     expect(found).toBeDefined();
     expect(found!.status).toBe("active");
   });
 });
 
 describe("registry events", () => {
+  let cleanup: () => void;
+  beforeEach(() => { cleanup = setupTestDb(); });
+  afterEach(() => { cleanup(); });
+
   test("createRegistryEvent and listRegistryEvents", () => {
-    createRegistryEvent({
-      package_name: "event-test-pkg",
-      version: "1.0.0",
-      ecosystem: Ecosystem.Npm,
-      event_type: "publish",
-      suspicious: true,
-      analysis: "Published by unknown maintainer",
-    });
+    createRegistryEvent({ package_name: "event-test-pkg", version: "1.0.0", ecosystem: Ecosystem.Npm, event_type: "publish", suspicious: true, analysis: "Published by unknown maintainer" });
 
     const events = listRegistryEvents({ package_name: "event-test-pkg" });
     expect(events.length).toBeGreaterThanOrEqual(1);

@@ -2,18 +2,22 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { setupTestDb } from "../db/test-helpers.js";
 import { lockfileScanner } from "./lockfile.js";
 import { ScannerType, Severity } from "../types/index.js";
 
 describe("lockfile forensics scanner", () => {
   let tempDir: string;
+  let cleanup: () => void;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "lockfile-test-"));
+    cleanup = setupTestDb();
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+    cleanup();
   });
 
   test("scanner has correct metadata", () => {

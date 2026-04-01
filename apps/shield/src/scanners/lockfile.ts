@@ -14,10 +14,12 @@ import { isVersionAffected, listAdvisories } from "../db/advisories.js";
 import { seedAdvisories } from "../data/advisories.js";
 import { getDb } from "../db/database.js";
 
-let _seeded = false;
 function ensureSeeded(): void {
-  if (_seeded) return;
-  try { getDb(); seedAdvisories(); _seeded = true; } catch {}
+  try {
+    const db = getDb();
+    const count = (db.prepare("SELECT COUNT(*) as n FROM advisories").get() as any)?.n ?? 0;
+    if (count === 0) seedAdvisories();
+  } catch {}
 }
 
 // --- Lockfile parsers (extract exact pinned versions) ---

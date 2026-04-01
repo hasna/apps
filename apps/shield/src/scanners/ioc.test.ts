@@ -2,18 +2,22 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { setupTestDb } from "../db/test-helpers.js";
 import { iocScanner } from "./ioc.js";
 import { ScannerType, Severity } from "../types/index.js";
 
 describe("IOC scanner", () => {
   let tempDir: string;
+  let cleanup: () => void;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "ioc-test-"));
+    cleanup = setupTestDb();
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+    cleanup();
   });
 
   test("scanner has correct metadata", () => {
