@@ -45,6 +45,7 @@ export const PG_MIGRATIONS: string[] = [
 
   CREATE TABLE IF NOT EXISTS messages (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    uuid TEXT NOT NULL DEFAULT gen_random_uuid()::text UNIQUE,
     session_id TEXT NOT NULL,
     from_agent TEXT NOT NULL,
     to_agent TEXT NOT NULL,

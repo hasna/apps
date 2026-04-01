@@ -117,7 +117,7 @@ bun:sqlite with WAL mode, foreign keys enabled via schema references, 5-second b
 - `idx_spaces_parent` on spaces(parent_id)
 - `idx_spaces_project` on spaces(project_id)
 
-## MCP Tools (16 total)
+## MCP Tools (22 total)
 
 ### DM Tools (5)
 | Tool | Description |
@@ -146,6 +146,18 @@ bun:sqlite with WAL mode, foreign keys enabled via schema references, 5-second b
 | `get_project` | Get project by ID or name |
 | `update_project` | Update any project field |
 | `delete_project` | Delete project (fails if spaces reference it) |
+
+### Cloud Sync Tools (6)
+| Tool | Description |
+|------|-------------|
+| `conversations_cloud_status` | Show cloud config, PG connection health, and unresolved conflict count |
+| `conversations_cloud_push` | Push local → cloud PostgreSQL. Skips int-PK tables (messages, reactions, etc.) to avoid ID collision |
+| `conversations_cloud_pull` | Pull cloud → local with UPSERT merge. Skips int-PK tables |
+| `conversations_cloud_sync` | Bidirectional sync — pull then push in one call |
+| `conversations_cloud_migrate` | Run `src/lib/pg-migrations.ts` DDL against the configured RDS instance. Supports `--dry_run` |
+| `conversations_cloud_feedback` | Send feedback for the conversations service |
+
+**Tables excluded from default sync** (integer AUTOINCREMENT PKs collide across machines): `messages`, `reactions`, `message_read_receipts`, `message_mentions`. Pass explicit `tables` param to sync these.
 
 ## Testing
 

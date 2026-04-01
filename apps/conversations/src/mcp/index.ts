@@ -4,7 +4,7 @@
  * Exposes tools for sending, reading, and managing messages, spaces, and projects between agents.
  *
  * Usage:
- *   conversations mcp          # Start MCP server on stdio
+ *   conversations mcp          # Start MCP server on stdio (22 tools)
  *   conversations-mcp          # Direct binary
  */
 

@@ -45,6 +45,7 @@ export function getDb(): Database {
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
       session_id TEXT NOT NULL,
       from_agent TEXT NOT NULL,
       to_agent TEXT NOT NULL,
@@ -65,6 +66,7 @@ export function getDb(): Database {
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_space ON messages(space)");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid)");
 
   // Projects table
   db.exec(`
@@ -242,6 +244,12 @@ export function getDb(): Database {
   if (!colNames2.includes("project_id")) {
     db.exec("ALTER TABLE messages ADD COLUMN project_id TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id)");
+  }
+  if (!colNames2.includes("uuid")) {
+    db.exec("ALTER TABLE messages ADD COLUMN uuid TEXT");
+    // Backfill existing rows with unique UUIDs
+    db.exec("UPDATE messages SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid)");
   }
 
   // Migrate agent_presence: add id, session_id, role, created_at columns

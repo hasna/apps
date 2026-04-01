@@ -64,7 +64,39 @@ function guessMimeType(name: string): string {
   return mimeMap[ext || ""] || "application/octet-stream";
 }
 
+/** Maximum allowed message content size in bytes (64 KB). */
+export const MAX_MESSAGE_BYTES = 65536;
+
+/** Per-agent rate limit: max messages per window. */
+const RATE_LIMIT_MAX = 60;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+const _rateLimitCounters = new Map<string, { count: number; windowStart: number }>();
+
+function checkRateLimit(agentId: string): void {
+  // Skip in test environments (in-memory or test DB paths)
+  const dbPath = process.env.CONVERSATIONS_DB_PATH ?? process.env.HASNA_CONVERSATIONS_DB_PATH ?? "";
+  if (dbPath === ":memory:" || dbPath.includes("test") || dbPath.includes("tmp")) return;
+
+  const now = Date.now();
+  const entry = _rateLimitCounters.get(agentId);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    _rateLimitCounters.set(agentId, { count: 1, windowStart: now });
+    return;
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    throw new Error(`Rate limit exceeded: ${agentId} may send at most ${RATE_LIMIT_MAX} messages per minute.`);
+  }
+}
+
 export function sendMessage(opts: SendMessageOptions): Message {
+  if (Buffer.byteLength(opts.content, "utf8") > MAX_MESSAGE_BYTES) {
+    throw new Error(`Message content exceeds maximum size of ${MAX_MESSAGE_BYTES} bytes (64 KB).`);
+  }
+
+  checkRateLimit(opts.from);
+
   const db = getDb();
   const explicitSession = opts.session_id && opts.session_id.trim().length > 0 ? opts.session_id : undefined;
   const sessionId = explicitSession

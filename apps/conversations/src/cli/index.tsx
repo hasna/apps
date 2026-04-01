@@ -62,6 +62,44 @@ registerBrainsCommand(program);
 // ---- cloud sync/push/pull/feedback ----
 registerCloudCommands(program as any, "conversations");
 
+// ---- cloud migrate ----
+{
+  const cloudCmd = program.commands.find((c: any) => c.name() === "cloud");
+  if (cloudCmd) {
+    cloudCmd
+      .command("migrate")
+      .description("Run PostgreSQL migrations against the configured RDS instance")
+      .option("--dry-run", "Print SQL without executing")
+      .action(async (opts) => {
+        try {
+          const { getCloudConfig, getConnectionString, PgAdapterAsync } = await import("@hasna/cloud");
+          const { PG_MIGRATIONS } = await import("../lib/pg-migrations.js");
+          const config = getCloudConfig();
+          if (config.mode === "local") {
+            console.error(chalk.red("Error: cloud mode not configured. Set RDS credentials first."));
+            process.exit(1);
+          }
+          if (opts.dryRun) {
+            console.log(chalk.dim("-- Dry run: SQL that would be executed --\n"));
+            for (const sql of PG_MIGRATIONS) console.log(sql);
+            return;
+          }
+          const pg = new PgAdapterAsync(getConnectionString("conversations"));
+          for (let i = 0; i < PG_MIGRATIONS.length; i++) {
+            process.stdout.write(chalk.dim(`Running migration ${i + 1}/${PG_MIGRATIONS.length}...`));
+            await pg.run(PG_MIGRATIONS[i]);
+            console.log(chalk.green(" done"));
+          }
+          await pg.close();
+          console.log(chalk.green("✓ All migrations applied."));
+        } catch (e: any) {
+          console.error(chalk.red(`Migration failed: ${e?.message ?? e}`));
+          process.exit(1);
+        }
+      });
+  }
+}
+
 // ---- default: TUI ----
 program
   .action(() => {
