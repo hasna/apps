@@ -2148,8 +2148,11 @@ program
     if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent.")); process.exit(1); }
     const db = getDatabase();
     if (project) {
-      const { getProjectByPath, getProjectByName } = require("../db/projects.js") as any;
-      const p = getProjectByPath(process.cwd(), db) || getProjectByName(project, db);
+      const { getProjectByPath } = require("../db/projects.js") as any;
+      // Try path lookup, then partial-ID, then name search
+      const p = getProjectByPath(project, db)
+        || (() => { const id = resolvePartialId(db, "projects", project); return id ? db.query("SELECT * FROM projects WHERE id = ?").get(id) : null; })()
+        || (db.query("SELECT * FROM projects WHERE name = ? OR task_list_id = ?").get(project, project) as any);
       const projectId = p?.id || project;
       db.run("UPDATE agents SET active_project_id = ? WHERE id = ? OR name = ?", [projectId, agentId, agentId]);
       console.log(chalk.green(`Focused on: ${p?.name || projectId}`));
@@ -2765,9 +2768,16 @@ program
   .option("--project <id>", "Filter to project")
   .option("--json", "Output as JSON")
   .action(async (opts) => {
+    const globalOpts = program.opts();
     const db = getDatabase();
     const filters: Record<string, string> = {};
-    if (opts.project) filters.project_id = opts.project;
+    const projectInput = opts.project || globalOpts.project;
+    if (projectInput) {
+      const pid = autoProject({ project: projectInput })
+        || resolvePartialId(db, "projects", projectInput)
+        || (db.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(projectInput, projectInput, projectInput) as any)?.id;
+      if (pid) filters.project_id = pid;
+    }
     const task = getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
     if (!task) {
       console.log(chalk.dim("No tasks available."));
@@ -3398,7 +3408,7 @@ program
       lines.push(`*${new Date().toLocaleDateString()}*\n`);
       lines.push(`| Metric | Value |`);
       lines.push(`|--------|-------|`);
-      lines.push(`| Active tasks | ${all.length} total (${stats.pending} pending, ${stats.in_progress} active) |`);
+      lines.push(`| Active tasks | ${all.length} total (${stats.by_status?.pending ?? 0} pending, ${stats.by_status?.in_progress ?? 0} active) |`);
       lines.push(`| Changed (${days}d) | ${changed.length} tasks |`);
       lines.push(`| Completed (${days}d) | ${completed.length} (${completionRate}% rate) |`);
       lines.push(`| Failed (${days}d) | ${failed.length} |`);
@@ -3406,7 +3416,7 @@ program
     } else {
       lines.push(chalk.bold(`todos report — last ${days} day${days !== 1 ? "s" : ""}`));
       lines.push("");
-      lines.push(`  Total:      ${chalk.bold(String(all.length))} tasks (${chalk.yellow(String(stats.pending))} pending, ${chalk.blue(String(stats.in_progress))} active)`);
+      lines.push(`  Total:      ${chalk.bold(String(all.length))} tasks (${chalk.yellow(String(stats.by_status?.pending ?? 0))} pending, ${chalk.blue(String(stats.by_status?.in_progress ?? 0))} active)`);
       lines.push(`  Changed:    ${chalk.bold(String(changed.length))} in period`);
       lines.push(`  Completed:  ${chalk.green(String(completed.length))} (${completionRate}% rate)`);
       if (failed.length > 0) lines.push(`  Failed:     ${chalk.red(String(failed.length))}`);
@@ -3414,7 +3424,7 @@ program
       if (Object.keys(byAgent).length > 0) {
         lines.push(`  By agent:   ${Object.entries(byAgent).map(([a, n]) => `${a}=${n}`).join(" ")}`);
       }
-      if (stats.in_progress > 0) lines.push(`  Stale risk: check \`todos stale\` for stuck tasks`);
+      if ((stats.by_status?.in_progress ?? 0) > 0) lines.push(`  Stale risk: check \`todos stale\` for stuck tasks`);
     }
 
     console.log(lines.join("\n"));
