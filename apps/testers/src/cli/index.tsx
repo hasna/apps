@@ -1367,7 +1367,12 @@ projectCmd
   .description("Show project details")
   .action((id: string) => {
     try {
-      const project = getProject(id);
+      // Try full UUID, then partial prefix match, then name
+      let project = getProject(id);
+      if (!project) {
+        const all = listProjects();
+        project = all.find((p) => p.id.startsWith(id) || p.name === id) ?? null;
+      }
       if (!project) {
         logError(chalk.red(`Project not found: ${id}`));
         process.exit(1);
@@ -3147,12 +3152,39 @@ apiCmd
 
 apiCmd
   .command("add")
-  .description("Add a new API check interactively")
+  .description("Add a new API check (interactive if no --url given)")
   .option("--project <id>", "Project ID")
+  .option("-n, --name <name>", "Check name (non-interactive)")
+  .option("-u, --url <url>", "URL to check, full or path (non-interactive)")
+  .option("-m, --method <method>", "HTTP method (default: GET)")
+  .option("--status <code>", "Expected HTTP status code (default: 200)")
+  .option("--contains <text>", "Body must contain this string")
+  .option("--response-time <ms>", "Max acceptable response time in ms")
+  .option("-t, --tag <tag>", "Tag (repeatable)", [] as string[])
   .action(async (opts) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
     try {
+      // Non-interactive mode
+      if (opts.url) {
+        const projectId = resolveProject(opts.project);
+        const check = createApiCheck({
+          name: opts.name?.trim() || opts.url,
+          method: (opts.method?.toUpperCase() ?? "GET") as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD",
+          url: opts.url.trim(),
+          expectedStatus: opts.status ? parseInt(opts.status, 10) : 200,
+          expectedBodyContains: opts.contains || undefined,
+          expectedResponseTimeMs: opts.responseTime ? parseInt(opts.responseTime, 10) : undefined,
+          tags: opts.tag ?? [],
+          projectId,
+        });
+        log("");
+        log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
+        log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
+        return;
+      }
+
+      // Interactive mode
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
       const name = await ask("Name: ");
       if (!name.trim()) { logError(chalk.red("Name is required")); process.exit(1); }
       const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
@@ -3180,7 +3212,6 @@ apiCmd
       log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
       log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
     } catch (error) {
-      rl.close();
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
@@ -3542,13 +3573,47 @@ personaCmd
 
 personaCmd
   .command("add")
-  .description("Create a persona interactively")
+  .description("Create a persona (interactive if no --name/--role given)")
   .option("--global", "Create as a global persona (no project scope)", false)
   .option("--project <id>", "Project ID")
+  .option("-n, --name <name>", "Persona name (non-interactive)")
+  .option("-r, --role <role>", "Persona role (non-interactive)")
+  .option("-d, --description <text>", "Persona description")
+  .option("-i, --instructions <text>", "Behavior instructions")
+  .option("--traits <list>", "Comma-separated traits (e.g. impatient,curious)")
+  .option("--goals <list>", "Comma-separated goals")
+  .option("--auth-email <email>", "Login email for auth testing")
+  .option("--auth-password <pass>", "Login password for auth testing")
+  .option("--auth-login-path <path>", "Login page path (default: /login)")
   .action(async (opts) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
     try {
+      // Non-interactive mode: --name and --role provided
+      if (opts.name && opts.role) {
+        const projectId = opts.global ? undefined : resolveProject(opts.project);
+        const traits = opts.traits ? opts.traits.split(",").map((t: string) => t.trim()).filter(Boolean) : [];
+        const goals = opts.goals ? opts.goals.split(",").map((g: string) => g.trim()).filter(Boolean) : [];
+        const persona = createPersona({
+          name: opts.name.trim(),
+          role: opts.role.trim(),
+          description: opts.description?.trim() ?? "",
+          instructions: opts.instructions?.trim() ?? "",
+          traits,
+          goals,
+          projectId,
+          authEmail: opts.authEmail,
+          authPassword: opts.authPassword,
+          authLoginPath: opts.authLoginPath,
+        });
+        log("");
+        log(chalk.green(`Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`));
+        log(chalk.dim(`  Role: ${persona.role}`));
+        log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
+        return;
+      }
+
+      // Interactive mode
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
       const name = await ask("Name: ");
       if (!name.trim()) { logError(chalk.red("Name is required")); rl.close(); process.exit(1); }
       const role = await ask("Role (e.g. first-time user, admin, power user): ");
