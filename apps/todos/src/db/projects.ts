@@ -217,6 +217,20 @@ export function nextTaskShortId(projectId: string, db?: Database): string | null
   const project = getProject(projectId, d);
   if (!project || !project.task_prefix) return null;
 
+  const prefix = project.task_prefix;
+  const prefixLen = prefix.length + 2; // "PREFIX-" length + 1 for the number start
+
+  // Sync counter up to the max existing short_id — handles tasks synced from other machines
+  // that may have been created with a higher counter than the local project counter.
+  const maxRow = d.query(
+    `SELECT MAX(CAST(SUBSTR(short_id, ?) AS INTEGER)) as max_counter FROM tasks WHERE short_id LIKE ?`,
+  ).get(prefixLen, `${prefix}-%`) as { max_counter: number | null };
+
+  const syncedMax = maxRow?.max_counter ?? 0;
+  if (syncedMax >= (project.task_counter ?? 0)) {
+    d.run("UPDATE projects SET task_counter = ?, updated_at = ? WHERE id = ?", [syncedMax, now(), projectId]);
+  }
+
   d.run("UPDATE projects SET task_counter = task_counter + 1, updated_at = ? WHERE id = ?", [now(), projectId]);
   const updated = getProject(projectId, d)!;
   const padded = String(updated.task_counter).padStart(5, "0");

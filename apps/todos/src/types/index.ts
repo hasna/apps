@@ -375,12 +375,11 @@ export interface UpdateTaskInput {
   task_list_id?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
-  due_at?: string;
+  due_at?: string | null;
   estimated_minutes?: number;
   requires_approval?: boolean;
   approved_by?: string;
   recurrence_rule?: string | null;
-  due_at?: string | null;
   version: number; // required for optimistic locking
   task_type?: string | null;
 }
