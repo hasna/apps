@@ -33,10 +33,10 @@ async function listCollections(json = false) {
 export function registerCollectionsCommands(program: Command): void {
   const collectionsCmd = program.command("collections").description("Manage model collections");
 
+  // bare `brains collections` → show table (use `collections list --json` for JSON)
   collectionsCmd
-    .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
-      await listCollections(opts.json);
+    .action(async () => {
+      await listCollections(false);
     });
 
   collectionsCmd
