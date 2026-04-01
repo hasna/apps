@@ -9,6 +9,7 @@ import {
   importZoneFile,
   discoverSubdomains,
   validateDns,
+  getDomain,
   getDomainByName,
   createDomain,
   updateDomain,
@@ -284,7 +285,7 @@ export function registerDnsCommands(program: Command): void {
       try {
         const records = listDnsRecords(domainId);
         if (records.length === 0) { console.log("No local DNS records to push."); return; }
-        const dbDomain = getDomainByName(domainId) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
+        const dbDomain = getDomain(domainId) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
         const provider = getDnsProvider(providerName);
         await provider.setDnsRecords(dbDomain.name, records.map((r) => ({
           type: r.type, name: r.name, value: r.value, ttl: r.ttl, priority: r.priority ?? undefined,
