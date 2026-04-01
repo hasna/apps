@@ -1,6 +1,6 @@
 {
   "name": "@hasna/evals",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Open source AI evaluation framework — LLM-as-judge + assertion-based evals for any AI app. CLI + MCP server.",
   "type": "module",
   "main": "dist/index.js",
@@ -65,8 +65,8 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@hasna/cloud": "^0.1.28",
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@hasna/cloud": "^0.1.30",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ajv": "^8.18.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
