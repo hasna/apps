@@ -53,6 +53,25 @@ import {
 import { getReporter } from "../reporters/index.js";
 import { loadConfig, initProject } from "../lib/index.js";
 import { seedAdvisories } from "../data/advisories.js";
+import { readFileSync, existsSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname as _dirname } from "path";
+
+function _getVersion(): string {
+  try {
+    // Walk up from current file to find package.json
+    let dir = _dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 4; i++) {
+      const candidate = dir + "/package.json";
+      if (existsSync(candidate)) {
+        const v = JSON.parse(readFileSync(candidate, "utf-8")).version;
+        if (v) return v;
+      }
+      dir = _dirname(dir);
+    }
+  } catch {}
+  return "0.0.0";
+}
 
 // --- Helpers ---
 
@@ -144,7 +163,7 @@ const program = new Command();
 program
   .name("security")
   .description("AI-powered security scanner for git repos")
-  .version("0.1.4");
+  .version(_getVersion());
 
 // scan [path]
 program
