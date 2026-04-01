@@ -1701,6 +1701,7 @@ program
   .option("-u, --url <url>", "Base URL")
   .option("-p, --path <path>", "Project path")
   .option("--ci <provider>", "Generate CI workflow (github)")
+  .option("-y, --yes", "Skip interactive prompts (non-interactive mode)", false)
   .action(async (opts) => {
     try {
       const { project, scenarios, framework, url } = initProject({
@@ -1746,6 +1747,8 @@ program
       log("");
 
       // ── Interactive post-init wizard ───────────────────────────────────
+      if (opts.yes) return; // skip wizard in non-interactive mode
+
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       const ask = (q: string): Promise<string> => new Promise((resolve) => rl.question(q, resolve));
 
@@ -2182,14 +2185,17 @@ program
 program
   .command("unchain <scenario-id>")
   .description("Remove a dependency from a scenario")
-  .requiredOption("--from <id>", "Dependency to remove")
+  .requiredOption("--depends-on <id>", "Dependency to remove (alias: --from)")
+  .option("--from <id>", "Dependency to remove (alias for --depends-on)")
   .action((scenarioId: string, opts) => {
     try {
       const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
       if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
 
-      const dep = getScenario(opts.from) ?? getScenarioByShortId(opts.from);
-      if (!dep) { logError(chalk.red(`Dependency not found: ${opts.from}`)); process.exit(1); }
+      const depId = opts.dependsOn ?? opts.from;
+      if (!depId) { logError(chalk.red("Specify the dependency to remove with --depends-on <id>")); process.exit(1); }
+      const dep = getScenario(depId) ?? getScenarioByShortId(depId);
+      if (!dep) { logError(chalk.red(`Dependency not found: ${depId}`)); process.exit(1); }
 
       removeDependency(scenario.id, dep.id);
       log(chalk.green(`Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`));
@@ -2273,8 +2279,10 @@ flowCmd
   .command("list")
   .description("List all flows")
   .option("--project <id>", "Project ID")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     const flows = listFlows(resolveProject(opts.project) ?? undefined);
+    if (opts.json) { log(JSON.stringify(flows, null, 2)); return; }
     if (flows.length === 0) {
       log(chalk.dim("\n  No flows found.\n"));
       return;
@@ -2839,10 +2847,12 @@ scanCmd
   .option("--type <type>", "Filter by type: console_error|network_error|broken_link|performance")
   .option("--project <id>", "Filter by project ID")
   .option("--limit <n>", "Max results", "50")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const { listScanIssues } = require("../db/scan-issues.js");
       const issues = listScanIssues({ status: opts.status, type: opts.type, projectId: opts.project, limit: parseInt(opts.limit) });
+      if (opts.json) { log(JSON.stringify(issues, null, 2)); return; }
       if (issues.length === 0) { log(chalk.dim("No scan issues found.")); return; }
       for (const i of issues) {
         const statusColor = i.status === "open" ? chalk.red : i.status === "regressed" ? chalk.yellow : chalk.green;
@@ -3975,11 +3985,33 @@ const goldenCmd = program.command("golden").description("Manage golden answer ch
 
 goldenCmd
   .command("add")
-  .description("Add a golden answer check interactively")
+  .description("Add a golden answer check (interactive if no --question given)")
   .option("--project <id>", "Project ID")
+  .option("-q, --question <text>", "Question the endpoint should answer (non-interactive)")
+  .option("-a, --answer <text>", "Expected golden answer (non-interactive)")
+  .option("-e, --endpoint <path>", "Endpoint path or URL (non-interactive)")
+  .option("--judge-model <model>", "Model to use as judge")
   .action(async (opts) => {
     try {
       const { createGoldenAnswer } = await import("../db/golden-answers.js");
+
+      // Non-interactive mode
+      if (opts.question && opts.answer && opts.endpoint) {
+        const projectId = resolveProject(opts.project);
+        const golden = createGoldenAnswer({
+          question: opts.question,
+          goldenAnswer: opts.answer,
+          endpoint: opts.endpoint,
+          judgeModel: opts.judgeModel || undefined,
+          projectId,
+        });
+        log(chalk.green(`\nCreated golden answer check ${chalk.bold(golden.shortId)}`));
+        log(`  Endpoint: ${golden.endpoint}`);
+        log(`  Question: ${golden.question.slice(0, 60)}`);
+        return;
+      }
+
+      // Interactive mode
       const ask = (prompt: string): Promise<string> => {
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         return new Promise((resolve) => rl.question(prompt, (ans) => { rl.close(); resolve(ans.trim()); }));

@@ -596,8 +596,14 @@ export async function runByFilter(
   let scenarios: Scenario[];
 
   if (options.scenarioIds && options.scenarioIds.length > 0) {
+    // When explicit scenario IDs are provided, search within project first, then globally
     const all = listScenarios({ projectId: options.projectId });
     scenarios = all.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
+    // Fallback: if not found in project scope, search globally
+    if (scenarios.length === 0 && options.projectId) {
+      const global = listScenarios({});
+      scenarios = global.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
+    }
   } else {
     scenarios = listScenarios({
       projectId: options.projectId,
