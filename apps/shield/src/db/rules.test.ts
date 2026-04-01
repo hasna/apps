@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { setupTestDb } from "./test-helpers.js";
+import { setupTestDb, getCurrentTestDb } from "./test-helpers.js";
 import {
   createRule,
   getRule,
@@ -226,24 +226,24 @@ describe("rules", () => {
   });
 
   test("seedBuiltinRules creates builtin rules", () => {
-    seedBuiltinRules();
+    seedBuiltinRules(getCurrentTestDb());
     const rules = listRules();
     expect(rules.length).toBeGreaterThan(0);
     expect(rules.every((r) => r.builtin)).toBe(true);
   });
 
   test("seedBuiltinRules is idempotent (does not duplicate on second call)", () => {
-    seedBuiltinRules();
+    seedBuiltinRules(getCurrentTestDb());
     const count1 = listRules().length;
 
-    seedBuiltinRules();
+    seedBuiltinRules(getCurrentTestDb());
     const count2 = listRules().length;
 
     expect(count2).toBe(count1);
   });
 
   test("seedBuiltinRules creates rules for multiple scanner types", () => {
-    seedBuiltinRules();
+    seedBuiltinRules(getCurrentTestDb());
     const rules = listRules();
     const scannerTypes = new Set(rules.map((r) => r.scanner_type));
     expect(scannerTypes.size).toBeGreaterThanOrEqual(4);

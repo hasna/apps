@@ -144,8 +144,8 @@ export function toggleRule(id: string, enabled: boolean): void {
   stmt.run(enabled ? 1 : 0, new Date().toISOString(), id);
 }
 
-export function seedBuiltinRules(): void {
-  const db = getDb();
+export function seedBuiltinRules(dbOverride?: ReturnType<typeof getDb>): void {
+  const db = dbOverride ?? getDb();
 
   const existing = db.prepare(`SELECT COUNT(*) as count FROM rules WHERE builtin = 1`).get() as { count: number };
   if (existing.count > 0) return;
@@ -284,7 +284,7 @@ export function seedBuiltinRules(): void {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
-  db.transaction(() => {
+  const txn = db.transaction(() => {
     const now = new Date().toISOString();
     for (const rule of builtinRules) {
       insertStmt.run(
@@ -302,4 +302,6 @@ export function seedBuiltinRules(): void {
       );
     }
   });
+  // SqliteAdapter auto-executes; bun:sqlite returns a callable
+  if (typeof txn === "function") txn();
 }
