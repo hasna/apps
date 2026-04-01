@@ -19,7 +19,7 @@ const program = new Command();
 program
   .name("domains")
   .description("Domain portfolio and DNS management for AI agents")
-  .version("0.0.3");
+  .version("0.0.4");
 
 // ── Core noun-based commands ───────────────────────────────────────────────
 registerDomainCommand(program);   // domains domain <list|get|add|update|delete|buy|setup|sync|renew|check|whois|export|expiring|stats>
