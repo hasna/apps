@@ -276,8 +276,9 @@ export function registerCommands(program: Command): void {
     .argument("<connector>", "Connector name")
     .option("--json", "Output as structured JSON", false)
     .option("--raw", "Output raw markdown", false)
+    .option("--essential", "Show auth and env vars only (no full docs)", false)
     .description("Show connector documentation (auth, env vars, API, CLI commands)")
-    .action((connector: string, options: { json: boolean; raw: boolean }) => {
+    .action((connector: string, options: { json: boolean; raw: boolean; essential: boolean }) => {
       const meta = getConnector(connector);
       if (!meta) {
         if (options.json) {
@@ -304,6 +305,29 @@ export function registerCommands(program: Command): void {
 
       if (options.raw) {
         console.log(docs.raw);
+        return;
+      }
+
+      if (options.essential) {
+        if (options.json) {
+          console.log(JSON.stringify({ name: meta.name, auth: docs.auth, envVars: docs.envVars }, null, 2));
+        } else {
+          console.log(chalk.bold(`\n${meta.displayName} — Auth & Env Vars`));
+          console.log(chalk.dim("─".repeat(50)));
+          if (docs.auth) {
+            console.log(chalk.bold("\nAuthentication"));
+            for (const line of docs.auth.split("\n").filter(Boolean)) {
+              console.log(`  ${line}`);
+            }
+          }
+          if (docs.envVars.length > 0) {
+            console.log(chalk.bold("\nEnvironment Variables"));
+            for (const v of docs.envVars) {
+              console.log(`  ${chalk.cyan(v.variable.padEnd(30))}${v.description}`);
+            }
+          }
+          console.log();
+        }
         return;
       }
 
