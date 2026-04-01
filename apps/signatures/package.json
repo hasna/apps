@@ -1,6 +1,6 @@
 {
   "name": "@hasna/signatures",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Open source e-signature platform — sign PDFs locally, manage documents, MCP + CLI + API",
   "type": "module",
   "bin": {
