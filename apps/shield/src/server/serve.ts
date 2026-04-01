@@ -677,7 +677,7 @@ export function startServer(port: number) {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const dashboardPath = join(__dirname, "../../dashboard/dist");
   app.use(express.static(dashboardPath));
-  app.get("*", (req: Request, res: Response) => {
+  app.get("/{*path}", (req: Request, res: Response) => {
     if (!req.path.startsWith("/api")) {
       res.sendFile(join(dashboardPath, "index.html"), (err) => {
         if (err) {
