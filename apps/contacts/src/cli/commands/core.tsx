@@ -343,19 +343,31 @@ const companiesCmd = program
 companiesCmd
   .command("add")
   .description("Add a new company")
-  .action(async () => {
-    console.log(chalk.bold.blue("\nAdd New Company\n"));
+  .option("--name <name>", "Company name")
+  .option("--domain <domain>", "Domain (e.g. acme.com)")
+  .option("--industry <industry>", "Industry")
+  .option("--size <size>", "Size (e.g. 1-10, 11-50)")
+  .option("--description <desc>", "Description")
+  .option("--notes <notes>", "Notes")
+  .action(async (opts: { name?: string; domain?: string; industry?: string; size?: string; description?: string; notes?: string }) => {
+    let name = opts.name;
+    let domain = opts.domain;
+    let industry = opts.industry;
+    let size = opts.size;
+    let description = opts.description;
 
-    const name = await prompt("Company name (required):");
     if (!name) {
-      console.error(chalk.red("Company name is required."));
-      process.exit(1);
+      console.log(chalk.bold.blue("\nAdd New Company\n"));
+      name = await prompt("Company name (required):");
+      if (!name) {
+        console.error(chalk.red("Company name is required."));
+        process.exit(1);
+      }
+      domain = domain ?? await prompt("Domain (e.g. acme.com):");
+      industry = industry ?? await prompt("Industry:");
+      size = size ?? await prompt("Size (e.g. 1-10, 11-50):");
+      description = description ?? await prompt("Description:");
     }
-
-    const domain = await prompt("Domain (e.g. acme.com):");
-    const industry = await prompt("Industry:");
-    const size = await prompt("Size (e.g. 1-10, 11-50):");
-    const description = await prompt("Description:");
 
     const company = createCompany({
       name,
@@ -363,6 +375,7 @@ companiesCmd
       industry: industry || undefined,
       size: size || undefined,
       description: description || undefined,
+      notes: opts.notes || undefined,
     });
 
     console.log(chalk.green(`\n✓ Company created: ${company.name} (${company.id})\n`));
@@ -411,17 +424,24 @@ const tagsCmd = program
 tagsCmd
   .command("add")
   .description("Create a new tag")
-  .action(async () => {
-    console.log(chalk.bold.blue("\nAdd New Tag\n"));
+  .option("--name <name>", "Tag name")
+  .option("--color <hex>", "Color hex (e.g. #FF5733)")
+  .option("--description <desc>", "Description")
+  .action(async (opts: { name?: string; color?: string; description?: string }) => {
+    let name = opts.name;
+    let color = opts.color;
+    let description = opts.description;
 
-    const name = await prompt("Tag name (required):");
     if (!name) {
-      console.error(chalk.red("Tag name is required."));
-      process.exit(1);
+      console.log(chalk.bold.blue("\nAdd New Tag\n"));
+      name = await prompt("Tag name (required):");
+      if (!name) {
+        console.error(chalk.red("Tag name is required."));
+        process.exit(1);
+      }
+      color = color ?? await prompt("Color (hex, e.g. #FF5733 — optional):");
+      description = description ?? await prompt("Description (optional):");
     }
-
-    const color = await prompt("Color (hex, e.g. #FF5733 — optional):");
-    const description = await prompt("Description (optional):");
 
     const tag = createTag({
       name,
