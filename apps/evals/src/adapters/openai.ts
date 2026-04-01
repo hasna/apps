@@ -30,10 +30,14 @@ export async function callOpenAIAdapter(
     });
 
     const output = response.choices[0]?.message?.content ?? "";
-    const toolCalls = response.choices[0]?.message?.tool_calls?.map((tc) => ({
-      name: tc.function.name,
-      arguments: JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>,
-    }));
+    const toolCalls = response.choices[0]?.message?.tool_calls?.map((tc) => {
+      // openai v6: tool call shape changed — function may be on different property
+      const fn = (tc as unknown as { function?: { name: string; arguments: string } }).function ?? tc;
+      return {
+        name: (fn as { name: string }).name,
+        arguments: JSON.parse((fn as { arguments: string }).arguments || "{}") as Record<string, unknown>,
+      };
+    });
 
     const inputTokens = response.usage?.prompt_tokens;
     const outputTokens = response.usage?.completion_tokens;
