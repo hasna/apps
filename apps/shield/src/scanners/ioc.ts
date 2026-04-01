@@ -15,9 +15,11 @@ import {
   listAdvisories,
   getAllIOCs,
   isVersionAffected,
+  getIOCsForAdvisory,
 } from "../db/advisories.js";
 import { seedAdvisories } from "../data/advisories.js";
 import { getDb } from "../db/database.js";
+import { getAlertManager } from "../alerts/index.js";
 
 // --- Ensure advisory data is loaded ---
 
@@ -217,6 +219,17 @@ function checkDepsAgainstAdvisories(deps: ParsedDep[]): FindingInput[] {
           `Attack type: ${advisory.attack_type}` +
           (advisory.threat_actor ? `. Threat actor: ${advisory.threat_actor}` : ""),
       });
+
+      // Fire alert in background — don't block the scan
+      try {
+        const alertManager = getAlertManager();
+        if (alertManager.isEnabled()) {
+          const iocs = getIOCsForAdvisory(advisory.id).map((i) => ({
+            type: i.type, value: i.value, context: i.context,
+          }));
+          alertManager.alert(advisory, iocs).catch(() => {});
+        }
+      } catch {}
     }
   }
 
