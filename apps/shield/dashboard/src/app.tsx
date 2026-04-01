@@ -4,11 +4,17 @@ import { FindingsPage } from "./components/findings-page";
 import { ScansPage } from "./components/scans-page";
 import { RulesPage } from "./components/rules-page";
 import { ProjectsPage } from "./components/projects-page";
+import { FeedPage } from "./components/feed-page";
+import { PackageLookupPage } from "./components/package-lookup-page";
+import { TimelinePage } from "./components/timeline-page";
 
-type Tab = "dashboard" | "findings" | "scans" | "rules" | "projects";
+type Tab = "dashboard" | "findings" | "scans" | "rules" | "projects" | "feed" | "lookup" | "timeline";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "feed", label: "🛡️ Feed" },
+  { id: "lookup", label: "🔍 Lookup" },
+  { id: "timeline", label: "📅 Timeline" },
   { id: "findings", label: "Findings" },
   { id: "scans", label: "Scans" },
   { id: "rules", label: "Rules" },
@@ -79,6 +85,9 @@ export function App() {
         )}
         {activeTab === "rules" && <RulesPage />}
         {activeTab === "projects" && <ProjectsPage />}
+        {activeTab === "feed" && <FeedPage />}
+        {activeTab === "lookup" && <PackageLookupPage />}
+        {activeTab === "timeline" && <TimelinePage />}
       </main>
     </div>
   );

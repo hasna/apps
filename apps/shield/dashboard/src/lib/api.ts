@@ -6,6 +6,7 @@ import type {
   Project,
   ScannerType,
   Severity,
+  Advisory,
 } from "../types";
 
 const BASE = "/api";
@@ -137,4 +138,44 @@ export async function createProject(
     method: "POST",
     body: JSON.stringify({ name, path }),
   });
+}
+
+export async function fetchAdvisories(params?: {
+  ecosystem?: string;
+  severity?: string;
+  limit?: number;
+}): Promise<{ advisories: Advisory[]; count: number }> {
+  const q = new URLSearchParams();
+  if (params?.ecosystem) q.set("ecosystem", params.ecosystem);
+  if (params?.severity) q.set("severity", params.severity);
+  if (params?.limit !== undefined) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return request(`/advisories${qs ? `?${qs}` : ""}`);
+}
+
+export async function fetchAdvisory(id: string): Promise<Advisory> {
+  return request<Advisory>(`/advisories/${id}`);
+}
+
+export async function searchAdvisories(q: string): Promise<{ advisories: Advisory[]; count: number }> {
+  return request(`/advisories/search?q=${encodeURIComponent(q)}`);
+}
+
+export async function checkPackage(params: {
+  name: string;
+  version?: string;
+  ecosystem?: string;
+}): Promise<{
+  status: "SAFE" | "COMPROMISED" | "HAS_ADVISORIES";
+  package: string;
+  advisory?: Partial<Advisory>;
+  advisories?: Partial<Advisory>[];
+  iocs?: Array<{ type: string; value: string; context: string | null }>;
+  action?: string;
+  message?: string;
+}> {
+  const q = new URLSearchParams({ name: params.name });
+  if (params.version) q.set("version", params.version);
+  if (params.ecosystem) q.set("ecosystem", params.ecosystem);
+  return request(`/check-package?${q.toString()}`);
 }

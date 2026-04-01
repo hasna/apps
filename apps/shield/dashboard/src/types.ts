@@ -8,7 +8,55 @@ export type ScannerType =
   | "code"
   | "git-history"
   | "config"
-  | "ai-safety";
+  | "ai-safety"
+  | "supply-chain"
+  | "ioc"
+  | "lockfile"
+  | "ci-cd";
+
+export type AttackType =
+  | "maintainer-hijack"
+  | "ci-cd-compromise"
+  | "tag-hijack"
+  | "typosquatting"
+  | "dependency-confusion"
+  | "malicious-package"
+  | "postinstall-exploit"
+  | "pth-injection";
+
+export type Ecosystem = "npm" | "pypi" | "go" | "crates.io" | "github-actions";
+
+export type IOCType = "ip" | "domain" | "file-path" | "process" | "hash" | "url";
+
+export interface Advisory {
+  id: string;
+  package_name: string;
+  ecosystem: Ecosystem;
+  affected_versions: string[];
+  safe_versions: string[];
+  attack_type: AttackType;
+  severity: Severity;
+  title: string;
+  description: string;
+  source: string;
+  cve_id: string | null;
+  threat_actor: string | null;
+  detected_at: string;
+  resolved_at: string | null;
+  tweet_id: string | null;
+  created_at: string;
+  updated_at: string;
+  iocs?: AdvisoryIOC[];
+}
+
+export interface AdvisoryIOC {
+  id: string;
+  advisory_id: string;
+  type: IOCType;
+  value: string;
+  context: string | null;
+  platform: string | null;
+}
 
 export interface Project {
   id: string;
