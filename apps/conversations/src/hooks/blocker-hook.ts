@@ -15,6 +15,11 @@
 import { getDb, closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
 
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  console.log("conversations-hook: Claude Code PreToolUse hook for blocking messages.\n\nUsage: conversations-hook\n\nReads CONVERSATIONS_AGENT_ID or CLAUDE_AGENT_ID env var to identify the agent.\nOutputs blocking messages to stdout and exits 0.");
+  process.exit(0);
+}
+
 const agent = resolveIdentity();
 const db = getDb();
 

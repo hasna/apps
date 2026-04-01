@@ -66,7 +66,6 @@ export function getDb(): Database {
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_space ON messages(space)");
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid)");
 
   // Projects table
   db.exec(`
