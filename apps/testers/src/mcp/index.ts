@@ -2318,6 +2318,158 @@ server.tool(
   },
 );
 
+// ─── 69. crawl_and_generate ──────────────────────────────────────────────────
+
+server.tool(
+  "crawl_and_generate",
+  "Crawl any web app from a URL and auto-generate test scenarios for each page discovered. Zero config — works for any app. Uses AI (Claude) to analyze each page and write practical test scenarios.",
+  {
+    url: z.string().describe("Root URL to crawl (e.g. https://app.example.com)"),
+    projectId: z.string().optional().describe("Project ID to attach generated scenarios to"),
+    maxPages: z.number().int().min(1).max(50).optional().default(20).describe("Max pages to crawl (default 20)"),
+    scenariosPerPage: z.number().int().min(1).max(10).optional().default(3).describe("Scenarios to generate per page (default 3)"),
+    model: z.string().optional().describe(MODEL_DESC),
+    skipPaths: z.array(z.string()).optional().describe("URL paths to skip (e.g. ['/logout', '/admin'])"),
+    tags: z.array(z.string()).optional().describe("Extra tags to add to all generated scenarios"),
+    headed: z.boolean().optional().describe("Run browser in headed mode"),
+  },
+  async ({ url, projectId, maxPages, scenariosPerPage, model, skipPaths, tags, headed }) => {
+    try {
+      const { crawlAndGenerate } = await import("../lib/crawl-and-generate.js");
+      const result = await crawlAndGenerate({
+        url,
+        projectId,
+        maxPages: maxPages ?? 20,
+        scenariosPerPage: scenariosPerPage ?? 3,
+        model,
+        skipPaths,
+        tags,
+        headed,
+      });
+      return json(result);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 70. create_environment ──────────────────────────────────────────────────
+
+server.tool(
+  "create_environment",
+  "Register a named environment (e.g. staging, production, local) with its base URL. Use env name in run_scenarios instead of hardcoding URLs.",
+  {
+    name: z.string().describe("Environment name (e.g. staging, production, local)"),
+    url: z.string().describe("Base URL for this environment (e.g. https://staging.example.com)"),
+    projectId: z.string().optional().describe("Scope to a specific project"),
+    isDefault: z.boolean().optional().describe("Set as default environment for this project"),
+    variables: z.record(z.string()).optional().describe("Environment variables (e.g. { API_KEY: 'test-key' })"),
+  },
+  async ({ name, url, projectId, isDefault, variables }) => {
+    try {
+      const { createEnvironment } = await import("../db/environments.js");
+      const env = createEnvironment({ name, url, projectId, isDefault, variables });
+      return json(env);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 71. list_environments ────────────────────────────────────────────────────
+
+server.tool(
+  "list_environments",
+  "List registered environments with their URLs",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+  },
+  async ({ projectId }) => {
+    try {
+      const { listEnvironments } = await import("../db/environments.js");
+      const envs = listEnvironments(projectId);
+      return json({ items: envs, total: envs.length });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 72. delete_environment ───────────────────────────────────────────────────
+
+server.tool(
+  "delete_environment",
+  "Delete a named environment",
+  { name: z.string().describe("Environment name to delete") },
+  async ({ name }) => {
+    try {
+      const { deleteEnvironment } = await import("../db/environments.js");
+      const deleted = deleteEnvironment(name);
+      if (!deleted) return errorResponse(notFoundErr(name, "Environment"));
+      return json({ deleted: true, name });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 73. set_default_environment ─────────────────────────────────────────────
+
+server.tool(
+  "set_default_environment",
+  "Set an environment as the default — run_scenarios will use it when no url/env is specified",
+  { name: z.string().describe("Environment name to set as default") },
+  async ({ name }) => {
+    try {
+      const { setDefaultEnvironment, getEnvironment } = await import("../db/environments.js");
+      setDefaultEnvironment(name);
+      return json({ default: true, name, env: getEnvironment(name) });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 74. list_scenarios_by_page ───────────────────────────────────────────────
+
+server.tool(
+  "list_scenarios_by_page",
+  "Group scenarios by page (targetPath). Shows which pages have test coverage and which don't. Useful for spotting gaps.",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+  },
+  async ({ projectId }) => {
+    try {
+      const scenarios = listScenarios({ projectId });
+      const byPage: Record<string, Array<{ id: string; shortId: string; name: string; priority: string; tags: string[] }>> = {};
+      const noPath: Array<{ id: string; shortId: string; name: string }> = [];
+
+      for (const s of scenarios) {
+        if (s.targetPath) {
+          if (!byPage[s.targetPath]) byPage[s.targetPath] = [];
+          byPage[s.targetPath]!.push({ id: s.id, shortId: s.shortId, name: s.name, priority: s.priority, tags: s.tags });
+        } else {
+          noPath.push({ id: s.id, shortId: s.shortId, name: s.name });
+        }
+      }
+
+      const pages = Object.entries(byPage)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([path, items]) => ({ path, scenarioCount: items.length, scenarios: items }));
+
+      return json({
+        pages,
+        totalPages: pages.length,
+        totalScenarios: scenarios.length,
+        scenariosWithNoPage: noPath.length,
+        noPageScenarios: noPath,
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
 // ─── Cloud ────────────────────────────────────────────────────────────────────
 
 registerCloudTools(server, "testers");
