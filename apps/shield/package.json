@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@hasna/cloud": "^0.1.24",
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
