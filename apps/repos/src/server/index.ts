@@ -18,6 +18,35 @@ import {
 import { scanRepos } from "../lib/scanner.js";
 import { getHealthReport } from "../lib/utils.js";
 
+const VERSION = "0.1.2";
+
+function handleCliFlags(argv: string[]): boolean {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log("Usage: repos-serve [options]");
+    console.log("");
+    console.log("HTTP API and dashboard server for @hasna/repos");
+    console.log("");
+    console.log("Options:");
+    console.log("  -h, --help     display help");
+    console.log("  -V, --version  display version");
+    console.log("");
+    console.log("Environment:");
+    console.log("  REPOS_PORT     Server port (default: 19450)");
+    return true;
+  }
+
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(VERSION);
+    return true;
+  }
+
+  return false;
+}
+
+if (handleCliFlags(process.argv.slice(2))) {
+  process.exit(0);
+}
+
 const PORT = parseInt(process.env["REPOS_PORT"] || "19450");
 
 const clients = new Set<ServerWebSocket>();

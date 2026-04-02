@@ -22,9 +22,35 @@ import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/githu
 import { buildGraph, queryNode, queryRelated, findPath, getDeps, getGraphStats } from "../lib/graph.js";
 import { getDb } from "../db/database.js";
 
+const VERSION = "0.1.2";
+
+function handleCliFlags(argv: string[]): boolean {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log("Usage: repos-mcp [options]");
+    console.log("");
+    console.log("MCP stdio server for @hasna/repos");
+    console.log("");
+    console.log("Options:");
+    console.log("  -h, --help     display help");
+    console.log("  -V, --version  display version");
+    return true;
+  }
+
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(VERSION);
+    return true;
+  }
+
+  return false;
+}
+
+if (handleCliFlags(process.argv.slice(2))) {
+  process.exit(0);
+}
+
 const server = new McpServer({
   name: "repos",
-  version: "0.1.0",
+  version: VERSION,
 });
 
 // ── Repos ──
