@@ -94,10 +94,37 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("delete <id>")
     .description("Delete a domain from the portfolio")
-    .action((id: string) => {
+    .option("-f, --force", "Required confirmation for destructive delete")
+    .option("--json", "Output JSON")
+    .action((id: string, opts: { force?: boolean; json?: boolean }) => {
+      if (!opts.force) {
+        const message = `Refusing to delete domain '${id}' without --force.`;
+        if (opts.json) {
+          console.log(JSON.stringify({ deleted: false, id, error: message }, null, 2));
+        } else {
+          console.error(message);
+          console.error("Re-run with --force to confirm deletion.");
+        }
+        process.exit(1);
+      }
+
       const deleted = deleteDomain(id);
-      if (deleted) console.log(`Deleted domain ${id}`);
-      else { console.error(`Domain '${id}' not found.`); process.exit(1); }
+      if (!deleted) {
+        const message = `Domain '${id}' not found.`;
+        if (opts.json) {
+          console.log(JSON.stringify({ deleted: false, id, error: message }, null, 2));
+        } else {
+          console.error(message);
+        }
+        process.exit(1);
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify({ deleted: true, id }, null, 2));
+        return;
+      }
+
+      console.log(`Deleted domain ${id}`);
     });
 
   // ── search ──────────────────────────────────────────────────────────────
