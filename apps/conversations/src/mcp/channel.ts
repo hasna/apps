@@ -44,7 +44,8 @@ export function registerChannelBridge(
   }
 
   function pushNotification(msg: { content: string; from_agent: string; session_id: string; space?: string | null; priority?: string }): void {
-    void server.server.notification({
+    console.error(`[channel-bridge] pushing notification: from=${msg.from_agent}, content=${msg.content.slice(0, 50)}`);
+    server.server.notification({
       method: "notifications/claude/channel",
       params: {
         content: msg.content,
@@ -55,6 +56,8 @@ export function registerChannelBridge(
           ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
         },
       },
+    }).catch((err: unknown) => {
+      console.error(`[channel-bridge] notification error: ${err}`);
     });
   }
 
@@ -64,7 +67,12 @@ export function registerChannelBridge(
     const agentId = getAgentId();
     const sessionId = getSessionId();
 
-    if (!agentId && !sessionId) return;
+    console.error(`[channel-bridge] startPolling: agentId=${agentId}, sessionId=${sessionId}`);
+
+    if (!agentId && !sessionId) {
+      console.error('[channel-bridge] no agentId or sessionId — not polling');
+      return;
+    }
 
     if (agentId) seedLastSeen(agentId, sessionId);
 
@@ -106,5 +114,9 @@ export function registerChannelBridge(
     }, POLL_INTERVAL_MS);
   }
 
-  setTimeout(() => startPolling(), 500);
+  // Wait for transport connection, then start polling
+  setTimeout(() => {
+    console.error('[channel-bridge] attempting to start polling...');
+    startPolling();
+  }, 2000);
 }
