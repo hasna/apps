@@ -12,13 +12,14 @@ import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
 import { registerCollectionsCommands } from "./commands/collections.js";
 import { registerCloudCommands } from "./commands/cloud.js";
+import { getPackageVersion } from "../lib/package-metadata.js";
 
 const program = new Command();
 
 program
   .name("brains")
   .description("Fine-tuned model tracker and trainer")
-  .version("0.0.1");
+  .version(getPackageVersion());
 
 // ── models ────────────────────────────────────────────────────────────────────
 

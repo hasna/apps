@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { createServerFetchHandler } from "./index.js";
+import { createServerFetchHandler, resolveServerPort } from "./index.js";
 
 const packageJson = JSON.parse(
   readFileSync(resolve(import.meta.dir, "../../package.json"), "utf-8")
@@ -28,6 +28,22 @@ function patch(path: string, body: unknown) {
 }
 
 describe("brains server", () => {
+  test("resolveServerPort returns help when --help is provided", () => {
+    const result = resolveServerPort(["--help"], undefined);
+    expect(result).toEqual({ showHelp: true });
+  });
+
+  test("resolveServerPort parses --port values", () => {
+    const result = resolveServerPort(["--port", "8123"], undefined);
+    expect(result).toEqual({ showHelp: false, port: 8123 });
+  });
+
+  test("resolveServerPort rejects invalid --port values", () => {
+    const result = resolveServerPort(["--port", "70000"], undefined);
+    expect(result.showHelp).toBe(false);
+    expect(result.error).toContain("Invalid port");
+  });
+
   test("GET /health returns ok", async () => {
     const response = get("/health");
     expect(response.status).toBe(200);
