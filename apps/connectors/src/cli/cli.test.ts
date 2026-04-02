@@ -80,7 +80,7 @@ describe("CLI", () => {
       const { stdout } = await run("list");
       expect(stdout).toContain("AI & ML");
       expect(stdout).toContain("anthropic");
-      expect(stdout).toContain("stripe");
+      expect(stdout).toContain("openai");
     });
 
     test("--category filters by category", async () => {
@@ -418,6 +418,27 @@ describe("CLI", () => {
         expect(entry).toHaveProperty("configured");
       }
     });
+
+    test("list --json supports --limit and --offset pagination", async () => {
+      const { stdout: fullStdout } = await run("list --json");
+      const full = JSON.parse(fullStdout);
+
+      const { stdout, exitCode } = await run("list --json --offset 2 --limit 5");
+      expect(exitCode).toBe(0);
+      const page = JSON.parse(stdout);
+      expect(Array.isArray(page)).toBe(true);
+      expect(page).toHaveLength(5);
+      expect(page.map((c: { name: string }) => c.name)).toEqual(
+        full.slice(2, 7).map((c: { name: string }) => c.name)
+      );
+    });
+
+    test("list --json returns error for invalid pagination values", async () => {
+      const { stdout, exitCode } = await run("list --json --offset -1 --limit abc");
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("Invalid value for");
+    });
   });
 
   describe("search edge cases", () => {
@@ -434,6 +455,13 @@ describe("CLI", () => {
       expect(data[0]).toHaveProperty("version");
       expect(data[0]).toHaveProperty("category");
       expect(data[0]).toHaveProperty("description");
+    });
+
+    test("search returns error for invalid --limit", async () => {
+      const { stdout, exitCode } = await run("search stripe --json --limit nope");
+      expect(exitCode).toBe(1);
+      const data = JSON.parse(stdout);
+      expect(data.error).toContain("Invalid value for --limit");
     });
   });
 
@@ -529,6 +557,14 @@ describe("CLI", () => {
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data)).toBe(true);
+    });
+
+    test("supports --limit and --offset", async () => {
+      const { stdout, exitCode } = await run("list --brief --json --offset 1 --limit 3");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data).toHaveLength(3);
     });
   });
 

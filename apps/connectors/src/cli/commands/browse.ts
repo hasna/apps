@@ -14,6 +14,17 @@ import {
 } from "../../lib/installer.js";
 import { getAuthStatus } from "../../server/auth.js";
 
+function parseNonNegativeInt(
+  raw: string | undefined,
+  flag: string
+): { value: number | undefined; error?: string } {
+  if (raw === undefined) return { value: undefined };
+  if (!/^\d+$/.test(raw)) {
+    return { value: undefined, error: `Invalid value for ${flag}: '${raw}'. Expected a non-negative integer.` };
+  }
+  return { value: parseInt(raw, 10) };
+}
+
 export function registerCommands(program: Command): void {
   // List command
   program
@@ -23,13 +34,34 @@ export function registerCommands(program: Command): void {
     .option("-a, --all", "Show all available connectors", false)
     .option("-i, --installed", "Show only installed connectors", false)
     .option("-b, --brief", "Output only connector names", false)
+    .option("--limit <n>", "Limit results")
+    .option("--offset <n>", "Skip first N results")
     .option("--json", "Output as JSON", false)
     .description("List available or installed connectors")
     .action((options) => {
+      const parsedLimit = parseNonNegativeInt(options.limit, "--limit");
+      const parsedOffset = parseNonNegativeInt(options.offset, "--offset");
+      if (parsedLimit.error || parsedOffset.error) {
+        const error = parsedLimit.error || parsedOffset.error || "Invalid pagination options";
+        if (options.json) {
+          console.log(JSON.stringify({ error }));
+        } else {
+          console.log(chalk.red(error));
+        }
+        process.exit(1);
+        return;
+      }
+      const limit = parsedLimit.value;
+      const offset = parsedOffset.value ?? 0;
+      const page = <T>(items: T[]): T[] => {
+        if (limit === undefined) return items.slice(offset);
+        return items.slice(offset, offset + limit);
+      };
+
       // --brief: output only connector names
       if (options.brief) {
         if (options.installed) {
-          const installed = getInstalledConnectors();
+          const installed = page(getInstalledConnectors());
           if (options.json) {
             console.log(JSON.stringify(installed));
           } else {
@@ -38,17 +70,17 @@ export function registerCommands(program: Command): void {
         } else if (options.category) {
           const category = CATEGORIES.find(c => c.toLowerCase() === options.category.toLowerCase());
           if (!category) { console.error(`Unknown category: ${options.category}`); process.exit(1); return; }
-          const names = getConnectorsByCategory(category).map(c => c.name);
+          const names = page(getConnectorsByCategory(category).map(c => c.name));
           if (options.json) { console.log(JSON.stringify(names)); } else { for (const n of names) console.log(n); }
         } else {
-          const names = CONNECTORS.map(c => c.name);
+          const names = page(CONNECTORS.map(c => c.name));
           if (options.json) { console.log(JSON.stringify(names)); } else { for (const n of names) console.log(n); }
         }
         return;
       }
 
       if (options.installed) {
-        const installed = getInstalledConnectors();
+        const installed = page(getInstalledConnectors());
 
         if (installed.length === 0) {
           if (options.json) {
@@ -162,14 +194,15 @@ export function registerCommands(program: Command): void {
           return;
         }
         const connectors = getConnectorsByCategory(category);
+        const pagedConnectors = page(connectors);
         if (options.json) {
-          console.log(JSON.stringify(connectors));
+          console.log(JSON.stringify(pagedConnectors));
           return;
         }
-        console.log(chalk.bold(`\n${category} (${connectors.length}):\n`));
+        console.log(chalk.bold(`\n${category} (${pagedConnectors.length}):\n`));
         console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Description")}`);
         console.log(chalk.dim(`  ${"─".repeat(60)}`));
-        for (const c of connectors) {
+        for (const c of pagedConnectors) {
           console.log(`  ${chalk.cyan(c.name.padEnd(20))}${chalk.dim((c.version || "-").padEnd(10))}${c.description}`);
         }
         return;
@@ -177,7 +210,23 @@ export function registerCommands(program: Command): void {
 
       // Show all
       if (options.json) {
-        console.log(JSON.stringify(CONNECTORS));
+        console.log(JSON.stringify(page(CONNECTORS)));
+        return;
+      }
+
+      if (options.limit || options.offset) {
+        const connectors = page(CONNECTORS);
+        console.log(chalk.bold(`\nAvailable connectors (${connectors.length}):\n`));
+        console.log(`  ${chalk.dim("Name".padEnd(20))}${chalk.dim("Version".padEnd(10))}${chalk.dim("Category".padEnd(24))}${chalk.dim("Description")}`);
+        console.log(chalk.dim(`  ${"─".repeat(96)}`));
+        for (const c of connectors) {
+          console.log(
+            `  ${chalk.cyan(c.name.padEnd(20))}` +
+            `${chalk.dim((c.version || "-").padEnd(10))}` +
+            `${chalk.dim(c.category.padEnd(24))}` +
+            `${c.description}`
+          );
+        }
         return;
       }
 
@@ -202,6 +251,17 @@ export function registerCommands(program: Command): void {
     .option("--limit <n>", "Max results", "20")
     .description("Search for connectors (ranked with fuzzy matching)")
     .action((query: string, options: { json: boolean; limit: string }) => {
+      const parsedLimit = parseNonNegativeInt(options.limit, "--limit");
+      if (parsedLimit.error || parsedLimit.value === undefined) {
+        const error = parsedLimit.error || "Invalid --limit value";
+        if (options.json) {
+          console.log(JSON.stringify({ error }));
+        } else {
+          console.log(chalk.red(error));
+        }
+        process.exit(1);
+        return;
+      }
       const installed = getInstalledConnectors();
       const { getPromotedConnectors } = require("../../db/promotions.js");
       const { getUsageMap } = require("../../db/usage.js");
@@ -209,7 +269,7 @@ export function registerCommands(program: Command): void {
         installed,
         promoted: getPromotedConnectors(),
         usage: getUsageMap(),
-        limit: parseInt(options.limit),
+        limit: parsedLimit.value,
       });
 
       if (options.json) {
