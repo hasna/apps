@@ -3547,7 +3547,7 @@ program
     const globalOpts = program.opts();
     const db = getDatabase();
     const { listTasks } = require("../db/tasks.js") as any;
-    const projectId = autoProject(globalOpts) || undefined;
+    const projectId = globalOpts.project ? (autoProject(globalOpts) || undefined) : undefined;
     const filter: any = { assigned_to: agent };
     if (projectId) filter.project_id = projectId;
     const tasks: any[] = listTasks(filter, db);
