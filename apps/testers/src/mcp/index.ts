@@ -26,6 +26,24 @@ import { createPersona, getPersona, listPersonas, updatePersona, deletePersona }
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
 
+const cliArgs = new Set(process.argv.slice(2));
+if (cliArgs.has("--help") || cliArgs.has("-h")) {
+  console.log(`Usage: testers-mcp [options]
+
+Open Testers MCP server (stdio transport)
+
+Options:
+  -h, --help       Show this help message
+  -V, --version    Show version
+`);
+  process.exit(0);
+}
+
+if (cliArgs.has("--version") || cliArgs.has("-V")) {
+  console.log("0.0.1");
+  process.exit(0);
+}
+
 // ─── Response Helpers ────────────────────────────────────────────────────────
 
 function json(data: unknown): { content: [{ type: "text"; text: string }] } {
@@ -458,26 +476,6 @@ server.tool(
   },
 );
 
-// ─── 15. import_from_todos ───────────────────────────────────────────────────
-
-server.tool(
-  "import_from_todos",
-  "Import test scenarios from the todos database",
-  {
-    projectName: z.string().optional().describe("Todos project name to filter by"),
-    tags: z.array(z.string()).optional().describe("Tags to filter todos tasks"),
-    projectId: z.string().optional().describe("Target project ID for imported scenarios"),
-  },
-  async ({ projectName, tags, projectId }) => {
-    try {
-      const result = importFromTodos({ projectName, tags, projectId });
-      return json(result);
-    } catch (error) {
-      return errorResponse(error);
-    }
-  },
-);
-
 // ─── 16. get_status ──────────────────────────────────────────────────────────
 
 server.tool(
@@ -518,134 +516,6 @@ server.tool(
       const scenarios = listScenarios({ projectId });
       const scenario = scenarios.find((s) => s.name === name) ?? null;
       return json({ exists: scenario !== null, scenario });
-    } catch (error) {
-      return errorResponse(error);
-    }
-  },
-);
-
-// ─── Schedule Tools ──────────────────────────────────────────────────────────
-
-server.tool(
-  "create_schedule",
-  {
-    name: z.string().describe("Schedule name"),
-    cronExpression: z.string().describe("Cron expression (5-field)"),
-    url: z.string().describe("Target URL to test"),
-    tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
-    priority: z.string().optional().describe("Filter scenarios by priority"),
-    model: z.string().optional().describe(MODEL_DESC),
-    headed: z.boolean().optional().describe("Run headed"),
-    parallel: z.number().optional().describe("Parallel count"),
-    projectId: z.string().optional().describe("Project ID"),
-  },
-  async (params) => {
-    try {
-      const schedule = createSchedule({
-        name: params.name,
-        cronExpression: params.cronExpression,
-        url: params.url,
-        scenarioFilter: { tags: params.tags, priority: params.priority as "low" | "medium" | "high" | "critical" | undefined },
-        model: params.model,
-        headed: params.headed,
-        parallel: params.parallel,
-        projectId: params.projectId,
-      });
-      const nextRun = getNextRunTime(schedule.cronExpression);
-      return json({ ...schedule, nextRunAt: nextRun.toISOString() });
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "list_schedules",
-  {
-    projectId: z.string().optional(),
-    enabled: z.boolean().optional(),
-    limit: z.number().optional(),
-  },
-  async (params) => {
-    try {
-      const schedules = listSchedules({ projectId: params.projectId, enabled: params.enabled, limit: params.limit });
-      return json({ items: schedules, total: schedules.length });
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "enable_schedule",
-  { id: z.string().describe("Schedule ID") },
-  async (params) => {
-    try {
-      const schedule = updateSchedule(params.id, { enabled: true });
-      return json(schedule);
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "disable_schedule",
-  { id: z.string().describe("Schedule ID") },
-  async (params) => {
-    try {
-      const schedule = updateSchedule(params.id, { enabled: false });
-      return json(schedule);
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "delete_schedule",
-  { id: z.string().describe("Schedule ID") },
-  async (params) => {
-    try {
-      const deleted = deleteSchedule(params.id);
-      if (!deleted) return errorResponse(notFoundErr(params.id, "Schedule"));
-      return json({ deleted: true, id: params.id });
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-// ─── 17. wait_for_run ────────────────────────────────────────────────────────
-
-server.tool(
-  "wait_for_run",
-  "Poll a run until it reaches a terminal status (passed, failed, error, or cancelled). Blocks until done or timeout.",
-  {
-    runId: z.string().describe("Run ID to wait for"),
-    timeoutMs: z.number().optional().describe("Max wait time in ms (default 300000)"),
-    pollIntervalMs: z.number().optional().describe("Poll interval in ms (default 3000)"),
-  },
-  async ({ runId, timeoutMs = 300000, pollIntervalMs = 3000 }) => {
-    try {
-      const terminalStatuses = new Set(["passed", "failed", "error", "cancelled"]);
-      const deadline = Date.now() + timeoutMs;
-
-      while (Date.now() < deadline) {
-        const run = getRun(runId);
-        if (!run) return errorResponse(notFoundErr(runId, "Run"));
-
-        if (terminalStatuses.has(run.status)) {
-          const results = getResultsByRun(runId);
-          const passed = results.filter((r) => r.status === "passed").length;
-          const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
-          return json({ ...run, passedCount: passed, failedCount: failed });
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      }
-
-      return errorResponse(Object.assign(new Error(`Run ${runId} did not complete within ${timeoutMs}ms`), { name: "TimeoutError" }));
     } catch (error) {
       return errorResponse(error);
     }
