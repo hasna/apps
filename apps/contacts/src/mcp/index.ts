@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerCloudTools } from "@hasna/cloud";
@@ -6,7 +8,17 @@ import { ConnectorNotInstalledError, ConnectorAuthError } from "../lib/connector
 import { TOOL_DEFINITIONS } from "./tools.js";
 import { allHandlers } from "./handlers/index.js";
 
-const server = new McpServer({ name: "contacts", version: "0.6.12" });
+function getServerVersion(): string {
+  try {
+    const packageJsonPath = join(import.meta.dir, "..", "..", "package.json");
+    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const server = new McpServer({ name: "contacts", version: getServerVersion() });
 
 for (const tool of TOOL_DEFINITIONS) {
   const handler = allHandlers[tool.name];
