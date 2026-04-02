@@ -19,18 +19,43 @@ export function registerDomainCommand(program: Command): void {
     .description("List all domains in the portfolio")
     .option("--status <status>", "Filter by status (active/expired/transferring/redemption)")
     .option("--registrar <name>", "Filter by registrar")
+    .option("--limit <n>", "Limit number of returned domains")
+    .option("--offset <n>", "Skip first N domains", "0")
     .option("--json", "Output JSON")
-    .action((opts: { status?: string; registrar?: string; json?: boolean }) => {
-      const domains = listDomains({ status: opts.status as "active" | undefined, registrar: opts.registrar });
-      if (opts.json) { console.log(JSON.stringify({ domains, count: domains.length }, null, 2)); return; }
+    .action((opts: { status?: string; registrar?: string; limit?: string; offset?: string; json?: boolean }) => {
+      const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
+      const offset = opts.offset ? parseInt(opts.offset, 10) : 0;
+
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+        console.error("--limit must be a non-negative integer");
+        process.exit(1);
+      }
+      if (!Number.isInteger(offset) || offset < 0) {
+        console.error("--offset must be a non-negative integer");
+        process.exit(1);
+      }
+
+      const domains = listDomains({
+        status: opts.status as "active" | undefined,
+        registrar: opts.registrar,
+        limit,
+        offset,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify({ domains, count: domains.length, limit: limit ?? null, offset }, null, 2));
+        return;
+      }
       if (domains.length === 0) { console.log("No domains found."); return; }
       for (const d of domains) {
         const exp = d.expires_at ? ` (expires ${d.expires_at.split("T")[0]})` : "";
         console.log(`  ${d.name} [${d.status}]${exp}`);
       }
       console.log(`\n${domains.length} domain(s)`);
+      if (limit !== undefined || offset > 0) {
+        console.log(`Page: limit=${limit ?? "all"}, offset=${offset}`);
+      }
     });
-
   // ── get ─────────────────────────────────────────────────────────────────
 
   domain

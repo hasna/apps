@@ -143,11 +143,17 @@ export function listDomains(options: ListDomainsOptions = {}): Domain[] {
   }
   sql += " ORDER BY name";
 
-  if (options.limit) {
+
+  if (options.limit !== undefined) {
     sql += " LIMIT ?";
     params.push(options.limit);
   }
-  if (options.offset) {
+
+  if (options.offset !== undefined && options.offset > 0) {
+    if (options.limit === undefined) {
+      // SQLite requires LIMIT when OFFSET is present.
+      sql += " LIMIT -1";
+    }
     sql += " OFFSET ?";
     params.push(options.offset);
   }

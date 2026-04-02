@@ -84,6 +84,21 @@ describe("Domains", () => {
     expect(all.length).toBeGreaterThanOrEqual(3);
   });
 
+  test("list domains with limit and offset", () => {
+    createDomain({ name: "aaa-first.com" });
+    createDomain({ name: "zzz-last.com" });
+
+    const firstPage = listDomains({ limit: 1 });
+    expect(firstPage.length).toBe(1);
+
+    const offsetPage = listDomains({ offset: 1 });
+    expect(offsetPage.length).toBeGreaterThanOrEqual(1);
+    expect(offsetPage.length).toBeLessThan(listDomains().length);
+
+    const emptyPage = listDomains({ limit: 0 });
+    expect(emptyPage).toHaveLength(0);
+  });
+
   test("list domains with status filter", () => {
     createDomain({ name: "transferring.net", status: "transferring" });
     const result = listDomains({ status: "transferring" });
