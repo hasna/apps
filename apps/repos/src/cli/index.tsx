@@ -2,6 +2,8 @@
 import { execSync } from "node:child_process";
 import { basename } from "node:path";
 import { program } from "commander";
+import { getCliVersion } from "./version.js";
+import { parseIntOption } from "./args.js";
 import chalk from "chalk";
 import {
   listRepos,
@@ -16,10 +18,11 @@ import {
 } from "../db/repos.js";
 import { scanRepos, watchRepos } from "../lib/scanner.js";
 import { getFilterAlias } from "../lib/config.js";
+import { formatRepoNotFoundMessage } from "./messages.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
 import { getActivityHeatmap, getContributorStats, getStaleRepos, getRecentActivity } from "../lib/analytics.js";
 import { buildGraph, queryNode, queryRelated, findPath, getDeps, getCrossOrgAuthors, getGraphStats } from "../lib/graph.js";
-import { findFile, whoIs, diffStats, getDirtyRepos, getUnpushedRepos, getBehindRepos, getHealthReport, getRepoPath, getReport, getChurn, getLanguages, exportRepos, importFromOrg } from "../lib/utils.js";
+import { findFile, whoIs, diffStats, getDirtyRepos, getUnpushedRepos, getBehindRepos, getHealthReport, getRepoPath, getReport, getChurn, getLanguages, exportRepos, importFromOrg, fuzzyFindRepo } from "../lib/utils.js";
 
 const ORG_ALIASES: Record<string, string> = {
   oss: "hasna",
@@ -34,7 +37,32 @@ const ORG_ALIASES: Record<string, string> = {
 program
   .name("repos")
   .description("Local repo intelligence — track all repos, search commits, PRs, branches")
-  .version("0.1.0");
+  .version(getCliVersion());
+
+function requireRepo(repoInput: string) {
+  const repo = getRepo(repoInput);
+  if (repo) return repo;
+
+  const suggestion = fuzzyFindRepo(repoInput);
+  console.error(
+    chalk.red(
+      formatRepoNotFoundMessage(
+        repoInput,
+        suggestion ? { name: suggestion.name, path: suggestion.path } : undefined
+      )
+    )
+  );
+  process.exit(1);
+}
+
+function intFlag(value: string, flagName: string, min = 0) {
+  try {
+    return parseIntOption(value, flagName, min);
+  } catch (error) {
+    console.error(chalk.red((error as Error).message));
+    process.exit(1);
+  }
+}
 
 // ── Scan ──
 program
@@ -57,7 +85,7 @@ program
     }
     const result = await scanRepos(roots, {
       full: opts.full,
-      workers: parseInt(opts.workers),
+      workers: intFlag(opts.workers, "--workers", 1),
       onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
     });
     if (opts.json) {
@@ -119,6 +147,7 @@ program
   .option("--family", "Filter by hasnafamily org (shorthand)")
   .option("-q, --query <query>", "Filter by name")
   .option("-n, --limit <n>", "Max results", "50")
+  .option("-o, --offset <n>", "Skip first N results", "0")
   .option("--json", "Output as JSON")
   .action((opts) => {
     const alias = opts.filter ? getFilterAlias(opts.filter) : undefined;
@@ -128,7 +157,7 @@ program
     }
     const org = alias?.org ?? (opts.oss ? "hasna" : opts.xyz ? "hasnaxyz" : opts.studio ? "hasnastudio" : opts.tools ? "hasnatools" : opts.ai ? "hasnaai" : opts.education ? "hasnaeducation" : opts.family ? "hasnafamily" : (opts.org ? ORG_ALIASES[opts.org] ?? opts.org : undefined));
     const query = alias?.query ?? opts.query;
-    const repos = listRepos({ org, query, limit: parseInt(opts.limit) });
+    const repos = listRepos({ org, query, limit: intFlag(opts.limit, "--limit", 1), offset: intFlag(opts.offset, "--offset", 0) });
     if (opts.json) {
       console.log(JSON.stringify(repos, null, 2));
     } else {
@@ -148,8 +177,7 @@ program
   .description("Get repo details")
   .option("--json", "Output as JSON")
   .action((name, opts) => {
-    const repo = getRepo(name);
-    if (!repo) { console.log(chalk.red("Repo not found")); process.exit(1); }
+    const repo = requireRepo(name);
     const stats = getRepoStats(repo.id);
     if (opts.json) {
       console.log(JSON.stringify({ ...repo, ...stats }, null, 2));
@@ -188,11 +216,10 @@ program
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
-      const repo = getRepo(opts.repo);
-      if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
+      const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
-    const commits = listCommits({ repo_id, author: opts.author, since: opts.since, until: opts.until, limit: parseInt(opts.limit) });
+    const commits = listCommits({ repo_id, author: opts.author, since: opts.since, until: opts.until, limit: intFlag(opts.limit, "--limit", 1) });
     if (opts.json) {
       console.log(JSON.stringify(commits, null, 2));
     } else {
@@ -215,8 +242,7 @@ program
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
-      const repo = getRepo(opts.repo);
-      if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
+      const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
     const is_remote = opts.remote ? true : opts.local ? false : undefined;
@@ -241,8 +267,7 @@ program
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
-      const repo = getRepo(opts.repo);
-      if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
+      const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
     const tags = listTags({ repo_id });
@@ -269,8 +294,7 @@ program
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
-      const repo = getRepo(opts.repo);
-      if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
+      const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
     // Handle --mine and --review flags
@@ -314,7 +338,7 @@ program
   .option("-n, --limit <n>", "Max results", "20")
   .option("--json", "Output as JSON")
   .action((query, opts) => {
-    const results = searchAll(query, parseInt(opts.limit));
+    const results = searchAll(query, intFlag(opts.limit, "--limit", 1));
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
     } else {
@@ -366,7 +390,7 @@ program
   .option("--days <n>", "Look back N days", "7")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const activity = getRecentActivity(parseInt(opts.days));
+    const activity = getRecentActivity(intFlag(opts.days, "--days", 1));
     if (opts.json) {
       console.log(JSON.stringify(activity, null, 2));
     } else {
@@ -387,11 +411,10 @@ program
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
-      const repo = getRepo(opts.repo);
-      if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
+      const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
-    const contributors = getContributorStats({ repo_id, limit: parseInt(opts.limit) });
+    const contributors = getContributorStats({ repo_id, limit: intFlag(opts.limit, "--limit", 1) });
     if (opts.json) {
       console.log(JSON.stringify(contributors, null, 2));
     } else {
@@ -409,7 +432,7 @@ program
   .option("--days <n>", "Stale threshold in days", "30")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const stale = getStaleRepos(parseInt(opts.days));
+    const stale = getStaleRepos(intFlag(opts.days, "--days", 1));
     if (opts.json) {
       console.log(JSON.stringify(stale, null, 2));
     } else {
@@ -430,8 +453,7 @@ program
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
-      const repo = getRepo(opts.repo);
-      if (!repo) { console.log(chalk.red(`Repo not found: ${opts.repo}`)); process.exit(1); }
+      const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
     const heatmap = getActivityHeatmap(repo_id);
@@ -456,7 +478,7 @@ program
   .action((opts) => {
     if (opts.repo) {
       try {
-        const result = syncGithubPRs(opts.repo, { limit: parseInt(opts.limit) });
+        const result = syncGithubPRs(opts.repo, { limit: intFlag(opts.limit, "--limit", 1) });
         if (opts.json) {
           console.log(JSON.stringify(result));
         } else {
@@ -469,7 +491,7 @@ program
     } else {
       const result = syncAllGithubPRs({
         org: opts.org,
-        limit: parseInt(opts.limit),
+        limit: intFlag(opts.limit, "--limit", 1),
         onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
       });
       if (opts.json) {
@@ -508,7 +530,7 @@ program
   .option("-n, --limit <n>", "Max repos", "50")
   .option("--json", "Output as JSON")
   .action((file, opts) => {
-    const results = findFile(file, parseInt(opts.limit));
+    const results = findFile(file, intFlag(opts.limit, "--limit", 1));
     if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
     if (results.length === 0) { console.log(chalk.dim("Not found in any repo")); return; }
     for (const r of results) {
@@ -544,7 +566,7 @@ program
   .option("--days <n>", "Custom days", "1")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const days = opts.week ? 7 : opts.today ? 1 : parseInt(opts.days);
+    const days = opts.week ? 7 : opts.today ? 1 : intFlag(opts.days, "--days", 1);
     const results = diffStats(days);
     if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
     if (results.length === 0) { console.log(chalk.dim(`No activity in last ${days} day(s)`)); return; }
@@ -661,7 +683,7 @@ program
   .option("--days <n>", "Look back N days", "7")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const report = getReport(parseInt(opts.days));
+    const report = getReport(intFlag(opts.days, "--days", 1));
     if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
     console.log(chalk.bold(`Report: ${report.period}`));
     console.log(`  Repos touched: ${report.repos_touched}`);
@@ -685,7 +707,7 @@ program
   .option("-n, --limit <n>", "Max results", "20")
   .option("--json", "Output as JSON")
   .action((opts) => {
-    const results = getChurn(parseInt(opts.days), parseInt(opts.limit));
+    const results = getChurn(intFlag(opts.days, "--days", 1), intFlag(opts.limit, "--limit", 1));
     if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
     if (results.length === 0) { console.log(chalk.dim("No file changes found")); return; }
     console.log(chalk.bold("Most changed files:"));
@@ -775,7 +797,7 @@ graph
   .option("-n, --limit <n>", "Max results", "10")
   .option("--json", "Output as JSON")
   .action((repo, opts) => {
-    const results = queryRelated(repo, parseInt(opts.limit));
+    const results = queryRelated(repo, intFlag(opts.limit, "--limit", 1));
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
     } else {
@@ -812,7 +834,7 @@ graph
   .option("--depth <n>", "Max depth", "3")
   .option("--json", "Output as JSON")
   .action((repo, opts) => {
-    const deps = getDeps(repo, parseInt(opts.depth));
+    const deps = getDeps(repo, intFlag(opts.depth, "--depth", 1));
     if (opts.json) {
       console.log(JSON.stringify(deps, null, 2));
     } else {

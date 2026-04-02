@@ -18,7 +18,7 @@ import {
 import { scanRepos } from "../lib/scanner.js";
 import { getHealthReport } from "../lib/utils.js";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
