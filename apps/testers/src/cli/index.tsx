@@ -1435,20 +1435,53 @@ projectCmd
 projectCmd
   .command("list")
   .description("List all projects")
-  .action(() => {
+  .option("--json", "Output as JSON", false)
+  .option("--search <text>", "Filter by project name/path (case-insensitive substring)")
+  .option("-l, --limit <n>", "Limit results", "100")
+  .option("--offset <n>", "Skip first N results", "0")
+  .action((opts) => {
     try {
-      const projects = listProjects();
-      if (projects.length === 0) {
+      const limit = Math.max(1, parseInt(opts.limit, 10) || 100);
+      const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
+      const search = typeof opts.search === "string" && opts.search.trim().length > 0 ? opts.search.trim().toLowerCase() : null;
+
+      const allProjects = listProjects();
+      const filtered = search
+        ? allProjects.filter((p) => {
+            const name = p.name.toLowerCase();
+            const path = (p.path ?? "").toLowerCase();
+            return name.includes(search) || path.includes(search);
+          })
+        : allProjects;
+
+      const paged = filtered.slice(offset, offset + limit);
+
+      if (opts.json) {
+        log(JSON.stringify({
+          total: filtered.length,
+          limit,
+          offset,
+          items: paged,
+        }, null, 2));
+        return;
+      }
+
+      if (filtered.length === 0) {
         log(chalk.dim("No projects found."));
         return;
       }
+
       log("");
       log(chalk.bold("  Projects"));
       log("");
       log(`  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`);
       log(`  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`);
-      for (const p of projects) {
+      for (const p of paged) {
         log(`  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`);
+      }
+      if (offset + paged.length < filtered.length) {
+        log("");
+        log(chalk.dim(`  Showing ${paged.length} of ${filtered.length} projects (use --limit/--offset to paginate)`));
       }
       log("");
     } catch (error) {
