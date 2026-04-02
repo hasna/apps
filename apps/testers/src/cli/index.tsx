@@ -2514,9 +2514,14 @@ envCmd
   .command("list")
   .description("List all environments")
   .option("--project <id>", "Filter by project ID")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const envs = listEnvironments(opts.project);
+      if (opts.json) {
+        log(JSON.stringify({ total: envs.length, items: envs }, null, 2));
+        return;
+      }
       if (envs.length === 0) {
         log(chalk.dim("No environments configured. Add one with: testers env add <name> --url <url>"));
         return;
