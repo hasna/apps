@@ -17,26 +17,28 @@ export function registerMessagingTools(
 ): void {
 
   server.registerTool("send_message", {
-    description: "Send a DM to an agent.",
+    description: "Send a DM to an agent by name, or to a specific agent-claude session by ID. When target_session_id is provided, the message is routed to that exact session and auto-injected into its conversation.",
     inputSchema: {
-      to: z.string(),
+      to: z.string().describe("Agent name to send to, OR use target_session_id instead for session targeting"),
       content: z.string(),
       from: z.string().optional(),
       priority: z.string().optional(),
       blocking: z.coerce.boolean().optional(),
       project_id: z.string().optional(),
+      target_session_id: z.string().optional().describe("If provided, sends to a specific agent-claude session ID (UUID). The message auto-injects into that session's conversation."),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, to, content, priority, blocking, project_id } = args;
+    const { from: fromParam, to, content, priority, blocking, project_id, target_session_id } = args;
     const from = resolveIdentity(fromParam);
 
     const msg = sendMessage({
       from,
-      to,
+      to: target_session_id ? `session:${target_session_id}` : to,
       content,
       priority,
       blocking,
       project_id,
+      metadata: target_session_id ? { target_session_id } : undefined,
     });
 
     return {
