@@ -85,6 +85,19 @@ describe("JSON reporter", () => {
     expect(parsed.summary.score).toBe(90);
   });
 
+  test("counts low and info severity findings", () => {
+    const findings = [
+      makeFinding({ id: "1", severity: Severity.Low }),
+      makeFinding({ id: "2", severity: Severity.Info, file: "b.ts" }),
+      makeFinding({ id: "3", severity: Severity.Low, file: "c.ts" }),
+    ];
+    const parsed = JSON.parse(reportFindings(findings));
+    expect(parsed.summary.low).toBe(2);
+    expect(parsed.summary.info).toBe(1);
+    expect(parsed.summary.critical).toBe(0);
+    expect(parsed.summary.high).toBe(0);
+  });
+
   test("includes scan info when provided", () => {
     const findings = [makeFinding()];
     const parsed = JSON.parse(reportFindings(findings, mockScan));

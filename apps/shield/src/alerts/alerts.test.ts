@@ -260,6 +260,110 @@ describe("WebhookChannel", () => {
   });
 });
 
+describe("EmailChannel", () => {
+  test("sends via SMTP API URL when env var is set", async () => {
+    const smtpFetch = mock(async () => ({ ok: true, status: 200, text: async () => "ok" } as Response));
+    (globalThis as any).fetch = smtpFetch;
+    process.env.SECURITY_SMTP_API_URL = "https://smtp-api.example.com/send";
+
+    const { EmailChannel } = await import("./channels/email.js");
+    const channel = new EmailChannel({
+      smtp_host: "smtp.example.com",
+      smtp_port: 587,
+      smtp_user: "user@example.com",
+      smtp_pass: "pass",
+      from: "security@example.com",
+      to: ["admin@example.com"],
+    });
+    const result = await channel.send(MOCK_PAYLOAD);
+
+    expect(result.channel).toBe("email");
+    expect(result.success).toBe(true);
+    expect(smtpFetch).toHaveBeenCalledWith(
+      "https://smtp-api.example.com/send",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    delete process.env.SECURITY_SMTP_API_URL;
+    (globalThis as any).fetch = mockFetch;
+  });
+
+  test("returns error when no SMTP API URL configured", async () => {
+    const orig = process.env.SECURITY_SMTP_API_URL;
+    delete process.env.SECURITY_SMTP_API_URL;
+
+    const { EmailChannel } = await import("./channels/email.js");
+    const channel = new EmailChannel({
+      smtp_host: "smtp.example.com",
+      smtp_port: 587,
+      smtp_user: "user",
+      smtp_pass: "pass",
+      from: "from@example.com",
+      to: ["to@example.com"],
+    });
+    const result = await channel.send(MOCK_PAYLOAD);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("SECURITY_SMTP_API_URL");
+
+    if (orig) process.env.SECURITY_SMTP_API_URL = orig;
+    (globalThis as any).fetch = mockFetch;
+  });
+});
+
+describe("TwitterChannel", () => {
+  test("formats tweet within 280 chars for critical advisory", async () => {
+    const { TwitterChannel } = await import("./channels/twitter.js");
+    const channel = new TwitterChannel({
+      api_key: "key",
+      api_secret: "secret",
+      access_token: "token",
+      access_token_secret: "token_secret",
+    });
+
+    // Access private method via any cast
+    const tweet = (channel as any).formatTweet(MOCK_PAYLOAD);
+    expect(typeof tweet).toBe("string");
+    expect(tweet.length).toBeLessThanOrEqual(280);
+    expect(tweet).toContain("axios");
+  });
+
+  test("tweet includes safe version when available", async () => {
+    const { TwitterChannel } = await import("./channels/twitter.js");
+    const channel = new TwitterChannel({
+      api_key: "key",
+      api_secret: "secret",
+      access_token: "token",
+      access_token_secret: "token_secret",
+    });
+
+    const tweet = (channel as any).formatTweet(MOCK_PAYLOAD);
+    expect(tweet).toContain("1.13.6"); // safe version
+  });
+
+  test("falls back to short format for long package names", async () => {
+    const { TwitterChannel } = await import("./channels/twitter.js");
+    const channel = new TwitterChannel({
+      api_key: "key",
+      api_secret: "secret",
+      access_token: "token",
+      access_token_secret: "token_secret",
+    });
+
+    const longPayload = {
+      ...MOCK_PAYLOAD,
+      advisory: {
+        ...MOCK_ADVISORY,
+        package_name: "a-very-long-package-name-that-makes-the-tweet-exceed-the-limit",
+        threat_actor: "A Very Long Threat Actor Name That Takes Up Space In The Tweet",
+        description: "x".repeat(300),
+      },
+    };
+
+    const tweet = (channel as any).formatTweet(longPayload as any);
+    expect(tweet.length).toBeLessThanOrEqual(280);
+  });
+});
+
 // Cleanup: restore fetch
 afterAll(() => {
   (globalThis as any).fetch = globalThis.fetch;

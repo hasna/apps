@@ -189,6 +189,40 @@ describe("rules", () => {
     expect(updated!.metadata).toEqual({ new: true, cwe: "CWE-79" });
   });
 
+  test("updateRule updates all fields", () => {
+    const rule = createRule({
+      name: "all-fields-rule",
+      description: "original desc",
+      scanner_type: ScannerType.Secrets,
+      severity: Severity.Low,
+      pattern: null,
+      enabled: true,
+      builtin: false,
+      metadata: {},
+    });
+
+    updateRule(rule.id, {
+      name: "new-name",
+      description: "new desc",
+      scanner_type: ScannerType.Code,
+      severity: Severity.High,
+      pattern: "new.*pattern",
+      enabled: false,
+      builtin: true,
+      metadata: { updated: true },
+    });
+
+    const updated = getRule(rule.id)!;
+    expect(updated.name).toBe("new-name");
+    expect(updated.description).toBe("new desc");
+    expect(updated.scanner_type).toBe(ScannerType.Code);
+    expect(updated.severity).toBe(Severity.High);
+    expect(updated.pattern).toBe("new.*pattern");
+    expect(updated.enabled).toBe(false);
+    expect(updated.builtin).toBe(true);
+    expect(updated.metadata).toEqual({ updated: true });
+  });
+
   test("updateRule with no fields is a no-op", () => {
     const rule = createRule({
       name: "noop-rule",
