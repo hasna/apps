@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { resolve } from "path";
 import { existsSync } from "fs";
 import chalk from "chalk";
-import { ScanStatus, Severity, type Finding } from "../../types/index.js";
+import { ScanStatus, Severity, ReportFormat, type Finding } from "../../types/index.js";
 import {
   getDb, createScan, completeScan, updateScanStatus, createFinding,
 } from "../../db/index.js";
@@ -44,8 +44,14 @@ export function registerScanCommand(program: Command): void {
       const scan = createScan(project.id, scannerTypes);
       updateScanStatus(scan.id, ScanStatus.Running);
 
-      console.log(chalk.bold(`\n  Scanning ${chalk.cyan(scanPath)}...`));
-      console.log(chalk.gray(`  Scanners: ${scannerTypes.join(", ")}`));
+      // Use stderr for progress when format is JSON/SARIF so stdout is clean
+      const isStructuredOutput = format !== ReportFormat.Terminal;
+      const log = isStructuredOutput
+        ? (msg: string) => process.stderr.write(msg + "\n")
+        : console.log;
+
+      log(chalk.bold(`\n  Scanning ${chalk.cyan(scanPath)}...`));
+      log(chalk.gray(`  Scanners: ${scannerTypes.join(", ")}`));
 
       const startTime = Date.now();
 
@@ -77,7 +83,7 @@ export function registerScanCommand(program: Command): void {
         completeScan(scan.id, storedFindings.length);
 
         if (useLLM && isLLMAvailable() && storedFindings.length > 0) {
-          console.log(chalk.gray(`  Running LLM analysis on ${storedFindings.length} findings (5 concurrent)...`));
+          log(chalk.gray(`  Running LLM analysis on ${storedFindings.length} findings (5 concurrent)...`));
           const BATCH_SIZE = 5;
           let analyzed = 0;
           for (let i = 0; i < storedFindings.length; i += BATCH_SIZE) {
@@ -90,14 +96,16 @@ export function registerScanCommand(program: Command): void {
                 analyzed++;
               }),
             );
-            process.stdout.write(chalk.gray(`\r  Analyzed ${analyzed}/${storedFindings.length} findings`));
+            (isStructuredOutput ? process.stderr : process.stdout).write(
+              chalk.gray(`\r  Analyzed ${analyzed}/${storedFindings.length} findings`)
+            );
           }
-          console.log();
+          log("");
         } else if (useLLM && !isLLMAvailable()) {
-          console.log(chalk.yellow("  LLM analysis requested but CEREBRAS_API_KEY is not set. Skipping."));
+          log(chalk.yellow("  LLM analysis requested but CEREBRAS_API_KEY is not set. Skipping."));
         }
 
-        console.log(chalk.gray(`  Completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s\n`));
+        log(chalk.gray(`  Completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s\n`));
 
         const filtered = filterBySeverity(storedFindings, severityThreshold);
         const reporter = getReporter(format);
