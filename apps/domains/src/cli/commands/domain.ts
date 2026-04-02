@@ -21,7 +21,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--registrar <name>", "Filter by registrar")
     .option("--limit <n>", "Limit number of returned domains")
     .option("--offset <n>", "Skip first N domains", "0")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((opts: { status?: string; registrar?: string; limit?: string; offset?: string; json?: boolean }) => {
       const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
       const offset = opts.offset ? parseInt(opts.offset, 10) : 0;
@@ -61,7 +61,7 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("get <id>")
     .description("Get a domain by ID")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((id: string, opts: { json?: boolean }) => {
       const d = getDomain(id);
       if (!d) { console.error(`Domain '${id}' not found.`); process.exit(1); }
@@ -84,7 +84,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--status <s>", "Status (active/expired/transferring/redemption)", "active")
     .option("--expires <date>", "Expiry date (YYYY-MM-DD)")
     .option("--notes <text>", "Notes")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((opts: { name: string; registrar?: string; status: string; expires?: string; notes?: string; json?: boolean }) => {
       const d = createDomain({
         name: opts.name, registrar: opts.registrar,
@@ -103,7 +103,7 @@ export function registerDomainCommand(program: Command): void {
     .option("--status <s>", "Status")
     .option("--expires <date>", "Expiry date")
     .option("--notes <text>", "Notes")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((id: string, opts: { registrar?: string; status?: string; expires?: string; notes?: string; json?: boolean }) => {
       const d = updateDomain(id, {
         registrar: opts.registrar, status: opts.status as "active" | undefined,
@@ -120,7 +120,7 @@ export function registerDomainCommand(program: Command): void {
     .command("delete <id>")
     .description("Delete a domain from the portfolio")
     .option("-f, --force", "Required confirmation for destructive delete")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((id: string, opts: { force?: boolean; json?: boolean }) => {
       if (!opts.force) {
         const message = `Refusing to delete domain '${id}' without --force.`;
@@ -157,7 +157,7 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("search <query>")
     .description("Search domains by name, registrar, or notes")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((query: string, opts: { json?: boolean }) => {
       const results = searchDomains(query);
       if (opts.json) { console.log(JSON.stringify({ results, count: results.length }, null, 2)); return; }
@@ -171,7 +171,7 @@ export function registerDomainCommand(program: Command): void {
     .command("expiring")
     .description("List domains expiring soon")
     .option("--days <n>", "Days threshold", "30")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((opts: { days: string; json?: boolean }) => {
       const domains = listExpiring(parseInt(opts.days));
       if (opts.json) { console.log(JSON.stringify(domains, null, 2)); return; }
@@ -186,7 +186,7 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("stats")
     .description("Show portfolio statistics")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((opts: { json?: boolean }) => {
       const stats = getDomainStats();
       if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
@@ -201,7 +201,7 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("whois <name>")
     .description("Run WHOIS lookup and update local DB record")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action((name: string, opts: { json?: boolean }) => {
       const result = whoisLookup(name);
       if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
