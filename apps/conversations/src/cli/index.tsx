@@ -12,6 +12,7 @@ import { registerSpaceCommands } from "./commands/spaces.js";
 import { registerProjectCommands } from "./commands/projects.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import { registerAnalyticsCommands } from "./commands/analytics.js";
+import { registerTmuxCommands } from "./commands/tmux.js";
 import pkg from "../../package.json";
 
 const program = new Command();
@@ -27,6 +28,7 @@ registerSpaceCommands(program);
 registerProjectCommands(program);
 registerAgentCommands(program);
 registerAnalyticsCommands(program);
+registerTmuxCommands(program);
 
 // ---- mcp ----
 program
