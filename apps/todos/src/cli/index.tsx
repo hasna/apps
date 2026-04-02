@@ -169,7 +169,7 @@ program
   .description("Universal task management for AI coding agents")
   .version(getPackageVersion())
   .option("--project <path>", "Project path")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--agent <name>", "Agent name")
   .option("--session <id>", "Session ID");
 
@@ -272,6 +272,16 @@ program
     const projectId = autoProject(globalOpts);
     const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
     const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
+    const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
+    if (opts.sort && !allowedSortFields.has(opts.sort)) {
+      console.error(chalk.red(`Invalid --sort value: ${opts.sort}. Allowed values: updated, created, priority, status.`));
+      process.exit(1);
+    }
+    const allowedFormats = new Set(["table", "compact", "csv", "json"]);
+    if (opts.format && !allowedFormats.has(opts.format)) {
+      console.error(chalk.red(`Invalid --format value: ${opts.format}. Allowed values: table, compact, csv, json.`));
+      process.exit(1);
+    }
 
     const filter: Record<string, unknown> = {};
     // For assigned-agent queries, default to cross-project results unless project scope is explicit.
@@ -311,7 +321,14 @@ program
       filter["assigned_to"] = opts.agentName;
     }
     if (opts.recurring) filter["has_recurrence"] = true;
-    if (opts.limit) filter["limit"] = parseInt(opts.limit, 10);
+    if (opts.limit !== undefined) {
+      const parsedLimit = Number.parseInt(String(opts.limit), 10);
+      if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+        console.error(chalk.red(`Invalid --limit value: ${opts.limit}. Must be a positive integer.`));
+        process.exit(1);
+      }
+      filter["limit"] = parsedLimit;
+    }
 
     let tasks = listTasks(filter as any);
     // Post-filter for due-today and overdue (not in TaskFilter directly)
@@ -1429,7 +1446,7 @@ program
   .command("project-rename <id-or-slug> <new-slug>")
   .description("Rename a project slug. Cascades to matching task lists. Task prefixes (e.g. APP-00001) are unchanged.")
   .option("--name <name>", "Also update the project display name")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((idOrSlug: string, newSlug: string, opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -1469,7 +1486,7 @@ const projectsPathCmd = program
 projectsPathCmd
   .command("set <project-id> <path>")
   .description("Set the local path for a project on this machine")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((projectId: string, projectPath: string, opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -1490,7 +1507,7 @@ projectsPathCmd
 projectsPathCmd
   .command("list <project-id>")
   .description("List all machine path overrides for a project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((projectId: string, opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -2267,7 +2284,7 @@ program
 program
   .command("agent <name>")
   .description("Show all info about an agent: tasks, status, last seen, stats")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((name: string, opts) => {
     const globalOpts = program.opts();
     // Find agent by name or partial ID
@@ -2812,7 +2829,7 @@ program
   .description("Show the best pending task to work on next")
   .option("--agent <id>", "Prefer tasks assigned to this agent")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -2840,7 +2857,7 @@ program
   .command("claim <agent>")
   .description("Atomically claim the best pending task for an agent")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (agent, opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -2875,7 +2892,7 @@ program
   .description("Show full project health snapshot")
   .option("--agent <id>", "Include next task for this agent")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -3031,7 +3048,7 @@ program
   .option("--reason <text>", "Why it failed")
   .option("--agent <id>", "Agent reporting the failure")
   .option("--retry", "Auto-create a retry copy")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (id, opts) => {
     const db = getDatabase();
     const resolvedId = resolvePartialId(db, "tasks", id);
@@ -3048,7 +3065,7 @@ program
   .command("active")
   .description("Show all currently in-progress tasks")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -3070,7 +3087,7 @@ program
   .description("Find tasks stuck in_progress with no recent activity")
   .option("--minutes <n>", "Stale threshold in minutes", "30")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -3093,7 +3110,7 @@ program
   .option("--max-age <minutes>", "Stale threshold in minutes", "60")
   .option("--project <id>", "Limit to a specific project")
   .option("--limit <n>", "Max stale tasks to release")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (agent: string, opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3121,7 +3138,7 @@ program
 program
   .command("assign <id> <agent>")
   .description("Assign a task to an agent")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, agent: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -3139,7 +3156,7 @@ program
 program
   .command("unassign <id>")
   .description("Remove task assignment")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -3157,7 +3174,7 @@ program
 program
   .command("tag <id> <tag>")
   .description("Add a tag to a task")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, tag: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -3176,7 +3193,7 @@ program
 program
   .command("untag <id> <tag>")
   .description("Remove a tag from a task")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, tag: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -3195,7 +3212,7 @@ program
 program
   .command("pin <id>")
   .description("Escalate task to critical priority")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -3215,7 +3232,7 @@ program
   .option("--days <n>", "Days of history to include", "7")
   .option("--project <id>", "Filter to project")
   .option("--agent <id>", "Filter to agent")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3282,7 +3299,7 @@ program
   .command("doctor")
   .description("Diagnose common task data issues")
   .option("--fix", "Auto-fix recoverable issues where possible")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3334,7 +3351,7 @@ program
 program
   .command("health")
   .description("Check todos system health — database, config, connectivity")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const checks: { name: string; ok: boolean; message: string }[] = [];
@@ -3406,7 +3423,7 @@ program
   .option("--days <n>", "Days to include in report", "7")
   .option("--project <id>", "Filter to project")
   .option("--markdown", "Output as markdown")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3480,7 +3497,7 @@ program
 program
   .command("today")
   .description("Show task activity from today")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3510,7 +3527,7 @@ program
 program
   .command("yesterday")
   .description("Show task activity from yesterday")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3542,7 +3559,7 @@ program
   .command("mine")
   .description("Show tasks assigned to you, grouped by status")
   .argument("<agent>", "Agent name or ID")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (agent: string, opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3592,7 +3609,7 @@ program
 program
   .command("blocked")
   .description("Show tasks blocked by incomplete dependencies")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3628,7 +3645,7 @@ program
 program
   .command("overdue")
   .description("Show tasks past their due date")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3656,7 +3673,7 @@ program
 program
   .command("week")
   .description("Show task activity from the past 7 days")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3711,7 +3728,7 @@ program
   .command("burndown")
   .description("Show task completion velocity over the past 7 days")
   .option("--days <n>", "Number of days", "7")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3758,7 +3775,7 @@ program
   .command("log")
   .description("Show recent task activity log (git-log style)")
   .option("--limit <n>", "Number of entries", "30")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3802,7 +3819,7 @@ program
 program
   .command("ready")
   .description("Show all tasks ready to be claimed (pending, unblocked, unlocked)")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .option("--limit <n>", "Max tasks to show", "20")
   .action(async (opts) => {
@@ -3842,7 +3859,7 @@ program
 program
   .command("sprint")
   .description("Sprint dashboard: in-progress, next up, blockers, and overdue")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3926,7 +3943,7 @@ program
   .option("--in-progress <items>", "Comma-separated in-progress items")
   .option("--blockers <items>", "Comma-separated blockers")
   .option("--next <items>", "Comma-separated next steps")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--limit <n>", "Number of handoffs to show", "5")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3982,7 +3999,7 @@ program
 program
   .command("priorities")
   .description("Show task counts grouped by priority")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -4017,7 +4034,7 @@ program
   .command("context")
   .description("Session start context: status, latest handoff, next task, overdue")
   .option("--agent <name>", "Agent name for handoff lookup")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -4069,7 +4086,7 @@ program
   .option("--stack <trace>", "Stack trace or detailed output")
   .option("--title <title>", "Custom task title (auto-generated if omitted)")
   .option("--priority <p>", "Priority: low, medium, high, critical")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const { createTask } = require("../db/tasks.js") as any;
@@ -4141,7 +4158,7 @@ dbCmd
   .command("migrate-pg")
   .description("Apply PostgreSQL migrations to the configured RDS instance")
   .option("--connection-string <url>", "PostgreSQL connection string (overrides cloud config)")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -4208,7 +4225,7 @@ const cloudCmd = program
 cloudCmd
   .command("status")
   .description("Show cloud config, connection health, machine registry, and sync status")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -4315,7 +4332,7 @@ cloudCmd
   .command("push")
   .description("Push local data to cloud PostgreSQL")
   .option("--tables <tables>", "Comma-separated table names (default: all)")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -4381,7 +4398,7 @@ cloudCmd
   .command("pull")
   .description("Pull cloud data to local — merges by primary key")
   .option("--tables <tables>", "Comma-separated table names (default: all)")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -4443,7 +4460,7 @@ cloudCmd
   .command("sync")
   .description("Bidirectional sync — pull remote changes then push local changes")
   .option("--tables <tables>", "Comma-separated table names (default: all)")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;
@@ -4521,7 +4538,7 @@ cloudCmd
   .option("--resolved", "Show resolved conflicts instead of unresolved")
   .option("--table <table>", "Filter by table name")
   .option("--limit <n>", "Max conflicts to show", "20")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const useJson = opts.json || globalOpts.json;

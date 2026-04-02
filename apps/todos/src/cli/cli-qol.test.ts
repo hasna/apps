@@ -325,4 +325,55 @@ describe("CLI QoL commands", () => {
       );
     }
   });
+
+  it("list should reject invalid --limit values", () => {
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run("list --limit nope");
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Invalid --limit value");
+  });
+
+  it("list should reject invalid --sort values", () => {
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run("list --sort random");
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Invalid --sort value");
+  });
+
+  it("list should reject invalid --format values", () => {
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run("list --format yaml");
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Invalid --format value");
+  });
+
+  it("global -j alias should enable json output", () => {
+    run("add 'json alias task' --json");
+    const out = run("-j list --all");
+    const tasks = JSON.parse(out);
+    expect(Array.isArray(tasks)).toBe(true);
+  });
+
+  it("help should show -j alias for json", () => {
+    const help = run("--help");
+    expect(help).toContain("-j, --json");
+  });
 });
