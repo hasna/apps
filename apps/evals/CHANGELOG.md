@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.18] - 2026-04-02
+
+### Fixed
+- Shell completion scripts now include the `sync` command for both bash and zsh output
+- Added CLI regression test to ensure completion output stays aligned with available top-level commands
+
 ## [0.1.14] - 2026-04-02
 
 ### Added

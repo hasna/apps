@@ -120,3 +120,15 @@ describe("evals ci set-baseline", () => {
     expect(exitCode).not.toBe(0); // no runs exist
   });
 });
+
+describe("evals completion", () => {
+  test("includes sync command in bash and zsh completion output", async () => {
+    const bash = await runCli(["completion", "bash"]);
+    expect(bash.exitCode).toBe(0);
+    expect(bash.stdout).toContain("sync");
+
+    const zsh = await runCli(["completion", "zsh"]);
+    expect(zsh.exitCode).toBe(0);
+    expect(zsh.stdout).toContain("sync:");
+  });
+});
