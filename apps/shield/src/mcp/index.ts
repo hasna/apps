@@ -8,11 +8,19 @@ import { registerCloudTools } from "@hasna/cloud";
 import { getDb } from "../db/database.js";
 import { seedBuiltinRules } from "../db/index.js";
 import { seedAdvisories } from "../data/advisories.js";
+import { PACKAGE_VERSION } from "../lib/version.js";
+import { parseMcpArgs } from "./args.js";
 
 import { registerScanTools } from "./tools/scan.js";
 import { registerFindingTools } from "./tools/findings.js";
 import { registerRulesPoliciesTools } from "./tools/rules-policies.js";
 import { registerAdvisoryTools } from "./tools/advisories.js";
+
+const parsedArgs = parseMcpArgs(process.argv.slice(2), PACKAGE_VERSION);
+if (parsedArgs) {
+  console.log(parsedArgs.text);
+  process.exit(0);
+}
 
 // Seed on startup
 seedBuiltinRules();
@@ -35,7 +43,7 @@ function getCodeContext(filePath: string, line: number, contextLines = 10): stri
   }
 }
 
-const server = new McpServer({ name: "security", version: "0.1.6" });
+const server = new McpServer({ name: "security", version: PACKAGE_VERSION });
 
 // Register tool modules
 registerScanTools(server, jsonResult, getCodeContext);
@@ -106,7 +114,7 @@ server.tool(
     try {
       const db = getDb();
       db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(
-        params.message, params.email || null, params.category || "general", "0.1.6"
+        params.message, params.email || null, params.category || "general", PACKAGE_VERSION
       );
       return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
     } catch (e) {

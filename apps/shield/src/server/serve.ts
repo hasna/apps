@@ -55,6 +55,7 @@ import {
 import { seedAdvisories } from "../data/advisories.js";
 import { ScannerType, ScanStatus, Severity } from "../types/index.js";
 import type { FindingInput } from "../types/index.js";
+import { getFirstString, getQueryInt } from "./query.js";
 
 // Seed builtin rules and advisory data on startup
 seedBuiltinRules();
@@ -210,8 +211,8 @@ export function startServer(port: number) {
   // GET /api/scans — list scans
   app.get("/api/scans", (req: Request, res: Response) => {
     try {
-      const project_id = req.query.project_id as string | undefined;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+      const project_id = getFirstString(req.query.project_id);
+      const limit = getQueryInt(req.query.limit, 50);
       const scans = listScans(project_id, limit);
       res.json({ scans, count: scans.length });
     } catch (error) {
@@ -222,7 +223,12 @@ export function startServer(port: number) {
   // GET /api/scans/:id — get scan details
   app.get("/api/scans/:id", (req: Request, res: Response) => {
     try {
-      const scan = getScan(req.params.id);
+      const scanId = getFirstString(req.params.id);
+      if (!scanId) {
+        res.status(400).json({ error: "Scan id is required" });
+        return;
+      }
+      const scan = getScan(scanId);
       if (!scan) {
         res.status(404).json({ error: "Scan not found" });
         return;
@@ -240,12 +246,12 @@ export function startServer(port: number) {
   app.get("/api/findings", (req: Request, res: Response) => {
     try {
       const options = {
-        scan_id: req.query.scan_id as string | undefined,
+        scan_id: getFirstString(req.query.scan_id),
         severity: req.query.severity as Severity | undefined,
         scanner_type: req.query.scanner_type as ScannerType | undefined,
-        file: req.query.file as string | undefined,
-        limit: req.query.limit ? parseInt(req.query.limit as string) : 100,
-        offset: req.query.offset ? parseInt(req.query.offset as string) : 0,
+        file: getFirstString(req.query.file),
+        limit: getQueryInt(req.query.limit, 100),
+        offset: getQueryInt(req.query.offset, 0),
       };
       const findings = listFindings(options);
       res.json({ findings, count: findings.length });
@@ -257,7 +263,12 @@ export function startServer(port: number) {
   // GET /api/findings/:id — get finding detail
   app.get("/api/findings/:id", (req: Request, res: Response) => {
     try {
-      const finding = getFinding(req.params.id);
+      const findingId = getFirstString(req.params.id);
+      if (!findingId) {
+        res.status(400).json({ error: "Finding id is required" });
+        return;
+      }
+      const finding = getFinding(findingId);
       if (!finding) {
         res.status(404).json({ error: "Finding not found" });
         return;
@@ -271,7 +282,12 @@ export function startServer(port: number) {
   // PATCH /api/findings/:id — update finding
   app.patch("/api/findings/:id", (req: Request, res: Response) => {
     try {
-      const finding = getFinding(req.params.id);
+      const findingId = getFirstString(req.params.id);
+      if (!findingId) {
+        res.status(400).json({ error: "Finding id is required" });
+        return;
+      }
+      const finding = getFinding(findingId);
       if (!finding) {
         res.status(404).json({ error: "Finding not found" });
         return;
@@ -284,8 +300,8 @@ export function startServer(port: number) {
       if (req.body.llm_fix !== undefined) updates.llm_fix = req.body.llm_fix;
       if (req.body.llm_exploitability !== undefined) updates.llm_exploitability = req.body.llm_exploitability;
 
-      updateFinding(req.params.id, updates);
-      const updated = getFinding(req.params.id);
+      updateFinding(findingId, updates);
+      const updated = getFinding(findingId);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -295,7 +311,12 @@ export function startServer(port: number) {
   // POST /api/findings/:id/explain — trigger LLM explanation
   app.post("/api/findings/:id/explain", rateLimitMiddleware, async (req: Request, res: Response) => {
     try {
-      const finding = getFinding(req.params.id);
+      const findingId = getFirstString(req.params.id);
+      if (!findingId) {
+        res.status(400).json({ error: "Finding id is required" });
+        return;
+      }
+      const finding = getFinding(findingId);
       if (!finding) {
         res.status(404).json({ error: "Finding not found" });
         return;
@@ -330,7 +351,12 @@ export function startServer(port: number) {
   // POST /api/findings/:id/fix — trigger LLM fix suggestion
   app.post("/api/findings/:id/fix", rateLimitMiddleware, async (req: Request, res: Response) => {
     try {
-      const finding = getFinding(req.params.id);
+      const findingId = getFirstString(req.params.id);
+      if (!findingId) {
+        res.status(400).json({ error: "Finding id is required" });
+        return;
+      }
+      const finding = getFinding(findingId);
       if (!finding) {
         res.status(404).json({ error: "Finding not found" });
         return;
@@ -406,14 +432,19 @@ export function startServer(port: number) {
   // PATCH /api/rules/:id — update rule
   app.patch("/api/rules/:id", (req: Request, res: Response) => {
     try {
-      const rule = getRule(req.params.id);
+      const ruleId = getFirstString(req.params.id);
+      if (!ruleId) {
+        res.status(400).json({ error: "Rule id is required" });
+        return;
+      }
+      const rule = getRule(ruleId);
       if (!rule) {
         res.status(404).json({ error: "Rule not found" });
         return;
       }
 
       if (req.body.enabled !== undefined) {
-        toggleRule(req.params.id, req.body.enabled);
+        toggleRule(ruleId, req.body.enabled);
       }
 
       const updates: Record<string, unknown> = {};
@@ -423,10 +454,10 @@ export function startServer(port: number) {
       if (req.body.pattern !== undefined) updates.pattern = req.body.pattern;
 
       if (Object.keys(updates).length > 0) {
-        updateRule(req.params.id, updates);
+        updateRule(ruleId, updates);
       }
 
-      const updated = getRule(req.params.id);
+      const updated = getRule(ruleId);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -471,7 +502,12 @@ export function startServer(port: number) {
   // PATCH /api/policies/:id — update policy
   app.patch("/api/policies/:id", (req: Request, res: Response) => {
     try {
-      const policy = getPolicy(req.params.id);
+      const policyId = getFirstString(req.params.id);
+      if (!policyId) {
+        res.status(400).json({ error: "Policy id is required" });
+        return;
+      }
+      const policy = getPolicy(policyId);
       if (!policy) {
         res.status(404).json({ error: "Policy not found" });
         return;
@@ -485,8 +521,8 @@ export function startServer(port: number) {
       if (req.body.notify !== undefined) updates.notify = req.body.notify;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
 
-      updatePolicy(req.params.id, updates);
-      const updated = getPolicy(req.params.id);
+      updatePolicy(policyId, updates);
+      const updated = getPolicy(policyId);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -578,10 +614,10 @@ export function startServer(port: number) {
   app.get("/api/advisories", (req: Request, res: Response) => {
     try {
       const options = {
-        ecosystem: req.query.ecosystem as string | undefined,
-        severity: req.query.severity as string | undefined,
-        attack_type: req.query.attack_type as string | undefined,
-        limit: req.query.limit ? parseInt(req.query.limit as string) : 50,
+        ecosystem: getFirstString(req.query.ecosystem),
+        severity: getFirstString(req.query.severity),
+        attack_type: getFirstString(req.query.attack_type),
+        limit: getQueryInt(req.query.limit, 50),
       };
       const advisories = listAdvisories(options);
       res.json({ advisories, count: advisories.length });
@@ -593,7 +629,7 @@ export function startServer(port: number) {
   // GET /api/advisories/search — search advisories
   app.get("/api/advisories/search", (req: Request, res: Response) => {
     try {
-      const q = req.query.q as string;
+      const q = getFirstString(req.query.q);
       if (!q) {
         res.status(400).json({ error: "q parameter is required" });
         return;
@@ -608,12 +644,17 @@ export function startServer(port: number) {
   // GET /api/advisories/:id — get advisory detail with IOCs
   app.get("/api/advisories/:id", (req: Request, res: Response) => {
     try {
-      const advisory = getAdvisory(req.params.id);
+      const advisoryId = getFirstString(req.params.id);
+      if (!advisoryId) {
+        res.status(400).json({ error: "Advisory id is required" });
+        return;
+      }
+      const advisory = getAdvisory(advisoryId);
       if (!advisory) {
         res.status(404).json({ error: "Advisory not found" });
         return;
       }
-      const iocs = getIOCsForAdvisory(req.params.id);
+      const iocs = getIOCsForAdvisory(advisoryId);
       res.json({ ...advisory, iocs });
     } catch (error) {
       res.status(500).json({ error: String(error) });
@@ -623,9 +664,9 @@ export function startServer(port: number) {
   // GET /api/check-package — check if a package is safe
   app.get("/api/check-package", (req: Request, res: Response) => {
     try {
-      const name = req.query.name as string;
-      const version = req.query.version as string | undefined;
-      const ecosystem = (req.query.ecosystem as string) || "npm";
+      const name = getFirstString(req.query.name);
+      const version = getFirstString(req.query.version);
+      const ecosystem = getFirstString(req.query.ecosystem) || "npm";
 
       if (!name) {
         res.status(400).json({ error: "name parameter is required" });
