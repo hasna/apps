@@ -17,7 +17,7 @@ async function listCollections(json = false) {
 
     if (json) { printJson(rows); return; }
     if (rows.length === 0) {
-      printInfo("No collections found. Set a collection with 'brains models set-collection'.");
+      printInfo("No collections found. Set a collection with 'brains models collection <model-id> <name>'.");
       return;
     }
     printTable(
@@ -50,7 +50,8 @@ export function registerCollectionsCommands(program: Command): void {
   collectionsCmd
     .command("show <name>")
     .description("List all models in a collection")
-    .action(async (name: string) => {
+    .option("--json", "Output as JSON")
+    .action(async (name: string, opts: { json?: boolean }) => {
       try {
         const db = getDb();
         const models = await db
@@ -58,7 +59,8 @@ export function registerCollectionsCommands(program: Command): void {
           .from(fineTunedModels)
           .where(eq(fineTunedModels.collection, name));
 
-        if (models.length === 0) { printInfo(`No models found in collection '${name}'.`); return; }
+        if (models.length === 0) { if (opts.json) { printJson([]); return; } printInfo(`No models found in collection '${name}'.`); return; }
+        if (opts.json) { printJson(models); return; }
         printTable(
           ["ID", "Name", "Provider", "Status", "Base Model"],
           models.map((m) => [m.id, m.name, m.provider, printStatus(m.status), m.baseModel])

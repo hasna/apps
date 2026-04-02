@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { randomUUID } from "crypto";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { homedir } from "os";
 import { getDb, trainingDatasets } from "../../db/index.js";
 import { printJson, printError, printSuccess, printInfo, printTable } from "../ui.js";
@@ -137,7 +137,7 @@ export function registerDataCommands(program: Command): void {
           if (!existsSync(f)) { printError(`File not found: ${f}`); process.exit(1); }
         }
 
-        mkdirSync(join(opts.output, "..").replace(/\/\.\.$/, "") || DEFAULT_DATASETS_DIR, { recursive: true });
+        mkdirSync(getMergeOutputDirectory(opts.output), { recursive: true });
 
         const allExamples: string[] = [];
         for (const f of files) {
@@ -204,3 +204,10 @@ export function registerDataCommands(program: Command): void {
       }
     });
 }
+
+function getMergeOutputDirectory(outputPath: string): string {
+  if (!outputPath) return DEFAULT_DATASETS_DIR;
+  return dirname(outputPath);
+}
+
+export { getMergeOutputDirectory };
