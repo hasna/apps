@@ -8,38 +8,56 @@ export function registerDoctorCommand(program: Command): void {
   program
     .command("doctor")
     .description("Run diagnostics — check credentials, DB, and provider connectivity")
-    .action(async () => {
+    .option("--json", "Output structured JSON")
+    .action(async (opts: { json?: boolean }) => {
       let passed = 0;
       let failed = 0;
+      const checks: { section: string; status: "pass" | "fail"; message: string; fix?: string }[] = [];
+      let currentSection = "general";
 
-      function ok(msg: string) { console.log(`  ✓ ${msg}`); passed++; }
+      function section(name: string): void {
+        currentSection = name;
+        if (!opts.json) {
+          console.log(`\n── ${name} ─────────────────────────────────`);
+        }
+      }
+
+      function ok(msg: string) {
+        checks.push({ section: currentSection, status: "pass", message: msg });
+        if (!opts.json) console.log(`  ✓ ${msg}`);
+        passed++;
+      }
+
       function fail(msg: string, fix?: string) {
-        console.log(`  ✗ ${msg}`);
-        if (fix) console.log(`    → ${fix}`);
+        checks.push({ section: currentSection, status: "fail", message: msg, fix });
+        if (!opts.json) {
+          console.log(`  ✗ ${msg}`);
+          if (fix) console.log(`    → ${fix}`);
+        }
         failed++;
       }
 
-      console.log("\n── Database ─────────────────────────────────");
+      section("Database");
       try {
         const count = countDomains();
         ok(`Local DB accessible (${count} domain${count !== 1 ? "s" : ""})`);
-      } catch (e) {
-        fail("Local DB not accessible", `Check ~/.hasna/domains/domains.db`);
+      } catch {
+        fail("Local DB not accessible", "Check ~/.hasna/domains/domains.db");
       }
 
-      console.log("\n── Config ───────────────────────────────────");
+      section("Config");
       const cfg = loadConfig();
       if (cfg.default_registrar) ok(`default-registrar: ${cfg.default_registrar}`);
       else fail("No default registrar set", "domains config set default-registrar route53");
       if (cfg.default_dns) ok(`default-dns: ${cfg.default_dns}`);
       else fail("No default DNS provider set", "domains config set default-dns cloudflare");
 
-      const contactFields = ["first_name","last_name","email","phone","address_line_1","city","state","country_code","zip_code"] as const;
+      const contactFields = ["first_name", "last_name", "email", "phone", "address_line_1", "city", "state", "country_code", "zip_code"] as const;
       const missingContact = contactFields.filter((f) => !cfg.contact?.[f]);
       if (missingContact.length === 0) ok("Registrant contact info complete");
       else fail(`Missing contact fields: ${missingContact.join(", ")}`, "domains config set contact.<field> <value>");
 
-      console.log("\n── Providers ────────────────────────────────");
+      section("Providers");
       const providers = getAvailableProviders().filter((p) => p.name !== "brandsight");
       for (const p of providers) {
         if (!p.configured) {
@@ -65,12 +83,32 @@ export function registerDoctorCommand(program: Command): void {
         }
       }
 
-      console.log("\n── Tools ────────────────────────────────────");
-      try { execSync("whois --version 2>/dev/null || whois example.com 2>/dev/null", { timeout: 3000 }); ok("whois binary found"); }
-      catch { fail("whois not installed", "apt install whois  /  brew install whois"); }
+      section("Tools");
+      try {
+        execSync("whois --version 2>/dev/null || whois example.com 2>/dev/null", { timeout: 3000 });
+        ok("whois binary found");
+      } catch {
+        fail("whois not installed", "apt install whois  /  brew install whois");
+      }
 
-      console.log(`\n${"─".repeat(45)}`);
-      console.log(`  ${passed} passed  /  ${failed} failed\n`);
+      if (opts.json) {
+        console.log(
+          JSON.stringify(
+            {
+              passed,
+              failed,
+              healthy: failed === 0,
+              checks,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        console.log(`\n${"─".repeat(45)}`);
+        console.log(`  ${passed} passed  /  ${failed} failed\n`);
+      }
+
       if (failed > 0) process.exit(1);
     });
 }
