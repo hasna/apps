@@ -17,12 +17,32 @@ interface TmuxSendResult {
   attempts: number;
 }
 
+function countLines(message: string): number {
+  const matches = message.match(/\r?\n/g);
+  return (matches?.length ?? 0) + 1;
+}
+
+function getDefaultDelayMs(message: string): number {
+  // Keep short messages near-instant while still giving large payloads room to paste.
+  const byLength = message.length * 1.5;
+  const byLines = countLines(message) * 10;
+  return Math.max(25, Math.min(1500, Math.round(byLength + byLines)));
+}
+
+function getVerifyPauseMs(message: string): number {
+  return message.length <= 120 ? 50 : 100;
+}
+
+function getRetryBackoffMs(attempt: number): number {
+  return Math.min(500, 100 * attempt);
+}
+
 export async function tmuxSend(
   target: string,
   message: string,
   opts: TmuxSendOptions = {},
 ): Promise<TmuxSendResult> {
-  const delay = opts.delayMs ?? Math.max(12000, message.length * 50);
+  const delay = opts.delayMs ?? getDefaultDelayMs(message);
   const maxRetries = opts.retries ?? 3;
   const verify = opts.verify !== false;
 
@@ -39,16 +59,17 @@ export async function tmuxSend(
     // 4. Verify (optional) — capture pane and check input bar is empty
     if (!verify) return { success: true, attempts: attempt };
 
-    await sleep(500);
+    await sleep(getVerifyPauseMs(message));
     const pane = execSync(`tmux capture-pane -t ${JSON.stringify(target)} -p`).toString();
-    const lastLines = pane.split("\n").slice(-3).join("\n");
+    const lastLines = pane.split("\n").slice(-6).join("\n");
     // If the beginning of the message is no longer visible in the prompt area, it was submitted
-    if (!lastLines.includes(message.slice(0, 20))) {
+    const marker = message.slice(0, Math.min(32, message.length));
+    if (!lastLines.includes(marker)) {
       return { success: true, attempts: attempt };
     }
 
     // Not submitted yet — retry
-    if (attempt < maxRetries) await sleep(2000);
+    if (attempt < maxRetries) await sleep(getRetryBackoffMs(attempt));
   }
 
   return { success: false, attempts: maxRetries };
@@ -65,7 +86,7 @@ export function registerTmuxCommands(program: Command): void {
     .description("Send a message to a tmux window with paste+wait+Enter+verify")
     .requiredOption("--target <target>", "Tmux target: session:window or session:window.pane")
     .requiredOption("--message <text>", "Message text to send")
-    .option("--delay <ms>", "Wait time (ms) after paste before hitting Enter (default: max(12000, len*50))", parseInt)
+    .option("--delay <ms>", "Wait time (ms) after paste before hitting Enter (default: adaptive 25-1500ms)", parseInt)
     .option("--retries <n>", "Max retry attempts (default: 3)", parseInt)
     .option("--no-verify", "Skip verification after sending")
     .option("--json", "Output result as JSON")
@@ -120,8 +141,8 @@ export function registerTmuxCommands(program: Command): void {
     .description("Send the same message to multiple tmux windows")
     .requiredOption("--targets <list>", "Comma-separated list of tmux targets")
     .requiredOption("--message <text>", "Message text to send")
-    .option("--delay <ms>", "Wait time (ms) after paste before Enter (default: max(12000, len*50))", parseInt)
-    .option("--stagger <ms>", "Delay (ms) between each target (default: 0)", parseInt)
+    .option("--delay <ms>", "Wait time (ms) after paste before Enter (default: adaptive 25-1500ms)", parseInt)
+    .option("--stagger <ms>", "Delay (ms) between each target (default: 500)", parseInt)
     .option("--retries <n>", "Max retry attempts per target (default: 3)", parseInt)
     .option("--no-verify", "Skip verification after sending")
     .option("--json", "Output results as JSON")
@@ -131,7 +152,7 @@ export function registerTmuxCommands(program: Command): void {
         .map((t: string) => t.trim())
         .filter(Boolean) as string[];
       const message = opts.message;
-      const stagger = Number.isFinite(opts.stagger) && opts.stagger > 0 ? opts.stagger : 0;
+      const stagger = Number.isFinite(opts.stagger) && opts.stagger >= 0 ? opts.stagger : 500;
 
       if (targets.length === 0) {
         console.error(chalk.red("--targets must be a non-empty comma-separated list."));
@@ -142,11 +163,10 @@ export function registerTmuxCommands(program: Command): void {
         process.exit(1);
       }
 
-      const results: Array<{ target: string; success: boolean; attempts: number; error?: string }> = [];
+      const results: Array<{ target: string; success: boolean; attempts: number; error?: string }> = new Array(targets.length);
 
-      for (let i = 0; i < targets.length; i++) {
-        const target = targets[i];
-        if (i > 0 && stagger > 0) await sleep(stagger);
+      await Promise.all(targets.map(async (target, i) => {
+        if (i > 0 && stagger > 0) await sleep(stagger * i);
 
         try {
           const result = await tmuxSend(target, message, {
@@ -154,7 +174,7 @@ export function registerTmuxCommands(program: Command): void {
             retries: Number.isFinite(opts.retries) ? opts.retries : undefined,
             verify: opts.verify !== false,
           });
-          results.push({ target, ...result });
+          results[i] = { target, ...result };
           if (!opts.json) {
             if (result.success) {
               console.log(chalk.green(`  ✓ ${target}`) + chalk.dim(` (attempt ${result.attempts})`));
@@ -164,12 +184,12 @@ export function registerTmuxCommands(program: Command): void {
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          results.push({ target, success: false, attempts: 0, error: errMsg });
+          results[i] = { target, success: false, attempts: 0, error: errMsg };
           if (!opts.json) {
             console.log(chalk.red(`  ✗ ${target}: ${errMsg}`));
           }
         }
-      }
+      }));
 
       const succeeded = results.filter((r) => r.success).length;
       const failed = results.length - succeeded;

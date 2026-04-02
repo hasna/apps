@@ -22,7 +22,7 @@ export function registerTmuxTools(server: McpServer): void {
     inputSchema: {
       target: z.string().describe("Tmux target: session:window or session:window.pane (e.g. platform-alumia:1)"),
       message: z.string().describe("Message text to send"),
-      delay_ms: z.coerce.number().optional().describe("Wait time (ms) after paste before hitting Enter. Default: max(12000, message_length * 50)"),
+      delay_ms: z.coerce.number().optional().describe("Wait time (ms) after paste before hitting Enter. Default: adaptive 25-1500ms"),
       retries: z.coerce.number().optional().describe("Max retry attempts (default: 3)"),
       verify: z.coerce.boolean().optional().describe("Verify message was submitted after Enter (default: true)"),
     },
@@ -61,8 +61,8 @@ export function registerTmuxTools(server: McpServer): void {
     inputSchema: {
       targets: z.array(z.string()).describe("List of tmux targets (session:window or session:window.pane)"),
       message: z.string().describe("Message text to send to all targets"),
-      delay_ms: z.coerce.number().optional().describe("Wait time (ms) after paste before Enter. Default: max(12000, message_length * 50)"),
-      stagger_ms: z.coerce.number().optional().describe("Delay (ms) between sending to each target (default: 0)"),
+      delay_ms: z.coerce.number().optional().describe("Wait time (ms) after paste before Enter. Default: adaptive 25-1500ms"),
+      stagger_ms: z.coerce.number().optional().describe("Delay (ms) between sending to each target (default: 500)"),
       retries: z.coerce.number().optional().describe("Max retry attempts per target (default: 3)"),
       verify: z.coerce.boolean().optional().describe("Verify each message was submitted (default: true)"),
     },
@@ -76,12 +76,12 @@ export function registerTmuxTools(server: McpServer): void {
       return { content: [{ type: "text", text: "message cannot be empty" }], isError: true };
     }
 
-    const stagger = typeof stagger_ms === "number" && stagger_ms > 0 ? stagger_ms : 0;
-    const results: Array<{ target: string; success: boolean; attempts: number; error?: string }> = [];
+    const stagger = typeof stagger_ms === "number" && stagger_ms >= 0 ? stagger_ms : 500;
+    const results: Array<{ target: string; success: boolean; attempts: number; error?: string }> = new Array(targets.length);
 
-    for (let i = 0; i < targets.length; i++) {
-      const target = (targets[i] as string).trim();
-      if (i > 0 && stagger > 0) await sleep(stagger);
+    await Promise.all(targets.map(async (rawTarget, i) => {
+      const target = String(rawTarget).trim();
+      if (i > 0 && stagger > 0) await sleep(stagger * i);
 
       try {
         const result = await tmuxSend(target, message, {
@@ -89,12 +89,12 @@ export function registerTmuxTools(server: McpServer): void {
           retries: typeof retries === "number" && retries > 0 ? retries : undefined,
           verify: verify !== false,
         });
-        results.push({ target, ...result });
+        results[i] = { target, ...result };
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        results.push({ target, success: false, attempts: 0, error: errMsg });
+        results[i] = { target, success: false, attempts: 0, error: errMsg };
       }
-    }
+    }));
 
     const succeeded = results.filter((r) => r.success).length;
     const failed = results.length - succeeded;
