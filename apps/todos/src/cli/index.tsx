@@ -270,9 +270,14 @@ program
     opts.tags = opts.tags || opts.tag;
     opts.list = opts.list || opts.taskList;
     const projectId = autoProject(globalOpts);
+    const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
+    const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
 
     const filter: Record<string, unknown> = {};
-    if (projectId) filter["project_id"] = projectId;
+    // For assigned-agent queries, default to cross-project results unless project scope is explicit.
+    if (projectId && !(hasAssignedFilter && !hasExplicitProjectFilter)) {
+      filter["project_id"] = projectId;
+    }
     if (opts.list) {
       const db = getDatabase();
       const listId = resolvePartialId(db, "task_lists", opts.list);

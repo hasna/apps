@@ -179,6 +179,27 @@ describe("CLI QoL commands", () => {
     expect(found.assigned_to).toBe("test-agent-qol");
   });
 
+  it("list --assigned should include tasks from other projects when project is only auto-detected", async () => {
+    const repoA = join(tmpDir, "auto-project-a");
+    const repoB = join(tmpDir, "auto-project-b");
+    await mkdir(repoA, { recursive: true });
+    await mkdir(repoB, { recursive: true });
+    execSync("git init -q", { cwd: repoA });
+    execSync("git init -q", { cwd: repoB });
+
+    const created = JSON.parse(run(`add 'Cross-project assigned task' --assign cross-agent --project ${repoB} --json`));
+    expect(created.assigned_to).toBe("cross-agent");
+
+    const out = execSync(
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json list --assigned cross-agent`,
+      { encoding: "utf-8", cwd: repoA, timeout: 15000 },
+    ).trim();
+    const tasks = JSON.parse(out);
+
+    expect(Array.isArray(tasks)).toBe(true);
+    expect(tasks.some((task: any) => task.id === created.id)).toBe(true);
+  });
+
   // ── config (no args) ──────────────────────────────────────────
 
   it("config should show current configuration", () => {
