@@ -17,7 +17,7 @@ describe("server CLI flags", () => {
     const parsed = parseServerCliArgs(["--version"], (msg) => out.push(msg));
 
     expect(parsed.handled).toBe(true);
-    expect(out).toEqual(["0.1.2"]);
+    expect(out).toEqual(["0.1.3"]);
   });
 
   test("parses --port value", () => {

@@ -4,7 +4,7 @@
 import { parseFromFile, parseFromString, validate, compile, run } from "../lib/pipeline.js";
 import { validateAndLint } from "../validator/validate.js";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 const DEFAULT_PORT = parseInt(process.env.OMP_PORT ?? "7070", 10);
 
 export function getServerHelpText(): string {

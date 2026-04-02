@@ -17,7 +17,7 @@ describe("mcp CLI flags", () => {
     const handled = handleMcpCliArgs(["--version"], (msg) => out.push(msg));
 
     expect(handled).toBe(true);
-    expect(out).toEqual(["0.1.2"]);
+    expect(out).toEqual(["0.1.3"]);
   });
 
   test("does not handle unrelated args", () => {

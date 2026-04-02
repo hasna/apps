@@ -13,14 +13,14 @@ const program = new Command();
 program
   .name("omp")
   .description("Open Markdown Protocol — parse, validate, and execute .omp.md files")
-  .version("0.1.2");
+  .version("0.1.3");
 
 // ─── validate ────────────────────────────────────────────────
 
 program
   .command("validate <file>")
   .description("Validate an OMP document against the spec")
-  .option("--json", "Output result as JSON")
+  .option("-j, --json", "Output result as JSON")
   .action(async (file: string, opts: { json?: boolean }) => {
     try {
       const doc = parseFromFile(file);
@@ -72,7 +72,7 @@ program
   .option("--llm <model>", "LLM provider:model (e.g., anthropic:haiku, openai:gpt-4o-mini, ollama:llama3)")
   .option("--output-dir <dir>", "Output directory", ".")
   .option("--verbose", "Verbose output")
-  .option("--json", "Output result as JSON")
+  .option("-j, --json", "Output result as JSON")
   .action(async (file: string, opts: { dryRun?: boolean; llm?: string; outputDir: string; verbose?: boolean; json?: boolean }) => {
     try {
       const llm = opts.llm ? parseLLMOption(opts.llm) : undefined;
@@ -140,7 +140,7 @@ program
 program
   .command("lint <file>")
   .description("Validate + best practice checks")
-  .option("--json", "Output result as JSON")
+  .option("-j, --json", "Output result as JSON")
   .action(async (file: string, opts: { json?: boolean }) => {
     try {
       const doc = parseFromFile(file);
@@ -185,7 +185,7 @@ program
 program
   .command("inspect <file>")
   .description("Show parsed AST, card count, DAG visualization")
-  .option("--json", "Output result as JSON")
+  .option("-j, --json", "Output result as JSON")
   .action(async (file: string, opts: { json?: boolean }) => {
     try {
       const doc = parseFromFile(file);

@@ -49,6 +49,22 @@ describe("omp CLI JSON output", () => {
     rmSync(fixtureDir, { recursive: true, force: true });
   });
 
+  test("validate -j outputs machine-readable payload", () => {
+    mkdirSync(fixtureDir, { recursive: true });
+    writeFileSync(fixtureFile, validDoc);
+
+    const result = runCli(["validate", fixtureFile, "-j"]);
+    const stdout = Buffer.from(result.stdout).toString("utf8");
+
+    expect(result.exitCode).toBe(0);
+
+    const payload = JSON.parse(stdout) as { valid: boolean; cards: number };
+    expect(payload.valid).toBe(true);
+    expect(payload.cards).toBeGreaterThan(0);
+
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
   test("inspect --json includes execution plan", () => {
     mkdirSync(fixtureDir, { recursive: true });
     writeFileSync(fixtureFile, validDoc);
@@ -77,6 +93,21 @@ describe("omp CLI JSON output", () => {
     const payload = JSON.parse(stdout) as { error: string };
     expect(payload.error).toContain("Unsupported LLM provider: foo");
     expect(payload.error).toContain("anthropic, openai, ollama");
+
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  test("run -j fails fast on unsupported provider", () => {
+    mkdirSync(fixtureDir, { recursive: true });
+    writeFileSync(fixtureFile, validDoc);
+
+    const result = runCli(["run", fixtureFile, "--dry-run", "-j", "--llm", "foo:gpt-x"]);
+    const stdout = Buffer.from(result.stdout).toString("utf8");
+
+    expect(result.exitCode).toBe(1);
+
+    const payload = JSON.parse(stdout) as { error: string };
+    expect(payload.error).toContain("Unsupported LLM provider: foo");
 
     rmSync(fixtureDir, { recursive: true, force: true });
   });
