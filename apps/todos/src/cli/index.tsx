@@ -114,6 +114,24 @@ function autoProject(opts: { project?: string }): string | undefined {
   return autoDetectProject(opts)?.id;
 }
 
+/** Normalize user-friendly status aliases to canonical TaskStatus values */
+function normalizeStatus(s: string): string {
+  switch (s.toLowerCase().trim()) {
+    case "done":      return "completed";
+    case "complete":  return "completed";
+    case "active":    return "in_progress";
+    case "wip":       return "in_progress";
+    case "cancelled": return "cancelled";
+    case "canceled":  return "cancelled";
+    default:          return s;
+  }
+}
+
+function normalizeStatusList(statuses: string | string[]): string | string[] {
+  if (Array.isArray(statuses)) return statuses.map(normalizeStatus);
+  return normalizeStatus(statuses);
+}
+
 function output(data: unknown, jsonMode: boolean): void {
   if (jsonMode) {
     console.log(JSON.stringify(data, null, 2));
@@ -206,7 +224,7 @@ program
         return id;
       })() : undefined,
       assigned_to: opts.assign,
-      status: opts.status as TaskStatus | undefined,
+      status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
       task_list_id: taskListId,
       agent_id: globalOpts.agent,
       session_id: globalOpts.session,
@@ -266,8 +284,8 @@ program
     }
     if (opts.status) {
       filter["status"] = opts.status.includes(",")
-        ? opts.status.split(",").map((s: string) => s.trim())
-        : opts.status;
+        ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim()))
+        : normalizeStatus(opts.status);
     } else if (!opts.all) {
       filter["status"] = ["pending", "in_progress"];
     }
@@ -652,7 +670,7 @@ program
         version: current.version,
         title: opts.title,
         description: opts.description,
-        status: opts.status as TaskStatus | undefined,
+        status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
         priority: opts.priority as TaskPriority | undefined,
         assigned_to: opts.assign,
         tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
@@ -1259,7 +1277,7 @@ program
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
     const searchOpts: any = { query, project_id: projectId };
-    if (opts.status) searchOpts.status = opts.status;
+    if (opts.status) searchOpts.status = normalizeStatusList(opts.status);
     if (opts.priority) searchOpts.priority = opts.priority;
     if (opts.assigned) searchOpts.assigned_to = opts.assigned;
     if (opts.since) searchOpts.updated_after = opts.since;
@@ -2588,7 +2606,7 @@ program
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
     const interval = parseInt(opts.interval, 10) * 1000;
-    const statusFilter = opts.status ? opts.status.split(",").map((s: string) => s.trim()) : ["pending", "in_progress"];
+    const statusFilter = opts.status ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim())) : ["pending", "in_progress"];
 
     function render() {
       const tasks = listTasks({ project_id: projectId, status: statusFilter as any });
