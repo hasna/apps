@@ -1,6 +1,6 @@
 {
   "name": "@hasna/security",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "AI-powered security scanner for git repos — CLI, MCP, API, Web Dashboard, SDK with Cerebras LLM",
   "type": "module",
   "main": "dist/index.js",
