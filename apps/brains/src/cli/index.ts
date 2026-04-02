@@ -6,13 +6,14 @@ import { eq } from "drizzle-orm";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getDb, getRawDb, fineTunedModels, trainingJobs } from "../db/index.js";
-import { printTable, printError, printSuccess, printInfo } from "./ui.js";
+import { printTable, printError, printSuccess, printInfo, printJson } from "./ui.js";
 import { registerModelsCommands } from "./commands/models.js";
 import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
 import { registerCollectionsCommands } from "./commands/collections.js";
 import { registerCloudCommands } from "./commands/cloud.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
+import { parseRemoveType } from "./remove.js";
 
 const program = new Command();
 
@@ -45,32 +46,52 @@ program
   .alias("uninstall")
   .description("Remove a fine-tuned model or training job by ID")
   .option("--type <type>", "Type: model | job (default: auto-detect)")
-  .action(async (id: string, opts) => {
+  .option("--json", "Output as JSON")
+  .action(async (id: string, opts: { type?: string; json?: boolean }) => {
     const db = getDb();
     try {
-      const type = opts.type?.toLowerCase();
-      if (type === "job" || (!type && !type)) {
-        // Try to delete as training job first if no type specified
+      const type = parseRemoveType(opts.type);
+
+      if (!type || type === "job") {
         const job = db.select().from(trainingJobs).where(eq(trainingJobs.id, id)).get();
-        if (job || type === "job") {
-          if (!job) { printError(`Job not found: ${id}`); process.exit(1); }
+        if (job) {
           db.delete(trainingJobs).where(eq(trainingJobs.id, id)).run();
+          if (opts.json) { printJson({ deleted: "job", id }); return; }
           printSuccess(`Training job ${id} removed`);
           return;
         }
+        if (type === "job") {
+          if (opts.json) { printJson({ error: `Job not found: ${id}` }); }
+          else { printError(`Job not found: ${id}`); }
+          process.exit(1);
+        }
       }
-      if (type === "model" || !type) {
+
+      if (!type || type === "model") {
         const model = db.select().from(fineTunedModels).where(eq(fineTunedModels.id, id)).get();
         if (model) {
           db.delete(fineTunedModels).where(eq(fineTunedModels.id, id)).run();
+          if (opts.json) { printJson({ deleted: "model", id }); return; }
           printSuccess(`Model ${id} removed`);
           return;
         }
+        if (type === "model") {
+          if (opts.json) { printJson({ error: `Model not found: ${id}` }); }
+          else { printError(`Model not found: ${id}`); }
+          process.exit(1);
+        }
       }
-      printError(`Not found: ${id}. Use --type model|job`);
+
+      const message = `Not found: ${id}. Use --type model|job to target a specific entity.`;
+      if (opts.json) { printJson({ error: message }); }
+      else { printError(message); }
       process.exit(1);
     } catch (err) {
-      printError(err instanceof Error ? err.message : String(err));
+      if (opts.json) {
+        printJson({ error: err instanceof Error ? err.message : String(err) });
+      } else {
+        printError(err instanceof Error ? err.message : String(err));
+      }
       process.exit(1);
     }
   });
