@@ -13,6 +13,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function parseOptionalDelayMs(value: unknown): number | undefined {
+  return typeof value === "number" && value >= 0 ? value : undefined;
+}
+
+export function normalizeTmuxTargets(rawTargets: unknown[]): string[] {
+  const normalized = rawTargets.map((target) => String(target).trim());
+  if (normalized.some((target) => target.length === 0)) {
+    throw new Error("targets must not contain empty values");
+  }
+  return normalized;
+}
+
 export function registerTmuxTools(server: McpServer): void {
   server.registerTool("tmux_send", {
     description:
@@ -38,7 +50,7 @@ export function registerTmuxTools(server: McpServer): void {
 
     try {
       const result = await tmuxSend(target.trim(), message, {
-        delayMs: typeof delay_ms === "number" && delay_ms > 0 ? delay_ms : undefined,
+        delayMs: parseOptionalDelayMs(delay_ms),
         retries: typeof retries === "number" && retries > 0 ? retries : undefined,
         verify: verify !== false,
       });
@@ -77,15 +89,21 @@ export function registerTmuxTools(server: McpServer): void {
     }
 
     const stagger = typeof stagger_ms === "number" && stagger_ms >= 0 ? stagger_ms : 500;
-    const results: Array<{ target: string; success: boolean; attempts: number; error?: string }> = new Array(targets.length);
+    let normalizedTargets: string[];
+    try {
+      normalizedTargets = normalizeTmuxTargets(targets);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { content: [{ type: "text", text: msg }], isError: true };
+    }
+    const results: Array<{ target: string; success: boolean; attempts: number; error?: string }> = new Array(normalizedTargets.length);
 
-    await Promise.all(targets.map(async (rawTarget, i) => {
-      const target = String(rawTarget).trim();
+    await Promise.all(normalizedTargets.map(async (target, i) => {
       if (i > 0 && stagger > 0) await sleep(stagger * i);
 
       try {
         const result = await tmuxSend(target, message, {
-          delayMs: typeof delay_ms === "number" && delay_ms > 0 ? delay_ms : undefined,
+          delayMs: parseOptionalDelayMs(delay_ms),
           retries: typeof retries === "number" && retries > 0 ? retries : undefined,
           verify: verify !== false,
         });
