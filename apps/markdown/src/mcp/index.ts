@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // OMP MCP Server — expose OMP tools to AI agents
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
@@ -12,11 +12,41 @@ import { validateAndLint } from "../validator/validate.js";
 import { existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { createRequire } from "module";
+
+const VERSION = "0.1.0";
+const require = createRequire(import.meta.url);
 
 const server = new Server(
-  { name: "markdown", version: "0.1.0" },
+  { name: "markdown", version: VERSION },
   { capabilities: { tools: {} } }
 );
+
+export function getMcpHelpText(): string {
+  return [
+    "Usage: omp-mcp [options]",
+    "",
+    "OMP MCP Server — stdio transport for OMP tools",
+    "",
+    "Options:",
+    "  -v, --version       Output version",
+    "  -h, --help          Display help",
+  ].join("\n");
+}
+
+export function handleMcpCliArgs(args: string[], log: (msg: string) => void = console.log): boolean {
+  if (args.includes("-h") || args.includes("--help")) {
+    log(getMcpHelpText());
+    return true;
+  }
+
+  if (args.includes("-v") || args.includes("--version")) {
+    log(VERSION);
+    return true;
+  }
+
+  return false;
+}
 
 // ─── Agent registry (in-memory) ─────────────────────────────
 
@@ -154,7 +184,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const a = args as { agent_id: string; project_id?: string };
         const ag = _agentReg.get(a.agent_id);
         if (!ag) return { content: [{ type: "text" as const, text: `Agent not found: ${a.agent_id}` }], isError: true };
-        (ag as any).project_id = a.project_id ?? undefined;
+        ag.project_id = a.project_id ?? undefined;
         return { content: [{ type: "text" as const, text: a.project_id ? `Focus: ${a.project_id}` : "Focus cleared" }] };
       }
       case "list_agents": {
@@ -164,7 +194,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "send_feedback": {
         const p = args as { message: string; email?: string; category?: string };
         const db = getFeedbackDb();
-        db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(p.message, p.email || null, p.category || "general", "0.1.0");
+        db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(p.message, p.email || null, p.category || "general", VERSION);
         db.close();
         return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
       }
@@ -277,9 +307,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // ─── Start ───────────────────────────────────────────────────
 
-async function main() {
+export async function main(args: string[] = process.argv.slice(2)) {
+  if (handleMcpCliArgs(args)) return;
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch(console.error);
+if (import.meta.main) {
+  main().catch(console.error);
+}
