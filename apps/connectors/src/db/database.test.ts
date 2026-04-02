@@ -57,6 +57,32 @@ describe("database module", () => {
         try { rmSync(tmp, { force: true }); } catch {}
       }
     });
+
+    test("getDatabase reopens when called with a different path", async () => {
+      const { getDatabase, closeDatabase } = await import("./database.js");
+      const tmpA = join(tmpdir(), `test-connectors-a-${process.pid}.db`);
+      const tmpB = join(tmpdir(), `test-connectors-b-${process.pid}.db`);
+      try {
+        const dbA = getDatabase(tmpA);
+        const dbB = getDatabase(tmpB);
+        expect(dbA).not.toBe(dbB);
+      } finally {
+        closeDatabase();
+        try { rmSync(tmpA, { force: true }); } catch {}
+        try { rmSync(tmpB, { force: true }); } catch {}
+      }
+    });
+
+    test("getDatabase supports :memory: path", async () => {
+      const { getDatabase, closeDatabase } = await import("./database.js");
+      try {
+        const db = getDatabase(":memory:");
+        const tables = db.all("SELECT name FROM sqlite_master WHERE type='table'");
+        expect(Array.isArray(tables)).toBe(true);
+      } finally {
+        closeDatabase();
+      }
+    });
   });
 
   describe("now / shortUuid", () => {
