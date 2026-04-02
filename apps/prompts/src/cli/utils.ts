@@ -14,6 +14,54 @@ export function getActiveProjectId(program: Command): string | null {
   return resolveProject(db, projectName)
 }
 
+export async function writeToClipboard(text: string): Promise<void> {
+  const run = async (cmd: string[]): Promise<void> => {
+    const proc = Bun.spawn(cmd, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
+    proc.stdin.write(text)
+    proc.stdin.end()
+    const exitCode = await proc.exited
+    if (exitCode !== 0) {
+      throw new Error(`Clipboard command failed: ${cmd[0]}`)
+    }
+  }
+
+  if (process.platform === "darwin") {
+    await run(["pbcopy"])
+    return
+  }
+
+  if (process.platform === "linux") {
+    const candidates: string[][] = [
+      ["xclip", "-selection", "clipboard"],
+      ["xsel", "--clipboard", "--input"],
+    ]
+
+    const available = candidates.filter((cmd) => {
+      const tool = cmd[0]
+      if (!tool) return false
+      if (typeof Bun.which !== "function") return true
+      return Boolean(Bun.which(tool))
+    })
+
+    if (available.length === 0) {
+      throw new Error("No clipboard tool found. Install xclip or xsel, or use `prompts use` / `prompts share` without clipboard.")
+    }
+
+    for (const cmd of available) {
+      try {
+        await run(cmd)
+        return
+      } catch {
+        // Try next available clipboard command.
+      }
+    }
+
+    throw new Error("Failed to copy to clipboard using available tools. Use `prompts use` or `prompts share` without clipboard.")
+  }
+
+  throw new Error("Clipboard is not supported on this platform. Use `prompts use` or `prompts share` without clipboard.")
+}
+
 export function output(program: Command, data: unknown): void {
   if (isJson(program)) {
     console.log(JSON.stringify(data, null, 2))

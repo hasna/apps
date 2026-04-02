@@ -4,7 +4,7 @@ import { getPrompt, updatePrompt } from "../../db/prompts.js"
 import { movePrompt } from "../../db/collections.js"
 import { extractVariableInfo, validateVars } from "../../lib/template.js"
 import { lintPrompt } from "../../lib/lint.js"
-import { isJson, output, handleError } from "../utils.js"
+import { isJson, output, handleError, writeToClipboard } from "../utils.js"
 
 export function registerQolCommands(program: Command): void {
 
@@ -148,27 +148,7 @@ export function registerQolCommands(program: Command): void {
         const markdown = lines.join("\n")
 
         if (opts.clipboard) {
-          const { platform } = process
-          if (platform === "darwin") {
-            const proc = Bun.spawn(["pbcopy"], { stdin: "pipe" })
-            proc.stdin.write(markdown)
-            proc.stdin.end()
-            await proc.exited
-          } else if (platform === "linux") {
-            try {
-              const proc = Bun.spawn(["xclip", "-selection", "clipboard"], { stdin: "pipe" })
-              proc.stdin.write(markdown)
-              proc.stdin.end()
-              await proc.exited
-            } catch {
-              const proc = Bun.spawn(["xsel", "--clipboard", "--input"], { stdin: "pipe" })
-              proc.stdin.write(markdown)
-              proc.stdin.end()
-              await proc.exited
-            }
-          } else {
-            handleError(program, "Clipboard not supported on this platform.")
-          }
+          await writeToClipboard(markdown)
           console.log(chalk.green(`Copied ${chalk.bold(p.slug)} to clipboard`))
         } else {
           if (isJson(program)) output(program, { id: p.id, slug: p.slug, markdown })

@@ -5,7 +5,7 @@ import { closeDatabase, resetDatabase } from "./database.js"
 // Use in-memory DB for tests
 process.env["PROMPTS_DB_PATH"] = ":memory:"
 
-import { createPrompt, getPrompt, listPrompts, updatePrompt, deletePrompt, usePrompt, upsertPrompt } from "./prompts.js"
+import { createPrompt, getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt } from "./prompts.js"
 import { PromptNotFoundError, VersionConflictError, DuplicateSlugError } from "../types/index.js"
 
 beforeEach(() => {
@@ -99,6 +99,14 @@ describe("listPrompts", () => {
     createPrompt({ title: "Tmpl", body: "has {{var}}" })
     expect(listPrompts({ is_template: true })).toHaveLength(1)
     expect(listPrompts({ is_template: false })).toHaveLength(1)
+  })
+
+  test("handles quoted project_id safely in project ordering path", () => {
+    createPrompt({ title: "Global", body: "body" })
+    const unsafeProjectId = "proj' OR 1=1 --"
+
+    expect(() => listPrompts({ project_id: unsafeProjectId })).not.toThrow()
+    expect(() => listPromptsSlim({ project_id: unsafeProjectId })).not.toThrow()
   })
 })
 

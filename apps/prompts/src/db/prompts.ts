@@ -140,6 +140,7 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
   const db = getDatabase()
   const conditions: string[] = []
   const params: (string | number)[] = []
+  const orderParams: (string | number)[] = []
 
   if (filter.collection) {
     conditions.push("collection = ?")
@@ -168,7 +169,8 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
     // Show project prompts + global prompts, project prompts first
     conditions.push("(project_id = ? OR project_id IS NULL)")
     params.push(filter.project_id)
-    orderBy = `(CASE WHEN project_id = '${filter.project_id}' THEN 0 ELSE 1 END), pinned DESC, use_count DESC, updated_at DESC`
+    orderBy = "(CASE WHEN project_id = ? THEN 0 ELSE 1 END), pinned DESC, use_count DESC, updated_at DESC"
+    orderParams.push(filter.project_id)
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
@@ -177,7 +179,7 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
 
   const rows = db
     .query(`SELECT * FROM prompts ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as Array<Record<string, unknown>>
+    .all(...params, ...orderParams, limit, offset) as Array<Record<string, unknown>>
 
   return rows.map(rowToPrompt)
 }
@@ -187,6 +189,7 @@ export function listPromptsSlim(filter: ListPromptsFilter = {}): SlimPrompt[] {
   const db = getDatabase()
   const conditions: string[] = []
   const params: (string | number)[] = []
+  const orderParams: (string | number)[] = []
 
   if (filter.collection) { conditions.push("collection = ?"); params.push(filter.collection) }
   if (filter.is_template !== undefined) { conditions.push("is_template = ?"); params.push(filter.is_template ? 1 : 0) }
@@ -201,7 +204,8 @@ export function listPromptsSlim(filter: ListPromptsFilter = {}): SlimPrompt[] {
   if (filter.project_id) {
     conditions.push("(project_id = ? OR project_id IS NULL)")
     params.push(filter.project_id)
-    orderBy = `(CASE WHEN project_id = '${filter.project_id}' THEN 0 ELSE 1 END), pinned DESC, use_count DESC, updated_at DESC`
+    orderBy = "(CASE WHEN project_id = ? THEN 0 ELSE 1 END), pinned DESC, use_count DESC, updated_at DESC"
+    orderParams.push(filter.project_id)
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
@@ -211,7 +215,7 @@ export function listPromptsSlim(filter: ListPromptsFilter = {}): SlimPrompt[] {
   // Select only needed columns — no body
   const rows = db
     .query(`SELECT id, slug, name, title, description, collection, tags, variables, is_template, source, pinned, next_prompt, expires_at, project_id, use_count, last_used_at, created_at, updated_at FROM prompts ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as Array<Record<string, unknown>>
+    .all(...params, ...orderParams, limit, offset) as Array<Record<string, unknown>>
 
   return rows.map(rowToSlimPrompt)
 }
@@ -284,18 +288,24 @@ export function usePrompt(idOrSlug: string): Prompt {
   return requirePrompt(prompt.id)
 }
 
-export function getTrending(days = 7, limit = 10): Array<{ id: string; slug: string; title: string; uses: number }> {
+export function getTrending(days = 7, limit = 10, projectId?: string | null): Array<{ id: string; slug: string; title: string; uses: number }> {
   const db = getDatabase()
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
-  return db.query(
+  const projectFilter = projectId ? "AND (p.project_id = ? OR p.project_id IS NULL)" : ""
+  const rows = db.query(
     `SELECT p.id, p.slug, p.title, COUNT(ul.id) as uses
      FROM usage_log ul
      JOIN prompts p ON p.id = ul.prompt_id
      WHERE ul.used_at >= ?
+     ${projectFilter}
      GROUP BY p.id
      ORDER BY uses DESC
      LIMIT ?`
-  ).all(cutoff, limit) as Array<{ id: string; slug: string; title: string; uses: number }>
+  )
+  if (projectId) {
+    return rows.all(cutoff, projectId, limit) as Array<{ id: string; slug: string; title: string; uses: number }>
+  }
+  return rows.all(cutoff, limit) as Array<{ id: string; slug: string; title: string; uses: number }>
 }
 
 export function setExpiry(idOrSlug: string, expiresAt: string | null): Prompt {

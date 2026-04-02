@@ -11,7 +11,7 @@ import { runAudit } from "../lib/audit.js"
 import { generateZshCompletion, generateBashCompletion } from "../lib/completion.js"
 import { lintAll } from "../lib/lint.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
-import { isJson, output, handleError, fmtPrompt } from "./utils.js"
+import { isJson, output, handleError, fmtPrompt, getActiveProjectId, writeToClipboard } from "./utils.js"
 import { registerPromptCommands } from "./commands/prompts.js"
 import { registerVersionCommands } from "./commands/versions.js"
 import { registerQolCommands } from "./commands/qol.js"
@@ -156,7 +156,11 @@ program
   .action((n: string | undefined) => {
     try {
       const limit = parseInt(n ?? "10") || 10
-      const prompts = listPrompts({ limit })
+      const project_id = getActiveProjectId(program)
+      const prompts = listPrompts({
+        limit,
+        ...(project_id !== null ? { project_id } : {}),
+      })
         .filter((p) => p.last_used_at !== null)
         .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""))
         .slice(0, limit)
@@ -176,7 +180,12 @@ program
   .option("-c, --collection <name>", "Lint only this collection")
   .action((opts: Record<string, string>) => {
     try {
-      const prompts = listPrompts({ collection: opts["collection"], limit: 10000 })
+      const project_id = getActiveProjectId(program)
+      const prompts = listPrompts({
+        collection: opts["collection"],
+        limit: 10000,
+        ...(project_id !== null ? { project_id } : {}),
+      })
       const results = lintAll(prompts)
       if (isJson(program)) { output(program, results); return }
       if (results.length === 0) { console.log(chalk.green("✓ All prompts pass lint.")); return }
@@ -202,8 +211,12 @@ program
   .action((days: string | undefined) => {
     try {
       const threshold = parseInt(days ?? "30") || 30
+      const project_id = getActiveProjectId(program)
       const cutoff = new Date(Date.now() - threshold * 24 * 60 * 60 * 1000).toISOString()
-      const all = listPrompts({ limit: 10000 })
+      const all = listPrompts({
+        limit: 10000,
+        ...(project_id !== null ? { project_id } : {}),
+      })
       const stale = all.filter(
         (p) => p.last_used_at === null || p.last_used_at < cutoff
       ).sort((a, b) => (a.last_used_at ?? "").localeCompare(b.last_used_at ?? ""))
@@ -256,27 +269,7 @@ program
   .action(async (id: string) => {
     try {
       const prompt = usePrompt(id)
-      const { platform } = process
-      if (platform === "darwin") {
-        const proc = Bun.spawn(["pbcopy"], { stdin: "pipe" })
-        proc.stdin.write(prompt.body)
-        proc.stdin.end()
-        await proc.exited
-      } else if (platform === "linux") {
-        try {
-          const proc = Bun.spawn(["xclip", "-selection", "clipboard"], { stdin: "pipe" })
-          proc.stdin.write(prompt.body)
-          proc.stdin.end()
-          await proc.exited
-        } catch {
-          const proc = Bun.spawn(["xsel", "--clipboard", "--input"], { stdin: "pipe" })
-          proc.stdin.write(prompt.body)
-          proc.stdin.end()
-          await proc.exited
-        }
-      } else {
-        handleError(program, "Clipboard not supported on this platform. Use `prompts use` instead.")
-      }
+      await writeToClipboard(prompt.body)
       if (isJson(program)) output(program, { copied: true, id: prompt.id, slug: prompt.slug })
       else console.log(chalk.green(`Copied ${chalk.bold(prompt.slug)} to clipboard`))
     } catch (e) {
@@ -401,7 +394,12 @@ program
   .option("-n, --limit <n>", "Max results", "50")
   .action((opts: Record<string, string>) => {
     try {
-      const all = listPrompts({ collection: opts["collection"], limit: parseInt(opts["limit"] ?? "50") || 50 })
+      const project_id = getActiveProjectId(program)
+      const all = listPrompts({
+        collection: opts["collection"],
+        limit: parseInt(opts["limit"] ?? "50") || 50,
+        ...(project_id !== null ? { project_id } : {}),
+      })
       const unused = all.filter((p) => p.use_count === 0).sort((a, b) => a.created_at.localeCompare(b.created_at))
       if (isJson(program)) { output(program, unused); return }
       if (unused.length === 0) { console.log(chalk.green("All prompts have been used at least once.")); return }
@@ -420,7 +418,8 @@ program
   .option("-n, --limit <n>", "Max results", "10")
   .action((opts: Record<string, string>) => {
     try {
-      const results = getTrending(parseInt(opts["days"] ?? "7") || 7, parseInt(opts["limit"] ?? "10") || 10)
+      const project_id = getActiveProjectId(program)
+      const results = getTrending(parseInt(opts["days"] ?? "7") || 7, parseInt(opts["limit"] ?? "10") || 10, project_id)
       if (isJson(program)) { output(program, results); return }
       if (results.length === 0) { console.log(chalk.gray("No usage data yet.")); return }
       console.log(chalk.bold(`Trending (last ${opts["days"] ?? "7"} days):`))

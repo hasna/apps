@@ -129,6 +129,7 @@ export function registerPromptCommands(program: Command): void {
     .option("--templates", "Show only templates")
     .option("--recent", "Sort by recently used")
     .option("-n, --limit <n>", "Max results", "50")
+    .option("-o, --offset <n>", "Skip first N results", "0")
     .action((opts: Record<string, string | boolean>) => {
       try {
         const project_id = getActiveProjectId(program)
@@ -137,6 +138,7 @@ export function registerPromptCommands(program: Command): void {
           tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
           is_template: opts["templates"] ? true : undefined,
           limit: parseInt(opts["limit"] as string) || 50,
+          offset: parseInt((opts["offset"] as string | undefined) ?? "0") || 0,
           ...(project_id !== null ? { project_id } : {}),
         })
         if (opts["recent"]) {
@@ -164,6 +166,7 @@ export function registerPromptCommands(program: Command): void {
     .option("-c, --collection <name>")
     .option("-t, --tags <tags>")
     .option("-n, --limit <n>", "Max results", "20")
+    .option("-o, --offset <n>", "Skip first N results", "0")
     .action((query: string, opts: Record<string, string>) => {
       try {
         const project_id = getActiveProjectId(program)
@@ -171,6 +174,7 @@ export function registerPromptCommands(program: Command): void {
           collection: opts["collection"],
           tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
           limit: parseInt(opts["limit"] ?? "20") || 20,
+          offset: parseInt(opts["offset"] ?? "0") || 0,
           ...(project_id !== null ? { project_id } : {}),
         })
         if (isJson(program)) {
@@ -226,9 +230,18 @@ export function registerPromptCommands(program: Command): void {
     .command("templates")
     .description("List template prompts")
     .option("-c, --collection <name>")
+    .option("-n, --limit <n>", "Max results", "50")
+    .option("-o, --offset <n>", "Skip first N results", "0")
     .action((opts: Record<string, string>) => {
       try {
-        const prompts = listPrompts({ is_template: true, collection: opts["collection"] })
+        const project_id = getActiveProjectId(program)
+        const prompts = listPrompts({
+          is_template: true,
+          collection: opts["collection"],
+          limit: parseInt(opts["limit"] ?? "50") || 50,
+          offset: parseInt(opts["offset"] ?? "0") || 0,
+          ...(project_id !== null ? { project_id } : {}),
+        })
         if (isJson(program)) {
           output(program, prompts)
         } else if (prompts.length === 0) {
