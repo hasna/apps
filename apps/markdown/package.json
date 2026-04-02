@@ -1,6 +1,6 @@
 {
   "name": "@hasna/markdown",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open Markdown Protocol (OMP) — structured markdown as intermediate representation between AI models. Smart LLM writes it, cheap LLM/regex executes it.",
   "type": "module",
   "main": "dist/index.js",
