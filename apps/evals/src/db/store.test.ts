@@ -61,6 +61,23 @@ describe("listRuns", () => {
   });
 });
 
+describe("deleteRun", () => {
+  test("deletes a saved run", async () => {
+    const { saveRun, getRun, deleteRun } = await import("./store.js");
+    saveRun(makeRun("del-run-1"));
+    expect(getRun("del-run-1")).not.toBeNull();
+    deleteRun("del-run-1");
+    expect(getRun("del-run-1")).toBeNull();
+  });
+
+  test("deleting nonexistent run is a no-op", async () => {
+    const { deleteRun, listRuns } = await import("./store.js");
+    const before = listRuns(100).length;
+    deleteRun("does-not-exist");
+    expect(listRuns(100).length).toBe(before);
+  });
+});
+
 describe("baselines", () => {
   test("set and get baseline", async () => {
     const { saveRun, setBaseline, getBaseline } = await import("./store.js");

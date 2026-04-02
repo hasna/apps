@@ -102,4 +102,55 @@ describe("streamDataset", () => {
     for await (const c of streamDataset(path)) ids.push(c.id);
     expect(ids).toEqual(["s1", "s2", "s3"]);
   });
+
+  test("filters by tags in stream mode", async () => {
+    const path = tmpFile("stream-tags.jsonl", [
+      '{"id":"t1","input":"a","tags":["smoke"]}',
+      '{"id":"t2","input":"b","tags":["slow"]}',
+      '{"id":"t3","input":"c","tags":["smoke"]}',
+    ].join("\n"));
+    const ids: string[] = [];
+    for await (const c of streamDataset(path, { tags: ["smoke"] })) ids.push(c.id);
+    expect(ids).toEqual(["t1", "t3"]);
+  });
+
+  test("skips malformed lines silently in stream mode", async () => {
+    const path = tmpFile("stream-bad.jsonl", [
+      '{"id":"good","input":"x"}',
+      'NOT JSON',
+      '{"id":"also-good","input":"y"}',
+    ].join("\n"));
+    const ids: string[] = [];
+    for await (const c of streamDataset(path)) ids.push(c.id);
+    expect(ids).toEqual(["good", "also-good"]);
+  });
+});
+
+describe("loadDataset — JSON array strict mode", () => {
+  test("strict mode throws on malformed item in JSON array", async () => {
+    const path = tmpFile("strict-array.json", JSON.stringify([
+      { id: "ok", input: "hello" },
+      { not_a_case: true }, // missing id
+    ]));
+    await expect(loadDataset(path, { strict: true })).rejects.toThrow();
+  });
+
+  test("non-strict skips bad items in JSON array with warning", async () => {
+    const path = tmpFile("bad-array.json", JSON.stringify([
+      { id: "ok", input: "hello" },
+      { not_a_case: true },
+    ]));
+    const { cases, warnings, skipped } = await loadDataset(path);
+    expect(cases.length).toBe(1);
+    expect(warnings.length).toBe(1);
+    expect(skipped).toBe(1);
+  });
+});
+
+describe("loadDataset — no files matched", () => {
+  test("throws when glob matches no files", async () => {
+    await expect(
+      loadDataset("/tmp/evals-no-such-dir-*/nonexistent-*.jsonl")
+    ).rejects.toThrow("No files matched");
+  });
 });
