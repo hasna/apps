@@ -18,6 +18,7 @@ import { registerProjectTools } from "./tools/projects.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
 import { registerCloudSyncTools } from "./tools/cloud.js";
+import { registerChannelBridge } from "./channel.js";
 
 import pkg from "../../package.json";
 
@@ -49,6 +50,9 @@ registerSpaceTools(server);
 registerProjectTools(server);
 registerAgentTools(server, agentFocus, getAgentFocus);
 registerAdvancedTools(server, pkg.version);
+
+// ---- Claude/Channel bridge (inter-session messaging) ----
+registerChannelBridge(server, () => process.env.CONVERSATIONS_AGENT_ID ?? null);
 
 // ---- Start server ----
 
