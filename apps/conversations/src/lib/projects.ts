@@ -82,10 +82,12 @@ export function createProject(opts: {
 
 export function listProjects(opts?: {
   status?: "active" | "archived";
+  limit?: number;
+  offset?: number;
 }): ProjectInfo[] {
   const db = getDb();
   const conditions: string[] = [];
-  const params: string[] = [];
+  const params: Array<string | number> = [];
 
   if (opts?.status) {
     conditions.push("p.status = ?");
@@ -94,6 +96,19 @@ export function listProjects(opts?: {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
+  let pagination = "";
+  if (typeof opts?.limit === "number" && Number.isFinite(opts.limit) && opts.limit > 0) {
+    pagination += " LIMIT ?";
+    params.push(Math.floor(opts.limit));
+  }
+  if (typeof opts?.offset === "number" && Number.isFinite(opts.offset) && opts.offset >= 0) {
+    if (!pagination.includes("LIMIT")) {
+      pagination += " LIMIT -1";
+    }
+    pagination += " OFFSET ?";
+    params.push(Math.floor(opts.offset));
+  }
+
   const rows = db.prepare(`
     SELECT
       p.*,
@@ -101,6 +116,7 @@ export function listProjects(opts?: {
     FROM projects p
     ${where}
     ORDER BY p.name ASC
+    ${pagination}
   `).all(...params) as Record<string, unknown>[];
 
   return rows.map((row) => ({

@@ -4,6 +4,12 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 
+export function requireDeleteConfirmation(confirmed?: boolean): void {
+  if (!confirmed) {
+    throw new Error('Project deletion requires --yes confirmation');
+  }
+}
+
 export function registerProjectCommands(program: Command): void {
   const project = program
     .command("project")
@@ -70,10 +76,18 @@ export function registerProjectCommands(program: Command): void {
     .command("list")
     .description("List all projects")
     .option("--status <status>", "Filter by status (active/archived)")
+    .option("--limit <n>", "Limit results", parseInt)
+    .option("--offset <n>", "Skip first N results", parseInt)
     .option("--json", "Output as JSON")
     .action((opts) => {
       const status = opts.status === "active" || opts.status === "archived" ? opts.status : undefined;
-      const projects = listProjects(status ? { status } : undefined);
+      const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined;
+      const offset = Number.isFinite(opts.offset) && opts.offset >= 0 ? opts.offset : undefined;
+      const projects = listProjects({
+        ...(status ? { status } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        ...(offset !== undefined ? { offset } : {}),
+      });
 
       if (opts.json) {
         console.log(JSON.stringify(projects, null, 2));
@@ -168,9 +182,11 @@ export function registerProjectCommands(program: Command): void {
     .command("delete")
     .description("Delete a project")
     .argument("<id-or-name>", "Project ID or name")
+    .option("--yes", "Confirm project deletion")
     .option("--json", "Output as JSON")
     .action((id, opts) => {
       try {
+        requireDeleteConfirmation(opts.yes);
         const isUuid = /^[0-9a-f-]{36}$/i.test(id);
         const resolvedId = isUuid ? id : (getProjectByName(id)?.id ?? id);
         const deleted = deleteProject(resolvedId);
@@ -184,7 +200,11 @@ export function registerProjectCommands(program: Command): void {
           console.log(chalk.green(`Project deleted.`));
         }
       } catch (e: any) {
-        console.error(chalk.red(e.message));
+        if (opts.json) {
+          console.log(JSON.stringify({ id, deleted: false, error: e.message }));
+        } else {
+          console.error(chalk.red(e.message));
+        }
         process.exit(1);
       }
       closeDb();

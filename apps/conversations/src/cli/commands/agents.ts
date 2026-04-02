@@ -5,6 +5,49 @@ import { resolveIdentity } from "../../lib/identity.js";
 import { heartbeat, registerAgent, isAgentConflict, listAgents, removePresence, renameAgent, getPresence } from "../../lib/presence.js";
 import { getProject, getProjectByName } from "../../lib/projects.js";
 
+type PresenceView = {
+  online: boolean;
+  last_seen_at: string;
+} | null;
+
+export type WhoamiPayload = {
+  agent: string;
+  source: string;
+  online: boolean;
+  last_seen_at: string | null;
+  last_seen_ago_seconds: number | null;
+};
+
+export function buildWhoamiPayload(
+  agent: string,
+  source: string,
+  presence: PresenceView,
+  nowMs = Date.now(),
+): WhoamiPayload {
+  if (!presence) {
+    return {
+      agent,
+      source,
+      online: false,
+      last_seen_at: null,
+      last_seen_ago_seconds: null,
+    };
+  }
+
+  const lastSeenMs = new Date(`${presence.last_seen_at}Z`).getTime();
+  const deltaSeconds = Number.isFinite(lastSeenMs)
+    ? Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000))
+    : null;
+
+  return {
+    agent,
+    source,
+    online: presence.online,
+    last_seen_at: presence.last_seen_at,
+    last_seen_ago_seconds: deltaSeconds,
+  };
+}
+
 export function registerAgentCommands(program: Command): void {
   // ---- agents ----
   const agents = program
@@ -231,6 +274,7 @@ export function registerAgentCommands(program: Command): void {
     .command("whoami")
     .description("Show current agent identity and online status")
     .option("--from <agent>", "Explicit agent identity")
+    .option("--json", "Output as JSON")
     .action((opts) => {
       const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
       const agent = resolveIdentity(opts.from);
@@ -249,11 +293,16 @@ export function registerAgentCommands(program: Command): void {
       }
 
       const presence = getPresence(agent);
+      const payload = buildWhoamiPayload(agent, source, presence);
+      if (opts.json) {
+        console.log(JSON.stringify(payload, null, 2));
+        closeDb();
+        return;
+      }
+
       let onlineStatus: string;
       if (presence && presence.online) {
-        const lastSeenMs = new Date(presence.last_seen_at + "Z").getTime();
-        const agoMs = Date.now() - lastSeenMs;
-        const agoSec = Math.floor(agoMs / 1000);
+        const agoSec = payload.last_seen_ago_seconds ?? 0;
         const agoStr = agoSec < 60 ? `${agoSec}s ago` : `${Math.floor(agoSec / 60)}m ago`;
         onlineStatus = chalk.green(`yes`) + chalk.dim(` (last seen ${agoStr})`);
       } else if (presence) {

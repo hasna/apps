@@ -102,6 +102,28 @@ describe("listProjects", () => {
     expect(projects[0].name).toBe("alpha");
     expect(projects[1].name).toBe("beta");
   });
+
+  test("applies limit", () => {
+    createProject({ name: "alpha", created_by: "alice" });
+    createProject({ name: "beta", created_by: "alice" });
+    createProject({ name: "gamma", created_by: "alice" });
+
+    const projects = listProjects({ limit: 2 });
+    expect(projects).toHaveLength(2);
+    expect(projects[0].name).toBe("alpha");
+    expect(projects[1].name).toBe("beta");
+  });
+
+  test("applies offset", () => {
+    createProject({ name: "alpha", created_by: "alice" });
+    createProject({ name: "beta", created_by: "alice" });
+    createProject({ name: "gamma", created_by: "alice" });
+
+    const projects = listProjects({ offset: 1 });
+    expect(projects).toHaveLength(2);
+    expect(projects[0].name).toBe("beta");
+    expect(projects[1].name).toBe("gamma");
+  });
 });
 
 describe("getProject", () => {
