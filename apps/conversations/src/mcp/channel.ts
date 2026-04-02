@@ -1,13 +1,14 @@
 /**
  * Claude Code channel bridge for conversations MCP server.
  *
- * Declares `experimental['claude/channel']` capability so Claude Code
- * (and agent-claude) can use this server as a channel for inter-session
- * messaging. When enabled, polls for new DMs to the current agent and
- * pushes them as `notifications/claude/channel` events.
+ * Declares `experimental['claude/channel']` capability so agent-claude
+ * can use this server as a channel for inter-session messaging.
  *
- * Usage: Start agent-claude with:
- *   agent-claude --channels server:conversations --dangerously-load-development-channels
+ * Polls for new messages addressed to:
+ *   1. The agent name (CONVERSATIONS_AGENT_ID) — standard DMs
+ *   2. The session ID (session:<uuid>) — targeted session injection via send_to_session
+ *
+ * Messages are pushed as `notifications/claude/channel` events.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,12 +16,11 @@ import { readMessages } from "../lib/messages.js";
 
 const POLL_INTERVAL_MS = 1000;
 
-/**
- * Register the claude/channel capability and start polling for
- * inbound messages to push as notifications.
- */
-export function registerChannelBridge(server: McpServer, getAgentId: () => string | null): void {
-  // Declare claude/channel capability so Claude Code registers us as a channel
+export function registerChannelBridge(
+  server: McpServer,
+  getAgentId: () => string | null,
+  getSessionId: () => string | null,
+): void {
   server.server.registerCapabilities({
     experimental: {
       'claude/channel': {},
@@ -28,56 +28,77 @@ export function registerChannelBridge(server: McpServer, getAgentId: () => strin
   });
 
   let lastSeenId = 0;
+  let lastSeenSessionId = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Seed lastSeenId from latest message on startup
-  function seedLastSeen(agentId: string): void {
-    const latest = readMessages({
-      to: agentId,
-      order: "desc",
-      limit: 1,
-    });
-    if (latest.length > 0) {
-      lastSeenId = latest[0].id;
+  function seedLastSeen(agentId: string, sessionId: string | null): void {
+    // Seed from agent DMs
+    const latestAgent = readMessages({ to: agentId, order: "desc", limit: 1 });
+    if (latestAgent.length > 0) lastSeenId = latestAgent[0].id;
+
+    // Seed from session-targeted messages
+    if (sessionId) {
+      const latestSession = readMessages({ to: `session:${sessionId}`, order: "desc", limit: 1 });
+      if (latestSession.length > 0) lastSeenSessionId = latestSession[0].id;
     }
   }
 
-  // Poll for new messages and push as channel notifications
+  function pushNotification(msg: { content: string; from_agent: string; session_id: string; space?: string | null; priority?: string }): void {
+    void server.server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        content: msg.content,
+        meta: {
+          from: msg.from_agent,
+          session_id: msg.session_id,
+          ...(msg.space ? { space: msg.space } : {}),
+          ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
+        },
+      },
+    });
+  }
+
   function startPolling(): void {
     if (pollTimer) return;
 
     const agentId = getAgentId();
-    if (!agentId) return;
+    const sessionId = getSessionId();
 
-    seedLastSeen(agentId);
+    if (!agentId && !sessionId) return;
+
+    if (agentId) seedLastSeen(agentId, sessionId);
 
     pollTimer = setInterval(() => {
-      const currentAgent = getAgentId();
-      if (!currentAgent) return;
-
       try {
-        const newMessages = readMessages({
-          to: currentAgent,
-          order: "asc",
-          limit: 20,
-        }).filter(m => m.id > lastSeenId);
+        const currentAgent = getAgentId();
+        const currentSession = getSessionId();
 
-        for (const msg of newMessages) {
-          lastSeenId = msg.id;
+        // Poll agent DMs
+        if (currentAgent) {
+          const newAgentMsgs = readMessages({
+            to: currentAgent,
+            order: "asc",
+            limit: 20,
+          }).filter(m => m.id > lastSeenId);
 
-          // Push as claude/channel notification
-          void server.server.notification({
-            method: "notifications/claude/channel",
-            params: {
-              content: msg.content,
-              meta: {
-                from: msg.from_agent,
-                session_id: msg.session_id,
-                ...(msg.space ? { space: msg.space } : {}),
-                ...(msg.priority !== "normal" ? { priority: msg.priority } : {}),
-              },
-            },
-          });
+          for (const msg of newAgentMsgs) {
+            lastSeenId = msg.id;
+            pushNotification(msg);
+          }
+        }
+
+        // Poll session-targeted messages
+        if (currentSession) {
+          const newSessionMsgs = readMessages({
+            to: `session:${currentSession}`,
+            order: "asc",
+            limit: 20,
+          }).filter(m => m.id > lastSeenSessionId);
+
+          for (const msg of newSessionMsgs) {
+            lastSeenSessionId = msg.id;
+            pushNotification(msg);
+          }
         }
       } catch {
         // Silently continue on poll errors
@@ -85,6 +106,5 @@ export function registerChannelBridge(server: McpServer, getAgentId: () => strin
     }, POLL_INTERVAL_MS);
   }
 
-  // Start polling after a short delay to let the connection establish
   setTimeout(() => startPolling(), 500);
 }

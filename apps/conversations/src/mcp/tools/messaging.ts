@@ -44,6 +44,33 @@ export function registerMessagingTools(
     };
   });
 
+  // Send a message targeted at a specific agent-claude session ID
+  server.registerTool("send_to_session", {
+    description: "Send a message to a specific agent-claude session by its session ID. The message will be auto-injected into that session's conversation via the channel bridge.",
+    inputSchema: {
+      target_session_id: z.string().describe("The agent-claude session ID (UUID) to send the message to"),
+      content: z.string().describe("Message content to inject into the target session"),
+      from: z.string().optional().describe("Sender agent name (defaults to CONVERSATIONS_AGENT_ID)"),
+      priority: z.string().optional(),
+    },
+  }, async (args: Record<string, any>) => {
+    const { target_session_id, content, from: fromParam, priority } = args;
+    const from = resolveIdentity(fromParam);
+
+    // Use session:<target_session_id> as the to field and store the real target in metadata
+    const msg = sendMessage({
+      from,
+      to: `session:${target_session_id}`,
+      content,
+      priority,
+      metadata: { target_session_id },
+    });
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(msg) }],
+    };
+  });
+
   server.registerTool("read_messages", {
     description: "Read DMs with optional filters.",
     inputSchema: {
