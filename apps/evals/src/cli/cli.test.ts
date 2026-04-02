@@ -88,6 +88,15 @@ describe("evals estimate", () => {
     expect(json["totalCases"]).toBe(1);
     expect(json["estimatedCostUsd"]).toBeDefined();
   });
+
+  test("-j alias outputs JSON", async () => {
+    const dataset = join(tmpDir, "estimate3.jsonl");
+    writeFileSync(dataset, JSON.stringify({ id: "j2", input: "test", judge: { rubric: "r" } }) + "\n");
+    const { stdout, exitCode } = await runCli(["estimate", dataset, "-j"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout) as Record<string, unknown>;
+    expect(json["totalCases"]).toBe(1);
+  });
 });
 
 describe("evals doctor", () => {
@@ -95,6 +104,21 @@ describe("evals doctor", () => {
     const { stdout } = await runCli(["doctor"]);
     expect(stdout).toContain("ANTHROPIC_API_KEY");
     expect(stdout).toContain("SQLite DB");
+  });
+
+  test("supports --json output", async () => {
+    const { stdout, exitCode } = await runCli(["doctor", "--json"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout) as { ok: boolean; checks: Array<{ name: string }> };
+    expect(json.ok).toBe(true);
+    expect(json.checks.some((c) => c.name === "ANTHROPIC_API_KEY")).toBe(true);
+  });
+
+  test("supports -j alias for JSON output", async () => {
+    const { stdout, exitCode } = await runCli(["doctor", "-j"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout) as { ok: boolean };
+    expect(json.ok).toBe(true);
   });
 });
 

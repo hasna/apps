@@ -2,12 +2,41 @@ import { Command } from "commander";
 import { compareRuns, printDiffReport, toMarkdown } from "../../core/reporter.js";
 import { getRun, getBaseline } from "../../db/store.js";
 
+export function renderMarkdownDiff(diff: ReturnType<typeof compareRuns>): string {
+  const lines: string[] = ["## Diff", ""];
+
+  if (diff.regressions.length === 0 && diff.improvements.length === 0) {
+    lines.push("- No changes between runs.");
+    return lines.join("\n");
+  }
+
+  if (diff.regressions.length > 0) {
+    lines.push("### Regressions");
+    for (const r of diff.regressions) {
+      lines.push(`- ${r.caseId}: ${r.before} -> ${r.after}`);
+    }
+    lines.push("");
+  }
+
+  if (diff.improvements.length > 0) {
+    lines.push("### Improvements");
+    for (const i of diff.improvements) {
+      lines.push(`- ${i.caseId}: ${i.before} -> ${i.after}`);
+    }
+    lines.push("");
+  }
+
+  const delta = diff.passRateDelta * 100;
+  lines.push(`- Score delta: ${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`);
+  return lines.join("\n");
+}
+
 export function compareCommand(): Command {
   return new Command("compare")
     .description("Compare two eval runs side-by-side")
     .argument("<before>", "Before run ID or baseline name")
     .argument("<after>", "After run ID (or 'latest')")
-    .option("--json", "Output JSON diff")
+    .option("-j, --json", "Output JSON diff")
     .option("--markdown", "Output markdown diff")
     .action(async (beforeArg: string, afterArg: string, opts: Record<string, string>) => {
       const { listRuns } = await import("../../db/store.js");
@@ -26,8 +55,8 @@ export function compareCommand(): Command {
         console.log(JSON.stringify(diff, null, 2));
       } else if (opts["markdown"]) {
         console.log(toMarkdown(afterRun));
-        console.log("\n## Diff\n");
-        printDiffReport(diff);
+        console.log();
+        console.log(renderMarkdownDiff(diff));
       } else {
         printDiffReport(diff);
       }

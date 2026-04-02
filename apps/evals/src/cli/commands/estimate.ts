@@ -17,7 +17,7 @@ export function estimateCommand(): Command {
     .argument("<dataset>", "Path to JSONL/JSON dataset")
     .option("--model <model>", "Judge model", "claude-sonnet-4-6")
     .option("--no-judge", "Assume no judge calls")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action(async (dataset: string, opts: Record<string, string>) => {
       const { cases, warnings } = await loadDataset(dataset);
       if (warnings.length > 0) for (const w of warnings) console.warn(`⚠ ${w}`);

@@ -24,7 +24,7 @@ export function runCommand(): Command {
     .option("--no-judge", "Skip LLM judge, run assertions only")
     .option("--output <format>", "Output format: terminal|json|markdown", "terminal")
     .option("--save", "Save run to database")
-    .option("--json", "Alias for --output json")
+    .option("-j, --json", "Alias for --output json")
     .action(async (dataset: string, opts: Record<string, string>) => {
       const { cases, warnings } = await loadDataset(dataset, {
         tags: opts["tags"] ? opts["tags"].split(",") : undefined,

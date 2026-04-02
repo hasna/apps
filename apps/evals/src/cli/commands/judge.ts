@@ -10,7 +10,7 @@ export function judgeCommand(): Command {
     .option("--expected <text>", "Expected behavior description")
     .option("--model <model>", "Judge model", "claude-sonnet-4-6")
     .option("--provider <provider>", "Judge provider: anthropic|openai", "anthropic")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action(async (opts: Record<string, string>) => {
       const result = await judgeOnce({
         input: opts["input"] ?? "",

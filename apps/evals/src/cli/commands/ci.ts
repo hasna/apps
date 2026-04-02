@@ -25,7 +25,7 @@ export function ciCommand(): Command {
     .option("--baseline <name>", "Baseline name to compare against", "main")
     .option("--fail-if-regression <pct>", "Fail if score drops by more than N%", "0")
     .option("--output <format>", "Output format: terminal|markdown", "terminal")
-    .option("--json", "Output JSON")
+    .option("-j, --json", "Output JSON")
     .action(async (dataset: string, opts: Record<string, string>) => {
       const { cases } = await loadDataset(dataset);
       const adapter = parseAdapterConfig(opts);

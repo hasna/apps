@@ -38,7 +38,8 @@ function resolveApiKey(envVar: string, secretsPath: string, secretsKey: string):
 export function doctorCommand(): Command {
   return new Command("doctor")
     .description("Health check — verify API keys, DB, and config")
-    .action(async () => {
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: { json?: boolean }) => {
       const checks: Array<{ name: string; ok: boolean; hint?: string }> = [];
 
       // Check Anthropic API key — env var or ~/.secrets fallback
@@ -101,13 +102,21 @@ export function doctorCommand(): Command {
         checks.push({ name: "Example dataset (optional)", ok: false, hint: "datasets/examples/smoke.jsonl not found — install @hasna/evals globally to include examples" });
       }
 
+      const allOk = checks.every((c) => c.ok || c.name.toLowerCase().includes("optional"));
+      if (opts.json) {
+        console.log(JSON.stringify({
+          ok: allOk,
+          checks,
+          summary: allOk ? "All checks passed." : "Some checks failed — see hints above.",
+        }, null, 2));
+        process.exit(allOk ? 0 : 1);
+      }
+
       console.log("\n\x1b[1mevals doctor\x1b[0m\n");
       for (const c of checks) {
         const icon = c.ok ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
         console.log(`  ${icon} ${c.name}${!c.ok && c.hint ? `\n      hint: ${c.hint}` : ""}`);
       }
-
-      const allOk = checks.every((c) => c.ok || c.name.toLowerCase().includes("optional"));
       console.log(allOk ? "\n\x1b[32m  All checks passed.\x1b[0m\n" : "\n\x1b[31m  Some checks failed — see hints above.\x1b[0m\n");
       process.exit(allOk ? 0 : 1);
     });
