@@ -1,7 +1,7 @@
 import type { Command } from "commander";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
 
 const MCP_SERVER_NAME = "domains";
@@ -21,6 +21,22 @@ function getMcpBinaryPath(): string {
   }
 }
 
+function ensureConfigDir(configPath: string): void {
+  const dir = dirname(configPath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+
+function readConfig(configPath: string): Record<string, unknown> {
+  if (!existsSync(configPath)) return {};
+  try {
+    return JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 export function registerMcpCommand(program: Command): void {
   const mcp = program.command("mcp").description("MCP server management for AI agents");
 
@@ -33,11 +49,8 @@ export function registerMcpCommand(program: Command): void {
       const configPath = opts.project ? paths.project : paths.global;
       const binary = getMcpBinaryPath();
 
-      let config: Record<string, unknown> = {};
-      if (existsSync(configPath)) {
-        try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch { config = {}; }
-      }
-
+      ensureConfigDir(configPath);
+      const config = readConfig(configPath);
       const mcpServers = (config.mcpServers ?? {}) as Record<string, unknown>;
       mcpServers[MCP_SERVER_NAME] = { command: binary, args: [] };
       config.mcpServers = mcpServers;
@@ -61,7 +74,8 @@ export function registerMcpCommand(program: Command): void {
         console.log("Config file not found — nothing to remove.");
         return;
       }
-      const config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+
+      const config = readConfig(configPath);
       const mcpServers = config.mcpServers as Record<string, unknown> | undefined;
       if (!mcpServers?.[MCP_SERVER_NAME]) {
         console.log(`MCP server '${MCP_SERVER_NAME}' is not registered.`);
@@ -75,20 +89,55 @@ export function registerMcpCommand(program: Command): void {
   mcp
     .command("status")
     .description("Check if domains MCP server is registered")
-    .action(() => {
+    .option("-j, --json", "Output JSON")
+    .action((opts: { json?: boolean }) => {
       const paths = getClaudeConfigPaths();
-      for (const [label, configPath] of [["global", paths.global], ["project", paths.project]] as const) {
-        if (!existsSync(configPath)) { console.log(`  ${label}: not found`); continue; }
+      const status: Array<{ scope: "global" | "project"; config_path: string; exists: boolean; registered: boolean; error?: string }> = [];
+
+      for (const [scope, configPath] of [["global", paths.global], ["project", paths.project]] as const) {
+        if (!existsSync(configPath)) {
+          status.push({ scope, config_path: configPath, exists: false, registered: false });
+          continue;
+        }
+
         try {
-          const config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+          const config = readConfig(configPath);
           const mcpServers = config.mcpServers as Record<string, unknown> | undefined;
-          if (mcpServers?.[MCP_SERVER_NAME]) {
-            console.log(`  ${label}: ✓ registered`);
-          } else {
-            console.log(`  ${label}: ✗ not registered`);
-          }
-        } catch {
-          console.log(`  ${label}: error reading config`);
+          status.push({
+            scope,
+            config_path: configPath,
+            exists: true,
+            registered: Boolean(mcpServers?.[MCP_SERVER_NAME]),
+          });
+        } catch (error) {
+          status.push({
+            scope,
+            config_path: configPath,
+            exists: true,
+            registered: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify({ server: MCP_SERVER_NAME, checks: status }, null, 2));
+        return;
+      }
+
+      for (const item of status) {
+        if (!item.exists) {
+          console.log(`  ${item.scope}: not found`);
+          continue;
+        }
+        if (item.error) {
+          console.log(`  ${item.scope}: error reading config`);
+          continue;
+        }
+        if (item.registered) {
+          console.log(`  ${item.scope}: ✓ registered`);
+        } else {
+          console.log(`  ${item.scope}: ✗ not registered`);
         }
       }
     });
