@@ -1,6 +1,6 @@
 {
   "name": "@hasna/evals",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Open source AI evaluation framework — LLM-as-judge + assertion-based evals for any AI app. CLI + MCP server.",
   "type": "module",
   "main": "dist/index.js",
