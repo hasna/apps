@@ -33,29 +33,28 @@ export function registerScanCommand(program: Command): void {
         process.exit(1);
       }
 
-      const config = loadConfig(scanPath);
-      const format = parseFormat(options.format);
-      const severityThreshold = parseSeverity(options.severity);
-      const scannerTypes = resolveScannerTypes(options.scanner, options.quick, config);
-      const useLLM = options.llm || config.llm_analyze;
-
-      getDb();
-      const project = ensureProject(scanPath);
-      const scan = createScan(project.id, scannerTypes);
-      updateScanStatus(scan.id, ScanStatus.Running);
-
-      // Use stderr for progress when format is JSON/SARIF so stdout is clean
-      const isStructuredOutput = format !== ReportFormat.Terminal;
-      const log = isStructuredOutput
-        ? (msg: string) => process.stderr.write(msg + "\n")
-        : console.log;
-
-      log(chalk.bold(`\n  Scanning ${chalk.cyan(scanPath)}...`));
-      log(chalk.gray(`  Scanners: ${scannerTypes.join(", ")}`));
-
-      const startTime = Date.now();
-
       try {
+        const config = loadConfig(scanPath);
+        const format = parseFormat(options.format);
+        const severityThreshold = parseSeverity(options.severity);
+        const scannerTypes = resolveScannerTypes(options.scanner, options.quick, config);
+        const useLLM = options.llm || config.llm_analyze;
+
+        getDb();
+        const project = ensureProject(scanPath);
+        const scan = createScan(project.id, scannerTypes);
+        updateScanStatus(scan.id, ScanStatus.Running);
+
+        // Use stderr for progress when format is JSON/SARIF so stdout is clean
+        const isStructuredOutput = format !== ReportFormat.Terminal;
+        const log = isStructuredOutput
+          ? (msg: string) => process.stderr.write(msg + "\n")
+          : console.log;
+
+        log(chalk.bold(`\n  Scanning ${chalk.cyan(scanPath)}...`));
+        log(chalk.gray(`  Scanners: ${scannerTypes.join(", ")}`));
+
+        const startTime = Date.now();
         let findingInputs: any[] = [];
 
         if (scannerTypes.length === 1) {
@@ -117,8 +116,7 @@ export function registerScanCommand(program: Command): void {
         }
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        updateScanStatus(scan.id, ScanStatus.Failed, undefined, errMsg);
-        console.error(chalk.red(`  Scan failed: ${errMsg}`));
+        console.error(chalk.red(`\n  Scan failed: ${errMsg}\n`));
         process.exit(1);
       }
     });

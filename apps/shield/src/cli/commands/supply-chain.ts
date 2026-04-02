@@ -5,6 +5,14 @@ import {
 } from "../../db/index.js";
 import { seedAdvisories } from "../../data/advisories.js";
 
+function parseNonNegativeInt(value: string, flagName: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${flagName} '${value}'. Expected a non-negative integer.`);
+  }
+  return parsed;
+}
+
 export function registerSupplyChainCommands(program: Command): void {
   // check-package <name> [version]
   program
@@ -62,33 +70,45 @@ export function registerSupplyChainCommands(program: Command): void {
     .option("--ecosystem <eco>", "Filter by ecosystem")
     .option("--severity <level>", "Filter by severity")
     .option("--search <query>", "Search advisories")
+    .option("--limit <n>", "Max advisories to return", "50")
+    .option("--offset <n>", "Skip first N advisories", "0")
     .action(async (options) => {
-      getDb();
-      try { seedAdvisories(); } catch {}
+      try {
+        getDb();
+        try { seedAdvisories(); } catch {}
 
-      const advisories = options.search
-        ? searchAdvisories(options.search)
-        : listAdvisories({ ecosystem: options.ecosystem, severity: options.severity });
+        const limit = parseNonNegativeInt(options.limit, "--limit");
+        const offset = parseNonNegativeInt(options.offset, "--offset");
 
-      if (advisories.length === 0) {
-        console.log(chalk.yellow("\n  No advisories found.\n"));
-        return;
-      }
+        const advisories = options.search
+          ? searchAdvisories(options.search).slice(offset, offset + limit)
+          : listAdvisories({ ecosystem: options.ecosystem, severity: options.severity, limit, offset });
 
-      console.log(chalk.bold(`\n  Supply Chain Advisories (${advisories.length})\n`));
-      console.log(chalk.gray("  " + "\u2500".repeat(70)));
+        if (advisories.length === 0) {
+          console.log(chalk.yellow("\n  No advisories found.\n"));
+          return;
+        }
 
-      for (const a of advisories) {
-        const color = a.severity === "critical" ? chalk.red : a.severity === "high" ? chalk.magenta : chalk.yellow;
+        console.log(chalk.bold(`\n  Supply Chain Advisories (${advisories.length})\n`));
+        console.log(chalk.gray(`  Showing results offset=${offset}, limit=${limit}`));
+        console.log(chalk.gray("  " + "\u2500".repeat(70)));
+
+        for (const a of advisories) {
+          const color = a.severity === "critical" ? chalk.red : a.severity === "high" ? chalk.magenta : chalk.yellow;
+          console.log();
+          console.log(color.bold(`  [${a.severity.toUpperCase()}] ${a.title}`));
+          console.log(chalk.gray(`  Package: ${a.package_name} (${a.ecosystem})`));
+          console.log(chalk.gray(`  Affected: ${a.affected_versions.join(", ")}`));
+          console.log(chalk.green(`  Safe: ${a.safe_versions.join(", ") || "none — remove package"}`));
+          console.log(chalk.gray(`  Attack: ${a.attack_type}${a.threat_actor ? ` by ${a.threat_actor}` : ""}`));
+          console.log(chalk.gray(`  Detected: ${a.detected_at}`));
+          console.log(chalk.gray(`  ID: ${a.id}`));
+        }
         console.log();
-        console.log(color.bold(`  [${a.severity.toUpperCase()}] ${a.title}`));
-        console.log(chalk.gray(`  Package: ${a.package_name} (${a.ecosystem})`));
-        console.log(chalk.gray(`  Affected: ${a.affected_versions.join(", ")}`));
-        console.log(chalk.green(`  Safe: ${a.safe_versions.join(", ") || "none — remove package"}`));
-        console.log(chalk.gray(`  Attack: ${a.attack_type}${a.threat_actor ? ` by ${a.threat_actor}` : ""}`));
-        console.log(chalk.gray(`  Detected: ${a.detected_at}`));
-        console.log(chalk.gray(`  ID: ${a.id}`));
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error(chalk.red(`\n  ${errMsg}\n`));
+        process.exit(1);
       }
-      console.log();
     });
 }

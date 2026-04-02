@@ -54,13 +54,7 @@ export function resolveScannerTypes(
   config: ConfigFile,
 ): ScannerType[] {
   if (scannerArg) {
-    const type = scannerArg as ScannerType;
-    if (!Object.values(ScannerType).includes(type)) {
-      console.error(chalk.red(`Unknown scanner type: ${scannerArg}`));
-      console.error(chalk.gray(`Available: ${Object.values(ScannerType).join(", ")}`));
-      process.exit(1);
-    }
-    return [type];
+    return [parseScannerType(scannerArg)];
   }
   if (quick) return [ScannerType.Secrets, ScannerType.Dependencies];
   return config.enabled_scanners;
@@ -74,7 +68,13 @@ export function parseSeverity(level: string): Severity {
     low: Severity.Low,
     info: Severity.Info,
   };
-  return map[level.toLowerCase()] ?? Severity.Info;
+
+  const parsed = map[level.toLowerCase()];
+  if (!parsed) {
+    const allowed = Object.values(Severity).join(", ");
+    throw new Error(`Invalid severity '${level}'. Allowed values: ${allowed}`);
+  }
+  return parsed;
 }
 
 export function parseFormat(format: string): ReportFormat {
@@ -83,7 +83,23 @@ export function parseFormat(format: string): ReportFormat {
     json: ReportFormat.Json,
     sarif: ReportFormat.Sarif,
   };
-  return map[format.toLowerCase()] ?? ReportFormat.Terminal;
+
+  const parsed = map[format.toLowerCase()];
+  if (!parsed) {
+    const allowed = Object.values(ReportFormat).join(", ");
+    throw new Error(`Invalid format '${format}'. Allowed values: ${allowed}`);
+  }
+  return parsed;
+}
+
+export function parseScannerType(type: string): ScannerType {
+  const lower = type.toLowerCase();
+  const parsed = Object.values(ScannerType).find((scannerType) => scannerType.toLowerCase() === lower);
+  if (!parsed) {
+    const allowed = Object.values(ScannerType).join(", ");
+    throw new Error(`Invalid scanner '${type}'. Allowed values: ${allowed}`);
+  }
+  return parsed;
 }
 
 export function filterBySeverity(findings: Finding[], threshold: Severity): Finding[] {
