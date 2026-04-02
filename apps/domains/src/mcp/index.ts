@@ -55,10 +55,11 @@ import {
   getSimilarDomains,
   getThreatAssessment,
 } from "../lib/brandsight.js";
+import { getPackageVersion } from "../lib/version.js";
 
 const server = new McpServer({
   name: "domains",
-  version: "0.0.1",
+  version: getPackageVersion(),
 });
 
 // --- Domains ---

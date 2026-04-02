@@ -7,6 +7,7 @@ import { execSync } from "node:child_process";
 import { getDatabase } from "./database.js";
 import { getDomain, updateDomain, type UpdateDomainInput } from "./domain-records.js";
 import { createDnsRecord, listDnsRecords, type DnsRecord } from "./dns-records.js";
+import { USER_AGENT } from "../lib/version.js";
 
 // ============================================================
 // WHOIS Lookup
@@ -333,7 +334,7 @@ export async function discoverSubdomains(domain: string): Promise<SubdomainResul
     const url = `https://crt.sh/?q=%25.${encodeURIComponent(domain)}&output=json`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(15000),
-      headers: { "User-Agent": "open-domains/0.0.1" },
+      headers: { "User-Agent": USER_AGENT },
     });
 
     if (!response.ok) {

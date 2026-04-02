@@ -13,13 +13,14 @@ import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerMcpCommand } from "./commands/mcp-install.js";
 import { registerServeCommand } from "./commands/serve.js";
 import { registerRoute53Commands } from "./commands/route53.js";
+import { getPackageVersion } from "../lib/version.js";
 
 const program = new Command();
 
 program
   .name("domains")
   .description("Domain portfolio and DNS management for AI agents")
-  .version("0.0.4");
+  .version(getPackageVersion());
 
 // ── Core noun-based commands ───────────────────────────────────────────────
 registerDomainCommand(program);   // domains domain <list|get|add|update|delete|buy|setup|sync|renew|check|whois|export|expiring|stats>

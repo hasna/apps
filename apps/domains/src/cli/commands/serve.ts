@@ -3,8 +3,11 @@ import {
   createDomain, getDomain, listDomains, updateDomain, deleteDomain,
   listDnsRecords, createDnsRecord,
 } from "../../db/domains.js";
+import { getPackageVersion } from "../../lib/version.js";
 
 export function registerServeCommand(program: Command): void {
+  const packageVersion = getPackageVersion();
+
   program
     .command("serve")
     .description("Start HTTP API server")
@@ -32,7 +35,7 @@ export function registerServeCommand(program: Command): void {
           try {
             // GET /health
             if (method === "GET" && path === "/health") {
-              return json({ status: "ok", version: "0.0.3" });
+              return json({ status: "ok", version: packageVersion });
             }
 
             // GET /domains

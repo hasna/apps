@@ -10,6 +10,8 @@
  *   BRANDSIGHT_ACCOUNT_ID — Account ID for corporate domain operations (optional)
  */
 
+import { USER_AGENT } from "./version.js";
+
 // ============================================================
 // Types
 // ============================================================
@@ -123,7 +125,7 @@ async function apiRequest<T>(
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
     Accept: "application/json",
-    "User-Agent": "open-domains/0.0.3",
+    "User-Agent": USER_AGENT,
   };
   try {
     const response = await fetchFn(url, {
@@ -158,7 +160,7 @@ async function apiGet<T>(
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
     Accept: "application/json",
-    "User-Agent": "open-domains/0.0.3",
+    "User-Agent": USER_AGENT,
   };
 
   try {
