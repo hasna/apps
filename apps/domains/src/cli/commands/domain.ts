@@ -229,7 +229,8 @@ export function registerDomainCommand(program: Command): void {
     .command("check <domains...>")
     .description("Check domain availability via configured registrar")
     .option("--provider <name>", "Registrar provider to use")
-    .action(async (domains: string[], opts: { provider?: string }) => {
+    .option("-j, --json", "Output JSON")
+    .action(async (domains: string[], opts: { provider?: string; json?: boolean }) => {
       const cfg = loadConfig();
       const providerName = opts.provider ?? cfg.default_registrar ?? "route53";
       const results = await Promise.allSettled(
@@ -238,21 +239,46 @@ export function registerDomainCommand(program: Command): void {
           return provider.checkAvailability(d);
         })
       );
+
       let anyError = false;
+      const output: Array<{ domain: string; available?: boolean; error?: string }> = [];
+
       for (let i = 0; i < domains.length; i++) {
         const r = results[i]!;
         if (r.status === "rejected") {
           const reason = (r as PromiseRejectedResult).reason;
-          console.error(`✗ ${domains[i]}: ${reason instanceof Error ? reason.message : String(reason)}`);
+          const error = reason instanceof Error ? reason.message : String(reason);
+          output.push({ domain: domains[i]!, error });
+          if (!opts.json) {
+            console.error(`✗ ${domains[i]}: ${error}`);
+          }
           anyError = true;
         } else {
           const result = (r as PromiseFulfilledResult<{ domain: string; available: boolean }>).value;
-          console.log(`${result.available ? "✓" : "✗"} ${result.domain} is ${result.available ? "available" : "not available"}`);
+          output.push({ domain: result.domain, available: result.available });
+          if (!opts.json) {
+            console.log(`${result.available ? "✓" : "✗"} ${result.domain} is ${result.available ? "available" : "not available"}`);
+          }
         }
       }
+
+      if (opts.json) {
+        console.log(
+          JSON.stringify(
+            {
+              provider: providerName,
+              count: output.length,
+              ok: !anyError,
+              results: output,
+            },
+            null,
+            2
+          )
+        );
+      }
+
       if (anyError) process.exit(1);
     });
-
   // ── sync ────────────────────────────────────────────────────────────────
 
   domain
