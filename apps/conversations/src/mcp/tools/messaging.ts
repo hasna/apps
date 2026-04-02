@@ -28,7 +28,8 @@ export function registerMessagingTools(
       target_session_id: z.string().optional().describe("If provided, sends to a specific agent-claude session ID (UUID). The message auto-injects into that session's conversation."),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, to, content, priority, blocking, project_id, target_session_id } = args;
+    const { from: fromParam, to: toParam, to_agent, content, priority, blocking, project_id, target_session_id } = args;
+    const to = toParam || to_agent; // Accept both "to" and "to_agent"
     const from = resolveIdentity(fromParam);
 
     const msg = sendMessage({
@@ -123,14 +124,16 @@ export function registerMessagingTools(
   });
 
   server.registerTool("reply", {
-    description: "Reply to a specific message, creating a thread. Sets reply_to so it can be retrieved with get_thread_replies.",
+    description: "Reply to a specific message by its numeric ID, creating a thread. Use read_messages first to find the message ID.",
     inputSchema: {
-      message_id: z.coerce.number(),
+      message_id: z.coerce.number().describe("Numeric message ID (integer) to reply to. Use read_messages to find IDs."),
       content: z.string(),
       from: z.string().optional(),
+      reply_to: z.coerce.number().optional().describe("Alias for message_id"),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, message_id, content } = args;
+    const { from: fromParam, message_id: mid, reply_to, content } = args;
+    const message_id = mid || reply_to;
     const original = getMessageById(message_id);
     if (!original) {
       return {

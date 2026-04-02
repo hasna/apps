@@ -43,14 +43,15 @@ export function registerChannelBridge(
     }
   }
 
-  function pushNotification(msg: { content: string; from_agent: string; session_id: string; space?: string | null; priority?: string }): void {
-    console.error(`[channel-bridge] pushing notification: from=${msg.from_agent}, content=${msg.content.slice(0, 50)}`);
+  function pushNotification(msg: { id: number; content: string; from_agent: string; session_id: string; space?: string | null; priority?: string }): void {
+    console.error(`[channel-bridge] pushing notification: from=${msg.from_agent}, id=${msg.id}, content=${msg.content.slice(0, 50)}`);
     server.server.notification({
       method: "notifications/claude/channel",
       params: {
         content: msg.content,
         meta: {
           from: msg.from_agent,
+          message_id: String(msg.id),
           session_id: msg.session_id,
           ...(msg.space ? { space: msg.space } : {}),
           ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
