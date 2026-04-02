@@ -1052,13 +1052,68 @@ program
 program
   .command("screenshots <id>")
   .description("List screenshots for a run or result")
-  .action((id: string) => {
+  .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "200")
+  .option("--offset <n>", "Skip first N results", "0")
+  .action((id: string, opts) => {
     try {
+      const limit = Math.max(1, parseInt(opts.limit, 10) || 200);
+      const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
+
       // Try as run-id first: get all results, then all screenshots
       const run = getRun(id);
       if (run) {
         const results = getResultsByRun(run.id);
-        let total = 0;
+        const flattened: Array<{
+          screenshotId: string;
+          resultId: string;
+          scenarioId: string;
+          scenarioShortId: string | null;
+          scenarioName: string | null;
+          stepNumber: number;
+          action: string;
+          filePath: string;
+          timestamp: string;
+          width: number;
+          height: number;
+        }> = [];
+
+        for (const result of results) {
+          const screenshots = listScreenshots(result.id);
+          const scenario = getScenario(result.scenarioId);
+          for (const ss of screenshots) {
+            flattened.push({
+              screenshotId: ss.id,
+              resultId: result.id,
+              scenarioId: result.scenarioId,
+              scenarioShortId: scenario?.shortId ?? null,
+              scenarioName: scenario?.name ?? null,
+              stepNumber: ss.stepNumber,
+              action: ss.action,
+              filePath: ss.filePath,
+              timestamp: ss.timestamp,
+              width: ss.width,
+              height: ss.height,
+            });
+          }
+        }
+
+        const paged = flattened.slice(offset, offset + limit);
+        if (opts.json) {
+          log(JSON.stringify({
+            input: id,
+            type: "run",
+            runId: run.id,
+            total: flattened.length,
+            limit,
+            offset,
+            items: paged,
+          }, null, 2));
+          return;
+        }
+
+        let seen = 0;
+        let shown = 0;
         log("");
         log(chalk.bold(`  Screenshots for run ${run.id.slice(0, 8)}`));
         log("");
@@ -1068,17 +1123,31 @@ program
           if (screenshots.length > 0) {
             const scenario = getScenario(result.scenarioId);
             const label = scenario ? `${scenario.shortId}: ${scenario.name}` : result.scenarioId.slice(0, 8);
-            log(chalk.bold(`  ${label}`));
+            let sectionPrinted = false;
             for (const ss of screenshots) {
+              if (seen < offset) {
+                seen++;
+                continue;
+              }
+              if (shown >= limit) break;
+              if (!sectionPrinted) {
+                log(chalk.bold(`  ${label}`));
+                sectionPrinted = true;
+              }
               log(`    ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
-              total++;
+              seen++;
+              shown++;
             }
-            log("");
+            if (sectionPrinted) log("");
+            if (shown >= limit) break;
           }
         }
 
-        if (total === 0) {
+        if (flattened.length === 0 || shown === 0) {
           log(chalk.dim("  No screenshots found."));
+          log("");
+        } else if (offset + shown < flattened.length) {
+          log(chalk.dim(`  Showing ${shown} of ${flattened.length} screenshots (use --limit/--offset to paginate)`));
           log("");
         }
         return;
@@ -1086,12 +1155,38 @@ program
 
       // Try as result-id
       const screenshots = listScreenshots(id);
+      const paged = screenshots.slice(offset, offset + limit);
+      if (opts.json) {
+        log(JSON.stringify({
+          input: id,
+          type: "result",
+          resultId: id,
+          total: screenshots.length,
+          limit,
+          offset,
+          items: paged.map((ss) => ({
+            screenshotId: ss.id,
+            stepNumber: ss.stepNumber,
+            action: ss.action,
+            filePath: ss.filePath,
+            timestamp: ss.timestamp,
+            width: ss.width,
+            height: ss.height,
+          })),
+        }, null, 2));
+        return;
+      }
+
       if (screenshots.length > 0) {
         log("");
         log(chalk.bold(`  Screenshots for result ${id.slice(0, 8)}`));
         log("");
-        for (const ss of screenshots) {
+        for (const ss of paged) {
           log(`  ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
+        }
+        if (paged.length < screenshots.length) {
+          log("");
+          log(chalk.dim(`  Showing ${paged.length} of ${screenshots.length} screenshots (use --limit/--offset to paginate)`));
         }
         log("");
         return;
