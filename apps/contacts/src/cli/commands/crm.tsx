@@ -638,11 +638,16 @@ program
 program
   .command('cold')
   .description("Show contacts you haven't reached out to recently")
-  .option('--days <n>', 'Days threshold', '30')
-  .action(async (opts: { days: string }) => {
+  .option('-d, --days <n>', 'Days threshold', '30')
+  .option('-j, --json', 'Output JSON')
+  .action(async (opts: { days: string; json?: boolean }) => {
     const { listColdContacts } = await import('../../db/contacts.js');
     const db = getDatabase();
     const contacts = listColdContacts(parseInt(opts.days, 10), db);
+    if (opts.json) {
+      console.log(JSON.stringify({ contacts, total: contacts.length, threshold_days: parseInt(opts.days, 10) }, null, 2));
+      return;
+    }
     if (!contacts.length) {
       console.log(chalk.green('\nNo cold contacts!\n'));
       return;
@@ -667,12 +672,17 @@ program
 
 program
   .command('upcoming')
-  .option('--days <n>', 'Days ahead to show', '7')
+  .option('-d, --days <n>', 'Days ahead to show', '7')
+  .option('-j, --json', 'Output JSON')
   .description('Show upcoming follow-ups, birthdays, and deadlines')
-  .action(async (opts: { days: string }) => {
+  .action(async (opts: { days: string; json?: boolean }) => {
     const { getUpcomingItems } = await import('../../lib/upcoming.js');
     const db = getDatabase();
     const items = getUpcomingItems(parseInt(opts.days, 10), db);
+    if (opts.json) {
+      console.log(JSON.stringify({ items, total: items.length, window_days: parseInt(opts.days, 10) }, null, 2));
+      return;
+    }
     if (!items.length) {
       console.log(chalk.green('\nNothing upcoming!\n'));
       return;
@@ -698,10 +708,15 @@ program
 program
   .command('stats')
   .description('Network health dashboard')
-  .action(async () => {
+  .option('-j, --json', 'Output JSON')
+  .action(async (opts: { json?: boolean }) => {
     const { getNetworkStats } = await import('../../lib/stats.js');
     const db = getDatabase();
     const s = getNetworkStats(db);
+    if (opts.json) {
+      console.log(JSON.stringify(s, null, 2));
+      return;
+    }
     console.log(chalk.bold.blue('\n━━━ Network Health Dashboard ━━━\n'));
 
     console.log(chalk.bold('  Network Size:'));
@@ -731,7 +746,7 @@ program
 program
   .command('audit')
   .description('Score contacts for data completeness')
-  .option('--limit <n>', 'Number to show', '20')
+  .option('-l, --limit <n>', 'Number to show', '20')
   .action(async (opts: { limit: string }) => {
     const { listContactAudit } = await import('../../lib/audit.js');
     const db = getDatabase();

@@ -148,14 +148,26 @@ program
   .option("--tag <tag_id>", "Filter by tag ID")
   .option("--company <id>", "Filter by company ID")
   .option("--include-restricted", "Include restricted-sensitivity contacts")
-  .option("--limit <n>", "Max results", "50")
-  .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string }) => {
+  .option("-l, --limit <n>", "Max results", "50")
+  .option("-o, --offset <n>", "Skip first N results", "0")
+  .option("--order-by <field>", "Sort field: display_name|created_at|updated_at|last_contacted_at|follow_up_at", "display_name")
+  .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
+  .option("-j, --json", "Output JSON")
+  .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
     const result = listContacts({
       tag_id: opts.tag,
       company_id: opts.company,
       include_restricted: opts.includeRestricted,
       limit: parseInt(opts.limit, 10),
+      offset: parseInt(opts.offset, 10),
+      order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
+      order_dir: opts.orderDir === "desc" ? "desc" : "asc",
     });
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
 
     if (result.contacts.length === 0) {
       console.log(chalk.gray("\nNo contacts found.\n"));
@@ -322,8 +334,23 @@ program
 const companiesCmd = program
   .command("companies")
   .description("Manage companies")
-  .action(() => {
-    const result = listCompanies({ limit: 50 });
+  .option("-l, --limit <n>", "Max results", "50")
+  .option("-o, --offset <n>", "Skip first N results", "0")
+  .option("--order-by <field>", "Sort field: name|created_at|updated_at", "name")
+  .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
+  .option("-j, --json", "Output JSON")
+  .action((opts: { limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
+    const result = listCompanies({
+      limit: parseInt(opts.limit, 10),
+      offset: parseInt(opts.offset, 10),
+      order_by: opts.orderBy as "name" | "created_at" | "updated_at",
+      order_dir: opts.orderDir === "desc" ? "desc" : "asc",
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     if (result.companies.length === 0) {
       console.log(chalk.gray("\nNo companies found.\n"));
       return;
@@ -599,10 +626,16 @@ program
 program
   .command("recent")
   .description("Show recently added or modified contacts")
-  .option("--limit <n>", "Number to show", "10")
-  .action((opts: { limit: string }) => {
+  .option("-l, --limit <n>", "Number to show", "10")
+  .option("-j, --json", "Output JSON")
+  .action((opts: { limit: string; json?: boolean }) => {
     const limit = parseInt(opts.limit, 10);
     const contacts = listRecentContacts(limit);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ contacts, total: contacts.length }, null, 2));
+      return;
+    }
 
     if (contacts.length === 0) {
       console.log(chalk.gray("\nNo contacts found.\n"));
