@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { handleServerCliArgs, getServerHelpText } from "./index.js";
+import { parseServerCliArgs, getServerHelpText } from "./index.js";
 
 describe("server CLI flags", () => {
   test("prints help and exits when --help is used", () => {
     const out: string[] = [];
-    const handled = handleServerCliArgs(["--help"], (msg) => out.push(msg));
+    const parsed = parseServerCliArgs(["--help"], (msg) => out.push(msg));
 
-    expect(handled).toBe(true);
+    expect(parsed.handled).toBe(true);
     expect(out).toHaveLength(1);
     expect(out[0]).toBe(getServerHelpText());
     expect(out[0]).toContain("Usage: omp-serve [options]");
@@ -14,17 +14,33 @@ describe("server CLI flags", () => {
 
   test("prints version and exits when --version is used", () => {
     const out: string[] = [];
-    const handled = handleServerCliArgs(["--version"], (msg) => out.push(msg));
+    const parsed = parseServerCliArgs(["--version"], (msg) => out.push(msg));
 
-    expect(handled).toBe(true);
-    expect(out).toEqual(["0.1.0"]);
+    expect(parsed.handled).toBe(true);
+    expect(out).toEqual(["0.1.2"]);
   });
 
-  test("does not handle unrelated args", () => {
-    const out: string[] = [];
-    const handled = handleServerCliArgs(["--port", "8080"], (msg) => out.push(msg));
+  test("parses --port value", () => {
+    const parsed = parseServerCliArgs(["--port", "8080"]);
 
-    expect(handled).toBe(false);
-    expect(out).toHaveLength(0);
+    expect(parsed.handled).toBe(false);
+    expect(parsed.port).toBe(8080);
+  });
+
+  test("parses --port=value", () => {
+    const parsed = parseServerCliArgs(["--port=9090"]);
+
+    expect(parsed.handled).toBe(false);
+    expect(parsed.port).toBe(9090);
+  });
+
+  test("throws on invalid port", () => {
+    expect(() => parseServerCliArgs(["--port", "abc"]))
+      .toThrow("Invalid port: abc");
+  });
+
+  test("throws on missing port value", () => {
+    expect(() => parseServerCliArgs(["--port"]))
+      .toThrow("Missing value for --port");
   });
 });

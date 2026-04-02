@@ -13,21 +13,37 @@ const program = new Command();
 program
   .name("omp")
   .description("Open Markdown Protocol — parse, validate, and execute .omp.md files")
-  .version("0.1.0");
+  .version("0.1.2");
 
 // ─── validate ────────────────────────────────────────────────
 
 program
   .command("validate <file>")
   .description("Validate an OMP document against the spec")
-  .action(async (file: string) => {
+  .option("--json", "Output result as JSON")
+  .action(async (file: string, opts: { json?: boolean }) => {
     try {
       const doc = parseFromFile(file);
       const errors = validate(doc);
-      printErrors(errors);
 
       const errorCount = errors.filter((e) => e.level === "error").length;
       const warnCount = errors.filter((e) => e.level === "warning").length;
+      const payload = {
+        valid: errorCount === 0,
+        cards: doc.cards.length,
+        errorCount,
+        warningCount: warnCount,
+        errors: errors.filter((e) => e.level === "error"),
+        warnings: errors.filter((e) => e.level === "warning"),
+      };
+
+      if (opts.json) {
+        printJson(payload);
+        if (errorCount > 0) process.exit(1);
+        return;
+      }
+
+      printErrors(errors);
 
       console.log(`\n${chalk.bold(doc.cards.length)} cards parsed`);
 
@@ -38,7 +54,11 @@ program
         process.exit(1);
       }
     } catch (err) {
-      console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      if (opts.json) {
+        printJson({ error: err instanceof Error ? err.message : String(err) });
+      } else {
+        console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      }
       process.exit(1);
     }
   });
@@ -52,7 +72,8 @@ program
   .option("--llm <model>", "LLM provider:model (e.g., anthropic:haiku, openai:gpt-4o-mini, ollama:llama3)")
   .option("--output-dir <dir>", "Output directory", ".")
   .option("--verbose", "Verbose output")
-  .action(async (file: string, opts: { dryRun?: boolean; llm?: string; outputDir: string; verbose?: boolean }) => {
+  .option("--json", "Output result as JSON")
+  .action(async (file: string, opts: { dryRun?: boolean; llm?: string; outputDir: string; verbose?: boolean; json?: boolean }) => {
     try {
       const llm = opts.llm ? parseLLMOption(opts.llm) : undefined;
 
@@ -64,6 +85,12 @@ program
           if (opts.verbose) console.log(chalk.dim(msg));
         },
       });
+
+      if (opts.json) {
+        printJson(result);
+        if (!result.success) process.exit(1);
+        return;
+      }
 
       console.log();
       if (result.success) {
@@ -83,7 +110,11 @@ program
 
       if (!result.success) process.exit(1);
     } catch (err) {
-      console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      if (opts.json) {
+        printJson({ error: err instanceof Error ? err.message : String(err) });
+      } else {
+        console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      }
       process.exit(1);
     }
   });
@@ -109,21 +140,42 @@ program
 program
   .command("lint <file>")
   .description("Validate + best practice checks")
-  .action(async (file: string) => {
+  .option("--json", "Output result as JSON")
+  .action(async (file: string, opts: { json?: boolean }) => {
     try {
       const doc = parseFromFile(file);
       const errors = validateAndLint(doc);
-      printErrors(errors);
 
       const errorCount = errors.filter((e) => e.level === "error").length;
       const warnCount = errors.filter((e) => e.level === "warning").length;
       const infoCount = errors.filter((e) => e.level === "info").length;
+      const payload = {
+        cards: doc.cards.length,
+        errorCount,
+        warningCount: warnCount,
+        infoCount,
+        errors: errors.filter((e) => e.level === "error"),
+        warnings: errors.filter((e) => e.level === "warning"),
+        info: errors.filter((e) => e.level === "info"),
+      };
+
+      if (opts.json) {
+        printJson(payload);
+        if (errorCount > 0) process.exit(1);
+        return;
+      }
+
+      printErrors(errors);
 
       console.log(`\n${errorCount} error(s), ${warnCount} warning(s), ${infoCount} info(s)`);
 
       if (errorCount > 0) process.exit(1);
     } catch (err) {
-      console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      if (opts.json) {
+        printJson({ error: err instanceof Error ? err.message : String(err) });
+      } else {
+        console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      }
       process.exit(1);
     }
   });
@@ -133,9 +185,29 @@ program
 program
   .command("inspect <file>")
   .description("Show parsed AST, card count, DAG visualization")
-  .action(async (file: string) => {
+  .option("--json", "Output result as JSON")
+  .action(async (file: string, opts: { json?: boolean }) => {
     try {
       const doc = parseFromFile(file);
+      const plan = compile(doc);
+      const payload = {
+        title: doc.title,
+        cards: doc.cards.map((card) => ({
+          type: card.type,
+          id: card.id,
+          depends: card.depends,
+          accepts: card.accepts,
+          headers: card.headers,
+          inlineDirectives: card.body.inlineDirectives.length,
+        })),
+        patterns: doc.patterns.length,
+        executionPlan: plan,
+      };
+
+      if (opts.json) {
+        printJson(payload);
+        return;
+      }
 
       console.log(chalk.bold(`Title: ${doc.title}`));
       console.log(chalk.bold(`Cards: ${doc.cards.length}`));
@@ -150,13 +222,16 @@ program
       }
 
       console.log();
-      const plan = compile(doc);
       console.log(chalk.bold("Execution Plan:"));
       for (const step of plan.steps) {
         console.log(`  ${step.description}`);
       }
     } catch (err) {
-      console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      if (opts.json) {
+        printJson({ error: err instanceof Error ? err.message : String(err) });
+      } else {
+        console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      }
       process.exit(1);
     }
   });
@@ -262,27 +337,52 @@ function printErrors(errors: OmpError[]) {
   }
 }
 
-function parseLLMOption(opt: string): LLMClientOptions {
-  const [provider, model] = opt.includes(":") ? opt.split(":", 2) : ["anthropic", opt];
+function printJson(payload: unknown) {
+  console.log(JSON.stringify(payload, null, 2));
+}
 
-  const providerMap: Record<string, "anthropic" | "openai" | "ollama"> = {
+function parseLLMOption(opt: string): LLMClientOptions {
+  const normalized = opt.trim();
+  if (!normalized) {
+    throw new Error("Invalid --llm value. Expected provider:model or model alias.");
+  }
+
+  const providerAliases: Record<string, "anthropic" | "openai" | "ollama"> = {
     anthropic: "anthropic",
     openai: "openai",
     ollama: "ollama",
-    haiku: "anthropic",
-    "gpt-4o-mini": "openai",
   };
 
-  const resolvedProvider = providerMap[provider] ?? "anthropic";
-
-  const modelMap: Record<string, string> = {
-    haiku: "claude-haiku-4-5-20251001",
-    "gpt-4o-mini": "gpt-4o-mini",
+  const modelAliases: Record<string, LLMClientOptions> = {
+    haiku: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+    "gpt-4o-mini": { provider: "openai", model: "gpt-4o-mini" },
   };
+
+  if (normalized.includes(":")) {
+    const [providerRaw, modelRaw] = normalized.split(":", 2);
+    const providerKey = providerRaw.toLowerCase();
+    const provider = providerAliases[providerKey];
+
+    if (!provider) {
+      throw new Error(
+        `Unsupported LLM provider: ${providerRaw}. Supported providers: anthropic, openai, ollama.`
+      );
+    }
+
+    if (!modelRaw || !modelRaw.trim()) {
+      throw new Error(`Missing model for provider ${providerRaw}. Example: ${providerRaw}:model-name`);
+    }
+
+    return { provider, model: modelRaw.trim() };
+  }
+
+  if (modelAliases[normalized]) {
+    return modelAliases[normalized];
+  }
 
   return {
-    provider: resolvedProvider,
-    model: modelMap[model] ?? model ?? "claude-haiku-4-5-20251001",
+    provider: "anthropic",
+    model: normalized,
   };
 }
 

@@ -4,8 +4,8 @@
 import { parseFromFile, parseFromString, validate, compile, run } from "../lib/pipeline.js";
 import { validateAndLint } from "../validator/validate.js";
 
-const VERSION = "0.1.0";
-const PORT = parseInt(process.env.OMP_PORT ?? "7070", 10);
+const VERSION = "0.1.2";
+const DEFAULT_PORT = parseInt(process.env.OMP_PORT ?? "7070", 10);
 
 export function getServerHelpText(): string {
   return [
@@ -20,21 +20,59 @@ export function getServerHelpText(): string {
   ].join("\n");
 }
 
-export function handleServerCliArgs(args: string[], log: (msg: string) => void = console.log): boolean {
+export function parseServerCliArgs(args: string[], log: (msg: string) => void = console.log): { handled: boolean; port?: number } {
   if (args.includes("-h") || args.includes("--help")) {
     log(getServerHelpText());
-    return true;
+    return { handled: true };
   }
 
   if (args.includes("-v") || args.includes("--version")) {
     log(VERSION);
-    return true;
+    return { handled: true };
   }
 
-  return false;
+  const port = parsePortArg(args);
+  return { handled: false, port };
 }
 
-export function createServer(port: number = PORT) {
+function parsePortArg(args: string[]): number | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === "-p" || arg === "--port") {
+      const next = args[i + 1];
+      if (!next || next.startsWith("-")) {
+        throw new Error("Missing value for --port. Example: omp-serve --port 8080");
+      }
+      return parseAndValidatePort(next);
+    }
+
+    if (arg.startsWith("--port=")) {
+      return parseAndValidatePort(arg.slice("--port=".length));
+    }
+
+    if (arg.startsWith("-p=")) {
+      return parseAndValidatePort(arg.slice("-p=".length));
+    }
+  }
+
+  return undefined;
+}
+
+function parseAndValidatePort(raw: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`Invalid port: ${raw}. Port must be an integer between 1 and 65535.`);
+  }
+
+  const port = Number.parseInt(raw, 10);
+  if (port < 1 || port > 65535) {
+    throw new Error(`Invalid port: ${raw}. Port must be between 1 and 65535.`);
+  }
+
+  return port;
+}
+
+export function createServer(port: number = DEFAULT_PORT) {
   return Bun.serve({
     port,
 
@@ -135,9 +173,18 @@ export function createServer(port: number = PORT) {
 }
 
 export function main(args: string[] = process.argv.slice(2)) {
-  if (handleServerCliArgs(args)) return null;
+  let parsed: { handled: boolean; port?: number };
 
-  const server = createServer(PORT);
+  try {
+    parsed = parseServerCliArgs(args);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
+  if (parsed.handled) return null;
+
+  const server = createServer(parsed.port ?? DEFAULT_PORT);
   console.log(`OMP server running on http://localhost:${server.port}`);
   return server;
 }

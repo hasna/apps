@@ -14,7 +14,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { createRequire } from "module";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.2";
 const require = createRequire(import.meta.url);
 
 const server = new Server(
