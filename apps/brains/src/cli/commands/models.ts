@@ -1,22 +1,96 @@
 import type { Command } from "commander";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb, fineTunedModels, trainingJobs } from "../../db/index.js";
 import * as openaiProvider from "../../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../../lib/providers/thinker-labs.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "../ui.js";
 
+type ModelRow = typeof fineTunedModels.$inferSelect;
+type Provider = ModelRow["provider"];
+type ModelStatus = ModelRow["status"];
+
+const VALID_STATUSES: ReadonlySet<ModelStatus> = new Set([
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
+interface ListModelsOptions {
+  json?: boolean;
+  provider?: string;
+  status?: string;
+  limit?: string;
+}
+
+function parseListLimit(rawLimit: string | undefined): number | undefined {
+  if (!rawLimit) return undefined;
+  const parsed = Number(rawLimit);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid --limit value: ${rawLimit}. Use a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseListFilters(opts: ListModelsOptions): { provider?: Provider; status?: ModelStatus; limit?: number } {
+  const providerRaw = opts.provider?.trim();
+  const statusRaw = opts.status?.trim();
+
+  if (providerRaw && providerRaw !== "openai" && providerRaw !== "thinker-labs") {
+    throw new Error(`Invalid --provider value: ${providerRaw}. Use openai or thinker-labs.`);
+  }
+
+  if (statusRaw && !VALID_STATUSES.has(statusRaw as ModelStatus)) {
+    throw new Error(`Invalid --status value: ${statusRaw}. Use one of: ${Array.from(VALID_STATUSES).join(", ")}.`);
+  }
+
+  const limit = parseListLimit(opts.limit);
+  const provider = providerRaw as Provider | undefined;
+  const status = statusRaw as ModelStatus | undefined;
+
+  return { provider, status, limit };
+}
+
 export function registerModelsCommands(program: Command): void {
   const modelsCmd = program.command("models").description("Manage tracked fine-tuned models");
+
+  const ensureModelExists = async (id: string) => {
+    const db = getDb();
+    const [model] = await db.select({ id: fineTunedModels.id }).from(fineTunedModels).where(eq(fineTunedModels.id, id));
+    if (!model) {
+      printError(`Model not found: ${id}`);
+      process.exit(1);
+    }
+    return db;
+  };
 
   modelsCmd
     .command("list")
     .description("List all tracked fine-tuned models")
+    .option("--provider <provider>", "Filter by provider (openai|thinker-labs)")
+    .option("--status <status>", "Filter by status (pending|running|succeeded|failed|cancelled)")
+    .option("--limit <n>", "Maximum number of results")
     .option("--json", "Output as JSON")
-    .action(async (opts: { json?: boolean }) => {
+    .action(async (opts: ListModelsOptions) => {
       try {
         const db = getDb();
-        const models = await db.select().from(fineTunedModels);
+        const filters = parseListFilters(opts);
+
+        const whereClause = filters.provider && filters.status
+          ? and(eq(fineTunedModels.provider, filters.provider), eq(fineTunedModels.status, filters.status))
+          : filters.provider
+            ? eq(fineTunedModels.provider, filters.provider)
+            : filters.status
+              ? eq(fineTunedModels.status, filters.status)
+              : undefined;
+
+        const query = db.select().from(fineTunedModels).$dynamic();
+        if (whereClause) query.where(whereClause);
+        if (filters.limit) query.limit(filters.limit);
+
+        const models = await query;
         if (opts.json) { printJson(models); return; }
         if (models.length === 0) {
           printInfo("No models tracked yet. Use 'brains finetune start' to train one.");
@@ -81,7 +155,7 @@ export function registerModelsCommands(program: Command): void {
     .description("Set the display name of a model")
     .action(async (id: string, displayName: string) => {
       try {
-        const db = getDb();
+        const db = await ensureModelExists(id);
         await db
           .update(fineTunedModels)
           .set({ displayName, updatedAt: Date.now() })
@@ -98,12 +172,12 @@ export function registerModelsCommands(program: Command): void {
     .description("Set the description of a model")
     .action(async (id: string, description: string) => {
       try {
-        const db = getDb();
+        const db = await ensureModelExists(id);
         await db
           .update(fineTunedModels)
           .set({ description, updatedAt: Date.now() })
           .where(eq(fineTunedModels.id, id));
-        printSuccess(`Description updated.`);
+        printSuccess("Description updated.");
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
         process.exit(1);
@@ -165,7 +239,7 @@ export function registerModelsCommands(program: Command): void {
     .description("Set the collection of a model")
     .action(async (id: string, collectionName: string) => {
       try {
-        const db = getDb();
+        const db = await ensureModelExists(id);
         await db
           .update(fineTunedModels)
           .set({ collection: collectionName, updatedAt: Date.now() })
@@ -209,9 +283,9 @@ export function registerModelsCommands(program: Command): void {
         await db.insert(fineTunedModels).values({
           id: modelId,
           name,
-          provider: opts.provider as "openai" | "thinker-labs",
+          provider: opts.provider as Provider,
           baseModel: result.baseModel ?? "unknown",
-          status: result.status as "pending" | "running" | "succeeded" | "failed" | "cancelled",
+          status: result.status as ModelStatus,
           fineTuneJobId: jobId,
           createdAt: now,
           updatedAt: now,
@@ -225,7 +299,7 @@ export function registerModelsCommands(program: Command): void {
           startedAt: now,
         });
 
-        printSuccess(`Model imported successfully.`);
+        printSuccess("Model imported successfully.");
         console.log();
         console.log(`  Local ID:  ${modelId}`);
         console.log(`  Job ID:    ${jobId}`);
@@ -239,3 +313,5 @@ export function registerModelsCommands(program: Command): void {
       }
     });
 }
+
+export { parseListFilters, parseListLimit };
