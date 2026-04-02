@@ -39,9 +39,10 @@ describe("HTTP adapter — response shape edge cases", () => {
           case "/404":
             return new Response("Not found", { status: 404 });
           case "/custom-input-path":
-            return req.json().then((b: Record<string, unknown>) =>
-              Response.json({ echo: (b["data"] as Record<string, unknown>)?.["query"] })
-            );
+            return req.json().then((b: unknown) => {
+              const body = b as Record<string, unknown>;
+              return Response.json({ echo: (body["data"] as Record<string, unknown>)?.["query"] });
+            });
           default:
             return Response.json({ content: "default" });
         }
