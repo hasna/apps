@@ -89,7 +89,7 @@ export function registerTmuxCommands(program: Command): void {
     .option("--delay <ms>", "Wait time (ms) after paste before hitting Enter (default: adaptive 25-1500ms)", parseInt)
     .option("--retries <n>", "Max retry attempts (default: 3)", parseInt)
     .option("--no-verify", "Skip verification after sending")
-    .option("--json", "Output result as JSON")
+    .option("-j, --json", "Output result as JSON")
     .action(async (opts) => {
       const target = opts.target.trim();
       const message = opts.message;
@@ -145,7 +145,7 @@ export function registerTmuxCommands(program: Command): void {
     .option("--stagger <ms>", "Delay (ms) between each target (default: 500)", parseInt)
     .option("--retries <n>", "Max retry attempts per target (default: 3)", parseInt)
     .option("--no-verify", "Skip verification after sending")
-    .option("--json", "Output results as JSON")
+    .option("-j, --json", "Output results as JSON")
     .action(async (opts) => {
       const targets = opts.targets
         .split(",")

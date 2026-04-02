@@ -23,7 +23,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--metadata <json>", "JSON metadata string")
     .option("--space <name>", "Send to a space instead of a specific agent")
     .option("--blocking", "Send as a blocking message (recipient must acknowledge)")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((message, opts) => {
       const from = resolveIdentity(opts.from).trim();
       const to = typeof opts.to === "string" ? opts.to.trim() : "";
@@ -92,7 +92,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("--unread", "Only unread messages")
     .option("--mark-read", "Mark returned messages as read")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const messages = readMessages({
         session_id: opts.session,
@@ -146,7 +146,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to show", parseInt)
     .option("--to <agent>", "Filter by recipient (for DMs)")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((spaceArg, opts) => {
       const result = readDigest({
         space: spaceArg || undefined,
@@ -185,7 +185,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--from <agent>", "Filter by sender")
     .option("--to <agent>", "Filter by recipient")
     .option("--limit <n>", "Max results to return", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
       if (!q) {
@@ -226,7 +226,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("since")
     .description("Show all activity (DMs + spaces) since a duration ago")
     .argument("<duration>", "Duration: e.g. 30m, 2h, 1d")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((duration, opts) => {
       // Parse duration string: 30m, 2h, 1d
       const match = duration.match(/^(\d+)([mhd])$/);
@@ -271,7 +271,7 @@ export function registerMessagingCommands(program: Command): void {
     .requiredOption("--to <message-id>", "Message ID to reply to", parseInt)
     .option("--from <agent>", "Sender agent ID")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((message, opts) => {
       const original = getMessageById(opts.to);
       if (!original) {
@@ -321,7 +321,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--session <id>", "Mark all messages in session as read")
     .option("--space <name>", "Mark all messages in space as read")
     .option("--agent <id>", "Agent marking messages as read")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((ids, opts) => {
       const agent = resolveIdentity(opts.agent);
       let count = 0;
@@ -378,7 +378,7 @@ export function registerMessagingCommands(program: Command): void {
     .argument("<id>", "Message ID", parseInt)
     .argument("<new-content>", "New message content")
     .option("--from <agent>", "Sender agent ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, newContent, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const content = typeof newContent === "string" ? newContent : "";
@@ -412,7 +412,7 @@ export function registerMessagingCommands(program: Command): void {
     .description("Delete a message (only sender can delete)")
     .argument("<id>", "Message ID", parseInt)
     .option("--from <agent>", "Sender agent ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
@@ -440,7 +440,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("pin")
     .description("Pin a message")
     .argument("<id>", "Message ID", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, opts) => {
       const msg = pinMessage(id);
 
@@ -462,7 +462,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("unpin")
     .description("Unpin a message")
     .argument("<id>", "Message ID", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, opts) => {
       const msg = unpinMessage(id);
 
@@ -486,7 +486,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--space <name>", "Filter by space")
     .option("--session <id>", "Filter by session ID")
     .option("--limit <n>", "Max results", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const messages = getPinnedMessages({ space: opts.space, session_id: opts.session, limit: opts.limit });
       if (opts.json) {
@@ -512,7 +512,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("blockers")
     .description("Check for unread blocking messages")
     .option("--from <agent>", "Agent to check blockers for")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
       const blockers = getUnreadBlockers(agent);
@@ -678,7 +678,7 @@ export function registerMessagingCommands(program: Command): void {
     .command("update")
     .description("Check for and install updates")
     .option("--check", "Only check for updates, don't install")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const pkg = await import("../../../package.json");
       const current = pkg.version;

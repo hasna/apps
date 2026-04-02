@@ -19,7 +19,7 @@ export function registerSpaceCommands(program: Command): void {
     .option("--parent <name>", "Parent space name (for nesting)")
     .option("--project <id>", "Project ID to associate with")
     .option("--from <agent>", "Creator agent ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const spaceName = typeof name === "string" ? name.trim() : "";
@@ -63,7 +63,7 @@ export function registerSpaceCommands(program: Command): void {
     .option("--parent <name>", "Filter by parent space name")
     .option("--top-level", "Show only top-level spaces")
     .option("--archived", "Include archived spaces")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const listOpts: { project_id?: string; parent_id?: string | null; include_archived?: boolean } = {};
       if (opts.project) listOpts.project_id = opts.project;
@@ -100,7 +100,7 @@ export function registerSpaceCommands(program: Command): void {
     .option("--description <text>", "New description")
     .option("--parent <name>", "New parent space name")
     .option("--project <id>", "New project ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const spaceName = typeof name === "string" ? name.trim() : "";
       if (!spaceName) {
@@ -131,7 +131,7 @@ export function registerSpaceCommands(program: Command): void {
     .command("archive")
     .description("Archive a space")
     .argument("<name>", "Space name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const spaceName = typeof name === "string" ? name.trim() : "";
       if (!spaceName) {
@@ -157,7 +157,7 @@ export function registerSpaceCommands(program: Command): void {
     .command("unarchive")
     .description("Unarchive a space")
     .argument("<name>", "Space name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const spaceName = typeof name === "string" ? name.trim() : "";
       if (!spaceName) {
@@ -186,7 +186,7 @@ export function registerSpaceCommands(program: Command): void {
     .argument("<message>", "Message content")
     .option("--from <agent>", "Sender agent ID")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((spaceName, message, opts) => {
       const from = resolveIdentity(opts.from).trim();
       const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
@@ -234,7 +234,7 @@ export function registerSpaceCommands(program: Command): void {
     .argument("<space>", "Space name")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to return", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((spaceName, opts) => {
       const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
       if (!spaceArg) {
@@ -272,7 +272,7 @@ export function registerSpaceCommands(program: Command): void {
     .description("Join a space")
     .argument("<space>", "Space name")
     .option("--from <agent>", "Agent ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((spaceName, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
@@ -306,7 +306,7 @@ export function registerSpaceCommands(program: Command): void {
     .description("Leave a space")
     .argument("<space>", "Space name")
     .option("--from <agent>", "Agent ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((spaceName, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
@@ -338,7 +338,7 @@ export function registerSpaceCommands(program: Command): void {
     .command("members")
     .description("List space members")
     .argument("<space>", "Space name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((spaceName, opts) => {
       const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
       if (!spaceArg) {

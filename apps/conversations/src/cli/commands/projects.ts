@@ -10,6 +10,22 @@ export function requireDeleteConfirmation(confirmed?: boolean): void {
   }
 }
 
+export function parseProjectListPagination(limitInput: unknown, offsetInput: unknown): {
+  limit: number | undefined;
+  offset: number | undefined;
+} {
+  if (limitInput !== undefined && (!Number.isFinite(limitInput) || Number(limitInput) <= 0)) {
+    throw new Error('--limit must be a positive integer.');
+  }
+  if (offsetInput !== undefined && (!Number.isFinite(offsetInput) || Number(offsetInput) < 0)) {
+    throw new Error('--offset must be a non-negative integer.');
+  }
+
+  const limit = Number.isFinite(limitInput) ? Math.floor(Number(limitInput)) : undefined;
+  const offset = Number.isFinite(offsetInput) ? Math.floor(Number(offsetInput)) : undefined;
+  return { limit, offset };
+}
+
 export function registerProjectCommands(program: Command): void {
   const project = program
     .command("project")
@@ -24,7 +40,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--repository <url>", "Repository URL")
     .option("--tags <json>", "JSON array of tags")
     .option("--from <agent>", "Creator agent ID")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const agent = resolveIdentity(opts.from).trim();
       const projectName = typeof name === "string" ? name.trim() : "";
@@ -78,11 +94,18 @@ export function registerProjectCommands(program: Command): void {
     .option("--status <status>", "Filter by status (active/archived)")
     .option("--limit <n>", "Limit results", parseInt)
     .option("--offset <n>", "Skip first N results", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const status = opts.status === "active" || opts.status === "archived" ? opts.status : undefined;
-      const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined;
-      const offset = Number.isFinite(opts.offset) && opts.offset >= 0 ? opts.offset : undefined;
+
+      let limit: number | undefined;
+      let offset: number | undefined;
+      try {
+        ({ limit, offset } = parseProjectListPagination(opts.limit, opts.offset));
+      } catch (e: any) {
+        console.error(chalk.red(e.message));
+        process.exit(1);
+      }
       const projects = listProjects({
         ...(status ? { status } : {}),
         ...(limit !== undefined ? { limit } : {}),
@@ -109,7 +132,7 @@ export function registerProjectCommands(program: Command): void {
     .command("get")
     .description("Get project details")
     .argument("<id-or-name>", "Project ID or name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((idOrName, opts) => {
       let p = getProject(idOrName);
       if (!p) p = getProjectByName(idOrName);
@@ -144,7 +167,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--status <status>", "New status (active/archived)")
     .option("--repository <url>", "New repository URL")
     .option("--tags <json>", "New tags (JSON array)")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, opts) => {
       const updates: Record<string, unknown> = {};
       if (opts.name) updates.name = opts.name;
@@ -183,7 +206,7 @@ export function registerProjectCommands(program: Command): void {
     .description("Delete a project")
     .argument("<id-or-name>", "Project ID or name")
     .option("--yes", "Confirm project deletion")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, opts) => {
       try {
         requireDeleteConfirmation(opts.yes);

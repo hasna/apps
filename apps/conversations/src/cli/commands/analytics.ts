@@ -20,7 +20,7 @@ export function registerAnalyticsCommands(program: Command): void {
   graph
     .command("build")
     .description("Build/rebuild knowledge graph from messages, spaces, projects")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const result = buildGraph();
       if (opts.json) {
@@ -34,7 +34,7 @@ export function registerAnalyticsCommands(program: Command): void {
   graph
     .command("stats")
     .description("Show knowledge graph statistics")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const stats = getGraphStats();
       if (opts.json) {
@@ -52,7 +52,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("agent")
     .description("Show an agent's communication network")
     .argument("<name>", "Agent name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const network = getAgentNetwork(name);
       if (opts.json) {
@@ -83,7 +83,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("summary")
     .description("Get a structured summary of a conversation")
     .argument("<target>", "Session ID or space name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((target, opts) => {
       const summary = getConversationSummary(target);
       if (!summary) {
@@ -128,7 +128,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--space <name>", "Topics for a specific space")
     .option("--session <id>", "Topics for a specific session")
     .option("--hours <n>", "Trending topics in last N hours", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       let topics;
       if (opts.space) {
@@ -163,7 +163,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--limit <n>", "Max results", parseInt)
     .option("--min-score <n>", "Minimum hotness score", parseInt)
     .option("--space <name>", "Filter by space")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const sessions = listHotSessions({
         limit: opts.limit ?? 10,
@@ -195,7 +195,7 @@ export function registerAnalyticsCommands(program: Command): void {
   program
     .command("context")
     .description("One-shot session boot context for agents: online agents, unread DMs, spaces, recent activity")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity();
       heartbeat(agent);
@@ -264,7 +264,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("sessions")
     .description("List conversation sessions")
     .option("--agent <id>", "Filter sessions involving this agent")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const sessions = listSessions(opts.agent);
 
@@ -290,7 +290,7 @@ export function registerAnalyticsCommands(program: Command): void {
   program
     .command("status")
     .description("Show database stats")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const db = getDb();
       const dbPath = getDbPath();
@@ -327,7 +327,7 @@ export function registerAnalyticsCommands(program: Command): void {
   program
     .command("doctor")
     .description("Check conversations setup and health")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const checks: { name: string; ok: boolean; message: string }[] = [];
 
@@ -422,7 +422,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .argument("<id>", "Message ID", parseInt)
     .argument("<emoji>", "Emoji to react with")
     .option("--from <agent>", "Agent identity override")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
       const reaction = addReaction(id, agent, emoji);
@@ -441,7 +441,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .argument("<id>", "Message ID", parseInt)
     .argument("<emoji>", "Emoji to remove")
     .option("--from <agent>", "Agent identity override")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, emoji, opts) => {
       const agent = resolveIdentity(opts.from);
       const removed = removeReaction(id, agent, emoji);
@@ -462,7 +462,7 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("reactions")
     .description("Show emoji reactions on a message")
     .argument("<id>", "Message ID", parseInt)
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((id, opts) => {
       const summary = getReactionSummary(id);
       if (opts.json) {

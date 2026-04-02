@@ -58,7 +58,7 @@ export function registerAgentCommands(program: Command): void {
     .command("list")
     .description("List all agents with their presence status")
     .option("--online", "Only show online agents")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity();
       heartbeat(agent);
@@ -86,7 +86,7 @@ export function registerAgentCommands(program: Command): void {
     .command("remove")
     .description("Remove an agent from the presence list")
     .argument("<name>", "Agent name to remove")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const agentName = typeof name === "string" ? name.trim() : "";
       if (!agentName) {
@@ -114,7 +114,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Rename an agent in the presence list")
     .argument("<old-name>", "Current agent name")
     .argument("<new-name>", "New agent name")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((oldName, newName, opts) => {
       const old = typeof oldName === "string" ? oldName.trim() : "";
       const renamed = typeof newName === "string" ? newName.trim() : "";
@@ -151,7 +151,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--role <role>", "Agent role (default: agent)")
     .option("--project <id>", "Project ID to lock agent to")
     .option("--force", "Force takeover even if another session is active")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const agentName = (typeof name === "string" ? name : "").trim();
       if (!agentName) {
@@ -186,7 +186,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Send a presence heartbeat to mark yourself as active")
     .option("--from <agent>", "Agent identity (default: CONVERSATIONS_AGENT_ID or auto)")
     .option("--status <status>", "Status: online, busy, idle (default: online)")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
       const status = opts.status || "online";
@@ -210,7 +210,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Set your project focus — scopes read operations to this project")
     .argument("<project>", "Project ID or name")
     .option("--from <agent>", "Agent identity")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((projectArg, opts) => {
       const agent = resolveIdentity(opts.from);
       const project = getProject(projectArg) || getProjectByName(projectArg);
@@ -232,7 +232,7 @@ export function registerAgentCommands(program: Command): void {
     .command("clear")
     .description("Clear your project focus")
     .option("--from <agent>", "Agent identity")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
       getDb().prepare("UPDATE agent_presence SET project_id = NULL WHERE agent = ?").run(agent);
@@ -249,7 +249,7 @@ export function registerAgentCommands(program: Command): void {
     .command("get")
     .description("Show current project focus")
     .option("--from <agent>", "Agent identity")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
       const presence = getPresence(agent);
@@ -274,7 +274,7 @@ export function registerAgentCommands(program: Command): void {
     .command("whoami")
     .description("Show current agent identity and online status")
     .option("--from <agent>", "Explicit agent identity")
-    .option("--json", "Output as JSON")
+    .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
       const agent = resolveIdentity(opts.from);
