@@ -1,0 +1,20 @@
+{
+  "name": "@hasna/knowledge",
+  "version": "0.1.0",
+  "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
+  "type": "module",
+  "bin": {
+    "open-knowledge": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:cli": "bun test tests/cli.test.ts"
+  },
+  "keywords": [
+    "knowledge",
+    "cli",
+    "agents",
+    "json"
+  ],
+  "license": "MIT"
+}
