@@ -1493,7 +1493,8 @@ projectCmd
 projectCmd
   .command("show <id>")
   .description("Show project details")
-  .action((id: string) => {
+  .option("--json", "Output as JSON", false)
+  .action((id: string, opts) => {
     try {
       // Try full UUID, then partial prefix match, then name
       let project = getProject(id);
@@ -1505,6 +1506,12 @@ projectCmd
         logError(chalk.red(`Project not found: ${id}`));
         process.exit(1);
       }
+
+      if (opts.json) {
+        log(JSON.stringify(project, null, 2));
+        return;
+      }
+
       log("");
       log(chalk.bold(`  Project: ${project.name}`));
       log(`  ID:          ${project.id}`);
@@ -1522,7 +1529,8 @@ projectCmd
 projectCmd
   .command("use <name>")
   .description("Set active project (find or create)")
-  .action((name: string) => {
+  .option("--json", "Output as JSON", false)
+  .action((name: string, opts) => {
     try {
       const project = ensureProject(name, process.cwd());
       if (!existsSync(CONFIG_DIR)) {
@@ -1538,6 +1546,12 @@ projectCmd
       }
       config.activeProject = project.id;
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+
+      if (opts.json) {
+        log(JSON.stringify({ activeProject: project.id, project }, null, 2));
+        return;
+      }
+
       log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
