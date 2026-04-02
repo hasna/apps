@@ -23,6 +23,7 @@ export function generateCommand(): Command {
     .option("--count <n>", "Number of cases to generate", "10")
     .option("--output <path>", "Output JSONL file path", "generated.jsonl")
     .option("--model <model>", "Model to use for generation", "claude-sonnet-4-6")
+    .option("-j, --json", "Output JSON summary")
     .action(async (opts: Record<string, string>) => {
       const client = new Anthropic();
       const count = parseInt(opts["count"] ?? "10");
@@ -54,8 +55,21 @@ export function generateCommand(): Command {
         } catch { /* skip malformed */ }
       }
 
+      const outputPath = opts["output"] ?? "generated.jsonl";
       const output = valid.map((c) => JSON.stringify(c)).join("\n");
-      writeFileSync(opts["output"] ?? "generated.jsonl", output + "\n");
-      console.log(`\x1b[32m✓ Generated ${valid.length} cases → ${opts["output"]}\x1b[0m`);
+      writeFileSync(outputPath, output + "\n");
+
+      if ((opts as unknown as Record<string, unknown>)["json"]) {
+        console.log(JSON.stringify({
+          generated: valid.length,
+          requested: count,
+          output: outputPath,
+          model: opts["model"] ?? "claude-sonnet-4-6",
+          description: opts["description"] ?? "",
+        }, null, 2));
+        return;
+      }
+
+      console.log(`\x1b[32m✓ Generated ${valid.length} cases → ${outputPath}\x1b[0m`);
     });
 }

@@ -62,6 +62,12 @@ describe("evals --help", () => {
     expect(stdout).toContain("estimate");
     expect(exitCode).toBe(0);
   });
+
+  test("generate --help includes JSON flag", async () => {
+    const { stdout, exitCode } = await runCli(["generate", "--help"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("-j, --json");
+  });
 });
 
 describe("evals estimate", () => {
