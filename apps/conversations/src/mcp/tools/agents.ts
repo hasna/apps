@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../../lib/presence.js";
+import { setSessionAgent } from "../channel.js";
 import { getSessionActivity } from "../../lib/sessions.js";
 import { getUnreadBlockers } from "../../lib/messages.js";
 
@@ -28,6 +29,7 @@ export function registerAgentTools(
     const { name, session_id, role, project_id } = args;
     try {
       const result = registerAgent(name, session_id, role, project_id);
+      setSessionAgent(name); // Bridge now knows who we are
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
       };
@@ -52,6 +54,7 @@ export function registerAgentTools(
     const { from: fromParam, status } = args;
     const agent = resolveIdentity(fromParam);
     heartbeat(agent, status);
+    setSessionAgent(agent); // Bridge now knows who we are
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, status: status || "online", heartbeat: true }) }],

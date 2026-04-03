@@ -54,12 +54,8 @@ registerAdvancedTools(server, pkg.version);
 registerTmuxTools(server);
 
 // ---- Claude/Channel bridge (inter-session messaging) ----
-// CONVERSATIONS_AGENT_ID = agent name, CONVERSATIONS_SESSION_ID = agent-claude session UUID
-registerChannelBridge(
-  server,
-  () => process.env.CONVERSATIONS_AGENT_ID ?? null,
-  () => process.env.CONVERSATIONS_SESSION_ID ?? null,
-);
+// No config needed — bridge auto-detects agent from register_agent/heartbeat calls
+registerChannelBridge(server);
 
 // ---- Start server ----
 

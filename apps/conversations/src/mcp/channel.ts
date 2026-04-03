@@ -1,123 +1,136 @@
 /**
  * Claude Code channel bridge for conversations MCP server.
  *
- * Declares `experimental['claude/channel']` capability so agent-claude
- * can use this server as a channel for inter-session messaging.
+ * Two messaging modes:
+ *   1. Direct inject (send_to_session) — targets session ID, auto-injected
+ *      via channel notification, auto-marked as read
+ *   2. DM (send_message) — targets agent name, sits in inbox unread
+ *      until the agent checks, also injected if agent is online
  *
- * Polls for new messages addressed to:
- *   1. The agent name (CONVERSATIONS_AGENT_ID) — standard DMs
- *   2. The session ID (session:<uuid>) — targeted session injection via send_to_session
+ * The bridge figures out who it is from:
+ *   - The agent that registered/heartbeated in this MCP session
+ *   - The CONVERSATIONS_SESSION_ID env var (set by agent-claude)
+ *   - Falls back to CONVERSATIONS_AGENT_ID if set
  *
- * Messages are pushed as `notifications/claude/channel` events.
+ * No manual config needed — just connect and go.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readMessages } from "../lib/messages.js";
+import { readMessages, markReadByIds } from "../lib/messages.js";
 
 const POLL_INTERVAL_MS = 1000;
 
-export function registerChannelBridge(
-  server: McpServer,
-  getAgentId: () => string | null,
-  getSessionId: () => string | null,
-): void {
+// Track the agent identity registered in this MCP session
+let sessionAgentId: string | null = null;
+
+/** Called by agent tools when register_agent or heartbeat fires */
+export function setSessionAgent(agentId: string): void {
+  sessionAgentId = agentId;
+}
+
+export function getSessionAgent(): string | null {
+  return sessionAgentId || process.env.CONVERSATIONS_AGENT_ID || null;
+}
+
+export function registerChannelBridge(server: McpServer): void {
   server.server.registerCapabilities({
-    experimental: {
-      'claude/channel': {},
-    },
+    experimental: { 'claude/channel': {} },
   });
 
-  let lastSeenId = 0;
-  let lastSeenSessionId = 0;
+  let lastAgentMsgId = 0;
+  let lastSessionMsgId = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  function seedLastSeen(agentId: string, sessionId: string | null): void {
-    // Seed from agent DMs
-    const latestAgent = readMessages({ to: agentId, order: "desc", limit: 1 });
-    if (latestAgent.length > 0) lastSeenId = latestAgent[0].id;
+  function getSessionId(): string | null {
+    return process.env.CONVERSATIONS_SESSION_ID || null;
+  }
 
-    // Seed from session-targeted messages
-    if (sessionId) {
-      const latestSession = readMessages({ to: `session:${sessionId}`, order: "desc", limit: 1 });
-      if (latestSession.length > 0) lastSeenSessionId = latestSession[0].id;
+  function seedLastSeen(): void {
+    const agent = getSessionAgent();
+    const sid = getSessionId();
+
+    if (agent) {
+      const latest = readMessages({ to: agent, order: "desc", limit: 1 });
+      if (latest.length > 0) lastAgentMsgId = latest[0].id;
+    }
+    if (sid) {
+      const latest = readMessages({ to: `session:${sid}`, order: "desc", limit: 1 });
+      if (latest.length > 0) lastSessionMsgId = latest[0].id;
     }
   }
 
-  function pushNotification(msg: { id: number; content: string; from_agent: string; session_id: string; space?: string | null; priority?: string }): void {
-    console.error(`[channel-bridge] pushing notification: from=${msg.from_agent}, id=${msg.id}, content=${msg.content.slice(0, 50)}`);
+  function pushNotification(msg: {
+    id: number;
+    content: string;
+    from_agent: string;
+    session_id: string;
+    space?: string | null;
+    priority?: string;
+  }, isDirect: boolean): void {
+    // Direct session messages are auto-marked as read
+    if (isDirect) {
+      try { markReadByIds([msg.id]); } catch { /* ok */ }
+    }
+
+    // Rich context for the receiving agent
+    const context = [
+      `From: ${msg.from_agent}`,
+      `Mode: ${isDirect ? 'direct (auto-injected, auto-read)' : 'dm (passive, check inbox)'}`,
+      `Message ID: ${msg.id}`,
+      msg.space ? `Space: ${msg.space}` : null,
+      msg.priority && msg.priority !== 'normal' ? `Priority: ${msg.priority}` : null,
+    ].filter(Boolean).join(' | ');
+
+    const enrichedContent = `[${context}]\n${msg.content}`;
+
     server.server.notification({
       method: "notifications/claude/channel",
       params: {
-        content: msg.content,
+        content: enrichedContent,
         meta: {
           from: msg.from_agent,
           message_id: String(msg.id),
           session_id: msg.session_id,
+          mode: isDirect ? "direct" : "dm",
           ...(msg.space ? { space: msg.space } : {}),
           ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
         },
       },
-    }).catch((err: unknown) => {
-      console.error(`[channel-bridge] notification error: ${err}`);
-    });
+    }).catch(() => { /* transport not ready or disconnected */ });
   }
 
   function startPolling(): void {
     if (pollTimer) return;
-
-    const agentId = getAgentId();
-    const sessionId = getSessionId();
-
-    console.error(`[channel-bridge] startPolling: agentId=${agentId}, sessionId=${sessionId}`);
-
-    if (!agentId && !sessionId) {
-      console.error('[channel-bridge] no agentId or sessionId — not polling');
-      return;
-    }
-
-    if (agentId) seedLastSeen(agentId, sessionId);
+    seedLastSeen();
 
     pollTimer = setInterval(() => {
       try {
-        const currentAgent = getAgentId();
-        const currentSession = getSessionId();
+        const agent = getSessionAgent();
+        const sid = getSessionId();
 
-        // Poll agent DMs
-        if (currentAgent) {
-          const newAgentMsgs = readMessages({
-            to: currentAgent,
-            order: "asc",
-            limit: 20,
-          }).filter(m => m.id > lastSeenId);
-
-          for (const msg of newAgentMsgs) {
-            lastSeenId = msg.id;
-            pushNotification(msg);
+        // Poll DMs to this agent (passive — stays unread unless direct)
+        if (agent) {
+          const msgs = readMessages({ to: agent, order: "asc", limit: 20 })
+            .filter(m => m.id > lastAgentMsgId);
+          for (const msg of msgs) {
+            lastAgentMsgId = msg.id;
+            pushNotification(msg, false);
           }
         }
 
-        // Poll session-targeted messages
-        if (currentSession) {
-          const newSessionMsgs = readMessages({
-            to: `session:${currentSession}`,
-            order: "asc",
-            limit: 20,
-          }).filter(m => m.id > lastSeenSessionId);
-
-          for (const msg of newSessionMsgs) {
-            lastSeenSessionId = msg.id;
-            pushNotification(msg);
+        // Poll direct session-targeted messages (auto-marked as read)
+        if (sid) {
+          const msgs = readMessages({ to: `session:${sid}`, order: "asc", limit: 20 })
+            .filter(m => m.id > lastSessionMsgId);
+          for (const msg of msgs) {
+            lastSessionMsgId = msg.id;
+            pushNotification(msg, true);
           }
         }
-      } catch {
-        // Silently continue on poll errors
-      }
+      } catch { /* silently continue */ }
     }, POLL_INTERVAL_MS);
   }
 
-  // Wait for transport connection, then start polling
-  setTimeout(() => {
-    console.error('[channel-bridge] attempting to start polling...');
-    startPolling();
-  }, 2000);
+  // Start polling after connection established
+  setTimeout(() => startPolling(), 2000);
 }
