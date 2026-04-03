@@ -26,6 +26,11 @@ let sessionAgentId: string | null = null;
 /** Called by agent tools when register_agent or heartbeat fires */
 export function setSessionAgent(agentId: string): void {
   sessionAgentId = agentId;
+  // Also update the identity system so outgoing messages use this name
+  try {
+    const { updateCachedAutoName } = require("../lib/identity.js");
+    updateCachedAutoName(agentId);
+  } catch { /* ok */ }
 }
 
 export function getSessionAgent(): string | null {
@@ -108,20 +113,20 @@ export function registerChannelBridge(server: McpServer): void {
         const agent = getSessionAgent();
         const sid = getSessionId();
 
-        // Poll DMs to this agent (passive — stays unread unless direct)
+        // Poll DMs to this agent — skip messages FROM self (no echoes)
         if (agent) {
           const msgs = readMessages({ to: agent, order: "asc", limit: 20 })
-            .filter(m => m.id > lastAgentMsgId);
+            .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
           for (const msg of msgs) {
             lastAgentMsgId = msg.id;
             pushNotification(msg, false);
           }
         }
 
-        // Poll direct session-targeted messages (auto-marked as read)
+        // Poll direct session-targeted messages — skip self (no echoes)
         if (sid) {
           const msgs = readMessages({ to: `session:${sid}`, order: "asc", limit: 20 })
-            .filter(m => m.id > lastSessionMsgId);
+            .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
           for (const msg of msgs) {
             lastSessionMsgId = msg.id;
             pushNotification(msg, true);
