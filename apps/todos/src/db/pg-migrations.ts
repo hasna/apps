@@ -574,4 +574,55 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (36) ON CONFLICT DO NOTHING;
   `,
+  // Migration 37: Multi-task templates — ordered steps with dependencies per template
+  `
+  CREATE TABLE IF NOT EXISTS template_tasks (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    title_pattern TEXT NOT NULL,
+    description TEXT,
+    priority TEXT DEFAULT 'medium',
+    tags TEXT DEFAULT '[]',
+    task_type TEXT,
+    depends_on_positions TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_template_tasks_template ON template_tasks(template_id);
+
+  INSERT INTO _migrations (id) VALUES (37) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 38: Template variables — typed variable definitions with defaults
+  `
+  ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS variables TEXT DEFAULT '[]';
+  INSERT INTO _migrations (id) VALUES (38) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 39: Template features — conditional tasks, composition, versioning
+  `
+  ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS condition TEXT;
+  ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS include_template_id TEXT;
+  ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+  CREATE TABLE IF NOT EXISTS template_versions (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    template_id TEXT NOT NULL REFERENCES task_templates(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    snapshot TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_template_versions_template ON template_versions(template_id);
+
+  INSERT INTO _migrations (id) VALUES (39) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 40: Per-machine short_id uniqueness — short_ids are human-readable local labels,
+  // not global identifiers. Canonical task identity is the nanoid UUID. Drop the global unique
+  // constraint and replace with per-machine uniqueness so synced tasks from different machines
+  // don't collide. New tasks no longer receive short_ids.
+  `
+  DROP INDEX IF EXISTS idx_tasks_short_id;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_short_id ON tasks(short_id, machine_id) WHERE short_id IS NOT NULL AND machine_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_short_id_lookup ON tasks(short_id) WHERE short_id IS NOT NULL;
+  INSERT INTO _migrations (id) VALUES (40) ON CONFLICT DO NOTHING;
+  `,
 ];

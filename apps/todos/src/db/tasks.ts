@@ -18,7 +18,6 @@ import {
   VersionConflictError,
 } from "../types/index.js";
 import { clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now, uuid } from "./database.js";
-import { nextTaskShortId } from "./projects.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
@@ -52,58 +51,65 @@ function replaceTaskTags(taskId: string, tags: string[], db: Database): void {
 
 export function createTask(input: CreateTaskInput, db?: Database): Task {
   const d = db || getDatabase();
-  const id = uuid();
   const timestamp = now();
   const tags = input.tags || [];
-
-  // Generate short_id from project prefix if project has one
-  const shortId = input.project_id ? nextTaskShortId(input.project_id, d) : null;
-
-  // Prepend short_id to title if generated
-  const title = shortId ? `${shortId}: ${input.title}` : input.title;
 
   // assigned_by = who created this task (always the calling agent)
   // assigned_from_project = which project they were in when they assigned it
   const assignedBy = input.assigned_by || input.agent_id;
   const assignedFromProject = input.assigned_from_project || null;
 
-  d.run(
-    `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      id,
-      shortId,
-      input.project_id || null,
-      input.parent_id || null,
-      input.plan_id || null,
-      input.task_list_id || null,
-      title,
-      input.description || null,
-      input.status || "pending",
-      input.priority || "medium",
-      input.agent_id || null,
-      input.assigned_to || null,
-      input.session_id || null,
-      input.working_dir || null,
-      JSON.stringify(tags),
-      JSON.stringify(input.metadata || {}),
-      timestamp,
-      timestamp,
-      input.due_at || null,
-      input.estimated_minutes || null,
-      input.requires_approval ? 1 : 0,
-      null,
-      null,
-      input.recurrence_rule || null,
-      input.recurrence_parent_id || null,
-      input.spawns_template_id || null,
-      input.reason || null,
-      input.spawned_from_session || null,
-      assignedBy || null,
-      assignedFromProject || null,
-      input.task_type || null,
-    ],
-  );
+  // Retry with a fresh UUID on the rare chance of a nanoid collision
+  let id = uuid();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      d.run(
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          null,
+          input.project_id || null,
+          input.parent_id || null,
+          input.plan_id || null,
+          input.task_list_id || null,
+          input.title,
+          input.description || null,
+          input.status || "pending",
+          input.priority || "medium",
+          input.agent_id || null,
+          input.assigned_to || null,
+          input.session_id || null,
+          input.working_dir || null,
+          JSON.stringify(tags),
+          JSON.stringify(input.metadata || {}),
+          timestamp,
+          timestamp,
+          input.due_at || null,
+          input.estimated_minutes || null,
+          input.requires_approval ? 1 : 0,
+          null,
+          null,
+          input.recurrence_rule || null,
+          input.recurrence_parent_id || null,
+          input.spawns_template_id || null,
+          input.reason || null,
+          input.spawned_from_session || null,
+          assignedBy || null,
+          assignedFromProject || null,
+          input.task_type || null,
+        ],
+      );
+      break; // success
+    } catch (e: any) {
+      // On PRIMARY KEY collision (nanoid dupe), retry with a new id
+      if (attempt < 2 && e?.message?.includes("UNIQUE constraint failed: tasks.id")) {
+        id = uuid();
+        continue;
+      }
+      throw e;
+    }
+  }
 
   if (tags.length > 0) {
     insertTaskTags(id, tags, d);
@@ -281,6 +287,11 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     } catch {
       // Invalid cursor — ignore and return from beginning
     }
+  }
+
+  // Exclude archived tasks by default
+  if (!filter.include_archived) {
+    conditions.push("archived_at IS NULL");
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1583,6 +1594,55 @@ export function bulkUpdateTasks(
   tx();
 
   return { updated, failed };
+}
+
+/**
+ * Archive tasks matching the criteria. Archives completed/failed/cancelled tasks
+ * older than `olderThanDays` days. Returns count of archived tasks.
+ */
+export function archiveTasks(options: {
+  project_id?: string;
+  task_list_id?: string;
+  older_than_days?: number;
+  status?: TaskStatus[];
+}, db?: Database): { archived: number } {
+  const d = db || getDatabase();
+  const conditions: string[] = ["archived_at IS NULL"];
+  const params: SQLQueryBindings[] = [];
+
+  const statuses = options.status ?? ["completed", "failed", "cancelled"];
+  conditions.push(`status IN (${statuses.map(() => "?").join(",")})`);
+  params.push(...statuses);
+
+  if (options.project_id) {
+    conditions.push("project_id = ?");
+    params.push(options.project_id);
+  }
+  if (options.task_list_id) {
+    conditions.push("task_list_id = ?");
+    params.push(options.task_list_id);
+  }
+  if (options.older_than_days !== undefined) {
+    const cutoff = new Date(Date.now() - options.older_than_days * 86400000).toISOString();
+    conditions.push("updated_at < ?");
+    params.push(cutoff);
+  }
+
+  const ts = now();
+  const result = d.run(
+    `UPDATE tasks SET archived_at = ? WHERE ${conditions.join(" AND ")}`,
+    [ts, ...params],
+  );
+  return { archived: result.changes };
+}
+
+/**
+ * Unarchive (restore) a specific task.
+ */
+export function unarchiveTask(id: string, db?: Database): Task | null {
+  const d = db || getDatabase();
+  d.run("UPDATE tasks SET archived_at = NULL WHERE id = ?", [id]);
+  return getTask(id, d);
 }
 
 export function getOverdueTasks(projectId?: string, db?: Database): Task[] {

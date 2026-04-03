@@ -42,7 +42,10 @@ function getTodosGlobalDir(): string {
   const home = process.env["HOME"] || HOME;
   const newDir = join(home, ".hasna", "todos");
   const legacyDir = join(home, ".todos");
-  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
+  // Prefer legacy dir if it has the config file and new dir doesn't
+  const newConfig = join(newDir, "config.json");
+  const legacyConfig = join(legacyDir, "config.json");
+  if (!existsSync(newConfig) && existsSync(legacyConfig)) return legacyDir;
   return newDir;
 }
 

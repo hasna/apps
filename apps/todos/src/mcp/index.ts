@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { registerCloudTools } from "@hasna/cloud";
+import { registerCloudSyncTools } from "./tools/cloud.js";
 import {
   createTask,
   getTask,
@@ -36,12 +36,15 @@ import {
   setTaskStatus,
   setTaskPriority,
   redistributeStaleTasks,
+  archiveTasks,
 } from "../db/tasks.js";
 import { addComment, logProgress } from "../db/comments.js";
 import {
   createProject,
   getProject,
   listProjects,
+  updateProject,
+  renameProject,
   addProjectSource,
   removeProjectSource,
   listProjectSources,
@@ -53,11 +56,11 @@ import {
   updatePlan,
   deletePlan,
 } from "../db/plans.js";
-import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../db/agents.js";
+import { registerAgent, isAgentConflict, getAgent, getAgentByName, listAgents } from "../db/agents.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../db/task-lists.js";
 import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
-import { getAgentTaskListId, getAgentPoolForProject } from "../lib/config.js";
+import { getAgentTaskListId } from "../lib/config.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import {
   getChecklist,
@@ -81,6 +84,11 @@ import type { Task } from "../types/index.js";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { DispatchNotFoundError } from "../types/index.js";
+import { registerDispatchTools } from "./tools/dispatch.js";
+import { registerTemplateTools } from "./tools/templates.js";
+import { registerWebhookTools } from "./tools/webhooks.js";
+import { registerAgentTools } from "./tools/agents.js";
 
 function getMcpVersion(): string {
   try {
@@ -108,7 +116,8 @@ const MINIMAL_TOOLS = new Set([
 const STANDARD_EXCLUDED = new Set([
   "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
-  "create_template", "list_templates", "create_task_from_template", "delete_template",
+  "create_template", "list_templates", "create_task_from_template", "delete_template", "update_template",
+  "init_templates", "preview_template", "export_template", "import_template", "template_history",
   "approve_task",
 ]);
 
@@ -179,6 +188,9 @@ function formatError(error: unknown): string {
   if (error instanceof CompletionGuardError) {
     const retry = error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {};
     return JSON.stringify({ code: CompletionGuardError.code, message: error.reason, suggestion: CompletionGuardError.suggestion, ...retry });
+  }
+  if (error instanceof DispatchNotFoundError) {
+    return JSON.stringify({ code: DispatchNotFoundError.code, message: error.message, suggestion: DispatchNotFoundError.suggestion });
   }
   if (error instanceof Error) {
     const msg = error.message;
@@ -256,6 +268,7 @@ function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
   if (task.parent_id) parts.push(`Parent: ${task.parent_id}`);
   if (task.project_id) parts.push(`Project: ${task.project_id}`);
   if (task.plan_id) parts.push(`Plan: ${task.plan_id}`);
+  if (task.due_at) parts.push(`Due: ${task.due_at.slice(0, 10)}`);
   if (task.tags.length > 0) parts.push(`Tags: ${task.tags.join(", ")}`);
   if (task.recurrence_rule) parts.push(`Recurrence: ${task.recurrence_rule}`);
   if (task.recurrence_parent_id) parts.push(`Recurrence parent: ${task.recurrence_parent_id}`);
@@ -295,6 +308,7 @@ server.tool(
     spawned_from_session: z.string().optional().describe("Session ID that created this task (for tracing task lineage)"),
     assigned_from_project: z.string().optional().describe("Override: project ID the assigning agent is working from. Auto-detected from agent focus if omitted."),
     task_type: z.string().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or any custom string"),
+    due_date: z.string().optional().describe("Due date as YYYY-MM-DD (e.g. '2026-04-15'). Stored as end-of-day ISO timestamp."),
   },
   async (params) => {
     try {
@@ -308,6 +322,11 @@ server.tool(
       if (resolved["parent_id"]) resolved["parent_id"] = resolveId(resolved["parent_id"] as string);
       if (resolved["plan_id"]) resolved["plan_id"] = resolveId(resolved["plan_id"] as string, "plans");
       if (resolved["task_list_id"]) resolved["task_list_id"] = resolveId(resolved["task_list_id"] as string, "task_lists");
+      // Convert due_date (YYYY-MM-DD) → due_at (ISO end-of-day)
+      if (resolved["due_date"]) {
+        resolved["due_at"] = `${resolved["due_date"]}T23:59:59.000Z`;
+        delete resolved["due_date"];
+      }
 
       // Auto-detect assigned_from_project from the calling agent's active focus/project
       if (!resolved["assigned_from_project"]) {
@@ -353,6 +372,7 @@ server.tool(
     offset: z.number().optional(),
     summary_only: z.boolean().optional().describe("When true, return only id, short_id, title, status, priority — minimal tokens for navigation"),
     cursor: z.string().optional().describe("Opaque cursor from a prior response for stable pagination. Use next_cursor from the previous page. Mutually exclusive with offset."),
+    include_archived: z.boolean().optional().describe("When true, include archived tasks. Default: false."),
   },
   async (params) => {
     try {
@@ -383,7 +403,8 @@ server.tool(
         const assigned = t.assigned_to ? ` -> ${t.assigned_to}` : "";
         const due = t.due_at ? ` due:${t.due_at.slice(0, 10)}` : "";
         const recur = t.recurrence_rule ? " [↻]" : "";
-        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${lock}${due}${recur}`;
+        const list = t.task_list_id ? ` list:${t.task_list_id.slice(0, 8)}` : "";
+        return `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}${assigned}${list}${lock}${due}${recur}`;
       }).join("\n");
       const currentOffset = resolved.offset || 0;
       const hasMore = total > (resolved.cursor ? tasks.length : currentOffset + tasks.length);
@@ -476,7 +497,7 @@ server.tool(
   "Update task fields. Version required for optimistic locking.",
   {
     id: z.string(),
-    version: z.number(),
+    version: z.union([z.number(), z.string()]).transform((v) => Number(v)),
     title: z.string().optional(),
     description: z.string().optional(),
     status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
@@ -487,6 +508,7 @@ server.tool(
     plan_id: z.string().optional(),
     task_list_id: z.string().optional(),
     task_type: z.string().nullable().optional().describe("Task type: bug, feature, chore, improvement, docs, test, security, or custom. null to clear."),
+    due_date: z.string().nullable().optional().describe("Due date as YYYY-MM-DD. null to clear. Stored as end-of-day ISO timestamp."),
   },
   async ({ id, ...rest }) => {
     try {
@@ -494,6 +516,11 @@ server.tool(
       const resolved = { ...rest } as Record<string, unknown>;
       if (resolved.task_list_id) resolved.task_list_id = resolveId(resolved.task_list_id as string, "task_lists");
       if (resolved.plan_id) resolved.plan_id = resolveId(resolved.plan_id as string, "plans");
+      // Convert due_date → due_at
+      if ("due_date" in resolved) {
+        resolved["due_at"] = resolved["due_date"] ? `${resolved["due_date"]}T23:59:59.000Z` : null;
+        delete resolved["due_date"];
+      }
       const task = updateTask(resolvedId, resolved as unknown as Parameters<typeof updateTask>[1]);
       return { content: [{ type: "text" as const, text: `updated: ${formatTask(task)}` }] };
     } catch (e) {
@@ -808,6 +835,37 @@ server.tool(
           text: `Source added: ${source.id.slice(0, 8)} | [${source.type}] ${source.name} → ${source.uri}`,
         }],
       };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// update_project
+if (shouldRegisterTool("update_project")) {
+server.tool(
+  "update_project",
+  "Update project fields: name, description, path, task_list_id. Use new_slug to rename the project slug (cascades to task_lists).",
+  {
+    id: z.string().describe("Project ID"),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    path: z.string().optional().describe("Update global path (use projects-path set for machine-local overrides)"),
+    task_list_id: z.string().optional(),
+    new_slug: z.string().optional().describe("Rename the project slug (kebab-case). Cascades to matching task_list slugs."),
+  },
+  async ({ id, name, description, path, task_list_id, new_slug }) => {
+    try {
+      const resolvedId = resolveId(id, "projects");
+      if (new_slug || (name && !description && !path && !task_list_id)) {
+        // Use renameProject for slug/name changes that need cascade
+        const result = renameProject(resolvedId, { name, new_slug });
+        const note = result.task_lists_updated > 0 ? ` (${result.task_lists_updated} task list(s) slug updated)` : "";
+        return { content: [{ type: "text" as const, text: `Project updated: ${result.project.id.slice(0, 8)} | ${result.project.name}${note}` }] };
+      }
+      const updated = updateProject(resolvedId, { name, description, path, task_list_id });
+      return { content: [{ type: "text" as const, text: `Project updated: ${updated.id.slice(0, 8)} | ${updated.name}${updated.path ? ` (${updated.path})` : ""}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1148,9 +1206,9 @@ server.tool(
 if (shouldRegisterTool("search_tasks")) {
 server.tool(
   "search_tasks",
-  "Full-text search across tasks with filters.",
+  "Full-text search across tasks with filters. query is optional — if omitted, returns all tasks matching the given filters.",
   {
-    query: z.string(),
+    query: z.string().optional(),
     project_id: z.string().optional(),
     task_list_id: z.string().optional(),
     status: z.union([
@@ -1179,12 +1237,13 @@ server.tool(
         ...filters,
       });
       if (tasks.length === 0) {
-        return { content: [{ type: "text" as const, text: `No tasks matching "${query}".` }] };
+        return { content: [{ type: "text" as const, text: query ? `No tasks matching "${query}".` : "No tasks found." }] };
       }
       const text = tasks.map((t) =>
         `[${t.status}] ${t.id.slice(0, 8)} | ${t.priority} | ${t.title}`,
       ).join("\n");
-      return { content: [{ type: "text" as const, text: `${tasks.length} result(s) for "${query}":\n${text}` }] };
+      const label = query ? `${tasks.length} result(s) for "${query}"` : `${tasks.length} task(s)`;
+      return { content: [{ type: "text" as const, text: `${label}:\n${text}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }
@@ -1257,414 +1316,7 @@ server.tool(
 
 // === AGENT TOOLS ===
 
-// set_focus
-if (shouldRegisterTool("set_focus")) {
-server.tool(
-  "set_focus",
-  "Focus this agent on a project. All list/search/status tools will default to this project.",
-  {
-    agent_id: z.string().describe("Agent ID or name"),
-    project_id: z.string().optional().describe("Project to focus on. Omit to clear."),
-    task_list_id: z.string().optional().describe("Task list to focus on"),
-  },
-  async ({ agent_id, project_id, task_list_id }) => {
-    try {
-      const resolvedProject = project_id ? resolveId(project_id, "projects") : undefined;
-      const focus: AgentFocus = { agent_id, project_id: resolvedProject, task_list_id };
-      agentFocusMap.set(agent_id, focus);
-      // Sync to DB
-      try {
-        const agent = getAgentByName(agent_id) || getAgent(agent_id);
-        if (agent) {
-          const db = getDatabase();
-          db.run("UPDATE agents SET active_project_id = ? WHERE id = ?", [resolvedProject || null, agent.id]);
-        }
-      } catch {}
-      const projectName = resolvedProject ? ` (${resolvedProject.slice(0, 8)})` : "";
-      return { content: [{ type: "text" as const, text: `Focused on project${projectName}. Read tools will default to this scope. Pass explicit project_id to override.` }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// get_focus
-if (shouldRegisterTool("get_focus")) {
-server.tool(
-  "get_focus",
-  "Get the current focus for an agent.",
-  { agent_id: z.string().describe("Agent ID or name") },
-  async ({ agent_id }) => {
-    const focus = getAgentFocus(agent_id);
-    if (!focus?.project_id) {
-      return { content: [{ type: "text" as const, text: "No focus set. Showing all projects." }] };
-    }
-    return { content: [{ type: "text" as const, text: `Focused on project: ${focus.project_id}${focus.task_list_id ? `, task list: ${focus.task_list_id}` : ""}` }] };
-  },
-);
-}
-
-// unfocus
-if (shouldRegisterTool("unfocus")) {
-server.tool(
-  "unfocus",
-  "Clear focus — show all projects and tasks.",
-  { agent_id: z.string().describe("Agent ID or name") },
-  async ({ agent_id }) => {
-    agentFocusMap.delete(agent_id);
-    try {
-      const agent = getAgentByName(agent_id) || getAgent(agent_id);
-      if (agent) {
-        const db = getDatabase();
-        db.run("UPDATE agents SET active_project_id = NULL WHERE id = ?", [agent.id]);
-      }
-    } catch {}
-    return { content: [{ type: "text" as const, text: "Focus cleared. Showing all projects." }] };
-  },
-);
-}
-
-// register_agent
-if (shouldRegisterTool("register_agent")) {
-server.tool(
-  "register_agent",
-  "Register an agent. Any name is allowed — the configured pool is advisory, not enforced. Returns a conflict error if the name is held by a recently-active agent.",
-  {
-    name: z.string().describe("Agent name — any name is allowed. Use suggest_agent_name to see pool suggestions and avoid conflicts."),
-    description: z.string().optional(),
-    capabilities: z.array(z.string()).optional().describe("Agent capabilities/skills for task routing (e.g. ['typescript', 'testing', 'devops'])"),
-    session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
-    working_dir: z.string().optional().describe("Working directory of this session — used to look up the project's agent pool and identify who holds the name in a conflict"),
-    force: z.boolean().optional().describe("Force takeover of an active agent's name. Use with caution — only when you know the previous session is dead."),
-  },
-  async ({ name, description, capabilities, session_id, working_dir, force }) => {
-    try {
-      // Look up the pool for this project (from config, based on working_dir) — null = no restriction
-      const pool = getAgentPoolForProject(working_dir);
-      const result = registerAgent({ name, description, capabilities, session_id, working_dir, force, pool: pool || undefined });
-      if (isAgentConflict(result)) {
-        const suggestLine = result.suggestions && result.suggestions.length > 0
-          ? `\nAvailable names: ${result.suggestions.join(", ")}`
-          : "";
-        const hint = `CONFLICT: ${result.message}${suggestLine}`;
-        return {
-          content: [{ type: "text" as const, text: hint }],
-          isError: true,
-        };
-      }
-      const agent = result;
-      const poolLine = pool ? `\nPool: [${pool.join(", ")}]` : "";
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Agent registered:\nID: ${agent.id}\nName: ${agent.name}${agent.description ? `\nDescription: ${agent.description}` : ""}\nSession: ${agent.session_id ?? "unbound"}${poolLine}\nCreated: ${agent.created_at}\nLast seen: ${agent.last_seen_at}`,
-        }],
-      };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// suggest_agent_name
-if (shouldRegisterTool("suggest_agent_name")) {
-server.tool(
-  "suggest_agent_name",
-  "Get available agent names for a project. Shows configured pool, active agents, and suggestions. If no pool is configured, any name is allowed.",
-  {
-    working_dir: z.string().optional().describe("Your working directory — used to look up the project's allowed name pool from config"),
-  },
-  async ({ working_dir }) => {
-    try {
-      const pool = getAgentPoolForProject(working_dir);
-      const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-      const allActive = listAgents().filter(a => a.last_seen_at > cutoff);
-
-      if (!pool) {
-        // No pool configured — any name works, just show active agents to avoid conflicts
-        const lines = [
-          "No agent pool configured — any name is allowed.",
-          allActive.length > 0
-            ? `Active agents (avoid these names): ${allActive.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}`
-            : "No active agents.",
-          "\nTo restrict names, configure agent_pool or project_pools in ~/.hasna/todos/config.json",
-        ];
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-      }
-
-      const available = getAvailableNamesFromPool(pool, getDatabase());
-      const activeInPool = allActive.filter(a => pool.map(n => n.toLowerCase()).includes(a.name));
-      const lines = [
-        `Project pool: ${pool.join(", ")}`,
-        `Available now (${available.length}): ${available.length > 0 ? available.join(", ") : "none — all names in use"}`,
-        activeInPool.length > 0 ? `Active agents: ${activeInPool.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}` : "Active agents: none",
-        available.length > 0 ? `\nSuggested: ${available[0]}` : "\nNo names available. Wait for an active agent to go stale (30min timeout).",
-      ];
-      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// list_agents
-if (shouldRegisterTool("list_agents")) {
-server.tool(
-  "list_agents",
-  "List all registered agents. By default shows only active agents — set include_archived to see archived ones too.",
-  {
-    include_archived: z.boolean().optional().describe("Include archived agents in the list (default: false)"),
-  },
-  async ({ include_archived }) => {
-    try {
-      const agents = listAgents({ include_archived: include_archived ?? false });
-      if (agents.length === 0) {
-        return { content: [{ type: "text" as const, text: "No agents registered." }] };
-      }
-      const text = agents.map((a) => {
-        const statusTag = a.status === "archived" ? " [archived]" : "";
-        return `${a.id} | ${a.name}${statusTag}${a.description ? ` - ${a.description}` : ""} (last seen: ${a.last_seen_at})`;
-      }).join("\n");
-      return { content: [{ type: "text" as const, text: `${agents.length} agent(s):\n${text}` }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// get_agent
-if (shouldRegisterTool("get_agent")) {
-server.tool(
-  "get_agent",
-  "Get agent details by ID or name. Provide one of id or name.",
-  {
-    id: z.string().optional(),
-    name: z.string().optional(),
-  },
-  async ({ id, name }) => {
-    try {
-      if (!id && !name) {
-        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
-      }
-      const agent = id ? getAgent(id) : getAgentByName(name!);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
-      }
-      const parts = [
-        `ID: ${agent.id}`,
-        `Name: ${agent.name}`,
-      ];
-      if (agent.description) parts.push(`Description: ${agent.description}`);
-      if (Object.keys(agent.metadata).length > 0) parts.push(`Metadata: ${JSON.stringify(agent.metadata)}`);
-      parts.push(`Created: ${agent.created_at}`);
-      parts.push(`Last seen: ${agent.last_seen_at}`);
-      return { content: [{ type: "text" as const, text: parts.join("\n") }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// rename_agent
-if (shouldRegisterTool("rename_agent")) {
-server.tool(
-  "rename_agent",
-  "Rename an agent. Resolve by id or current name.",
-  {
-    id: z.string().optional(),
-    name: z.string().optional(),
-    new_name: z.string(),
-  },
-  async ({ id, name, new_name }) => {
-    try {
-      if (!id && !name) {
-        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
-      }
-      const agent = id ? getAgent(id) : getAgentByName(name!);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
-      }
-      const updated = updateAgent(agent.id, { name: new_name });
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Agent renamed: ${agent.name} -> ${updated.name}\nID: ${updated.id}`,
-        }],
-      };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// update_agent
-if (shouldRegisterTool("update_agent")) {
-server.tool(
-  "update_agent",
-  "Update an agent's description, role, title, or other metadata. Resolve by id or name.",
-  {
-    id: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    role: z.string().optional(),
-    title: z.string().optional(),
-    level: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    permissions: z.array(z.string()).optional(),
-    metadata: z.record(z.unknown()).optional(),
-  },
-  async ({ id, name, ...updates }) => {
-    try {
-      if (!id && !name) {
-        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
-      }
-      const agent = id ? getAgent(id) : getAgentByName(name!);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
-      }
-      const updated = updateAgent(agent.id, updates);
-      return { content: [{ type: "text" as const, text: `Agent updated: ${updated.name} (${updated.id.slice(0, 8)})` }] };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// delete_agent
-if (shouldRegisterTool("delete_agent")) {
-server.tool(
-  "delete_agent",
-  "Archive an agent (soft delete). The agent is hidden from list_agents but preserved for task history. Use unarchive_agent to restore. Resolve by id or name.",
-  {
-    id: z.string().optional(),
-    name: z.string().optional(),
-  },
-  async ({ id, name }) => {
-    try {
-      if (!id && !name) {
-        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
-      }
-      const agent = id ? getAgent(id) : getAgentByName(name!);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
-      }
-      const archived = archiveAgent(agent.id);
-      return {
-        content: [{
-          type: "text" as const,
-          text: archived ? `Agent archived: ${agent.name} (${agent.id}). Use unarchive_agent to restore.` : `Failed to archive agent: ${agent.name}`,
-        }],
-        isError: !archived,
-      };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// unarchive_agent
-if (shouldRegisterTool("unarchive_agent")) {
-server.tool(
-  "unarchive_agent",
-  "Restore an archived agent back to active status. Resolve by id or name.",
-  {
-    id: z.string().optional(),
-    name: z.string().optional(),
-  },
-  async ({ id, name }) => {
-    try {
-      if (!id && !name) {
-        return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
-      }
-      const agent = id ? getAgent(id) : getAgentByName(name!);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
-      }
-      if (agent.status === "active") {
-        return { content: [{ type: "text" as const, text: `Agent ${agent.name} is already active.` }] };
-      }
-      const restored = unarchiveAgent(agent.id);
-      return {
-        content: [{
-          type: "text" as const,
-          text: restored ? `Agent restored: ${agent.name} (${agent.id}) is now active.` : `Failed to restore agent: ${agent.name}`,
-        }],
-        isError: !restored,
-      };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// heartbeat
-if (shouldRegisterTool("heartbeat")) {
-server.tool(
-  "heartbeat",
-  "Update your last_seen_at timestamp to signal you're still active. Call periodically during long tasks to prevent being marked stale.",
-  {
-    agent_id: z.string().describe("Your agent ID or name."),
-  },
-  async ({ agent_id }) => {
-    try {
-      const agent = getAgent(agent_id) || getAgentByName(agent_id);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
-      }
-      updateAgentActivity(agent.id);
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Heartbeat: ${agent.name} (${agent.id}) — last_seen_at updated to ${new Date().toISOString()}`,
-        }],
-      };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
-
-// release_agent
-if (shouldRegisterTool("release_agent")) {
-server.tool(
-  "release_agent",
-  "Explicitly release/logout an agent — clears session binding and makes the name immediately available. Call this when your session ends instead of waiting for the 30-minute stale timeout.",
-  {
-    agent_id: z.string().describe("Your agent ID or name."),
-    session_id: z.string().optional().describe("Your session ID — if provided, release only succeeds if it matches (prevents other sessions from releasing your agent)."),
-  },
-  async ({ agent_id, session_id }) => {
-    try {
-      const agent = getAgent(agent_id) || getAgentByName(agent_id);
-      if (!agent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
-      }
-      const released = releaseAgent(agent.id, session_id);
-      if (!released) {
-        return { content: [{ type: "text" as const, text: `Release denied: session_id does not match agent's current session.` }], isError: true };
-      }
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Agent released: ${agent.name} (${agent.id}) — session cleared, name is now available.`,
-        }],
-      };
-    } catch (e) {
-      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-    }
-  },
-);
-}
+registerAgentTools(server, { shouldRegisterTool, resolveId, formatError, agentFocusMap, getAgentFocus });
 
 // === TASK LIST TOOLS ===
 
@@ -1712,9 +1364,17 @@ server.tool(
       if (lists.length === 0) {
         return { content: [{ type: "text" as const, text: "No task lists found." }] };
       }
+      const db = getDatabase();
       const text = lists.map((l) => {
         const project = l.project_id ? ` (project: ${l.project_id.slice(0, 8)})` : "";
-        return `${l.id.slice(0, 8)} | ${l.name} [${l.slug}]${project}${l.description ? ` - ${l.description}` : ""}`;
+        const counts = db.query(
+          `SELECT COUNT(*) as total,
+            SUM(CASE WHEN status IN ('pending','in_progress') THEN 1 ELSE 0 END) as active,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as done
+           FROM tasks WHERE task_list_id = ? AND archived_at IS NULL`
+        ).get(l.id) as { total: number; active: number; done: number };
+        const taskNote = ` [${counts.active} active, ${counts.done} done / ${counts.total} total]`;
+        return `${l.id.slice(0, 8)} | ${l.name} [${l.slug}]${taskNote}${project}${l.description ? ` - ${l.description}` : ""}`;
       }).join("\n");
       return { content: [{ type: "text" as const, text: `${lists.length} task list(s):\n${text}` }] };
     } catch (e) {
@@ -2179,148 +1839,11 @@ server.tool(
 
 // === WEBHOOK TOOLS ===
 
-// create_webhook
-if (shouldRegisterTool("create_webhook")) {
-server.tool(
-  "create_webhook",
-  "Register a webhook for task change events.",
-  {
-    url: z.string(),
-    events: z.array(z.string()).optional(),
-    secret: z.string().optional(),
-  },
-  async (params) => {
-    try {
-      const { createWebhook } = await import("../db/webhooks.js");
-      const wh = createWebhook(params);
-      return { content: [{ type: "text" as const, text: `Webhook created: ${wh.id.slice(0, 8)} | ${wh.url} | events: ${wh.events.length === 0 ? "all" : wh.events.join(",")}` }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
-
-// list_webhooks
-if (shouldRegisterTool("list_webhooks")) {
-server.tool(
-  "list_webhooks",
-  "List all registered webhooks",
-  {},
-  async () => {
-    try {
-      const { listWebhooks } = await import("../db/webhooks.js");
-      const webhooks = listWebhooks();
-      if (webhooks.length === 0) return { content: [{ type: "text" as const, text: "No webhooks registered." }] };
-      const text = webhooks.map(w => `${w.id.slice(0, 8)} | ${w.active ? "active" : "inactive"} | ${w.url} | events: ${w.events.length === 0 ? "all" : w.events.join(",")}`).join("\n");
-      return { content: [{ type: "text" as const, text: `${webhooks.length} webhook(s):\n${text}` }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
-
-// delete_webhook
-if (shouldRegisterTool("delete_webhook")) {
-server.tool(
-  "delete_webhook",
-  "Delete a webhook by ID.",
-  {
-    id: z.string(),
-  },
-  async ({ id }) => {
-    try {
-      const { deleteWebhook } = await import("../db/webhooks.js");
-      const deleted = deleteWebhook(id);
-      return { content: [{ type: "text" as const, text: deleted ? "Webhook deleted." : "Webhook not found." }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
+registerWebhookTools(server, { shouldRegisterTool, formatError });
 
 // === TEMPLATE TOOLS ===
 
-// create_template
-if (shouldRegisterTool("create_template")) {
-server.tool(
-  "create_template",
-  "Create a reusable task template.",
-  {
-    name: z.string(),
-    title_pattern: z.string(),
-    description: z.string().optional(),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
-    tags: z.array(z.string()).optional(),
-    project_id: z.string().optional(),
-    plan_id: z.string().optional(),
-  },
-  async (params) => {
-    try {
-      const { createTemplate } = await import("../db/templates.js");
-      const t = createTemplate(params);
-      return { content: [{ type: "text" as const, text: `Template created: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}"` }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
-
-// list_templates
-if (shouldRegisterTool("list_templates")) {
-server.tool(
-  "list_templates",
-  "List all task templates",
-  {},
-  async () => {
-    try {
-      const { listTemplates } = await import("../db/templates.js");
-      const templates = listTemplates();
-      if (templates.length === 0) return { content: [{ type: "text" as const, text: "No templates." }] };
-      const text = templates.map(t => `${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}" | ${t.priority}`).join("\n");
-      return { content: [{ type: "text" as const, text: `${templates.length} template(s):\n${text}` }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
-
-// create_task_from_template
-if (shouldRegisterTool("create_task_from_template")) {
-server.tool(
-  "create_task_from_template",
-  "Create a task from a template with optional overrides.",
-  {
-    template_id: z.string(),
-    title: z.string().optional(),
-    description: z.string().optional(),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
-    assigned_to: z.string().optional(),
-    project_id: z.string().optional(),
-  },
-  async (params) => {
-    try {
-      const { taskFromTemplate } = await import("../db/templates.js");
-      const input = taskFromTemplate(params.template_id, {
-        title: params.title, description: params.description,
-        priority: params.priority as any, assigned_to: params.assigned_to, project_id: params.project_id,
-      });
-      const task = createTask(input);
-      return { content: [{ type: "text" as const, text: `Task created from template:\n${task.id.slice(0, 8)} | ${task.priority} | ${task.title}` }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
-
-// delete_template
-if (shouldRegisterTool("delete_template")) {
-server.tool(
-  "delete_template",
-  "Delete a task template by ID.",
-  { id: z.string() },
-  async ({ id }) => {
-    try {
-      const { deleteTemplate } = await import("../db/templates.js");
-      const deleted = deleteTemplate(id);
-      return { content: [{ type: "text" as const, text: deleted ? "Template deleted." : "Template not found." }] };
-    } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
-  },
-);
-}
+registerTemplateTools(server, { shouldRegisterTool, resolveId, formatError });
 
 // === APPROVAL TOOLS ===
 
@@ -2505,6 +2028,51 @@ server.tool(
 );
 }
 
+// archive_completed
+if (shouldRegisterTool("archive_completed")) {
+server.tool(
+  "archive_completed",
+  "Archive completed/failed/cancelled tasks to reduce clutter. Archived tasks are hidden from list_tasks and search_tasks by default.",
+  {
+    project_id: z.string().optional().describe("Scope to a project"),
+    task_list_id: z.string().optional().describe("Scope to a task list"),
+    older_than_days: z.number().optional().describe("Only archive tasks last updated more than N days ago. Default: all matching tasks."),
+    status: z.array(z.enum(["completed", "failed", "cancelled"])).optional().describe("Statuses to archive. Default: completed, failed, cancelled."),
+    dry_run: z.boolean().optional().describe("Preview count without archiving. Default: false."),
+  },
+  async ({ project_id, task_list_id, older_than_days, status, dry_run }) => {
+    try {
+      const filters: Parameters<typeof archiveTasks>[0] = {};
+      if (project_id) filters.project_id = resolveId(project_id, "projects");
+      if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+      if (older_than_days !== undefined) filters.older_than_days = older_than_days;
+      if (status) filters.status = status;
+
+      if (dry_run) {
+        // Count without archiving
+        const db = getDatabase();
+        const statuses = status ?? ["completed", "failed", "cancelled"];
+        const conditions = ["archived_at IS NULL", `status IN (${statuses.map(() => "?").join(",")})`];
+        const params: any[] = [...statuses];
+        if (filters.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+        if (filters.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+        if (older_than_days !== undefined) {
+          const cutoff = new Date(Date.now() - older_than_days * 86400000).toISOString();
+          conditions.push("updated_at < ?"); params.push(cutoff);
+        }
+        const count = (db.query(`SELECT COUNT(*) as c FROM tasks WHERE ${conditions.join(" AND ")}`).get(...params) as { c: number }).c;
+        return { content: [{ type: "text" as const, text: `Dry run: would archive ${count} task(s).` }] };
+      }
+
+      const result = archiveTasks(filters);
+      return { content: [{ type: "text" as const, text: `Archived ${result.archived} task(s).` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // bulk_update_tasks
 if (shouldRegisterTool("bulk_update_tasks")) {
 server.tool(
@@ -2628,7 +2196,33 @@ server.tool(
       if (project_id) filters.project_id = resolveId(project_id, "projects");
       if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
       if (agent_id) filters.agent_id = agent_id;
-      const stats = getTaskStats(Object.keys(filters).length > 0 ? filters : undefined);
+      const stats = getTaskStats(Object.keys(filters).length > 0 ? filters : undefined) as Record<string, unknown>;
+
+      // Add per-task-list breakdown when scoped to a project (or globally)
+      if (!task_list_id) {
+        const db = getDatabase();
+        const listRows = db.query(
+          `SELECT tl.id, tl.name, tl.slug,
+            COUNT(t.id) as total,
+            SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN t.status IN ('pending','in_progress') THEN 1 ELSE 0 END) as active
+           FROM task_lists tl
+           LEFT JOIN tasks t ON t.task_list_id = tl.id ${filters.project_id ? "AND t.project_id = ?" : ""}
+           ${filters.project_id ? "WHERE tl.project_id = ?" : ""}
+           GROUP BY tl.id ORDER BY tl.name`
+        ).all(...(filters.project_id ? [filters.project_id, filters.project_id] : [])) as { id: string; name: string; slug: string; total: number; completed: number; active: number }[];
+
+        stats.by_task_list = listRows.map(r => ({
+          id: r.id.slice(0, 8),
+          name: r.name,
+          slug: r.slug,
+          total: r.total,
+          completed: r.completed,
+          active: r.active,
+          completion_rate: r.total > 0 ? Math.round((r.completed / r.total) * 100) : 0,
+        }));
+      }
+
       return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -3521,7 +3115,8 @@ server.tool(
       "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
       "get_task_history","get_recent_activity","recap","task_context","standup","burndown","blame","import_github_issue",
       "create_webhook","list_webhooks","delete_webhook",
-      "create_template","list_templates","create_task_from_template","delete_template",
+      "create_template","list_templates","create_task_from_template","delete_template","update_template",
+      "init_templates","preview_template","export_template","import_template","template_history",
       "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
       "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status","get_context","get_health","bootstrap",
       "decompose_task",
@@ -3639,10 +3234,16 @@ server.tool(
       delete_webhook: "Delete a webhook by ID.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
 
       // Templates
-      create_template: "Create a reusable task template.\n  Params: name(string, req), title_pattern(string, req — e.g. 'Fix: {description}'), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string)\n  Example: {name: 'Bug Report', title_pattern: 'Bug: {description}', priority: 'high', tags: ['bug']}",
+      create_template: "Create a reusable task template. Supports multi-task templates with dependencies.\n  Params: name(string, req), title_pattern(string, req), description(string), priority(low|medium|high|critical), tags(string[]), project_id(string), plan_id(string), tasks(array of {title_pattern, description, priority, tags, task_type, depends_on(number[]), metadata})\n  Example single: {name: 'Bug Report', title_pattern: 'Bug: {description}', priority: 'high', tags: ['bug']}\n  Example multi: {name: 'Feature', title_pattern: 'Feature: {name}', tasks: [{title_pattern: 'Design {name}'}, {title_pattern: 'Implement {name}', depends_on: [0]}, {title_pattern: 'Test {name}', depends_on: [1]}]}",
       list_templates: "List all task templates. No params.",
-      create_task_from_template: "Create a task from a template with optional overrides.\n  Params: template_id(string, req), title(string), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string)\n  Example: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}",
+      create_task_from_template: "Create task(s) from a template. Multi-task templates create all tasks with dependencies wired. Supports {variable} substitution.\n  Params: template_id(string, req), title(string — single-task override), description(string), priority(low|medium|high|critical), assigned_to(string), project_id(string), task_list_id(string), variables(Record<string,string> — {name} substitution)\n  Example single: {template_id: 'a1b2c3d4', assigned_to: 'maximus'}\n  Example multi: {template_id: 'a1b2c3d4', project_id: 'proj1', variables: {name: 'OAuth login'}}",
       delete_template: "Delete a task template.\n  Params: id(string, req)\n  Example: {id: 'a1b2c3d4'}",
+      update_template: "Update a task template's name, title pattern, or other fields.\n  Params: id(string, req), name(string), title_pattern(string), description(string), priority(low|medium|high|critical), tags(string[]), variables(TemplateVariable[]), project_id(string), plan_id(string)\n  Example: {id: 'a1b2c3d4', name: 'Renamed Template', priority: 'critical'}",
+      init_templates: "Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit). Skips already existing. No params.",
+      preview_template: "Preview a template without creating tasks. Shows resolved titles, deps, priorities.\n  Params: template_id(string, req), variables(Record<string,string>)\n  Example: {template_id: 'a1b2c3d4', variables: {name: 'invoices'}}",
+      export_template: "Export a template as JSON (template + tasks + variables). Use for sharing or backup.\n  Params: template_id(string, req)\n  Example: {template_id: 'a1b2c3d4'}",
+      import_template: "Import a template from a JSON string (as returned by export_template). Creates new template with new IDs.\n  Params: json(string, req)\n  Example: {json: '{\"name\":\"My Template\",...}'}",
+      template_history: "Show version history of a template. Each update creates a snapshot of the previous state.\n  Params: template_id(string, req)\n  Example: {template_id: 'a1b2c3d4'}",
 
       // Active work
       get_active_work: "See all in-progress tasks and who is working on them.\n  Params: project_id(string, optional), task_list_id(string, optional)\n  Example: {project_id: 'a1b2c3d4'}",
@@ -4633,9 +4234,64 @@ server.resource(
   },
 );
 
+// === PG MIGRATIONS ===
+
+if (shouldRegisterTool("migrate_pg")) {
+server.tool(
+  "migrate_pg",
+  "Apply PostgreSQL schema migrations to the configured RDS instance",
+  {
+    connection_string: z.string().optional().describe("PostgreSQL connection string (overrides cloud config)"),
+  },
+  async ({ connection_string }) => {
+    try {
+      let connStr: string;
+      if (connection_string) {
+        connStr = connection_string;
+      } else {
+        const { getConnectionString } = await import("@hasna/cloud");
+        connStr = getConnectionString("todos");
+      }
+
+      const { applyPgMigrations } = await import("../db/pg-migrate.js");
+      const result = await applyPgMigrations(connStr);
+
+      const lines: string[] = [];
+      if (result.applied.length > 0) {
+        lines.push(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`);
+      }
+      if (result.alreadyApplied.length > 0) {
+        lines.push(`Already applied: ${result.alreadyApplied.length} migration(s)`);
+      }
+      if (result.errors.length > 0) {
+        lines.push(`Errors:\n${result.errors.join("\n")}`);
+      }
+      if (result.applied.length === 0 && result.errors.length === 0) {
+        lines.push("Schema is up to date.");
+      }
+      lines.push(`Total migrations: ${result.totalMigrations}`);
+
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        isError: result.errors.length > 0,
+      };
+    } catch (e: any) {
+      return {
+        content: [{ type: "text" as const, text: `Migration failed: ${e?.message ?? String(e)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+}
+
+// === DISPATCH ===
+
+registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
+
 // === CLOUD ===
 
-registerCloudTools(server, "todos");
+registerCloudSyncTools(server, { shouldRegisterTool, formatError });
 
 // === START SERVER ===
 

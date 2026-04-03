@@ -48,6 +48,7 @@ import { searchTasks } from "../lib/search.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js";
 import { getAgentTaskListId, loadConfig } from "../lib/config.js";
 import type { Project, Task, TaskStatus, TaskPriority } from "../types/index.js";
+import { registerDispatchCommands } from "./commands/dispatch.js";
 
 function getPackageVersion(): string {
   try {
@@ -113,6 +114,24 @@ function autoProject(opts: { project?: string }): string | undefined {
   return autoDetectProject(opts)?.id;
 }
 
+/** Normalize user-friendly status aliases to canonical TaskStatus values */
+function normalizeStatus(s: string): string {
+  switch (s.toLowerCase().trim()) {
+    case "done":      return "completed";
+    case "complete":  return "completed";
+    case "active":    return "in_progress";
+    case "wip":       return "in_progress";
+    case "cancelled": return "cancelled";
+    case "canceled":  return "cancelled";
+    default:          return s;
+  }
+}
+
+function normalizeStatusList(statuses: string | string[]): string | string[] {
+  if (Array.isArray(statuses)) return statuses.map(normalizeStatus);
+  return normalizeStatus(statuses);
+}
+
 function output(data: unknown, jsonMode: boolean): void {
   if (jsonMode) {
     console.log(JSON.stringify(data, null, 2));
@@ -150,7 +169,7 @@ program
   .description("Universal task management for AI coding agents")
   .version(getPackageVersion())
   .option("--project <path>", "Project path")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--agent <name>", "Agent name")
   .option("--session <id>", "Session ID");
 
@@ -205,7 +224,7 @@ program
         return id;
       })() : undefined,
       assigned_to: opts.assign,
-      status: opts.status as TaskStatus | undefined,
+      status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
       task_list_id: taskListId,
       agent_id: globalOpts.agent,
       session_id: globalOpts.session,
@@ -251,9 +270,24 @@ program
     opts.tags = opts.tags || opts.tag;
     opts.list = opts.list || opts.taskList;
     const projectId = autoProject(globalOpts);
+    const hasAssignedFilter = Boolean(opts.assigned || opts.agentName);
+    const hasExplicitProjectFilter = Boolean(globalOpts.project || opts.projectName);
+    const allowedSortFields = new Set(["updated", "created", "priority", "status"]);
+    if (opts.sort && !allowedSortFields.has(opts.sort)) {
+      console.error(chalk.red(`Invalid --sort value: ${opts.sort}. Allowed values: updated, created, priority, status.`));
+      process.exit(1);
+    }
+    const allowedFormats = new Set(["table", "compact", "csv", "json"]);
+    if (opts.format && !allowedFormats.has(opts.format)) {
+      console.error(chalk.red(`Invalid --format value: ${opts.format}. Allowed values: table, compact, csv, json.`));
+      process.exit(1);
+    }
 
     const filter: Record<string, unknown> = {};
-    if (projectId) filter["project_id"] = projectId;
+    // For assigned-agent queries, default to cross-project results unless project scope is explicit.
+    if (projectId && !(hasAssignedFilter && !hasExplicitProjectFilter)) {
+      filter["project_id"] = projectId;
+    }
     if (opts.list) {
       const db = getDatabase();
       const listId = resolvePartialId(db, "task_lists", opts.list);
@@ -265,8 +299,8 @@ program
     }
     if (opts.status) {
       filter["status"] = opts.status.includes(",")
-        ? opts.status.split(",").map((s: string) => s.trim())
-        : opts.status;
+        ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim()))
+        : normalizeStatus(opts.status);
     } else if (!opts.all) {
       filter["status"] = ["pending", "in_progress"];
     }
@@ -287,7 +321,14 @@ program
       filter["assigned_to"] = opts.agentName;
     }
     if (opts.recurring) filter["has_recurrence"] = true;
-    if (opts.limit) filter["limit"] = parseInt(opts.limit, 10);
+    if (opts.limit !== undefined) {
+      const parsedLimit = Number.parseInt(String(opts.limit), 10);
+      if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+        console.error(chalk.red(`Invalid --limit value: ${opts.limit}. Must be a positive integer.`));
+        process.exit(1);
+      }
+      filter["limit"] = parsedLimit;
+    }
 
     let tasks = listTasks(filter as any);
     // Post-filter for due-today and overdue (not in TaskFilter directly)
@@ -651,7 +692,7 @@ program
         version: current.version,
         title: opts.title,
         description: opts.description,
-        status: opts.status as TaskStatus | undefined,
+        status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
         priority: opts.priority as TaskPriority | undefined,
         assigned_to: opts.assign,
         tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
@@ -1019,10 +1060,12 @@ program
   .option("-p, --priority <level>", "Default priority")
   .option("-t, --tags <tags>", "Default tags (comma-separated)")
   .option("--delete <id>", "Delete a template")
+  .option("--update <id>", "Update a template")
   .option("--use <id>", "Create a task from a template")
+  .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
   .action((opts) => {
     const globalOpts = program.opts();
-    const { createTemplate, listTemplates, deleteTemplate, taskFromTemplate } = require("../db/templates.js");
+    const { createTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } = require("../db/templates.js");
 
     if (opts.add) {
       if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
@@ -1048,14 +1091,46 @@ program
       return;
     }
 
+    if (opts.update) {
+      const updates: Record<string, any> = {};
+      if (opts.add) updates.name = opts.add;
+      if (opts.title) updates.title_pattern = opts.title;
+      if (opts.description) updates.description = opts.description;
+      if (opts.priority) updates.priority = opts.priority;
+      if (opts.tags) updates.tags = opts.tags.split(",").map((t: string) => t.trim());
+      const updated = updateTemplate(opts.update, updates);
+      if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+      if (globalOpts.json) { output(updated, true); }
+      else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
+      return;
+    }
+
     if (opts.use) {
       try {
+        // Parse --var key=value pairs
+        const variables: Record<string, string> = {};
+        if (opts.var) {
+          for (const v of (opts.var as string[])) {
+            const eq = v.indexOf("=");
+            if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+            variables[v.slice(0, eq)] = v.slice(eq + 1);
+          }
+        }
         const input = taskFromTemplate(opts.use, {
           title: opts.title,
           description: opts.description,
           priority: opts.priority,
         });
-        const task = createTask({ ...input, project_id: input.project_id || autoProject(globalOpts) });
+        // Substitute {var} placeholders in title
+        if (input.title) {
+          let title = input.title;
+          for (const [k, v] of Object.entries(variables)) {
+            title = title.replace(new RegExp(`\\{${k}\\}`, "g"), v);
+          }
+          // If unresolved placeholders remain, leave them (user can still create the task)
+          input.title = title;
+        }
+        const task = createTask({ ...input, agent_id: globalOpts.agent, project_id: input.project_id || autoProject(globalOpts) });
         if (globalOpts.json) { output(task, true); }
         else { console.log(chalk.green("Task created from template:")); console.log(formatTaskLine(task)); }
       } catch (e) { handleError(e); }
@@ -1068,8 +1143,125 @@ program
     if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
     console.log(chalk.bold(`${templates.length} template(s):\n`));
     for (const t of templates) {
-      console.log(`  ${chalk.dim(t.id.slice(0, 8))} ${chalk.bold(t.name)} ${chalk.cyan(`"${t.title_pattern}"`)} ${chalk.yellow(t.priority)}`);
+      const vars = t.variables && t.variables.length > 0 ? ` ${chalk.dim(`(${t.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')})`)}` : "";
+      console.log(`  ${chalk.dim(t.id.slice(0, 8))} ${chalk.bold(t.name)} ${chalk.cyan(`"${t.title_pattern}"`)} ${chalk.yellow(t.priority)}${vars}`);
     }
+  });
+
+// template init — initialize built-in starter templates
+program
+  .command("template-init")
+  .alias("templates-init")
+  .description("Initialize built-in starter templates (open-source-project, bug-fix, feature, security-audit)")
+  .action(() => {
+    const globalOpts = program.opts();
+    const { initBuiltinTemplates } = require("../db/builtin-templates.js");
+    const result = initBuiltinTemplates();
+    if (globalOpts.json) { output(result, true); return; }
+    if (result.created === 0) {
+      console.log(chalk.dim(`All ${result.skipped} built-in template(s) already exist.`));
+    } else {
+      console.log(chalk.green(`Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.`));
+    }
+  });
+
+// template preview — preview template without creating tasks
+program
+  .command("template-preview <id>")
+  .alias("templates-preview")
+  .description("Preview a template without creating tasks — shows resolved titles, deps, and priorities")
+  .option("--var <vars...>", "Variable substitution in key=value format (e.g. --var name=invoices)")
+  .action((id: string, opts: { var?: string[] }) => {
+    const globalOpts = program.opts();
+    const { previewTemplate } = require("../db/templates.js");
+
+    // Parse --var key=value pairs
+    const variables: Record<string, string> = {};
+    if (opts.var) {
+      for (const v of opts.var) {
+        const eq = v.indexOf("=");
+        if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+        variables[v.slice(0, eq)] = v.slice(eq + 1);
+      }
+    }
+
+    try {
+      const preview = previewTemplate(id, Object.keys(variables).length > 0 ? variables : undefined);
+      if (globalOpts.json) { output(preview, true); return; }
+
+      console.log(chalk.bold(`Preview: ${preview.template_name} (${preview.tasks.length} tasks)`));
+      if (preview.description) console.log(chalk.dim(`  ${preview.description}`));
+      if (preview.variables.length > 0) {
+        console.log(chalk.dim(`  Variables: ${preview.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`));
+      }
+      if (Object.keys(preview.resolved_variables).length > 0) {
+        console.log(chalk.dim(`  Resolved: ${Object.entries(preview.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`));
+      }
+      console.log();
+      for (const t of preview.tasks) {
+        const deps = t.depends_on_positions.length > 0 ? chalk.dim(` (after: ${t.depends_on_positions.join(", ")})`) : "";
+        console.log(`  ${chalk.dim(`[${t.position}]`)} ${chalk.yellow(t.priority)} | ${t.title}${deps}`);
+      }
+    } catch (e) { handleError(e); }
+  });
+
+// template export — export a template as JSON
+program
+  .command("template-export <id>")
+  .alias("templates-export")
+  .description("Export a template as JSON to stdout")
+  .action((id: string) => {
+    const { exportTemplate } = require("../db/templates.js");
+    try {
+      const json = exportTemplate(id);
+      console.log(JSON.stringify(json, null, 2));
+    } catch (e) { handleError(e); }
+  });
+
+// template import — import a template from JSON
+program
+  .command("template-import [file]")
+  .alias("templates-import")
+  .description("Import a template from a JSON file")
+  .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
+  .action((file: string | undefined, opts: { file?: string }) => {
+    const globalOpts = program.opts();
+    const { importTemplate } = require("../db/templates.js");
+    const { readFileSync } = require("fs");
+    try {
+      const filePath = file || opts.file;
+      if (!filePath) { console.error(chalk.red("Provide a file path: todos template-import <file> or --file <path>")); process.exit(1); }
+      const content = readFileSync(filePath, "utf-8");
+      const json = JSON.parse(content);
+      const template = importTemplate(json);
+      if (globalOpts.json) { output(template, true); }
+      else { console.log(chalk.green(`Template imported: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+    } catch (e) { handleError(e); }
+  });
+
+// template history — show version history of a template
+program
+  .command("template-history <id>")
+  .alias("templates-history")
+  .description("Show version history of a template")
+  .action((id: string) => {
+    const globalOpts = program.opts();
+    const { listTemplateVersions, getTemplate } = require("../db/templates.js");
+    try {
+      const template = getTemplate(id);
+      if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+      const versions = listTemplateVersions(id);
+      if (globalOpts.json) { output({ current_version: template.version, versions }, true); return; }
+      console.log(chalk.bold(`${template.name} — current version: ${template.version}`));
+      if (versions.length === 0) {
+        console.log(chalk.dim("  No previous versions."));
+      } else {
+        for (const v of versions) {
+          const snap = JSON.parse(v.snapshot);
+          console.log(`  ${chalk.dim(`v${v.version}`)} | ${v.created_at} | ${snap.name} | "${snap.title_pattern}"`);
+        }
+      }
+    } catch (e) { handleError(e); }
   });
 
 // comment
@@ -1107,7 +1299,7 @@ program
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
     const searchOpts: any = { query, project_id: projectId };
-    if (opts.status) searchOpts.status = opts.status;
+    if (opts.status) searchOpts.status = normalizeStatusList(opts.status);
     if (opts.priority) searchOpts.priority = opts.priority;
     if (opts.assigned) searchOpts.assigned_to = opts.assigned;
     if (opts.since) searchOpts.updated_after = opts.since;
@@ -1216,6 +1408,11 @@ program
       } else {
         project = createProject({ name, path: projectPath, task_list_id: opts.taskListId });
       }
+      // Auto-register machine-local path
+      try {
+        const { setMachineLocalPath } = require("../db/projects.js") as typeof import("../db/projects.js");
+        setMachineLocalPath(project.id, projectPath);
+      } catch {}
 
       if (globalOpts.json) {
         output(project, true);
@@ -1241,6 +1438,112 @@ program
     for (const p of projects) {
       const taskList = p.task_list_id ? chalk.cyan(` [${p.task_list_id}]`) : "";
       console.log(`${chalk.dim(p.id.slice(0, 8))} ${chalk.bold(p.name)} ${chalk.dim(p.path)}${taskList}${p.description ? ` - ${p.description}` : ""}`);
+    }
+  });
+
+// project rename
+program
+  .command("project-rename <id-or-slug> <new-slug>")
+  .description("Rename a project slug. Cascades to matching task lists. Task prefixes (e.g. APP-00001) are unchanged.")
+  .option("--name <name>", "Also update the project display name")
+  .option("-j, --json", "Output as JSON")
+  .action((idOrSlug: string, newSlug: string, opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { renameProject } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      // Try resolve by ID first, then by task_list_id slug
+      let resolvedId = resolvePartialId(db, "projects", idOrSlug);
+      if (!resolvedId) {
+        const bySlug = db.query("SELECT id FROM projects WHERE task_list_id = ?").get(idOrSlug) as { id: string } | null;
+        resolvedId = bySlug?.id ?? null;
+      }
+      if (!resolvedId) {
+        console.error(chalk.red(`Project not found: ${idOrSlug}`));
+        process.exit(1);
+      }
+      const result = renameProject(resolvedId, { name: opts.name, new_slug: newSlug });
+      if (useJson) {
+        output({ project: result.project, task_lists_updated: result.task_lists_updated }, true);
+      } else {
+        console.log(chalk.green(`Project renamed: ${result.project.name} (slug: ${result.project.task_list_id})`));
+        if (result.task_lists_updated > 0) {
+          console.log(chalk.dim(`  Updated ${result.task_lists_updated} task list slug(s).`));
+        }
+      }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
+// projects path — machine-local path overrides
+const projectsPathCmd = program
+  .command("projects-path")
+  .description("Manage machine-local path overrides for projects");
+
+projectsPathCmd
+  .command("set <project-id> <path>")
+  .description("Set the local path for a project on this machine")
+  .option("-j, --json", "Output as JSON")
+  .action((projectId: string, projectPath: string, opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { setMachineLocalPath } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "projects", projectId);
+      if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+      const entry = setMachineLocalPath(resolved, resolve(projectPath));
+      if (useJson) { output(entry, true); }
+      else { console.log(chalk.green(`Local path set: ${entry.path} (machine: ${entry.machine_id.slice(0, 8)})`)); }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
+projectsPathCmd
+  .command("list <project-id>")
+  .description("List all machine path overrides for a project")
+  .option("-j, --json", "Output as JSON")
+  .action((projectId: string, opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { listMachineLocalPaths } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "projects", projectId);
+      if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+      const paths = listMachineLocalPaths(resolved);
+      if (useJson) { output(paths, true); return; }
+      if (paths.length === 0) { console.log(chalk.dim("No machine path overrides.")); return; }
+      for (const p of paths) {
+        console.log(`${chalk.dim(p.machine_id.slice(0, 8))} ${p.path}  ${chalk.dim(p.updated_at)}`);
+      }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
+    }
+  });
+
+projectsPathCmd
+  .command("remove <project-id>")
+  .description("Remove the local path override for a project on this machine")
+  .option("--machine <id>", "Machine ID to remove override for (default: this machine)")
+  .action((projectId: string, opts) => {
+    try {
+      const { removeMachineLocalPath } = require("../db/projects.js") as typeof import("../db/projects.js");
+      const db = getDatabase();
+      const resolved = resolvePartialId(db, "projects", projectId);
+      if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+      const removed = removeMachineLocalPath(resolved, opts.machine);
+      if (removed) { console.log(chalk.green("Machine path override removed.")); }
+      else { console.log(chalk.dim("No override found to remove.")); }
+    } catch (e) {
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+      process.exit(1);
     }
   });
 
@@ -1905,8 +2208,11 @@ program
     if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent.")); process.exit(1); }
     const db = getDatabase();
     if (project) {
-      const { getProjectByPath, getProjectByName } = require("../db/projects.js") as any;
-      const p = getProjectByPath(process.cwd(), db) || getProjectByName(project, db);
+      const { getProjectByPath } = require("../db/projects.js") as any;
+      // Try path lookup, then partial-ID, then name search
+      const p = getProjectByPath(project, db)
+        || (() => { const id = resolvePartialId(db, "projects", project); return id ? db.query("SELECT * FROM projects WHERE id = ?").get(id) : null; })()
+        || (db.query("SELECT * FROM projects WHERE name = ? OR task_list_id = ?").get(project, project) as any);
       const projectId = p?.id || project;
       db.run("UPDATE agents SET active_project_id = ? WHERE id = ? OR name = ?", [projectId, agentId, agentId]);
       console.log(chalk.green(`Focused on: ${p?.name || projectId}`));
@@ -1978,7 +2284,7 @@ program
 program
   .command("agent <name>")
   .description("Show all info about an agent: tasks, status, last seen, stats")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((name: string, opts) => {
     const globalOpts = program.opts();
     // Find agent by name or partial ID
@@ -2230,7 +2536,10 @@ program
   .option("--set <key=value>", "Set a config value (e.g. completion_guard.enabled=true)")
   .action((opts) => {
     const globalOpts = program.opts();
-    const configPath = join(process.env["HOME"] || "~", ".todos", "config.json");
+    const home = process.env["HOME"] || "~";
+    const newPath = join(home, ".hasna", "todos", "config.json");
+    const legacyPath = join(home, ".todos", "config.json");
+    const configPath = (!existsSync(newPath) && existsSync(legacyPath)) ? legacyPath : newPath;
 
     if (opts.get) {
       const config = loadConfig();
@@ -2319,7 +2628,7 @@ program
     const globalOpts = program.opts();
     const projectId = autoProject(globalOpts);
     const interval = parseInt(opts.interval, 10) * 1000;
-    const statusFilter = opts.status ? opts.status.split(",").map((s: string) => s.trim()) : ["pending", "in_progress"];
+    const statusFilter = opts.status ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim())) : ["pending", "in_progress"];
 
     function render() {
       const tasks = listTasks({ project_id: projectId, status: statusFilter as any });
@@ -2520,11 +2829,18 @@ program
   .description("Show the best pending task to work on next")
   .option("--agent <id>", "Prefer tasks assigned to this agent")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
+    const globalOpts = program.opts();
     const db = getDatabase();
     const filters: Record<string, string> = {};
-    if (opts.project) filters.project_id = opts.project;
+    const projectInput = opts.project || globalOpts.project;
+    if (projectInput) {
+      const pid = autoProject({ project: projectInput })
+        || resolvePartialId(db, "projects", projectInput)
+        || (db.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(projectInput, projectInput, projectInput) as any)?.id;
+      if (pid) filters.project_id = pid;
+    }
     const task = getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
     if (!task) {
       console.log(chalk.dim("No tasks available."));
@@ -2541,7 +2857,7 @@ program
   .command("claim <agent>")
   .description("Atomically claim the best pending task for an agent")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (agent, opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -2576,7 +2892,7 @@ program
   .description("Show full project health snapshot")
   .option("--agent <id>", "Include next task for this agent")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -2732,7 +3048,7 @@ program
   .option("--reason <text>", "Why it failed")
   .option("--agent <id>", "Agent reporting the failure")
   .option("--retry", "Auto-create a retry copy")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (id, opts) => {
     const db = getDatabase();
     const resolvedId = resolvePartialId(db, "tasks", id);
@@ -2749,7 +3065,7 @@ program
   .command("active")
   .description("Show all currently in-progress tasks")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -2771,7 +3087,7 @@ program
   .description("Find tasks stuck in_progress with no recent activity")
   .option("--minutes <n>", "Stale threshold in minutes", "30")
   .option("--project <id>", "Filter to project")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const db = getDatabase();
     const filters: Record<string, string> = {};
@@ -2794,7 +3110,7 @@ program
   .option("--max-age <minutes>", "Stale threshold in minutes", "60")
   .option("--project <id>", "Limit to a specific project")
   .option("--limit <n>", "Max stale tasks to release")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (agent: string, opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -2822,7 +3138,7 @@ program
 program
   .command("assign <id> <agent>")
   .description("Assign a task to an agent")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, agent: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -2840,7 +3156,7 @@ program
 program
   .command("unassign <id>")
   .description("Remove task assignment")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -2858,7 +3174,7 @@ program
 program
   .command("tag <id> <tag>")
   .description("Add a tag to a task")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, tag: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -2877,7 +3193,7 @@ program
 program
   .command("untag <id> <tag>")
   .description("Remove a tag from a task")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, tag: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -2896,7 +3212,7 @@ program
 program
   .command("pin <id>")
   .description("Escalate task to critical priority")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action((id: string, opts) => {
     const globalOpts = program.opts();
     const resolvedId = resolveTaskId(id);
@@ -2916,7 +3232,7 @@ program
   .option("--days <n>", "Days of history to include", "7")
   .option("--project <id>", "Filter to project")
   .option("--agent <id>", "Filter to agent")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -2983,7 +3299,7 @@ program
   .command("doctor")
   .description("Diagnose common task data issues")
   .option("--fix", "Auto-fix recoverable issues where possible")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3035,7 +3351,7 @@ program
 program
   .command("health")
   .description("Check todos system health — database, config, connectivity")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const checks: { name: string; ok: boolean; message: string }[] = [];
@@ -3107,7 +3423,7 @@ program
   .option("--days <n>", "Days to include in report", "7")
   .option("--project <id>", "Filter to project")
   .option("--markdown", "Output as markdown")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3155,7 +3471,7 @@ program
       lines.push(`*${new Date().toLocaleDateString()}*\n`);
       lines.push(`| Metric | Value |`);
       lines.push(`|--------|-------|`);
-      lines.push(`| Active tasks | ${all.length} total (${stats.pending} pending, ${stats.in_progress} active) |`);
+      lines.push(`| Active tasks | ${all.length} total (${stats.by_status?.pending ?? 0} pending, ${stats.by_status?.in_progress ?? 0} active) |`);
       lines.push(`| Changed (${days}d) | ${changed.length} tasks |`);
       lines.push(`| Completed (${days}d) | ${completed.length} (${completionRate}% rate) |`);
       lines.push(`| Failed (${days}d) | ${failed.length} |`);
@@ -3163,7 +3479,7 @@ program
     } else {
       lines.push(chalk.bold(`todos report — last ${days} day${days !== 1 ? "s" : ""}`));
       lines.push("");
-      lines.push(`  Total:      ${chalk.bold(String(all.length))} tasks (${chalk.yellow(String(stats.pending))} pending, ${chalk.blue(String(stats.in_progress))} active)`);
+      lines.push(`  Total:      ${chalk.bold(String(all.length))} tasks (${chalk.yellow(String(stats.by_status?.pending ?? 0))} pending, ${chalk.blue(String(stats.by_status?.in_progress ?? 0))} active)`);
       lines.push(`  Changed:    ${chalk.bold(String(changed.length))} in period`);
       lines.push(`  Completed:  ${chalk.green(String(completed.length))} (${completionRate}% rate)`);
       if (failed.length > 0) lines.push(`  Failed:     ${chalk.red(String(failed.length))}`);
@@ -3171,7 +3487,7 @@ program
       if (Object.keys(byAgent).length > 0) {
         lines.push(`  By agent:   ${Object.entries(byAgent).map(([a, n]) => `${a}=${n}`).join(" ")}`);
       }
-      if (stats.in_progress > 0) lines.push(`  Stale risk: check \`todos stale\` for stuck tasks`);
+      if ((stats.by_status?.in_progress ?? 0) > 0) lines.push(`  Stale risk: check \`todos stale\` for stuck tasks`);
     }
 
     console.log(lines.join("\n"));
@@ -3181,7 +3497,7 @@ program
 program
   .command("today")
   .description("Show task activity from today")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3211,7 +3527,7 @@ program
 program
   .command("yesterday")
   .description("Show task activity from yesterday")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3243,12 +3559,12 @@ program
   .command("mine")
   .description("Show tasks assigned to you, grouped by status")
   .argument("<agent>", "Agent name or ID")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (agent: string, opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
     const { listTasks } = require("../db/tasks.js") as any;
-    const projectId = autoProject(globalOpts) || undefined;
+    const projectId = globalOpts.project ? (autoProject(globalOpts) || undefined) : undefined;
     const filter: any = { assigned_to: agent };
     if (projectId) filter.project_id = projectId;
     const tasks: any[] = listTasks(filter, db);
@@ -3293,7 +3609,7 @@ program
 program
   .command("blocked")
   .description("Show tasks blocked by incomplete dependencies")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3329,7 +3645,7 @@ program
 program
   .command("overdue")
   .description("Show tasks past their due date")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3357,7 +3673,7 @@ program
 program
   .command("week")
   .description("Show task activity from the past 7 days")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3412,7 +3728,7 @@ program
   .command("burndown")
   .description("Show task completion velocity over the past 7 days")
   .option("--days <n>", "Number of days", "7")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3459,7 +3775,7 @@ program
   .command("log")
   .description("Show recent task activity log (git-log style)")
   .option("--limit <n>", "Number of entries", "30")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3503,7 +3819,7 @@ program
 program
   .command("ready")
   .description("Show all tasks ready to be claimed (pending, unblocked, unlocked)")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .option("--limit <n>", "Max tasks to show", "20")
   .action(async (opts) => {
@@ -3543,7 +3859,7 @@ program
 program
   .command("sprint")
   .description("Sprint dashboard: in-progress, next up, blockers, and overdue")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3627,7 +3943,7 @@ program
   .option("--in-progress <items>", "Comma-separated in-progress items")
   .option("--blockers <items>", "Comma-separated blockers")
   .option("--next <items>", "Comma-separated next steps")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--limit <n>", "Number of handoffs to show", "5")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3683,7 +3999,7 @@ program
 program
   .command("priorities")
   .description("Show task counts grouped by priority")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .option("--project <id>", "Filter to project")
   .action(async (opts) => {
     const globalOpts = program.opts();
@@ -3718,7 +4034,7 @@ program
   .command("context")
   .description("Session start context: status, latest handoff, next task, overdue")
   .option("--agent <name>", "Agent name for handoff lookup")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const db = getDatabase();
@@ -3770,7 +4086,7 @@ program
   .option("--stack <trace>", "Stack trace or detailed output")
   .option("--title <title>", "Custom task title (auto-generated if omitted)")
   .option("--priority <p>", "Priority: low, medium, high, critical")
-  .option("--json", "Output as JSON")
+  .option("-j, --json", "Output as JSON")
   .action(async (opts) => {
     const globalOpts = program.opts();
     const { createTask } = require("../db/tasks.js") as any;
@@ -3833,4 +4149,436 @@ program.action(async () => {
 import { makeBrainsCommand } from "./brains.js";
 program.addCommand(makeBrainsCommand());
 
+// ── db subcommand ────────────────────────────────────────────────────────────
+const dbCmd = program
+  .command("db")
+  .description("Database management commands");
+
+dbCmd
+  .command("migrate-pg")
+  .description("Apply PostgreSQL migrations to the configured RDS instance")
+  .option("--connection-string <url>", "PostgreSQL connection string (overrides cloud config)")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+
+    let connStr: string;
+    if (opts.connectionString) {
+      connStr = opts.connectionString;
+    } else {
+      try {
+        const { getConnectionString } = await import("@hasna/cloud");
+        connStr = getConnectionString("todos");
+      } catch (e) {
+        const msg = "Cloud RDS not configured. Use --connection-string or run `cloud setup`.";
+        if (useJson) {
+          console.log(JSON.stringify({ error: msg }));
+        } else {
+          console.error(chalk.red(msg));
+        }
+        process.exit(1);
+      }
+    }
+
+    try {
+      const { applyPgMigrations } = await import("../db/pg-migrate.js");
+      const result = await applyPgMigrations(connStr);
+
+      if (useJson) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (result.applied.length > 0) {
+        console.log(chalk.green(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`));
+      }
+      if (result.alreadyApplied.length > 0) {
+        console.log(chalk.dim(`Already applied: ${result.alreadyApplied.length} migration(s)`));
+      }
+      if (result.errors.length > 0) {
+        for (const err of result.errors) {
+          console.error(chalk.red(`  Error: ${err}`));
+        }
+        process.exit(1);
+      }
+      if (result.applied.length === 0 && result.errors.length === 0) {
+        console.log(chalk.dim("Schema is up to date."));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) {
+        console.log(JSON.stringify({ error: msg }));
+      } else {
+        console.error(chalk.red(`Migration failed: ${msg}`));
+      }
+      process.exit(1);
+    }
+  });
+
+// ── cloud commands ────────────────────────────────────────────────────────────
+
+const cloudCmd = program
+  .command("cloud")
+  .description("Cloud sync commands");
+
+cloudCmd
+  .command("status")
+  .description("Show cloud config, connection health, machine registry, and sync status")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { getCloudConfig, getConnectionString, PgAdapterAsync, SqliteAdapter, getDbPath, listSqliteTables, ensureConflictsTable, listConflicts } = await import("@hasna/cloud");
+      const { getMachineId, listMachines } = await import("../db/machines.js");
+      const config = getCloudConfig();
+      const machineId = getMachineId();
+      const machines = listMachines();
+
+      const info: Record<string, any> = {
+        mode: config.mode,
+        service: "todos",
+        machine_id: machineId,
+        rds_host: config.rds.host || "(not configured)",
+        machines: machines.map(m => ({ id: m.id, name: m.name, hostname: m.hostname, platform: m.platform, last_seen: m.last_seen_at })),
+      };
+
+      // Check PG connection
+      if (config.rds.host && config.rds.username) {
+        try {
+          const pg = new PgAdapterAsync(getConnectionString("postgres"));
+          await pg.get("SELECT 1 as ok");
+          info.postgresql = "connected";
+          await pg.close();
+        } catch (err: any) {
+          info.postgresql = `failed — ${err?.message}`;
+        }
+      }
+
+      // Sync health: per-table counts of unsynced rows
+      const local = new SqliteAdapter(getDbPath("todos"));
+      const tables = listSqliteTables(local).filter((t: string) => !t.startsWith("_"));
+      const syncHealth: Array<{ table: string; total: number; unsynced: number; last_synced: string | null }> = [];
+      for (const table of tables) {
+        try {
+          const totalRow = local.get(`SELECT COUNT(*) as c FROM "${table}"`) as { c: number } | null;
+          const unsyncedRow = local.get(`SELECT COUNT(*) as c FROM "${table}" WHERE synced_at IS NULL`) as { c: number } | null;
+          const lastRow = local.get(`SELECT MAX(synced_at) as m FROM "${table}"`) as { m: string | null } | null;
+          syncHealth.push({
+            table,
+            total: totalRow?.c ?? 0,
+            unsynced: unsyncedRow?.c ?? 0,
+            last_synced: lastRow?.m ?? null,
+          });
+        } catch {
+          // Table might not have synced_at
+        }
+      }
+      info.sync_health = syncHealth.filter(s => s.total > 0);
+
+      // Conflicts
+      try {
+        ensureConflictsTable(local);
+        const unresolved = listConflicts(local, { resolved: false });
+        info.conflicts_unresolved = unresolved.length;
+      } catch {}
+
+      local.close();
+
+      if (useJson) {
+        console.log(JSON.stringify(info, null, 2));
+      } else {
+        console.log(chalk.bold("Cloud Status"));
+        console.log(`  Mode: ${info.mode}`);
+        console.log(`  Machine: ${machineId}`);
+        console.log(`  RDS Host: ${info.rds_host}`);
+        if (info.postgresql) console.log(`  PostgreSQL: ${info.postgresql}`);
+
+        if (machines.length > 0) {
+          console.log(chalk.bold("\nMachines"));
+          for (const m of machines) {
+            const current = m.id === machineId ? chalk.green(" (this)") : "";
+            console.log(`  ${m.name}${current} — ${m.hostname || "?"} / ${m.platform || "?"} — last seen ${m.last_seen_at}`);
+          }
+        }
+
+        const healthItems = (info.sync_health as typeof syncHealth).filter(s => s.total > 0);
+        if (healthItems.length > 0) {
+          console.log(chalk.bold("\nSync Health"));
+          for (const s of healthItems) {
+            const pct = s.total > 0 ? Math.round(((s.total - s.unsynced) / s.total) * 100) : 100;
+            const color = pct === 100 ? chalk.green : pct > 50 ? chalk.yellow : chalk.red;
+            console.log(`  ${s.table}: ${color(`${pct}%`)} synced (${s.unsynced} unsynced / ${s.total} total)${s.last_synced ? ` — last: ${s.last_synced}` : ""}`);
+          }
+        }
+
+        if (info.conflicts_unresolved > 0) {
+          console.log(chalk.bold("\nConflicts"));
+          console.log(`  ${chalk.yellow(`${info.conflicts_unresolved} unresolved`)} — run \`todos cloud conflicts\` to review`);
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) {
+        console.log(JSON.stringify({ error: msg }));
+      } else {
+        console.error(chalk.red(msg));
+      }
+    }
+  });
+
+cloudCmd
+  .command("push")
+  .description("Push local data to cloud PostgreSQL")
+  .option("--tables <tables>", "Comma-separated table names (default: all)")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { getCloudConfig, getConnectionString, syncPush, listSqliteTables, SqliteAdapter, PgAdapterAsync, getDbPath } = await import("@hasna/cloud");
+      const { getMachineId } = await import("../db/machines.js");
+      const { now } = await import("../db/database.js");
+
+      const config = getCloudConfig();
+      if (config.mode === "local") {
+        const msg = "Error: cloud mode not configured.";
+        if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+        process.exit(1);
+      }
+
+      const machineId = getMachineId();
+      const local = new SqliteAdapter(getDbPath("todos"));
+      const cloud = new PgAdapterAsync(getConnectionString("todos"));
+
+      const tableList = opts.tables
+        ? opts.tables.split(",").map((t: string) => t.trim())
+        : listSqliteTables(local).filter((t: string) => !t.startsWith("_"));
+
+      // Stamp machine_id
+      for (const table of tableList) {
+        try { local.run(`UPDATE "${table}" SET machine_id = ? WHERE machine_id IS NULL`, machineId); } catch {}
+      }
+
+      const results = await syncPush(local, cloud, {
+        tables: tableList,
+        onProgress: (p: any) => {
+          if (!useJson && p.phase === "done") {
+            console.log(`  ${p.table}: ${p.rowsWritten} rows pushed`);
+          }
+        },
+      });
+
+      // Mark synced_at
+      const syncTime = now();
+      for (const r of results) {
+        if (r.rowsWritten > 0) {
+          try { local.run(`UPDATE "${r.table}" SET synced_at = ? WHERE machine_id = ?`, syncTime, machineId); } catch {}
+        }
+      }
+
+      local.close();
+      await cloud.close();
+
+      const total = results.reduce((s: number, r: any) => s + r.rowsWritten, 0);
+      if (useJson) {
+        console.log(JSON.stringify({ total, machine_id: machineId, tables: results }));
+      } else {
+        console.log(chalk.green(`Done. ${total} rows pushed (machine: ${machineId}).`));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+      process.exit(1);
+    }
+  });
+
+cloudCmd
+  .command("pull")
+  .description("Pull cloud data to local — merges by primary key")
+  .option("--tables <tables>", "Comma-separated table names (default: all)")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { getCloudConfig, getConnectionString, syncPull, listPgTables, SqliteAdapter, PgAdapterAsync, getDbPath } = await import("@hasna/cloud");
+      const { now } = await import("../db/database.js");
+
+      const config = getCloudConfig();
+      if (config.mode === "local") {
+        const msg = "Error: cloud mode not configured.";
+        if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+        process.exit(1);
+      }
+
+      const local = new SqliteAdapter(getDbPath("todos"));
+      const cloud = new PgAdapterAsync(getConnectionString("todos"));
+
+      let tableList: string[];
+      if (opts.tables) {
+        tableList = opts.tables.split(",").map((t: string) => t.trim());
+      } else {
+        tableList = (await listPgTables(cloud)).filter((t: string) => !t.startsWith("_"));
+      }
+
+      const results = await syncPull(cloud, local, {
+        tables: tableList,
+        onProgress: (p: any) => {
+          if (!useJson && p.phase === "done") {
+            console.log(`  ${p.table}: ${p.rowsWritten} rows pulled`);
+          }
+        },
+      });
+
+      // Mark synced_at
+      const syncTime = now();
+      for (const r of results) {
+        if (r.rowsWritten > 0) {
+          try { local.run(`UPDATE "${r.table}" SET synced_at = ? WHERE synced_at IS NULL OR synced_at < ?`, syncTime, syncTime); } catch {}
+        }
+      }
+
+      local.close();
+      await cloud.close();
+
+      const total = results.reduce((s: number, r: any) => s + r.rowsWritten, 0);
+      if (useJson) {
+        console.log(JSON.stringify({ total, tables: results }));
+      } else {
+        console.log(chalk.green(`Done. ${total} rows pulled.`));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+      process.exit(1);
+    }
+  });
+
+cloudCmd
+  .command("sync")
+  .description("Bidirectional sync — pull remote changes then push local changes")
+  .option("--tables <tables>", "Comma-separated table names (default: all)")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { getCloudConfig, getConnectionString, syncPush, syncPull, listSqliteTables, listPgTables, SqliteAdapter, PgAdapterAsync, getDbPath } = await import("@hasna/cloud");
+      const { getMachineId } = await import("../db/machines.js");
+      const { now } = await import("../db/database.js");
+
+      const config = getCloudConfig();
+      if (config.mode === "local") {
+        const msg = "Error: cloud mode not configured.";
+        if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+        process.exit(1);
+      }
+
+      const machineId = getMachineId();
+      const local = new SqliteAdapter(getDbPath("todos"));
+      const cloud = new PgAdapterAsync(getConnectionString("todos"));
+
+      // Union of local + remote tables
+      let tableList: string[];
+      if (opts.tables) {
+        tableList = opts.tables.split(",").map((t: string) => t.trim());
+      } else {
+        const localTables = new Set(listSqliteTables(local).filter((t: string) => !t.startsWith("_")));
+        const remoteTables = new Set((await listPgTables(cloud)).filter((t: string) => !t.startsWith("_")));
+        tableList = [...new Set([...localTables, ...remoteTables])];
+      }
+
+      // Pull first
+      if (!useJson) console.log(chalk.bold("Pulling..."));
+      const pullResults = await syncPull(cloud, local, {
+        tables: tableList,
+        onProgress: (p: any) => { if (!useJson && p.phase === "done" && p.rowsWritten > 0) console.log(`  ↓ ${p.table}: ${p.rowsWritten} rows`); },
+      });
+      const pullTotal = pullResults.reduce((s: number, r: any) => s + r.rowsWritten, 0);
+
+      // Stamp machine_id
+      for (const table of tableList) {
+        try { local.run(`UPDATE "${table}" SET machine_id = ? WHERE machine_id IS NULL`, machineId); } catch {}
+      }
+
+      // Push
+      if (!useJson) console.log(chalk.bold("Pushing..."));
+      const pushResults = await syncPush(local, cloud, {
+        tables: tableList,
+        onProgress: (p: any) => { if (!useJson && p.phase === "done" && p.rowsWritten > 0) console.log(`  ↑ ${p.table}: ${p.rowsWritten} rows`); },
+      });
+      const pushTotal = pushResults.reduce((s: number, r: any) => s + r.rowsWritten, 0);
+
+      // Mark synced_at
+      const syncTime = now();
+      for (const table of tableList) {
+        try { local.run(`UPDATE "${table}" SET synced_at = ?`, syncTime); } catch {}
+      }
+
+      local.close();
+      await cloud.close();
+
+      if (useJson) {
+        console.log(JSON.stringify({ pulled: pullTotal, pushed: pushTotal, machine_id: machineId, tables: tableList.length }));
+      } else {
+        console.log(chalk.green(`Done. Pulled ${pullTotal}, pushed ${pushTotal} rows across ${tableList.length} table(s) (machine: ${machineId}).`));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+      process.exit(1);
+    }
+  });
+
+cloudCmd
+  .command("conflicts")
+  .description("List sync conflicts detected during push/pull")
+  .option("--resolved", "Show resolved conflicts instead of unresolved")
+  .option("--table <table>", "Filter by table name")
+  .option("--limit <n>", "Max conflicts to show", "20")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const useJson = opts.json || globalOpts.json;
+    try {
+      const { listConflicts, ensureConflictsTable, SqliteAdapter, getDbPath } = await import("@hasna/cloud");
+      const local = new SqliteAdapter(getDbPath("todos"));
+      ensureConflictsTable(local);
+
+      const conflicts = listConflicts(local, { resolved: !!opts.resolved, table: opts.table });
+      local.close();
+
+      const maxResults = parseInt(opts.limit, 10) || 20;
+      const shown = conflicts.slice(0, maxResults);
+
+      if (useJson) {
+        console.log(JSON.stringify({ total: conflicts.length, conflicts: shown }, null, 2));
+        return;
+      }
+
+      if (shown.length === 0) {
+        console.log(chalk.dim(opts.resolved ? "No resolved conflicts." : "No unresolved conflicts."));
+        return;
+      }
+
+      console.log(`${conflicts.length} conflict(s)${conflicts.length > shown.length ? ` (showing ${shown.length})` : ""}:\n`);
+      for (const c of shown) {
+        console.log(chalk.yellow(`[${c.id}]`) + ` ${c.table_name}/${c.row_id}`);
+        console.log(`  Local:  ${c.local_updated_at}`);
+        console.log(`  Remote: ${c.remote_updated_at}`);
+        if (c.resolution) console.log(`  Resolution: ${chalk.green(c.resolution)} at ${c.resolved_at}`);
+        console.log();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (useJson) { console.log(JSON.stringify({ error: msg })); } else { console.error(chalk.red(msg)); }
+    }
+  });
+
+// ── dispatch commands ─────────────────────────────────────────────────────────
+registerDispatchCommands(program);
+
+// KEEP BELOW — unreachable placeholder to satisfy TypeScript (removed inline block)
 program.parse();

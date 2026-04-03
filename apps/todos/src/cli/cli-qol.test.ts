@@ -179,6 +179,49 @@ describe("CLI QoL commands", () => {
     expect(found.assigned_to).toBe("test-agent-qol");
   });
 
+  it("list --assigned should include tasks from other projects when project is only auto-detected", async () => {
+    const repoA = join(tmpDir, "auto-project-a");
+    const repoB = join(tmpDir, "auto-project-b");
+    await mkdir(repoA, { recursive: true });
+    await mkdir(repoB, { recursive: true });
+    execSync("git init -q", { cwd: repoA });
+    execSync("git init -q", { cwd: repoB });
+
+    const created = JSON.parse(run(`add 'Cross-project assigned task' --assign cross-agent --project ${repoB} --json`));
+    expect(created.assigned_to).toBe("cross-agent");
+
+    const out = execSync(
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json list --assigned cross-agent`,
+      { encoding: "utf-8", cwd: repoA, timeout: 15000 },
+    ).trim();
+    const tasks = JSON.parse(out);
+
+    expect(Array.isArray(tasks)).toBe(true);
+    expect(tasks.some((task: any) => task.id === created.id)).toBe(true);
+  });
+
+
+  it("mine should include tasks from other projects when project is only auto-detected", async () => {
+    const repoA = join(tmpDir, "mine-auto-project-a");
+    const repoB = join(tmpDir, "mine-auto-project-b");
+    await mkdir(repoA, { recursive: true });
+    await mkdir(repoB, { recursive: true });
+    execSync("git init -q", { cwd: repoA });
+    execSync("git init -q", { cwd: repoB });
+
+    const created = JSON.parse(run(`add 'Mine cross-project task' --assign mine-cross-agent --project ${repoB} --json`));
+    expect(created.assigned_to).toBe("mine-cross-agent");
+
+    const out = execSync(
+      `HOME=${fakeHome} TODOS_DB_PATH=${dbPath} TODOS_AUTO_PROJECT=true bun run ${join(CWD, "src/cli/index.tsx")} --json mine mine-cross-agent`,
+      { encoding: "utf-8", cwd: repoA, timeout: 15000 },
+    ).trim();
+    const tasks = JSON.parse(out);
+
+    expect(Array.isArray(tasks)).toBe(true);
+    expect(tasks.some((task: any) => task.id === created.id)).toBe(true);
+  });
+
   // ── config (no args) ──────────────────────────────────────────
 
   it("config should show current configuration", () => {
@@ -281,5 +324,56 @@ describe("CLI QoL commands", () => {
         priorityOrder[priorities[i + 1]] ?? 4,
       );
     }
+  });
+
+  it("list should reject invalid --limit values", () => {
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run("list --limit nope");
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Invalid --limit value");
+  });
+
+  it("list should reject invalid --sort values", () => {
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run("list --sort random");
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Invalid --sort value");
+  });
+
+  it("list should reject invalid --format values", () => {
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run("list --format yaml");
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Invalid --format value");
+  });
+
+  it("global -j alias should enable json output", () => {
+    run("add 'json alias task' --json");
+    const out = run("-j list --all");
+    const tasks = JSON.parse(out);
+    expect(Array.isArray(tasks)).toBe(true);
+  });
+
+  it("help should show -j alias for json", () => {
+    const help = run("--help");
+    expect(help).toContain("-j, --json");
   });
 });

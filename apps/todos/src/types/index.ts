@@ -123,6 +123,27 @@ export interface UpdatePlanInput {
   agent_id?: string;
 }
 
+// Machine
+export interface Machine {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  last_seen_at: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface MachineRow {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  last_seen_at: string;
+  metadata: string | null;
+  created_at: string;
+}
+
 // Agent
 export type AgentStatus = "active" | "archived";
 
@@ -354,7 +375,7 @@ export interface UpdateTaskInput {
   task_list_id?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
-  due_at?: string;
+  due_at?: string | null;
   estimated_minutes?: number;
   requires_approval?: boolean;
   approved_by?: string;
@@ -381,6 +402,8 @@ export interface TaskFilter {
   offset?: number;
   /** Opaque cursor from a prior list_tasks response — stable pagination that survives concurrent mutations */
   cursor?: string;
+  /** When true, include archived tasks. Default: false (archived tasks excluded) */
+  include_archived?: boolean;
 }
 
 // Task dependency
@@ -514,6 +537,10 @@ export interface Webhook {
   events: string[];
   secret: string | null;
   active: boolean;
+  project_id: string | null;
+  task_list_id: string | null;
+  agent_id: string | null;
+  task_id: string | null;
   created_at: string;
 }
 
@@ -521,6 +548,18 @@ export interface CreateWebhookInput {
   url: string;
   events?: string[];
   secret?: string;
+  project_id?: string;
+  task_list_id?: string;
+  agent_id?: string;
+  task_id?: string;
+}
+
+// Template variable definition
+export interface TemplateVariable {
+  name: string;        // e.g. "name"
+  required: boolean;   // must be provided
+  default?: string;    // fallback value
+  description?: string; // help text
 }
 
 // Task Template
@@ -531,6 +570,8 @@ export interface TaskTemplate {
   description: string | null;
   priority: TaskPriority;
   tags: string[];
+  variables: TemplateVariable[];
+  version: number;
   project_id: string | null;
   plan_id: string | null;
   metadata: Record<string, unknown>;
@@ -543,9 +584,53 @@ export interface CreateTemplateInput {
   description?: string;
   priority?: TaskPriority;
   tags?: string[];
+  variables?: TemplateVariable[];
   project_id?: string;
   plan_id?: string;
   metadata?: Record<string, unknown>;
+  tasks?: TemplateTaskInput[];
+}
+
+// Template task — a single step in a multi-task template
+export interface TemplateTask {
+  id: string;
+  template_id: string;
+  position: number;
+  title_pattern: string;
+  description: string | null;
+  priority: TaskPriority;
+  tags: string[];
+  task_type: string | null;
+  condition: string | null;
+  include_template_id: string | null;
+  depends_on_positions: number[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TemplateTaskInput {
+  title_pattern: string;
+  description?: string;
+  priority?: TaskPriority;
+  tags?: string[];
+  task_type?: string;
+  condition?: string;
+  include_template_id?: string;
+  depends_on?: number[];  // position indices this task depends on
+  metadata?: Record<string, unknown>;
+}
+
+export interface TemplateWithTasks extends TaskTemplate {
+  tasks: TemplateTask[];
+}
+
+// Template version — historical snapshot of a template
+export interface TemplateVersion {
+  id: string;
+  template_id: string;
+  version: number;
+  snapshot: string;
+  created_at: string;
 }
 
 // Version conflict error
@@ -644,5 +729,90 @@ export class CompletionGuardError extends Error {
   ) {
     super(reason);
     this.name = "CompletionGuardError";
+  }
+}
+
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+
+export const DISPATCH_STATUSES = ["pending", "sent", "failed", "cancelled"] as const;
+export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+
+/** Parsed tmux target: session:window.pane (all parts optional except window) */
+export interface TmuxTarget {
+  session: string | null;
+  window: string;
+  pane: string | null;
+  /** Original spec string, e.g. "main", "work:1", "work:1.0" */
+  raw: string;
+}
+
+export interface Dispatch {
+  id: string;
+  title: string | null;
+  target_window: string;
+  task_ids: string[];
+  task_list_id: string | null;
+  /** Pre-formatted message, or null to format at send time */
+  message: string | null;
+  /** Delay in ms between send and Enter. null = auto-calculated */
+  delay_ms: number | null;
+  scheduled_at: string | null;
+  status: DispatchStatus;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface DispatchRow {
+  id: string;
+  title: string | null;
+  target_window: string;
+  task_ids: string;
+  task_list_id: string | null;
+  message: string | null;
+  delay_ms: number | null;
+  scheduled_at: string | null;
+  status: string;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface DispatchLog {
+  id: string;
+  dispatch_id: string;
+  target_window: string;
+  message: string;
+  delay_ms: number;
+  status: "sent" | "failed";
+  error: string | null;
+  created_at: string;
+}
+
+export interface CreateDispatchInput {
+  title?: string;
+  target_window: string;
+  task_ids?: string[];
+  task_list_id?: string;
+  /** Pre-format the message. If omitted, formatted at send time from task_ids/task_list_id. */
+  message?: string;
+  /** Explicit delay in ms. If omitted, auto-calculated from message length. */
+  delay_ms?: number;
+  /** ISO string. If omitted, dispatch is immediate. */
+  scheduled_at?: string;
+}
+
+export interface ListDispatchesFilter {
+  status?: DispatchStatus | DispatchStatus[];
+  limit?: number;
+  offset?: number;
+}
+
+export class DispatchNotFoundError extends Error {
+  static readonly code = "DISPATCH_NOT_FOUND";
+  static readonly suggestion = "Check the dispatch ID with list_dispatches.";
+  constructor(public dispatchId: string) {
+    super(`Dispatch not found: ${dispatchId}`);
+    this.name = "DispatchNotFoundError";
   }
 }

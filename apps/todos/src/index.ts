@@ -44,6 +44,8 @@ export {
   setTaskPriority,
   redistributeStaleTasks,
   getOverdueTasks,
+  archiveTasks,
+  unarchiveTask,
 } from "./db/tasks.js";
 export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput } from "./db/tasks.js";
 
@@ -62,7 +64,13 @@ export {
   addProjectSource,
   removeProjectSource,
   listProjectSources,
+  renameProject,
+  setMachineLocalPath,
+  getMachineLocalPath,
+  listMachineLocalPaths,
+  removeMachineLocalPath,
 } from "./db/projects.js";
+export type { ProjectMachinePath } from "./db/projects.js";
 
 // Plans
 export {
@@ -139,10 +147,16 @@ export {
 } from "./lib/model-config.js";
 
 // Webhooks
-export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook } from "./db/webhooks.js";
+export { createWebhook, getWebhook, listWebhooks, deleteWebhook, dispatchWebhook, listDeliveries } from "./db/webhooks.js";
+export type { WebhookDelivery } from "./db/webhooks.js";
 
 // Templates
-export { createTemplate, getTemplate, listTemplates, deleteTemplate, taskFromTemplate } from "./db/templates.js";
+export { createTemplate, getTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate, addTemplateTasks, getTemplateWithTasks, getTemplateTasks, tasksFromTemplate, previewTemplate, resolveVariables, evaluateCondition, exportTemplate, importTemplate, getTemplateVersion, listTemplateVersions } from "./db/templates.js";
+export type { TemplatePreview, TemplatePreviewTask, UpdateTemplateInput, TemplateExport } from "./db/templates.js";
+
+// Built-in Templates
+export { initBuiltinTemplates, BUILTIN_TEMPLATES } from "./db/builtin-templates.js";
+export type { BuiltinTemplate } from "./db/builtin-templates.js";
 
 // Checklists
 export {
@@ -166,6 +180,9 @@ export type { TaskFile, AddTaskFileInput } from "./db/task-files.js";
 // Locks
 export { acquireLock, releaseLock, checkLock, cleanExpiredLocks } from "./db/locks.js";
 export type { ResourceLock } from "./db/locks.js";
+
+// Machines
+export { getOrCreateLocalMachine, getMachineId, resetMachineId, getMachine, getMachineByName, listMachines, deleteMachine } from "./db/machines.js";
 
 // Orgs
 export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";
@@ -202,6 +219,10 @@ export type { SearchOptions } from "./lib/search.js";
 // Sync
 export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js";
 export type { SyncResult } from "./lib/sync-types.js";
+
+// PG Migrations
+export { applyPgMigrations } from "./db/pg-migrate.js";
+export type { PgMigrationResult } from "./db/pg-migrate.js";
 
 // Extract
 export { extractTodos, extractFromSource, tagToPriority, EXTRACT_TAGS } from "./lib/extract.js";
@@ -279,6 +300,11 @@ export type {
   CreateWebhookInput,
   TaskTemplate,
   CreateTemplateInput,
+  TemplateTask,
+  TemplateTaskInput,
+  TemplateWithTasks,
+  TemplateVariable,
+  TemplateVersion,
   Org,
   CreateOrgInput,
 } from "./types/index.js";
@@ -287,6 +313,7 @@ export {
   TASK_STATUSES,
   TASK_PRIORITIES,
   PLAN_STATUSES,
+  DISPATCH_STATUSES,
   VersionConflictError,
   TaskNotFoundError,
   ProjectNotFoundError,
@@ -296,4 +323,37 @@ export {
   AgentNotFoundError,
   TaskListNotFoundError,
   CompletionGuardError,
+  DispatchNotFoundError,
 } from "./types/index.js";
+
+// Dispatch types
+export type {
+  Dispatch,
+  DispatchStatus,
+  DispatchLog,
+  TmuxTarget,
+  CreateDispatchInput,
+  ListDispatchesFilter,
+} from "./types/index.js";
+
+// Dispatch DB functions
+export {
+  createDispatch,
+  getDispatch,
+  listDispatches,
+  cancelDispatch,
+  updateDispatchStatus,
+  createDispatchLog,
+  listDispatchLogs,
+  getDueDispatches,
+} from "./db/dispatches.js";
+
+// Dispatch engine
+export { executeDispatch, runDueDispatches, dispatchToMultiple } from "./lib/dispatch.js";
+
+// Dispatch formatter
+export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
+export type { FormatOpts } from "./lib/dispatch-formatter.js";
+
+// tmux primitives
+export { parseTmuxTarget, formatTmuxTarget, validateTmuxTarget, sendToTmux, calculateDelay, DELAY_MIN, DELAY_MAX } from "./lib/tmux.js";

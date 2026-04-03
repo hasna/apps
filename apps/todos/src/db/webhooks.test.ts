@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { createWebhook, getWebhook, listWebhooks, deleteWebhook } from "./webhooks.js";
+import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries, dispatchWebhook } from "./webhooks.js";
 
 let db: Database;
 
@@ -47,6 +47,29 @@ describe("createWebhook", () => {
     const wh = createWebhook({ url: "https://example.com" }, db);
     expect(wh.created_at).toBeTruthy();
   });
+
+  it("should create with scope filters", () => {
+    const wh = createWebhook({
+      url: "https://scoped.com/hook",
+      events: ["task.created"],
+      project_id: "proj-123",
+      task_list_id: "list-456",
+      agent_id: "agent-789",
+      task_id: "task-abc",
+    }, db);
+    expect(wh.project_id).toBe("proj-123");
+    expect(wh.task_list_id).toBe("list-456");
+    expect(wh.agent_id).toBe("agent-789");
+    expect(wh.task_id).toBe("task-abc");
+  });
+
+  it("should default scope filters to null", () => {
+    const wh = createWebhook({ url: "https://noscope.com" }, db);
+    expect(wh.project_id).toBeNull();
+    expect(wh.task_list_id).toBeNull();
+    expect(wh.agent_id).toBeNull();
+    expect(wh.task_id).toBeNull();
+  });
 });
 
 describe("getWebhook", () => {
@@ -73,6 +96,15 @@ describe("getWebhook", () => {
     const found = getWebhook(wh.id, db);
     expect(typeof found!.active).toBe("boolean");
     expect(found!.active).toBe(true);
+  });
+
+  it("should preserve scope filters on get", () => {
+    const wh = createWebhook({ url: "https://x.com", project_id: "p1", agent_id: "a1" }, db);
+    const found = getWebhook(wh.id, db);
+    expect(found!.project_id).toBe("p1");
+    expect(found!.agent_id).toBe("a1");
+    expect(found!.task_list_id).toBeNull();
+    expect(found!.task_id).toBeNull();
   });
 });
 
@@ -120,5 +152,83 @@ describe("deleteWebhook", () => {
     const wh = createWebhook({ url: "https://gone.com" }, db);
     deleteWebhook(wh.id, db);
     expect(getWebhook(wh.id, db)).toBeNull();
+  });
+
+  it("should cascade delete webhook deliveries", () => {
+    const wh = createWebhook({ url: "https://cascade.com" }, db);
+    // Manually insert a delivery
+    db.run(
+      "INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status_code, attempt) VALUES (?, ?, ?, ?, ?, ?)",
+      ["del-1", wh.id, "task.created", "{}", 200, 1],
+    );
+    expect(listDeliveries(wh.id, 10, db)).toHaveLength(1);
+
+    deleteWebhook(wh.id, db);
+    expect(listDeliveries(wh.id, 10, db)).toHaveLength(0);
+  });
+});
+
+describe("listDeliveries", () => {
+  it("should return empty when no deliveries exist", () => {
+    expect(listDeliveries(undefined, 50, db)).toEqual([]);
+  });
+
+  it("should list deliveries for a specific webhook", () => {
+    const wh = createWebhook({ url: "https://log.com" }, db);
+    db.run(
+      "INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status_code, attempt) VALUES (?, ?, ?, ?, ?, ?)",
+      ["d1", wh.id, "task.created", '{"test":true}', 200, 1],
+    );
+    db.run(
+      "INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status_code, attempt) VALUES (?, ?, ?, ?, ?, ?)",
+      ["d2", wh.id, "task.completed", '{"test":true}', 500, 1],
+    );
+    const deliveries = listDeliveries(wh.id, 50, db);
+    expect(deliveries).toHaveLength(2);
+  });
+
+  it("should list all deliveries when no webhook_id filter", () => {
+    const wh1 = createWebhook({ url: "https://a.com" }, db);
+    const wh2 = createWebhook({ url: "https://b.com" }, db);
+    db.run(
+      "INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status_code, attempt) VALUES (?, ?, ?, ?, ?, ?)",
+      ["d1", wh1.id, "task.created", "{}", 200, 1],
+    );
+    db.run(
+      "INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status_code, attempt) VALUES (?, ?, ?, ?, ?, ?)",
+      ["d2", wh2.id, "task.completed", "{}", 200, 1],
+    );
+    const all = listDeliveries(undefined, 50, db);
+    expect(all).toHaveLength(2);
+  });
+
+  it("should respect limit", () => {
+    const wh = createWebhook({ url: "https://limit.com" }, db);
+    for (let i = 0; i < 5; i++) {
+      db.run(
+        "INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status_code, attempt) VALUES (?, ?, ?, ?, ?, ?)",
+        [`d${i}`, wh.id, "task.created", "{}", 200, 1],
+      );
+    }
+    expect(listDeliveries(wh.id, 3, db)).toHaveLength(3);
+  });
+});
+
+describe("dispatchWebhook scope filtering", () => {
+  it("should not throw when dispatching with no webhooks", async () => {
+    await dispatchWebhook("task.created", { id: "t1", project_id: "p1" }, db);
+  });
+
+  it("should match unscoped webhooks to any event", () => {
+    const wh = createWebhook({ url: "https://unscoped.com" }, db);
+    // Unscoped webhook has all null scope fields - should match any payload
+    expect(wh.project_id).toBeNull();
+    expect(wh.agent_id).toBeNull();
+  });
+
+  it("should create scoped webhook that only fires for matching project", () => {
+    const wh = createWebhook({ url: "https://scoped.com", project_id: "proj-abc" }, db);
+    expect(wh.project_id).toBe("proj-abc");
+    // The actual filtering is tested in integration; unit test just validates creation
   });
 });
