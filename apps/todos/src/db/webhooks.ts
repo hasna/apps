@@ -5,6 +5,60 @@ import { getDatabase, now, uuid } from "./database.js";
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000; // 1s, 2s, 4s exponential backoff
 
+/**
+ * Validate webhook URL to prevent SSRF attacks.
+ * Blocks localhost, private IPs, and cloud metadata endpoints.
+ */
+export function validateWebhookUrl(urlString: string): void {
+  try {
+    const url = new URL(urlString);
+
+    // Only allow HTTPS
+    if (url.protocol !== "https:") {
+      throw new Error("Webhook URLs must use HTTPS");
+    }
+
+    const hostname = url.hostname.toLowerCase();
+
+    // Block localhost and loopback
+    if (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "0.0.0.0"
+    ) {
+      throw new Error("Webhook URLs cannot target localhost");
+    }
+
+    // Block cloud metadata endpoints
+    if (hostname === "169.254.169.254" || hostname.startsWith("169.254.")) {
+      throw new Error("Webhook URLs cannot target cloud metadata endpoints");
+    }
+
+    // Block private IP ranges
+    const privateRanges = [
+      /^10\./,                    // 10.0.0.0/8
+      /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
+      /^192\.168\./,              // 192.168.0.0/16
+      /^127\./,                   // 127.0.0.0/8
+      /^169\.254\./,              // Link-local
+      /^fc00:/i,                 // IPv6 private
+      /^fe80:/i,                 // IPv6 link-local
+    ];
+
+    for (const range of privateRanges) {
+      if (range.test(hostname)) {
+        throw new Error("Webhook URLs cannot target private IP ranges");
+      }
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("Webhook URLs")) {
+      throw e;
+    }
+    throw new Error(`Invalid webhook URL: ${urlString}`);
+  }
+}
+
 export interface WebhookDelivery {
   id: string;
   webhook_id: string;
@@ -30,6 +84,7 @@ function rowToWebhook(row: any): Webhook {
 
 export function createWebhook(input: CreateWebhookInput, db?: Database): Webhook {
   const d = db || getDatabase();
+  validateWebhookUrl(input.url);
   const id = uuid();
   d.run(
     `INSERT INTO webhooks (id, url, events, secret, project_id, task_list_id, agent_id, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,

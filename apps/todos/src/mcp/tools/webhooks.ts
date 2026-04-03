@@ -22,7 +22,8 @@ export function registerWebhookTools(server: McpServer, { shouldRegisterTool, fo
       },
       async (params) => {
         try {
-          const { createWebhook } = await import("../../db/webhooks.js");
+          const { createWebhook, validateWebhookUrl } = await import("../../db/webhooks.js");
+          validateWebhookUrl(params.url);
           const wh = createWebhook(params);
           const scope = [wh.project_id && `project:${wh.project_id}`, wh.task_list_id && `list:${wh.task_list_id}`, wh.agent_id && `agent:${wh.agent_id}`, wh.task_id && `task:${wh.task_id}`].filter(Boolean).join(", ");
           return { content: [{ type: "text" as const, text: `Webhook created: ${wh.id.slice(0, 8)} | ${wh.url} | events: ${wh.events.length === 0 ? "all" : wh.events.join(",")}${scope ? ` | scope: ${scope}` : ""}` }] };

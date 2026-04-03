@@ -96,6 +96,11 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
       if (callerHasNoSession && existingHasActiveSession) {
         return buildConflictError(existing, lastSeenMs, input.pool, d);
       }
+
+      // Session-to-project locking: if existing agent has active session bound to a different project, block
+      if (input.project_id && existing.session_id && isActive && existing.active_project_id && existing.active_project_id !== input.project_id) {
+        return buildConflictError(existing, lastSeenMs, input.pool, d);
+      }
     }
 
     // Takeover: stale agent, force takeover, or compatible session — update binding
@@ -114,6 +119,11 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
       updates.push("description = ?");
       params.push(input.description);
     }
+    // Session-to-project locking: persist project binding when session_id is provided
+    if (input.project_id && input.session_id) {
+      updates.push("active_project_id = ?");
+      params.push(input.project_id);
+    }
     params.push(existing.id);
     d.run(`UPDATE agents SET ${updates.join(", ")} WHERE id = ?`, params);
     return getAgent(existing.id, d)!;
@@ -123,14 +133,14 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir, active_project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, normalizedName, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), JSON.stringify(input.capabilities || []),
      input.reports_to || null,
      input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp,
-     input.session_id || null, input.working_dir || null],
+     input.session_id || null, input.working_dir || null, input.project_id && input.session_id ? input.project_id : null],
   );
 
   return getAgent(id, d)!;
