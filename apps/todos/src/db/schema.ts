@@ -743,6 +743,42 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_short_id_lookup ON tasks(short_id) WHERE short_id IS NOT NULL;
   INSERT OR IGNORE INTO _migrations (id) VALUES (44);
   `,
+  // Migration 45: Time tracking — log time spent on tasks and actual vs estimated reporting
+  `
+  CREATE TABLE IF NOT EXISTS task_time_logs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    started_at TEXT,
+    ended_at TEXT,
+    minutes INTEGER NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_task ON task_time_logs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_agent ON task_time_logs(agent_id);
+  ALTER TABLE tasks ADD COLUMN actual_minutes INTEGER;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (45);
+  `,
+  // Migration 46: Task watchers — per-task agent subscriptions
+  `
+  CREATE TABLE IF NOT EXISTS task_watchers (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, agent_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_watchers_task ON task_watchers(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_watchers_agent ON task_watchers(agent_id);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (46);
+  `,
+  // Migration 47: Cross-project task references — depends_on supports external task IDs
+  `
+  ALTER TABLE task_dependencies ADD COLUMN external_project_id TEXT;
+  ALTER TABLE task_dependencies ADD COLUMN external_task_id TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (47);
+  `,
 ];
 
 export function runMigrations(db: Database): void {
@@ -1153,6 +1189,38 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_synced ON tasks(synced_at)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_projects_machine ON projects(machine_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine_id)");
+
+  // Time tracking
+  ensureTable("task_time_logs", `
+    CREATE TABLE task_time_logs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      agent_id TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      minutes INTEGER NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_time_logs_task ON task_time_logs(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_time_logs_agent ON task_time_logs(agent_id)");
+  ensureColumn("tasks", "actual_minutes", "INTEGER");
+
+  // Task watchers
+  ensureTable("task_watchers", `
+    CREATE TABLE task_watchers (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(task_id, agent_id)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_watchers_task ON task_watchers(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_watchers_agent ON task_watchers(agent_id)");
+
+  // Cross-project task dependencies
+  ensureColumn("task_dependencies", "external_project_id", "TEXT");
+  ensureColumn("task_dependencies", "external_task_id", "TEXT");
 }
 
 export function backfillTaskTags(db: Database): void {

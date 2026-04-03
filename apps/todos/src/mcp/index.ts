@@ -4116,6 +4116,188 @@ server.tool(
 );
 }
 
+// === TIME TRACKING ===
+
+if (shouldRegisterTool("log_time")) {
+server.tool(
+  "log_time",
+  "Log time spent on a task.",
+  {
+    task_id: z.string().describe("Task ID to log time against"),
+    minutes: z.number().min(1).describe("Minutes spent"),
+    agent_id: z.string().optional().describe("Agent logging the time"),
+    started_at: z.string().optional().describe("ISO timestamp when work started"),
+    ended_at: z.string().optional().describe("ISO timestamp when work ended"),
+    notes: z.string().optional().describe("Notes about what was done"),
+  },
+  async ({ task_id, minutes, agent_id, started_at, ended_at, notes }) => {
+    try {
+      const { logTime } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      logTime({ task_id: resolveId(task_id), minutes, agent_id, started_at, ended_at, notes });
+      return { content: [{ type: "text" as const, text: `Logged ${minutes} min on task ${task_id.slice(0,8)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_time_report")) {
+server.tool(
+  "get_time_report",
+  "Get time tracking report: actual vs estimated minutes for completed tasks.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    agent_id: z.string().optional().describe("Filter by assignee"),
+    since: z.string().optional().describe("ISO date — only tasks completed after this date"),
+  },
+  async ({ project_id, agent_id, since }) => {
+    try {
+      const { getTimeReport } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      const report = getTimeReport({ project_id: project_id ? resolveId(project_id, "projects") : undefined, agent_id, since });
+      if (report.length === 0) return { content: [{ type: "text" as const, text: "No completed tasks found." }] };
+      const lines = report.map(r => {
+        const est = r.estimated_minutes ?? "?";
+        const actual = r.actual_minutes ?? "?";
+        const diff = r.estimated_minutes != null && r.actual_minutes != null ? ` (${r.actual_minutes - r.estimated_minutes >= 0 ? "+" : ""}${r.actual_minutes - r.estimated_minutes})` : "";
+        return `${r.title.slice(0,50)}: estimated ${est}min, actual ${actual}min${diff}`;
+      });
+      return { content: [{ type: "text" as const, text: `Time Report:\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === TASK WATCHERS ===
+
+if (shouldRegisterTool("watch_task")) {
+server.tool(
+  "watch_task",
+  "Subscribe to notifications for a task.",
+  {
+    task_id: z.string().describe("Task ID to watch"),
+    agent_id: z.string().optional().describe("Agent subscribing (defaults to context agent)"),
+  },
+  async ({ task_id, agent_id }) => {
+    try {
+      const { watchTask } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      watchTask(resolveId(task_id), agent_id || "");
+      return { content: [{ type: "text" as const, text: `Now watching task ${task_id.slice(0,8)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("unwatch_task")) {
+server.tool(
+  "unwatch_task",
+  "Unsubscribe from notifications for a task.",
+  {
+    task_id: z.string().describe("Task ID to unwatch"),
+    agent_id: z.string().optional().describe("Agent unsubscribing (defaults to context agent)"),
+  },
+  async ({ task_id, agent_id }) => {
+    try {
+      const { unwatchTask } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      unwatchTask(resolveId(task_id), agent_id || "");
+      return { content: [{ type: "text" as const, text: `Stopped watching task ${task_id.slice(0,8)}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+if (shouldRegisterTool("get_task_watchers")) {
+server.tool(
+  "get_task_watchers",
+  "List agents watching a task.",
+  {
+    task_id: z.string().describe("Task ID"),
+  },
+  async ({ task_id }) => {
+    try {
+      const { getTaskWatchers } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      const watchers = getTaskWatchers(resolveId(task_id));
+      if (watchers.length === 0) return { content: [{ type: "text" as const, text: "No watchers." }] };
+      return { content: [{ type: "text" as const, text: `Watching (${watchers.length}): ${watchers.map(w => w.agent_id).join(", ")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === TODOS RETRO ===
+
+if (shouldRegisterTool("todos_retro")) {
+server.tool(
+  "todos_retro",
+  "Post-completion retrospective: stats on completed tasks, low-confidence completions, avg time vs estimate, and patterns.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    plan_id: z.string().optional().describe("Filter by plan"),
+    task_list_id: z.string().optional().describe("Filter by task list"),
+    since: z.string().optional().describe("ISO date — only tasks completed after this date"),
+    agent_id: z.string().optional().describe("Filter by assignee"),
+  },
+  async ({ project_id, plan_id, task_list_id, since, agent_id }) => {
+    try {
+      const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      const { patrolTasks } = require("../db/patrol.js") as typeof import("../db/patrol.js");
+      // Get completed tasks
+      const completed = listTasks({ status: "completed", project_id, plan_id, task_list_id, assigned_to: agent_id, limit: 500 }, undefined) as any[];
+      const filtered = since ? completed.filter((t: any) => t.completed_at && t.completed_at >= since) : completed;
+      const total = filtered.length;
+      const lowConf = filtered.filter((t: any) => t.confidence != null && t.confidence < 0.7).length;
+      const withEstimate = filtered.filter((t: any) => t.estimated_minutes != null && t.actual_minutes != null);
+      const avgDiff = withEstimate.length > 0
+        ? withEstimate.reduce((acc: number, t: any) => acc + (t.actual_minutes - t.estimated_minutes), 0) / withEstimate.length
+        : 0;
+      const patrolResult = patrolTasks({ project_id: project_id ? resolveId(project_id, "projects") : undefined });
+      const stuck = patrolResult.issues.filter(i => i.type === "stuck").length;
+      const lines = [
+        `Retro (${total} completed tasks${since ? ` since ${since}` : ""})`,
+        `Low confidence: ${lowConf}/${total}`,
+        `Avg time vs estimate: ${avgDiff >= 0 ? "+" : ""}${avgDiff.toFixed(1)}min`,
+        `Currently stuck: ${stuck}`,
+      ];
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
+// === INBOX ===
+
+if (shouldRegisterTool("todos_inbox")) {
+server.tool(
+  "todos_inbox",
+  "Get unassigned tasks (GTD inbox) — tasks with no assignee, not yet started.",
+  {
+    project_id: z.string().optional().describe("Filter by project"),
+    limit: z.number().optional().describe("Max results (default: 20)"),
+  },
+  async ({ project_id, limit }) => {
+    try {
+      const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+      const tasks = listTasks({ status: "pending", project_id, assigned_to: "", limit: limit || 20 }, undefined) as any[];
+      if (tasks.length === 0) return { content: [{ type: "text" as const, text: "Inbox is empty." }] };
+      const lines = tasks.map((t: any) => `[${t.priority}] ${t.title.slice(0,60)} (${t.id.slice(0,8)})`);
+      return { content: [{ type: "text" as const, text: `Inbox (${tasks.length}):\n${lines.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  },
+);
+}
+
 // === AGENT METRICS & LEADERBOARD ===
 
 if (shouldRegisterTool("get_agent_metrics")) {

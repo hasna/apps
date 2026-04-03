@@ -164,6 +164,7 @@ export interface Agent {
   last_seen_at: string;
   session_id: string | null; // bound session — used to detect name conflicts
   working_dir: string | null;
+  active_project_id: string | null; // project this agent's session is locked to
 }
 
 export interface AgentRow {
@@ -183,6 +184,7 @@ export interface AgentRow {
   last_seen_at: string;
   session_id: string | null;
   working_dir: string | null;
+  active_project_id: string | null;
 }
 
 export interface RegisterAgentInput {
@@ -278,6 +280,7 @@ export interface Task {
   completed_at: string | null;
   due_at: string | null;
   estimated_minutes: number | null;
+  actual_minutes: number | null;
   requires_approval: boolean;
   approved_by: string | null;
   approved_at: string | null;
@@ -410,6 +413,35 @@ export interface TaskFilter {
 export interface TaskDependency {
   task_id: string;
   depends_on: string;
+  external_project_id?: string | null;
+  external_task_id?: string | null;
+}
+
+// Time log entry for task time tracking
+export interface TaskTimeLog {
+  id: string;
+  task_id: string;
+  agent_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  minutes: number;
+  notes: string | null;
+  created_at: string;
+}
+
+// Task watcher — agent subscription to task events
+export interface TaskWatcher {
+  id: string;
+  task_id: string;
+  agent_id: string;
+  created_at: string;
+}
+
+export interface TaskWatcherRow {
+  id: string;
+  task_id: string;
+  agent_id: string;
+  created_at: string;
 }
 
 // Task comment
@@ -498,6 +530,7 @@ export interface TaskRow {
   max_retries: number;
   retry_after: string | null;
   sla_minutes: number | null;
+  actual_minutes: number | null;
 }
 
 export interface SessionRow {

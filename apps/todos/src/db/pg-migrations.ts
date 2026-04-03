@@ -625,4 +625,40 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_tasks_short_id_lookup ON tasks(short_id) WHERE short_id IS NOT NULL;
   INSERT INTO _migrations (id) VALUES (40) ON CONFLICT DO NOTHING;
   `,
+  // Migration 41: Time tracking — log time spent on tasks and actual vs estimated reporting
+  `
+  CREATE TABLE IF NOT EXISTS task_time_logs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    started_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    minutes INTEGER NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_task ON task_time_logs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_time_logs_agent ON task_time_logs(agent_id);
+  ALTER TABLE tasks ADD COLUMN actual_minutes INTEGER;
+  INSERT INTO _migrations (id) VALUES (41) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 42: Task watchers — per-task agent subscriptions
+  `
+  CREATE TABLE IF NOT EXISTS task_watchers (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(task_id, agent_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_watchers_task ON task_watchers(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_watchers_agent ON task_watchers(agent_id);
+  INSERT INTO _migrations (id) VALUES (42) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 43: Cross-project task references — depends_on supports external task IDs
+  `
+  ALTER TABLE task_dependencies ADD COLUMN external_project_id TEXT;
+  ALTER TABLE task_dependencies ADD COLUMN external_task_id TEXT;
+  INSERT INTO _migrations (id) VALUES (43) ON CONFLICT DO NOTHING;
+  `,
 ];
