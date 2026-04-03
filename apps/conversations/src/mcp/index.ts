@@ -19,6 +19,7 @@ import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
 import { registerCloudSyncTools } from "./tools/cloud.js";
 import { registerChannelBridge } from "./channel.js";
+import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
 
 import pkg from "../../package.json";
@@ -53,9 +54,10 @@ registerAgentTools(server, agentFocus, getAgentFocus);
 registerAdvancedTools(server, pkg.version);
 registerTmuxTools(server);
 
-// ---- Claude/Channel bridge (inter-session messaging) ----
-// No config needed — bridge auto-detects agent from register_agent/heartbeat calls
-registerChannelBridge(server);
+// ---- Channel bridges ----
+// Each bridge auto-starts if its credentials are available
+registerChannelBridge(server);     // Inter-session messaging (always on)
+registerTelegramChannel(server);   // Telegram (if TELEGRAM_BOT_TOKEN is set)
 
 // ---- Start server ----
 
