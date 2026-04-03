@@ -77,16 +77,8 @@ export function registerChannelBridge(server: McpServer): void {
       try { markReadByIds([msg.id]); } catch { /* ok */ }
     }
 
-    // Rich context for the receiving agent
-    const context = [
-      `From: ${msg.from_agent}`,
-      `Mode: ${isDirect ? 'direct (auto-injected, auto-read)' : 'dm (passive, check inbox)'}`,
-      `Message ID: ${msg.id}`,
-      msg.space ? `Space: ${msg.space}` : null,
-      msg.priority && msg.priority !== 'normal' ? `Priority: ${msg.priority}` : null,
-    ].filter(Boolean).join(' | ');
-
-    const enrichedContent = `[${context}]\n${msg.content}`;
+    // Content for the model — clean message first, then context for the AI
+    const enrichedContent = `${msg.content}\n\n---\n[Via Conversations MCP from ${msg.from_agent} (message #${msg.id}). To reply, use the conversations send_message tool with to="${msg.from_agent}"]`;
 
     server.server.notification({
       method: "notifications/claude/channel",

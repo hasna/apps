@@ -18,15 +18,21 @@ export function registerAgentTools(
 ): void {
 
   server.registerTool("register_agent", {
-    description: "Register an agent with conflict detection. Returns AgentConflictError if another active session exists (active = heartbeat within last 30 min). Optional project_id locks agent to a project for the session.",
+    description: "Register an agent. Just provide the name — session_id is auto-detected.",
     inputSchema: {
-      name: z.string(),
-      session_id: z.string(),
+      name: z.string().optional().describe("Agent name"),
+      agent_name: z.string().optional().describe("Agent name (alias)"),
+      agent_id: z.string().optional().describe("Agent name (alias)"),
+      session_id: z.string().optional().describe("Auto-detected from environment, do not set manually"),
       role: z.string().optional(),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { name, session_id, role, project_id } = args;
+    const { name: nameParam, agent_name, agent_id, session_id: manualSid, role, project_id } = args;
+    const name = nameParam || agent_name || agent_id;
+    if (!name) return { content: [{ type: "text", text: "Error: name is required" }], isError: true };
+    // Auto-detect session_id from environment (set by agent-claude MCP subprocess)
+    const session_id = manualSid || process.env.CONVERSATIONS_SESSION_ID || `${name}-${Date.now()}`;
     try {
       const result = registerAgent(name, session_id, role, project_id);
       setSessionAgent(name); // Bridge now knows who we are
@@ -45,14 +51,16 @@ export function registerAgentTools(
   });
 
   server.registerTool("heartbeat", {
-    description: "Send presence heartbeat.",
+    description: "Send presence heartbeat. Use 'from' or 'name' to set agent identity.",
     inputSchema: {
-      from: z.string().optional(),
+      from: z.string().optional().describe("Agent name"),
+      name: z.string().optional().describe("Agent name (alias for from)"),
+      agent_name: z.string().optional().describe("Agent name (alias for from)"),
       status: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { from: fromParam, status } = args;
-    const agent = resolveIdentity(fromParam);
+    const { from: fromParam, name: nameParam, agent_name, status } = args;
+    const agent = resolveIdentity(fromParam || nameParam || agent_name);
     heartbeat(agent, status);
     setSessionAgent(agent); // Bridge now knows who we are
 
