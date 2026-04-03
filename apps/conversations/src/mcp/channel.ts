@@ -20,21 +20,31 @@ import { readMessages, markReadByIds } from "../lib/messages.js";
 
 const POLL_INTERVAL_MS = 1000;
 
-// Track the agent identity registered in this MCP session
+// Track agent identity and session for this MCP connection
 let sessionAgentId: string | null = null;
+let sessionClaudeId: string | null = null; // agent-claude session UUID
 
 /** Called by agent tools when register_agent or heartbeat fires */
-export function setSessionAgent(agentId: string): void {
+export function setSessionAgent(agentId: string, claudeSessionId?: string): void {
   sessionAgentId = agentId;
-  // Also update the identity system so outgoing messages use this name
+  if (claudeSessionId) sessionClaudeId = claudeSessionId;
   try {
     const { updateCachedAutoName } = require("../lib/identity.js");
     updateCachedAutoName(agentId);
   } catch { /* ok */ }
 }
 
+/** Called by register_agent to store the claude session ID */
+export function setClaudeSessionId(id: string): void {
+  sessionClaudeId = id;
+}
+
 export function getSessionAgent(): string | null {
   return sessionAgentId || process.env.CONVERSATIONS_AGENT_ID || null;
+}
+
+export function getClaudeSessionId(): string | null {
+  return sessionClaudeId || process.env.CONVERSATIONS_SESSION_ID || null;
 }
 
 export function registerChannelBridge(server: McpServer): void {
@@ -47,7 +57,7 @@ export function registerChannelBridge(server: McpServer): void {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   function getSessionId(): string | null {
-    return process.env.CONVERSATIONS_SESSION_ID || null;
+    return getClaudeSessionId();
   }
 
   function seedLastSeen(): void {
@@ -77,8 +87,11 @@ export function registerChannelBridge(server: McpServer): void {
       try { markReadByIds([msg.id]); } catch { /* ok */ }
     }
 
-    // Content for the model — clean message first, then context for the AI
-    const enrichedContent = `${msg.content}\n\n---\n[Via Conversations MCP from ${msg.from_agent} (message #${msg.id}). To reply, use the conversations send_message tool with to="${msg.from_agent}"]`;
+    // Content: clean message for display, then instructions for the model after separator
+    // Include session ID so the model can do direct injection if needed
+    const senderSession = msg.session_id;
+    const replyHint = `To reply, use conversations send_message with to="${msg.from_agent}". For direct session injection, use send_to_session with target_session_id from the sender's session.`;
+    const enrichedContent = `${msg.content}\n\n---\n[Via Conversations from ${msg.from_agent} (msg #${msg.id}). ${replyHint}]`;
 
     server.server.notification({
       method: "notifications/claude/channel",

@@ -7,7 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
 import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../../lib/presence.js";
-import { setSessionAgent } from "../channel.js";
+import { setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { getSessionActivity } from "../../lib/sessions.js";
 import { getUnreadBlockers } from "../../lib/messages.js";
 
@@ -32,10 +32,12 @@ export function registerAgentTools(
     const name = nameParam || agent_name || agent_id;
     if (!name) return { content: [{ type: "text", text: "Error: name is required" }], isError: true };
     // Auto-detect session_id from environment (set by agent-claude MCP subprocess)
-    const session_id = manualSid || process.env.CONVERSATIONS_SESSION_ID || `${name}-${Date.now()}`;
+    const claudeSid = process.env.CONVERSATIONS_SESSION_ID || null;
+    const session_id = manualSid || claudeSid || `${name}-${Date.now()}`;
     try {
       const result = registerAgent(name, session_id, role, project_id);
       setSessionAgent(name); // Bridge now knows who we are
+      if (claudeSid) setClaudeSessionId(claudeSid); // Track for channel bridge polling
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
       };
