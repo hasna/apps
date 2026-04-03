@@ -566,23 +566,21 @@ describe("task_list_id support", () => {
 });
 
 describe("short_id and task prefix", () => {
-  it("should generate short_id from project prefix", () => {
+  it("should have null short_id for tasks with project (short_id generation removed)", () => {
     const project = createProject({ name: "Alpha Project", path: "/alpha" }, db);
     const task = createTask({ title: "Fix login bug", project_id: project.id }, db);
-    expect(task.short_id).not.toBeNull();
-    expect(task.short_id).toMatch(/^[A-Z]+-\d{5}$/);
-    expect(task.title).toContain("Fix login bug");
-    expect(task.title).toStartWith(task.short_id!);
+    expect(task.short_id).toBeNull();
+    expect(task.title).toBe("Fix login bug");
   });
 
-  it("should increment counter for each task", () => {
+  it("should have null short_id for all new tasks", () => {
     const project = createProject({ name: "Beta", path: "/beta" }, db);
     const t1 = createTask({ title: "Task 1", project_id: project.id }, db);
     const t2 = createTask({ title: "Task 2", project_id: project.id }, db);
     const t3 = createTask({ title: "Task 3", project_id: project.id }, db);
-    expect(t1.short_id).toMatch(/-00001$/);
-    expect(t2.short_id).toMatch(/-00002$/);
-    expect(t3.short_id).toMatch(/-00003$/);
+    expect(t1.short_id).toBeNull();
+    expect(t2.short_id).toBeNull();
+    expect(t3.short_id).toBeNull();
   });
 
   it("should have null short_id for tasks without project", () => {
@@ -591,25 +589,18 @@ describe("short_id and task prefix", () => {
     expect(task.title).toBe("Standalone task");
   });
 
-  it("should use custom prefix if provided", () => {
+  it("should not use custom prefix for new tasks", () => {
     const project = createProject({ name: "My App", path: "/app", task_prefix: "APP" }, db);
     const task = createTask({ title: "Build UI", project_id: project.id }, db);
-    expect(task.short_id).toBe("APP-00001");
-    expect(task.title).toBe("APP-00001: Build UI");
+    expect(task.short_id).toBeNull();
+    expect(task.title).toBe("Build UI");
   });
 
-  it("should auto-generate unique prefix from project name", () => {
-    const p1 = createProject({ name: "Alpha Beta", path: "/ab1" }, db);
-    const p2 = createProject({ name: "Alpha Bravo", path: "/ab2" }, db);
-    expect(p1.task_prefix).toBeTruthy();
-    expect(p2.task_prefix).toBeTruthy();
-    expect(p1.task_prefix).not.toBe(p2.task_prefix);
-  });
-
-  it("should prepend short_id to title", () => {
+  it("should have null short_id for all new tasks regardless of project prefix", () => {
     const project = createProject({ name: "Test", path: "/test", task_prefix: "TST" }, db);
     const task = createTask({ title: "Original title", project_id: project.id }, db);
-    expect(task.title).toBe("TST-00001: Original title");
+    expect(task.short_id).toBeNull();
+    expect(task.title).toBe("Original title");
   });
 });
 
@@ -956,9 +947,9 @@ describe("bulkCreateTasks", () => {
     ], db);
 
     expect(result.created).toHaveLength(2);
-    // All tasks should have the project and short_ids
-    expect(result.created[0]!.short_id).not.toBeNull();
-    expect(result.created[1]!.short_id).not.toBeNull();
+    // All tasks should have the project (short_ids are no longer generated)
+    expect(result.created[0]!.short_id).toBeNull();
+    expect(result.created[1]!.short_id).toBeNull();
 
     const taskA = getTask(result.created[0]!.id, db)!;
     const taskB = getTask(result.created[1]!.id, db)!;
@@ -1554,16 +1545,15 @@ describe("failTask", () => {
     expect(retryMeta.failure_reason).toBe("Transient error");
   });
 
-  it("should strip short_id prefix from retry task title", () => {
+  it("should strip short_id prefix from retry task title (short_id no longer generated)", () => {
     const project = createProject({ name: "test-proj", path: "/tmp/test-fail-proj" }, db);
     const task = createTask({ title: "My task", project_id: project.id }, db);
-    expect(task.short_id).toBeDefined();
-    expect(task.title).toContain(": My task");
+    // short_id is now always null for new tasks
+    expect(task.short_id).toBeNull();
+    expect(task.title).toBe("My task");
 
     const result = failTask(task.id, undefined, "fail", { retry: true }, db);
     expect(result.retryTask!.title).toContain("My task");
-    // Should not contain the original short_id doubled up
-    expect(result.retryTask!.title).not.toContain(task.short_id + ": " + task.short_id);
   });
 
   it("should not create retry task when retry is false or omitted", () => {
