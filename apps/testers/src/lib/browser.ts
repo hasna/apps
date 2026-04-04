@@ -1,8 +1,8 @@
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
 
-export type BrowserEngine = "playwright" | "lightpanda" | "bun";
+export type BrowserEngine = "playwright" | "playwright-firefox" | "playwright-webkit" | "lightpanda" | "bun";
 
 interface ViewportSize {
   width: number;
@@ -66,6 +66,17 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
+    if (engine === "playwright-firefox") {
+      const browser = await firefox.launch({ headless });
+      return browser;
+    }
+
+    if (engine === "playwright-webkit") {
+      const browser = await webkit.launch({ headless });
+      return browser;
+    }
+
+    // Default: chromium
     const browser = await chromium.launch({
       headless,
       args: [
@@ -267,8 +278,10 @@ export async function installBrowser(engine?: BrowserEngine): Promise<void> {
     return installLightpanda();
   }
 
+  const browserName = engine === "playwright-firefox" ? "firefox" : engine === "playwright-webkit" ? "webkit" : "chromium";
+
   try {
-    execSync("bunx playwright install chromium", {
+    execSync(`bunx playwright install ${browserName}`, {
       stdio: "inherit",
     });
   } catch (error) {
