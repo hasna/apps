@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { Assertion } from "../types/index.js";
+import { runA11yAudit } from "./a11y-audit.js";
 
 export interface AssertionResult {
   assertion: Assertion;
@@ -97,6 +98,27 @@ async function evaluateOne(
       };
     }
 
+    case "no_a11y_violations": {
+      try {
+        const auditResult = await runA11yAudit(page);
+        const hasIssues = auditResult.violations.length > 0;
+        return {
+          assertion,
+          passed: !hasIssues,
+          actual: hasIssues
+            ? `${auditResult.totalViolations} violation(s): ${auditResult.violations.map((v) => v.id).join(", ")}`
+            : "No accessibility violations found",
+        };
+      } catch (err) {
+        return {
+          assertion,
+          passed: false,
+          actual: "",
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
     case "url_contains": {
       const url = page.url();
       const expected = String(assertion.expected ?? "");
@@ -173,7 +195,7 @@ async function evaluateOne(
 
     case "local_storage_value": {
       const [lsKey, expectedValue] = (assertion.expected as string).split("=", 2);
-      const value = await page.evaluate((k) => localStorage.getItem(k), lsKey);
+      const value = await page.evaluate((k) => localStorage.getItem(k), lsKey ?? "");
       return {
         assertion,
         passed: value === expectedValue,
@@ -183,7 +205,7 @@ async function evaluateOne(
 
     case "session_storage_value": {
       const [ssKey, expectedValue] = (assertion.expected as string).split("=", 2);
-      const value = await page.evaluate((k) => sessionStorage.getItem(k), ssKey);
+      const value = await page.evaluate((k) => sessionStorage.getItem(k), ssKey ?? "");
       return {
         assertion,
         passed: value === expectedValue,
