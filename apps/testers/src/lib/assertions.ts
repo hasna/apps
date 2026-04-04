@@ -117,6 +117,90 @@ async function evaluateOne(
       };
     }
 
+    case "cookie_exists": {
+      const cookieName = assertion.expected as string;
+      const cookies = await page.context().cookies();
+      const found = cookies.some((c) => c.name === cookieName);
+      return {
+        assertion,
+        passed: found,
+        actual: found ? `Cookie "${cookieName}" exists` : `Cookie "${cookieName}" not found`,
+      };
+    }
+
+    case "cookie_not_exists": {
+      const cookieName = assertion.expected as string;
+      const cookies = await page.context().cookies();
+      const found = cookies.some((c) => c.name === cookieName);
+      return {
+        assertion,
+        passed: !found,
+        actual: found ? `Cookie "${cookieName}" found (unexpected)` : `Cookie "${cookieName}" does not exist`,
+      };
+    }
+
+    case "cookie_value": {
+      const [cookieName, expectedValue] = (assertion.expected as string).split("=", 2);
+      const cookies = await page.context().cookies();
+      const cookie = cookies.find((c) => c.name === cookieName);
+      const actualValue = cookie?.value ?? "";
+      return {
+        assertion,
+        passed: actualValue === expectedValue,
+        actual: cookie ? `${cookieName}=${actualValue}` : `Cookie "${cookieName}" not found`,
+      };
+    }
+
+    case "local_storage_exists": {
+      const key = assertion.expected as string;
+      const value = await page.evaluate((k) => localStorage.getItem(k), key);
+      return {
+        assertion,
+        passed: value !== null,
+        actual: value !== null ? `Key "${key}" exists with value "${value}"` : `Key "${key}" not found in localStorage`,
+      };
+    }
+
+    case "local_storage_not_exists": {
+      const key = assertion.expected as string;
+      const value = await page.evaluate((k) => localStorage.getItem(k), key);
+      return {
+        assertion,
+        passed: value === null,
+        actual: value !== null ? `Key "${key}" exists (unexpected)` : `Key "${key}" does not exist in localStorage`,
+      };
+    }
+
+    case "local_storage_value": {
+      const [lsKey, expectedValue] = (assertion.expected as string).split("=", 2);
+      const value = await page.evaluate((k) => localStorage.getItem(k), lsKey);
+      return {
+        assertion,
+        passed: value === expectedValue,
+        actual: value !== null ? `${lsKey}=${value}` : `Key "${lsKey}" not found in localStorage`,
+      };
+    }
+
+    case "session_storage_value": {
+      const [ssKey, expectedValue] = (assertion.expected as string).split("=", 2);
+      const value = await page.evaluate((k) => sessionStorage.getItem(k), ssKey);
+      return {
+        assertion,
+        passed: value === expectedValue,
+        actual: value !== null ? `${ssKey}=${value}` : `Key "${ssKey}" not found in sessionStorage`,
+      };
+    }
+
+    case "session_storage_not_exists": {
+      const key = assertion.expected as string;
+      const value = await page.evaluate((k) => sessionStorage.getItem(k), key);
+      return {
+        assertion,
+        passed: value === null,
+        actual: value !== null ? `Key "${key}" exists (unexpected)` : `Key "${key}" does not exist in sessionStorage`,
+      };
+    }
+
     default: {
       return {
         assertion,
@@ -214,6 +298,54 @@ export function parseAssertionString(str: string): Assertion {
     }
 
     throw new Error(`Unknown selector action: "${action}". Expected "visible" or "not-visible"`);
+  }
+
+  // cookie:exists:<name>
+  if (trimmed.startsWith("cookie:exists:")) {
+    const name = trimmed.slice("cookie:exists:".length);
+    return { type: "cookie_exists", expected: name, description: `Cookie "${name}" exists` };
+  }
+
+  // cookie:not-exists:<name>
+  if (trimmed.startsWith("cookie:not-exists:")) {
+    const name = trimmed.slice("cookie:not-exists:".length);
+    return { type: "cookie_not_exists", expected: name, description: `Cookie "${name}" does not exist` };
+  }
+
+  // cookie:value:<name>=<value>
+  if (trimmed.startsWith("cookie:value:")) {
+    const valueStr = trimmed.slice("cookie:value:".length);
+    return { type: "cookie_value", expected: valueStr, description: `Cookie value is "${valueStr}"` };
+  }
+
+  // local:exists:<key>
+  if (trimmed.startsWith("local:exists:")) {
+    const key = trimmed.slice("local:exists:".length);
+    return { type: "local_storage_exists", expected: key, description: `LocalStorage key "${key}" exists` };
+  }
+
+  // local:not-exists:<key>
+  if (trimmed.startsWith("local:not-exists:")) {
+    const key = trimmed.slice("local:not-exists:".length);
+    return { type: "local_storage_not_exists", expected: key, description: `LocalStorage key "${key}" does not exist` };
+  }
+
+  // local:value:<key>=<value>
+  if (trimmed.startsWith("local:value:")) {
+    const valueStr = trimmed.slice("local:value:".length);
+    return { type: "local_storage_value", expected: valueStr, description: `LocalStorage value is "${valueStr}"` };
+  }
+
+  // session:value:<key>=<value>
+  if (trimmed.startsWith("session:value:")) {
+    const valueStr = trimmed.slice("session:value:".length);
+    return { type: "session_storage_value", expected: valueStr, description: `SessionStorage value is "${valueStr}"` };
+  }
+
+  // session:not-exists:<key>
+  if (trimmed.startsWith("session:not-exists:")) {
+    const key = trimmed.slice("session:not-exists:".length);
+    return { type: "session_storage_not_exists", expected: key, description: `SessionStorage key "${key}" does not exist` };
   }
 
   throw new Error(`Cannot parse assertion: "${str}". See --help for assertion formats.`);
