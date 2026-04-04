@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, type BrowserContext } from "playwright";
 import type { CreateScenarioInput } from "../types/index.js";
 import { createScenario } from "../db/scenarios.js";
 
@@ -195,4 +195,163 @@ export async function recordAndSave(
   const input = actionsToScenarioInput(recording, name, projectId);
   const scenario = createScenario(input);
   return { recording, scenario };
+}
+
+// ─── Auth Flow Recording & Replay ─────────────────────────────────────────────
+
+export interface AuthRecordingOptions {
+  email: string;
+  password: string;
+  loginUrl: string;
+  emailSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
+  waitForUrl?: string | RegExp;
+  timeoutMs?: number;
+}
+
+export interface SavedAuthState {
+  cookies: { name: string; value: string; domain: string; path: string }[];
+  localStorage: { origin: string; entries: { name: string; value: string }[] }[];
+  loginUrl: string;
+  recordedAt: string;
+}
+
+/**
+ * Navigate to login, fill credentials, and capture auth state (cookies + localStorage).
+ * Returns the saved auth state for replay in future test runs.
+ */
+export async function recordAuthFlow(
+  loginUrl: string,
+  options: AuthRecordingOptions,
+): Promise<SavedAuthState> {
+  const browser = await chromium.launch({ headless: false });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const page = await context.newPage();
+
+  const emailSelector = options.emailSelector ?? 'input[name="email"], input[type="email"], #email';
+  const passwordSelector = options.passwordSelector ?? 'input[name="password"], input[type="password"], #password';
+  const submitSelector = options.submitSelector ?? 'button[type="submit"], input[type="submit"]';
+
+  try {
+    await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: options.timeoutMs ?? 30000 });
+
+    // Fill credentials
+    await page.fill(emailSelector, options.email);
+    await page.fill(passwordSelector, options.password);
+    await page.click(submitSelector);
+
+    // Wait for navigation or timeout
+    if (options.waitForUrl) {
+      await page.waitForURL(options.waitForUrl, { timeout: options.timeoutMs ?? 30000 });
+    } else {
+      await page.waitForLoadState("networkidle", { timeout: options.timeoutMs ?? 30000 });
+    }
+
+    // Capture cookies
+    const cookies = await context.cookies();
+    const formattedCookies = cookies.map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain || "",
+      path: c.path || "/",
+    }));
+
+    // Capture localStorage from all frames
+    const frames = page.frames();
+    const localStorageEntries: SavedAuthState["localStorage"] = [];
+    for (const frame of frames) {
+      try {
+        const origin = frame.url();
+        if (origin && origin !== "about:blank") {
+          const entries = await frame.evaluate(() => {
+            const items: { name: string; value: string }[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key) items.push({ name: key, value: localStorage.getItem(key) || "" });
+            }
+            return items;
+          });
+          if (entries.length > 0) {
+            localStorageEntries.push({ origin, entries });
+          }
+        }
+      } catch {
+        // Frame might be cross-origin or not ready
+      }
+    }
+
+    return {
+      cookies: formattedCookies,
+      localStorage: localStorageEntries,
+      loginUrl,
+      recordedAt: new Date().toISOString(),
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * Restore a previously saved auth state into a browser context.
+ * Injects cookies and localStorage so the page is already authenticated.
+ */
+export async function replayAuthState(
+  context: BrowserContext,
+  authState: SavedAuthState,
+): Promise<void> {
+  // Restore cookies
+  for (const cookie of authState.cookies) {
+    try {
+      await context.addCookies([{
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        expires: -1,
+      }]);
+    } catch {
+      // Cookie set failed — skip
+    }
+  }
+
+  // Restore localStorage on first page load
+  const page = await context.newPage();
+  // Navigate to the login URL origin first to set same-origin localStorage
+  const origin = new URL(authState.loginUrl).origin;
+  await page.goto(`${origin}/about:blank`, { waitUntil: "domcontentloaded" }).catch(() => {});
+
+  for (const entry of authState.localStorage) {
+    try {
+      await page.evaluate((items) => {
+        for (const item of items) {
+          localStorage.setItem(item.name, item.value);
+        }
+      }, entry.entries);
+    } catch {
+      // localStorage access failed — skip
+    }
+  }
+
+  await page.close();
+}
+
+/**
+ * Convert saved auth state into a scenario with auth metadata.
+ */
+export function authStateToScenarioMetadata(
+  authState: SavedAuthState,
+  name: string,
+  projectId?: string,
+): ReturnType<typeof createScenario> {
+  return createScenario({
+    name,
+    description: `Authenticated test scenario from recorded auth state at ${authState.loginUrl}`,
+    steps: [`Navigate to authenticated session`],
+    tags: ["auth", "recorded"],
+    requiresAuth: true,
+    authConfig: { loginPath: new URL(authState.loginUrl).pathname },
+    metadata: { authState: JSON.parse(JSON.stringify(authState)) },
+    projectId,
+  });
 }
