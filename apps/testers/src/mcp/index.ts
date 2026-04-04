@@ -140,6 +140,44 @@ server.tool(
   },
 );
 
+// ─── 1b. batch_create_scenarios ──────────────────────────────────────────────
+
+server.tool(
+  "batch_create_scenarios",
+  "Create multiple test scenarios in a single call. Each item requires name and description.",
+  {
+    scenarios: z.array(z.object({
+      name: z.string().describe("Scenario name"),
+      description: z.string().describe("What this scenario tests"),
+      steps: z.array(z.string()).optional().describe("Ordered test steps"),
+      tags: z.array(z.string()).optional().describe("Tags for filtering"),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Scenario priority"),
+      model: z.string().optional().describe(MODEL_DESC),
+      targetPath: z.string().optional().describe("URL path to navigate to"),
+      requiresAuth: z.boolean().optional().describe("Whether scenario requires authentication"),
+    })).min(1).max(100).describe("Array of scenarios to create"),
+    projectId: z.string().optional().describe("Project ID to scope all scenarios to"),
+  },
+  async ({ scenarios, projectId }) => {
+    try {
+      const results: { id: string; name: string; shortId: string; error?: string }[] = [];
+      for (const s of scenarios) {
+        try {
+          const scenario = createScenario({ ...s, projectId });
+          results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
+        } catch (e) {
+          results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      const created = results.filter((r) => !r.error).length;
+      const failed = results.filter((r) => r.error).length;
+      return json({ created, failed, total: scenarios.length, results });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
 // ─── 2. get_scenario ─────────────────────────────────────────────────────────
 
 server.tool(

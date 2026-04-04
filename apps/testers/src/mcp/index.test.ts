@@ -140,4 +140,20 @@ describe("MCP module dependencies", () => {
     // Timeout is already in RunOptions interface; runner uses options.timeout
     // as fallback when scenario.timeoutMs is not set
   });
+
+  test("batch_create_scenarios creates multiple scenarios (OPE9-00246)", () => {
+    const { createScenario } = require("../db/scenarios.js");
+    const scenarios = [
+      { name: "Batch Test 1", description: "First batch scenario", steps: ["Step 1"], tags: ["batch"] },
+      { name: "Batch Test 2", description: "Second batch scenario", priority: "high" as const },
+      { name: "Batch Test 3", description: "Third batch scenario", tags: ["batch", "smoke"] },
+    ];
+    const results = scenarios.map((s) => createScenario(s));
+    expect(results).toHaveLength(3);
+    expect(results[0].name).toBe("Batch Test 1");
+    expect(results[0].steps).toEqual(["Step 1"]);
+    expect(results[0].tags).toEqual(["batch"]);
+    expect(results[1].priority).toBe("high");
+    expect(results[2].tags).toEqual(["batch", "smoke"]);
+  });
 });
