@@ -58,6 +58,28 @@ describe("templates", () => {
       expect(names).toContain("Image alt text");
     });
 
+    test("returns 4 scenarios for 'checkout'", () => {
+      const result = getTemplate("checkout");
+      expect(result).not.toBeNull();
+      expect(result!.length).toBe(4);
+      const names = result!.map((s) => s.name);
+      expect(names).toContain("Add item to cart");
+      expect(names).toContain("Cart page shows added items");
+      expect(names).toContain("Checkout flow completion");
+      expect(names).toContain("Apply coupon/discount code");
+    });
+
+    test("returns 4 scenarios for 'search'", () => {
+      const result = getTemplate("search");
+      expect(result).not.toBeNull();
+      expect(result!.length).toBe(4);
+      const names = result!.map((s) => s.name);
+      expect(names).toContain("Search returns relevant results");
+      expect(names).toContain("Empty search handling");
+      expect(names).toContain("No results handling");
+      expect(names).toContain("Search filters work");
+    });
+
     test("returns null for nonexistent template", () => {
       const result = getTemplate("nonexistent");
       expect(result).toBeNull();
@@ -78,7 +100,7 @@ describe("templates", () => {
   describe("listTemplateNames", () => {
     test("returns all template names", () => {
       const names = listTemplateNames();
-      expect(names).toEqual(["auth", "crud", "forms", "nav", "a11y"]);
+      expect(names).toEqual(["auth", "crud", "forms", "nav", "a11y", "checkout", "search"]);
     });
 
     test("returns an array of strings", () => {

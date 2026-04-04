@@ -6,6 +6,7 @@ import { z } from "zod";
 import { registerCloudTools } from "@hasna/cloud";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
+import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
 import { getRun, listRuns, updateRun } from "../db/runs.js";
 import { listResults, getResultsByRun } from "../db/results.js";
 import { listScreenshots } from "../db/screenshots.js";
@@ -172,6 +173,57 @@ server.tool(
       const created = results.filter((r) => !r.error).length;
       const failed = results.filter((r) => r.error).length;
       return json({ created, failed, total: scenarios.length, results });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 1c. list_templates ──────────────────────────────────────────────────────
+
+server.tool(
+  "list_templates",
+  "List built-in scenario templates available for quick setup. Use apply_template to create scenarios from a template.",
+  {},
+  async () => {
+    try {
+      const templates = listTemplateNames().map((name) => {
+        const scenarios = getTemplate(name)!;
+        return { name, scenarioCount: scenarios.length, scenarios: scenarios.map((s) => ({ name: s.name, description: s.description, priority: s.priority, tags: s.tags })) };
+      });
+      return json({ templates });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
+// ─── 1d. apply_template ──────────────────────────────────────────────────────
+
+server.tool(
+  "apply_template",
+  "Create scenarios from a built-in template. Returns the created scenario IDs and any errors.",
+  {
+    template: z.string().describe("Template name to apply (auth, crud, forms, nav, a11y, checkout, search)"),
+    projectId: z.string().optional().describe("Project ID to scope scenarios to"),
+  },
+  async ({ template, projectId }) => {
+    try {
+      const scenarios = getTemplate(template);
+      if (!scenarios) return errorResponse(new Error(`Template not found: ${template}. Available: ${listTemplateNames().join(", ")}`));
+
+      const results: { id: string; name: string; shortId: string; error?: string }[] = [];
+      for (const s of scenarios) {
+        try {
+          const scenario = createScenario({ ...s, projectId });
+          results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
+        } catch (e) {
+          results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      const created = results.filter((r) => !r.error).length;
+      const failed = results.filter((r) => r.error).length;
+      return json({ template, created, failed, total: scenarios.length, results });
     } catch (error) {
       return errorResponse(error);
     }
