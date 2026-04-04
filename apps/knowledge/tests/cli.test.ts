@@ -1,3 +1,8 @@
+/**
+ * @hasna/knowledge
+ * Copyright 2026 Hasna Inc.
+ * Licensed under the Apache License, Version 2.0
+ */
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,7 +10,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CLI = join(__dirname, '..', 'src', 'cli.js');
+const CLI = join(__dirname, '..', 'src', 'cli.ts');
 
 function runCli(args: string[]) {
   return Bun.spawnSync(['bun', CLI, ...args], {

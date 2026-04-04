@@ -4,17 +4,35 @@
   "description": "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   "type": "module",
   "bin": {
-    "open-knowledge": "./src/cli.js"
+    "open-knowledge": "./src/cli.ts"
   },
   "scripts": {
     "test": "bun test",
-    "test:cli": "bun test tests/cli.test.ts"
+    "test:cli": "bun test tests/cli.test.ts",
+    "build": "bun build --target=bun --outfile=bin/open-knowledge.js --minify src/cli.ts",
+    "prepublishOnly": "bun run build",
+    "postinstall": "bun run build"
   },
   "keywords": [
     "knowledge",
     "cli",
     "agents",
-    "json"
+    "json",
+    "notes",
+    "local",
+    "store"
   ],
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/knowledge"
+  },
+  "bugs": {
+    "url": "https://github.com/hasna/knowledge/issues"
+  },
+  "author": "Hasna Inc. <hasna@example.com>",
+  "engines": {
+    "bun": ">=1.0",
+    "node": ">=18"
+  }
 }

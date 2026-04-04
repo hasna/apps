@@ -1,0 +1,17 @@
+node_modules/
+*.lock
+*.log
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+.codewith/

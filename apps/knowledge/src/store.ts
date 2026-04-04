@@ -1,24 +1,43 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, readFileSync as readFile } from 'node:fs';
+/**
+ * @hasna/knowledge
+ * Copyright 2026 Hasna Inc.
+ * Licensed under the Apache License, Version 2.0
+ */
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-export function defaultStorePath() {
+export interface KnowledgeItem {
+  id: string;
+  title: string;
+  content: string;
+  url: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Store {
+  items: KnowledgeItem[];
+}
+
+export function defaultStorePath(): string {
   return `${homedir()}/.open-knowledge/db.json`;
 }
 
-function ensureStore(path) {
+export function ensureStore(path: string): void {
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify({ items: [] }, null, 2));
   }
 }
 
-function lockPath(path) {
+function lockPath(path: string): string {
   return `${path}.lock`;
 }
 
-function acquireLock(lockPath, ownerId) {
+function acquireLock(lockPath: string, ownerId: string): void {
   const maxWait = 5000;
   const interval = 50;
   const start = Date.now();
@@ -26,30 +45,25 @@ function acquireLock(lockPath, ownerId) {
     try {
       if (!existsSync(lockPath)) {
         writeFileSync(lockPath, JSON.stringify({ owner: ownerId, ts: Date.now() }));
-        return true;
+        return;
       }
-      const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+      const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as { owner: string; ts: number };
       if (Date.now() - lock.ts > 10000) {
         unlinkSync(lockPath);
       }
     } catch {
       // lock file disappeared, try again
     }
-    const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-    if (typeof Bun !== 'undefined') {
-      Bun.sleep(interval);
-    } else {
-      const start2 = Date.now();
-      while (Date.now() - start2 < interval) {}
-    }
+    const start2 = Date.now();
+    while (Date.now() - start2 < interval) {}
   }
   throw new Error(`Could not acquire lock on ${lockPath} after ${maxWait}ms`);
 }
 
-function releaseLock(lockPath, ownerId) {
+function releaseLock(lockPath: string, ownerId: string): void {
   try {
     if (existsSync(lockPath)) {
-      const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+      const lock = JSON.parse(readFileSync(lockPath, 'utf8')) as { owner: string; ts: number };
       if (lock.owner === ownerId) {
         unlinkSync(lockPath);
       }
@@ -57,23 +71,23 @@ function releaseLock(lockPath, ownerId) {
   } catch {}
 }
 
-export function loadStore(path) {
+export function loadStore(path: string): Store {
   ensureStore(path);
   const raw = readFileSync(path, 'utf8');
-  const parsed = JSON.parse(raw);
+  const parsed = JSON.parse(raw) as Store;
   if (!parsed || !Array.isArray(parsed.items)) {
     return { items: [] };
   }
   return parsed;
 }
 
-export function saveStore(path, store) {
+export function saveStore(path: string, store: Store): void {
   const tmp = `${path}.tmp.${randomUUID()}`;
   writeFileSync(tmp, JSON.stringify(store, null, 2));
   renameSync(tmp, path);
 }
 
-export function withLock(path, fn) {
+export function withLock<T>(path: string, fn: () => T): T {
   const owner = randomUUID();
   const lpath = lockPath(path);
   acquireLock(lpath, owner);
@@ -84,6 +98,6 @@ export function withLock(path, fn) {
   }
 }
 
-export function makeId() {
+export function makeId(): string {
   return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
