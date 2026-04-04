@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
-import { defaultStorePath, loadStore, saveStore, makeId } from './store.js';
+import { defaultStorePath, loadStore, saveStore, withLock, makeId } from './store.js';
 import pkg from '../package.json' with { type: 'json' };
 
-const COMMANDS = ['add', 'list', 'get', 'delete', 'help'];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'export', 'help'];
 const COMMAND_ALIASES = {
   ls: 'list',
-  rm: 'delete'
+  rm: 'delete',
+  edit: 'update',
 };
 
 function parseArgs(argv) {
@@ -67,15 +68,38 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
+    if (token === '--title') {
+      flags.title = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (token === '--content') {
+      flags.content = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (token === '--url') {
+      flags.url = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (token === '--tag' || token === '-t') {
+      flags.tag = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (token === '--format') {
+      flags.format = argv[i + 1];
+      i += 1;
+      continue;
+    }
     throw new Error(`Unknown flag: ${token}. Run 'open-knowledge --help' for valid options.`);
   }
   return { positional, flags };
 }
 
 function resolveCommand(raw) {
-  if (!raw) {
-    return '';
-  }
+  if (!raw) return '';
   return COMMAND_ALIASES[raw] ?? raw;
 }
 
@@ -93,9 +117,7 @@ function levenshtein(a, b) {
 }
 
 function suggestCommand(input) {
-  if (!input) {
-    return '';
-  }
+  if (!input) return '';
   const all = [...COMMANDS, ...Object.keys(COMMAND_ALIASES)];
   let best = '';
   let bestScore = Number.POSITIVE_INFINITY;
@@ -110,24 +132,75 @@ function suggestCommand(input) {
 }
 
 function printGlobalHelp() {
-  console.log(`open-knowledge - local agent knowledge store\n\nUsage:\n  open-knowledge <command> [options]\n\nCommands:\n  add <title> <content>      Add an item\n  list (alias: ls)            List items (supports pagination/search/sort)\n  get --id <id>               Get one item\n  delete (alias: rm) --id <id> Delete item (requires --yes)\n  help [command]              Show help\n\nGlobal Options:\n  --json                      Output JSON\n  --store <path>              Override store path\n  -v, --version               Show version\n  -h, --help                  Show help\n\nList Options:\n  -p, --page <n>              Page number (default: 1)\n  -l, --limit <n>             Items per page (default: 20)\n  -s, --search <text>         Filter by title/content\n  --sort <created|title>      Sort field (default: created)\n  --desc                       Sort descending\n\nDelete Options:\n  --id <id>                   Item id\n  -y, --yes                   Confirm destructive action`);
+  console.log(`open-knowledge - local agent knowledge store
+
+Usage:
+  open-knowledge <command> [options]
+
+Commands:
+  add <title> <content>       Add an item
+  list (alias: ls)             List items (supports pagination/search/sort/tag)
+  get --id <id>               Get one item
+  update --id <id>            Update an item (--title, --content, --url, --tag)
+  delete (alias: rm) --id <id> Delete item (requires --yes)
+  export                       Export all items (--format jsonl)
+  help [command]               Show help
+
+Global Options:
+  --json                      Output JSON
+  --store <path>              Override store path
+  -v, --version               Show version
+  -h, --help                  Show help
+
+List Options:
+  -p, --page <n>              Page number (default: 1)
+  -l, --limit <n>             Items per page (default: 20)
+  -s, --search <text>         Filter by title/content
+  -t, --tag <tag>             Filter by tag
+  --sort <created|title>       Sort field (default: created)
+  --desc                       Sort descending
+
+Add/Update Options:
+  --url <url>                 Attach source URL
+
+Update Options:
+  --id <id>                   Item id
+  --title <title>             New title
+  --content <content>         New content
+  --url <url>                 New source URL
+  -t, --tag <tag>             Add a tag
+
+Delete Options:
+  --id <id>                   Item id
+  -y, --yes                   Confirm destructive action
+
+Export Options:
+  --format jsonl              Export as newline-delimited JSON (default: JSON array)`);
 }
 
 function printCommandHelp(command) {
   if (command === 'add') {
-    console.log('Usage: open-knowledge add <title> <content> [--json]');
+    console.log('Usage: open-knowledge add <title> <content> [--url <url>] [-t <tag>] [--json]');
     return;
   }
   if (command === 'list' || command === 'ls') {
-    console.log('Usage: open-knowledge list|ls [-p <page>] [-l <limit>] [-s <search>] [--sort created|title] [--desc] [--json]');
+    console.log('Usage: open-knowledge list|ls [-p <page>] [-l <limit>] [-s <search>] [-t <tag>] [--sort created|title] [--desc] [--json]');
     return;
   }
   if (command === 'get') {
     console.log('Usage: open-knowledge get --id <id> [--json]');
     return;
   }
+  if (command === 'update' || command === 'edit') {
+    console.log('Usage: open-knowledge update|edit --id <id> [--title <title>] [--content <content>] [--url <url>] [-t <tag>] [--json]');
+    return;
+  }
   if (command === 'delete' || command === 'rm') {
     console.log('Usage: open-knowledge delete|rm --id <id> -y [--json]');
+    return;
+  }
+  if (command === 'export') {
+    console.log('Usage: open-knowledge export [--format jsonl] [--json]');
     return;
   }
   printGlobalHelp();
@@ -191,56 +264,99 @@ function run(argv) {
     if (!title || !content) {
       throw new Error('Usage: open-knowledge add <title> <content>');
     }
-    const db = loadStore(storePath);
-    const item = {
-      id: makeId(),
-      title,
-      content,
-      created_at: new Date().toISOString()
-    };
-    db.items.push(item);
-    saveStore(storePath, db);
-    output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const item = {
+        id: makeId(),
+        title,
+        content,
+        url: flags.url || null,
+        tags: flags.tag ? [flags.tag] : [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      db.items.push(item);
+      saveStore(storePath, db);
+      output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
+    });
     return;
   }
 
   if (command === 'list') {
-    const db = loadStore(storePath);
-    const page = Number.isFinite(flags.page) && flags.page > 0 ? flags.page : 1;
-    const limit = Number.isFinite(flags.limit) && flags.limit > 0 ? flags.limit : 20;
-    const search = flags.search ? String(flags.search).toLowerCase() : '';
-    const filtered = search
-      ? db.items.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search))
-      : db.items;
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const page = Number.isFinite(flags.page) && flags.page > 0 ? flags.page : 1;
+      const limit = Number.isFinite(flags.limit) && flags.limit > 0 ? flags.limit : 20;
+      const search = flags.search ? String(flags.search).toLowerCase() : '';
+      const tag = flags.tag ? String(flags.tag).toLowerCase() : '';
 
-    const { sorted, sort, direction } = sortItems(filtered, flags);
-    const start = (page - 1) * limit;
-    const rows = sorted.slice(start, start + limit);
-    const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
+      let filtered = db.items;
+      if (search) {
+        filtered = filtered.filter(
+          (x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search)
+        );
+      }
+      if (tag) {
+        filtered = filtered.filter((x) => x.tags && x.tags.map((t) => t.toLowerCase()).includes(tag));
+      }
 
-    if (flags.json) {
-      output({ ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows }, true);
-      return;
-    }
-    if (rows.length === 0) {
-      output(`No items found (search=${search || 'none'})`, false);
-      return;
-    }
-    for (const row of rows) {
-      console.log(`${row.id}\t${row.title}\t${row.created_at}`);
-    }
-    console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'}`);
+      const { sorted, sort, direction } = sortItems(filtered, flags);
+      const start = (page - 1) * limit;
+      const rows = sorted.slice(start, start + limit);
+      const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
+
+      if (flags.json) {
+        output({ ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows }, true);
+        return;
+      }
+      if (rows.length === 0) {
+        output(`No items found (search=${search || 'none'}, tag=${tag || 'none'})`, false);
+        return;
+      }
+      for (const row of rows) {
+        console.log(`${row.id}\t${row.title}\t${row.created_at}${row.url ? `\t${row.url}` : ''}${row.tags?.length ? `\t[${row.tags.join(', ')}]` : ''}`);
+      }
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    });
     return;
   }
 
   if (command === 'get') {
     requireId(flags);
-    const db = loadStore(storePath);
-    const item = db.items.find((x) => x.id === flags.id);
-    if (!item) {
-      throw new Error(`Item not found: ${flags.id}`);
-    }
-    output({ ok: true, item, message: `${item.id}: ${item.title}` }, flags.json);
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const item = db.items.find((x) => x.id === flags.id);
+      if (!item) {
+        throw new Error(`Item not found: ${flags.id}`);
+      }
+      output({ ok: true, item, message: `${item.id}: ${item.title}` }, flags.json);
+    });
+    return;
+  }
+
+  if (command === 'update') {
+    requireId(flags);
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const idx = db.items.findIndex((x) => x.id === flags.id);
+      if (idx === -1) {
+        throw new Error(`Item not found: ${flags.id}`);
+      }
+      const item = db.items[idx];
+      if (flags.title !== undefined) item.title = flags.title;
+      if (flags.content !== undefined) item.content = flags.content;
+      if (flags.url !== undefined) item.url = flags.url;
+      if (flags.tag !== undefined) {
+        item.tags = item.tags || [];
+        if (!item.tags.map((t) => t.toLowerCase()).includes(flags.tag.toLowerCase())) {
+          item.tags.push(flags.tag);
+        }
+      }
+      item.updated_at = new Date().toISOString();
+      db.items[idx] = item;
+      saveStore(storePath, db);
+      output({ ok: true, item, message: `Updated ${item.id}` }, flags.json);
+    });
     return;
   }
 
@@ -249,15 +365,35 @@ function run(argv) {
     if (!flags.yes) {
       throw new Error('Refusing delete without --yes. Re-run with: open-knowledge delete --id <id> --yes');
     }
-    const db = loadStore(storePath);
-    const before = db.items.length;
-    db.items = db.items.filter((x) => x.id !== flags.id);
-    const deleted = before !== db.items.length;
-    saveStore(storePath, db);
-    if (!deleted) {
-      throw new Error(`Item not found: ${flags.id}`);
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      const before = db.items.length;
+      db.items = db.items.filter((x) => x.id !== flags.id);
+      const deleted = before !== db.items.length;
+      saveStore(storePath, db);
+      if (!deleted) {
+        throw new Error(`Item not found: ${flags.id}`);
+      }
+      output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
+    });
+    return;
+  }
+
+  if (command === 'export') {
+    const format = flags.format ?? 'json';
+    if (format !== 'json' && format !== 'jsonl') {
+      throw new Error("Invalid --format. Use 'json' or 'jsonl'.");
     }
-    output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
+    withLock(storePath, () => {
+      const db = loadStore(storePath);
+      if (format === 'jsonl') {
+        for (const item of db.items) {
+          console.log(JSON.stringify(item));
+        }
+      } else {
+        output({ ok: true, items: db.items }, flags.json);
+      }
+    });
     return;
   }
 
