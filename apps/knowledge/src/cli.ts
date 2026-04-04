@@ -207,7 +207,7 @@ function useColor(flags: Flags): boolean {
   return process.stdout.isTTY === true;
 }
 
-function output(data: unknown, asJson: boolean | undefined, flags?: Flags): void {
+function output(data: unknown, asJson?: boolean, _flags?: Flags): void {
   if (asJson) { console.log(JSON.stringify(data, null, 2)); return; }
   if (typeof data === 'string') { console.log(data); return; }
   console.log((data as { message?: string }).message ?? JSON.stringify(data, null, 2));
@@ -234,7 +234,7 @@ function run(argv: string[]): void {
   const { positional, flags } = parseArgs(argv);
   log('debug', 'CLI invoked', { command: positional[0], flags: { json: flags.json, store: flags.store } });
 
-  if (flags.version) { output({ name: pkg.name, version: pkg.version }, flags.json); return; }
+  if (flags.version) { console.log(flags.json ? JSON.stringify({ name: pkg.name, version: pkg.version }, null, 2) : pkg.version); return; }
 
   if (flags.completions) {
     const shell = flags.completions;
@@ -290,6 +290,9 @@ function run(argv: string[]): void {
   }
 
   if (command === 'list') {
+    if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
+      throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
+    }
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
