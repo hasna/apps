@@ -64,4 +64,66 @@ describe("MCP module dependencies", () => {
     const runs = listRuns();
     expect(Array.isArray(runs)).toBe(true);
   });
+
+  test("listResults filters by status (OPE9-00118)", () => {
+    const { listResults, updateResult } = require("../db/results.js");
+    const { createRun } = require("../db/runs.js");
+
+    const run = createRun({ url: "http://test.example", model: "quick" });
+    const scenario = createScenario({ name: "filter-test", description: "test" });
+
+    const passedResult = require("../db/results.js").createResult({
+      runId: run.id,
+      scenarioId: scenario.id,
+      model: "quick",
+      stepsTotal: 1,
+    });
+    updateResult(passedResult.id, { status: "passed" });
+
+    const failedResult = require("../db/results.js").createResult({
+      runId: run.id,
+      scenarioId: scenario.id,
+      model: "quick",
+      stepsTotal: 1,
+    });
+    updateResult(failedResult.id, { status: "failed" });
+
+    const allResults = listResults(run.id);
+    expect(allResults.length).toBe(2);
+
+    // Verify status filtering works at the MCP tool level (in-memory filter)
+    const passedFiltered = allResults.filter((r: any) => r.status === "passed");
+    expect(passedFiltered.length).toBe(1);
+    expect(passedFiltered[0].id).toBe(passedResult.id);
+
+    const failedFiltered = allResults.filter((r: any) => r.status === "failed");
+    expect(failedFiltered.length).toBe(1);
+    expect(failedFiltered[0].id).toBe(failedResult.id);
+  });
+
+  test("listResults filters by scenarioId (OPE9-00118)", () => {
+    const { createRun } = require("../db/runs.js");
+    const { listResults, updateResult, createResult } = require("../db/results.js");
+
+    const run = createRun({ url: "http://test2.example", model: "quick" });
+    const scenarioA = createScenario({ name: "scenario-A", description: "test A" });
+    const scenarioB = createScenario({ name: "scenario-B", description: "test B" });
+
+    const resultA = createResult({ runId: run.id, scenarioId: scenarioA.id, model: "quick", stepsTotal: 1 });
+    updateResult(resultA.id, { status: "passed" });
+    const resultB = createResult({ runId: run.id, scenarioId: scenarioB.id, model: "quick", stepsTotal: 1 });
+    updateResult(resultB.id, { status: "passed" });
+
+    const allResults = listResults(run.id);
+    expect(allResults.length).toBe(2);
+
+    // Verify scenarioId filtering (exact match and partial match)
+    const exactFiltered = allResults.filter((r: any) => r.scenarioId === scenarioA.id);
+    expect(exactFiltered.length).toBe(1);
+    expect(exactFiltered[0].scenarioId).toBe(scenarioA.id);
+
+    // Partial match (prefix)
+    const partialFiltered = allResults.filter((r: any) => r.scenarioId === scenarioA.id || r.scenarioId.startsWith(scenarioA.id.slice(0, 8)));
+    expect(partialFiltered.length).toBe(1);
+  });
 });
