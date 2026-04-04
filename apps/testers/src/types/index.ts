@@ -5,6 +5,7 @@ export type RunStatus = "pending" | "running" | "passed" | "failed" | "cancelled
 export type ResultStatus = "passed" | "failed" | "error" | "skipped" | "flaky";
 export type ModelPreset = "quick" | "thorough" | "deep" | "cerebras-fast" | "cerebras-smart";
 export type BrowserEngine = "playwright" | "lightpanda" | "bun";
+export type AuthStrategy = "form-login" | "bearer" | "cookie" | "oauth" | "custom_script";
 
 export type AssertionType = "visible" | "not_visible" | "text_contains" | "text_equals" | "element_count" | "no_console_errors" | "url_contains" | "title_contains" | "no_a11y_violations" | "cookie_exists" | "cookie_value" | "cookie_not_exists" | "local_storage_exists" | "local_storage_value" | "local_storage_not_exists" | "session_storage_value" | "session_storage_not_exists";
 
@@ -834,6 +835,9 @@ export interface PersonaRow {
   auth_password: string | null;
   auth_login_path: string | null;
   auth_cookies: string | null; // JSON — saved session state
+  auth_strategy: string | null; // "form-login" | "bearer" | "cookie" | "oauth" | "custom_script"
+  auth_headers: string | null; // JSON — custom headers for bearer/cookie strategies
+  auth_script: string | null; // JS script content for custom_script strategy
 }
 
 export interface PersonaAuth {
@@ -841,6 +845,31 @@ export interface PersonaAuth {
   password: string;
   loginPath: string;
   cookies: Record<string, unknown>[] | null; // saved session cookies
+  strategy: AuthStrategy;
+  headers?: Record<string, string>; // for bearer/cookie strategies
+  customScript?: string; // for custom_script strategy
+}
+
+export interface AuthProfile {
+  strategy: AuthStrategy;
+  // Common
+  email?: string;
+  password?: string;
+  loginPath?: string;
+  emailFieldSelector?: string;
+  passwordFieldSelector?: string;
+  submitSelector?: string;
+  postLoginWaitFor?: string;
+  // Bearer strategy
+  bearerToken?: string;
+  // Cookie strategy
+  cookies?: { name: string; value: string; domain?: string; path?: string }[];
+  // OAuth strategy
+  oauthProvider?: string;
+  // Custom script strategy
+  customScript?: string;
+  // Custom headers for any strategy
+  headers?: Record<string, string>;
 }
 
 export interface Persona {
@@ -884,6 +913,9 @@ export interface CreatePersonaInput {
   authEmail?: string;
   authPassword?: string;
   authLoginPath?: string;
+  authStrategy?: AuthStrategy;
+  authHeaders?: Record<string, string>;
+  authCustomScript?: string;
 }
 
 export interface UpdatePersonaInput {
@@ -904,6 +936,9 @@ export interface UpdatePersonaInput {
   authPassword?: string;
   authLoginPath?: string;
   authCookies?: Record<string, unknown>[] | null;
+  authStrategy?: AuthStrategy;
+  authHeaders?: Record<string, string>;
+  authCustomScript?: string;
 }
 
 export interface PersonaFilter {
@@ -940,6 +975,9 @@ export function personaFromRow(row: PersonaRow): Persona {
       password: row.auth_password!,
       loginPath: row.auth_login_path ?? "/login",
       cookies: row.auth_cookies ? JSON.parse(row.auth_cookies) : null,
+      strategy: (row.auth_strategy as AuthStrategy) ?? "form-login",
+      headers: row.auth_headers ? JSON.parse(row.auth_headers) : undefined,
+      customScript: row.auth_script ?? undefined,
     } : null,
   };
 }

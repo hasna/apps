@@ -464,6 +464,11 @@ ALTER TABLE results ADD COLUMN har_path TEXT;
 ALTER TABLE scenarios ADD COLUMN parameters TEXT;
   `,
   `
+ALTER TABLE personas ADD COLUMN auth_strategy TEXT DEFAULT 'form-login';
+ALTER TABLE personas ADD COLUMN auth_headers TEXT;
+ALTER TABLE personas ADD COLUMN auth_script TEXT;
+  `,
+  `
 CREATE TABLE IF NOT EXISTS step_results (
   id TEXT PRIMARY KEY,
   result_id TEXT NOT NULL REFERENCES results(id) ON DELETE CASCADE,

@@ -17,8 +17,8 @@ export function createPersona(input: CreatePersonaInput): Persona {
   const timestamp = now();
 
   db.query(`
-    INSERT INTO personas (id, short_id, project_id, name, description, role, instructions, traits, goals, behaviors, expertise_level, demographics, pain_points, metadata, enabled, auth_email, auth_password, auth_login_path, version, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    INSERT INTO personas (id, short_id, project_id, name, description, role, instructions, traits, goals, behaviors, expertise_level, demographics, pain_points, metadata, enabled, auth_email, auth_password, auth_login_path, auth_cookies, auth_strategy, auth_headers, auth_script, version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `).run(
     id,
     short_id,
@@ -38,6 +38,10 @@ export function createPersona(input: CreatePersonaInput): Persona {
     input.authEmail ?? null,
     input.authPassword ?? null,
     input.authLoginPath ?? null,
+    null, // auth_cookies
+    input.authStrategy ?? "form-login",
+    input.authHeaders ? JSON.stringify(input.authHeaders) : null,
+    input.authCustomScript ?? null,
     timestamp,
     timestamp,
   );
@@ -181,6 +185,18 @@ export function updatePersona(id: string, updates: UpdatePersonaInput, version: 
   if (updates.authCookies !== undefined) {
     sets.push("auth_cookies = ?");
     params.push(updates.authCookies ? JSON.stringify(updates.authCookies) : null);
+  }
+  if (updates.authStrategy !== undefined) {
+    sets.push("auth_strategy = ?");
+    params.push(updates.authStrategy);
+  }
+  if (updates.authHeaders !== undefined) {
+    sets.push("auth_headers = ?");
+    params.push(JSON.stringify(updates.authHeaders));
+  }
+  if (updates.authCustomScript !== undefined) {
+    sets.push("auth_script = ?");
+    params.push(updates.authCustomScript);
   }
 
   if (sets.length === 0) {
