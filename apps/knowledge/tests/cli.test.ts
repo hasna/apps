@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const CLI = '/home/hasna/workspace/hasna/opensource/opensourcedev/open-knowledge/src/cli.js';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CLI = join(__dirname, '..', 'src', 'cli.js');
 
 function runCli(args: string[]) {
   return Bun.spawnSync(['bun', CLI, ...args], {
