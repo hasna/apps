@@ -3,6 +3,7 @@ process.env.TESTERS_DB_PATH = ":memory:";
 import { describe, test, expect } from "bun:test";
 import { createScenario, listScenarios, getScenario, deleteScenario } from "../db/scenarios.js";
 import { listRuns, createRun, updateRun } from "../db/runs.js";
+import { createProject } from "../db/projects.js";
 import { getDatabase } from "../db/database.js";
 
 describe("MCP module dependencies", () => {
@@ -181,5 +182,31 @@ describe("MCP module dependencies", () => {
     expect(failedIds).toContain(s2.id);
     expect(failedIds).toContain(s3.id);
     expect(failedIds).not.toContain(s1.id);
+  });
+
+  test("listRuns filters by projectId, status, date range (OPE9-00253)", () => {
+    const { listRuns } = require("../db/runs.js");
+    const { createRun, updateRun } = require("../db/runs.js");
+
+    const proj = createProject({ name: "runs-filter-test" });
+
+    const run1 = createRun({ url: "http://test1.example", model: "quick", projectId: proj.id });
+    updateRun(run1.id, { status: "passed", started_at: "2026-04-01T10:00:00Z" });
+    const run2 = createRun({ url: "http://test2.example", model: "quick", projectId: proj.id });
+    updateRun(run2.id, { status: "failed", started_at: "2026-04-02T10:00:00Z" });
+    const run3 = createRun({ url: "http://test3.example", model: "quick" }); // no project
+    updateRun(run3.id, { status: "passed", started_at: "2026-04-03T10:00:00Z" });
+
+    const all = listRuns();
+    expect(all.length).toBeGreaterThanOrEqual(3);
+
+    const filtered = listRuns({ projectId: proj.id });
+    expect(filtered.length).toBe(2);
+
+    const passedOnly = listRuns({ status: "passed" });
+    expect(passedOnly.length).toBeGreaterThanOrEqual(2);
+
+    const dateFiltered = listRuns({ since: "2026-04-02T00:00:00Z", until: "2026-04-02T23:59:59Z" });
+    expect(dateFiltered.length).toBeGreaterThanOrEqual(1);
   });
 });

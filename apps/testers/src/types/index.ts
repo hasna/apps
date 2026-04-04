@@ -361,6 +361,8 @@ export type RunSortField = "date" | "duration" | "cost";
 export interface RunFilter {
   projectId?: string;
   status?: RunStatus;
+  since?: string;
+  until?: string;
   sort?: "date" | "duration" | "cost";
   desc?: boolean;
   limit?: number;

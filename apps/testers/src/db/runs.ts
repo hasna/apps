@@ -62,6 +62,15 @@ export function listRuns(filter?: RunFilter): Run[] {
     params.push(filter.status);
   }
 
+  if (filter?.since) {
+    conditions.push("started_at >= ?");
+    params.push(filter.since);
+  }
+  if (filter?.until) {
+    conditions.push("started_at <= ?");
+    params.push(filter.until);
+  }
+
   let sql = "SELECT * FROM runs";
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
@@ -101,6 +110,14 @@ export function countRuns(filter?: RunFilter): number {
   if (filter?.status) {
     conditions.push("status = ?");
     params.push(filter.status);
+  }
+  if (filter?.since) {
+    conditions.push("started_at >= ?");
+    params.push(filter.since);
+  }
+  if (filter?.until) {
+    conditions.push("started_at <= ?");
+    params.push(filter.until);
   }
 
   let sql = "SELECT COUNT(*) as count FROM runs";

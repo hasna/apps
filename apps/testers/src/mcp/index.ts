@@ -387,12 +387,18 @@ server.tool(
   "list_runs",
   "List test runs with optional filters",
   {
+    projectId: z.string().optional().describe("Filter by project ID"),
     status: z.enum(["pending", "running", "passed", "failed", "cancelled"]).optional().describe("Filter by status"),
+    since: z.string().optional().describe("Filter runs started at or after this ISO date"),
+    until: z.string().optional().describe("Filter runs started at or before this ISO date"),
+    sort: z.enum(["date", "duration", "cost"]).optional().describe("Sort field"),
+    desc: z.boolean().optional().describe("Sort descending (default true)"),
     limit: z.number().optional().describe("Max results to return"),
+    offset: z.number().optional().describe("Number of results to skip"),
   },
-  async ({ status, limit }) => {
+  async ({ projectId, status, since, until, sort, desc, limit, offset }) => {
     try {
-      const runs = listRuns({ status, limit });
+      const runs = listRuns({ projectId, status, since, until, sort, desc, limit, offset });
       return json({ items: runs, total: runs.length });
     } catch (error) {
       return errorResponse(error);
