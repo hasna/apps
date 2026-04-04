@@ -1028,15 +1028,16 @@ server.tool(
     url: z.string().describe("URL to scan"),
     pages: z.array(z.string()).optional().describe("Specific paths to include"),
     projectId: z.string().optional().describe("Project ID"),
-    scanners: z.array(z.enum(["console", "network", "links", "performance"])).optional().describe("Which scanners to run (default: console, network, links)"),
+    scanners: z.array(z.enum(["console", "network", "links", "performance", "a11y"])).optional().describe("Which scanners to run (default: console, network, links)"),
     maxPages: z.number().optional().describe("Max pages for link crawl (default 20)"),
+    wcagLevel: z.enum(["A", "AA", "AAA"]).optional().describe("WCAG compliance level for a11y scanner (default: AA)"),
     headed: z.boolean().optional(),
     timeoutMs: z.number().optional(),
   },
-  async ({ url, pages, projectId, scanners, maxPages, headed, timeoutMs }) => {
+  async ({ url, pages, projectId, scanners, maxPages, headed, timeoutMs, wcagLevel }) => {
     try {
       const { runHealthScan } = await import("../lib/health-scan.js");
-      const summary = await runHealthScan({ url, pages, projectId, scanners, maxPages, headed, timeoutMs });
+      const summary = await runHealthScan({ url, pages, projectId, scanners, maxPages, headed, timeoutMs, wcagLevel });
       return json(summary);
     } catch (e) { return errorResponse(e); }
   },

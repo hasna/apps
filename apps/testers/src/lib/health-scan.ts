@@ -4,6 +4,7 @@ import { scanBrokenLinks } from "./scanners/links.js";
 import { scanPerformance } from "./scanners/performance.js";
 import { scanInjection } from "./scanners/injection.js";
 import { scanPiiEndpoint } from "./scanners/pii-scanner.js";
+import { scanA11y } from "./scanners/a11y.js";
 import { upsertScanIssue, setScanIssueTodoTaskId } from "../db/scan-issues.js";
 import { connectToTodos } from "./todos-connector.js";
 import type { ScanResult, ScanIssue } from "../types/index.js";
@@ -16,7 +17,8 @@ export interface HealthScanOptions {
   projectId?: string;
   headed?: boolean;
   timeoutMs?: number;
-  scanners?: ("console" | "network" | "links" | "performance" | "injection" | "pii")[];
+  scanners?: ("console" | "network" | "links" | "performance" | "injection" | "pii" | "a11y")[];
+  wcagLevel?: "A" | "AA" | "AAA";
   injectionEndpoint?: string;
   injectionInputField?: string;
   maxPages?: number;
@@ -84,6 +86,16 @@ export async function runHealthScan(options: HealthScanOptions): Promise<HealthS
       timeoutMs,
     });
     results.push(piiResult);
+  }
+  if (scanners.includes("a11y")) {
+    const a11yResult = await scanA11y({
+      url,
+      pages,
+      wcagLevel: options.wcagLevel ?? "AA",
+      headed,
+      timeoutMs,
+    });
+    results.push(a11yResult);
   }
 
   // Deduplicate and persist all issues
