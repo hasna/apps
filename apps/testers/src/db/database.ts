@@ -455,6 +455,11 @@ ALTER TABLE scenarios ADD COLUMN required_role TEXT;
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+
+  // Migration 26: HAR capture path on results
+  `
+ALTER TABLE results ADD COLUMN har_path TEXT;
+  `,
 ];
 
 function applyMigrations(database: Database): void {

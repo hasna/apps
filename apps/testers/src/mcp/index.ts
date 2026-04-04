@@ -2059,6 +2059,40 @@ server.tool(
   },
 );
 
+// ─── 59. get_har ──────────────────────────────────────────────────────────────
+
+server.tool(
+  "get_har",
+  `Get HAR (HTTP Archive) file for a test result. Returns metadata by default, or full HAR content when includeContent is true. Useful for debugging network requests, API calls, and CORS issues. ${ID_DESC}`,
+  {
+    resultId: z.string().describe(`Result ID. ${ID_DESC}`),
+    includeContent: z.boolean().optional().describe("Return full HAR JSON content (default: false)"),
+  },
+  async ({ resultId, includeContent }) => {
+    try {
+      const result = getResult(resultId);
+      if (!result) return errorResponse(notFoundErr(resultId, "Result"));
+
+      const harPath = (result as { harPath?: string | null }).harPath ?? (result.metadata as { harPath?: string } | null)?.harPath;
+      if (!harPath) return json({ resultId, harAvailable: false, message: "No HAR file recorded for this result." });
+
+      const harFile = Bun.file(harPath);
+      const exists = await harFile.exists();
+      if (!exists) return json({ resultId, harPath, harAvailable: false, message: "HAR file was recorded but has been cleaned up." });
+
+      if (!includeContent) {
+        const size = await harFile.size();
+        return json({ resultId, harPath, harAvailable: true, sizeBytes: size, message: "HAR file available. Use includeContent: true to retrieve." });
+      }
+
+      const harContent = await harFile.text();
+      return json({ resultId, harPath, harAvailable: true, har: JSON.parse(harContent) });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
 // ─── Cloud ────────────────────────────────────────────────────────────────────
 
 registerCloudTools(server, "testers");

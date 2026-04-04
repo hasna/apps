@@ -120,6 +120,7 @@ export interface ResultRow {
   persona_id: string | null;
   persona_name: string | null;
   failure_analysis: string | null;
+  har_path: string | null;
 }
 
 export interface ScreenshotRow {
@@ -261,6 +262,7 @@ export interface Result {
   personaId: string | null;
   personaName: string | null;
   failureAnalysis: FailureAnalysis | null;
+  harPath: string | null;
 }
 
 export interface Screenshot {
@@ -531,6 +533,7 @@ export function resultFromRow(row: ResultRow): Result {
     personaId: row.persona_id ?? null,
     personaName: row.persona_name ?? null,
     failureAnalysis: row.failure_analysis ? JSON.parse(row.failure_analysis) : null,
+    harPath: row.har_path ?? null,
   };
 }
 

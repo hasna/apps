@@ -126,4 +126,21 @@ describe("MCP module dependencies", () => {
     const partialFiltered = allResults.filter((r: any) => r.scenarioId === scenarioA.id || r.scenarioId.startsWith(scenarioA.id.slice(0, 8)));
     expect(partialFiltered.length).toBe(1);
   });
+
+  test("results store and retrieve harPath via metadata (OPE9-00223)", () => {
+    const { createRun } = require("../db/runs.js");
+    const { createResult, updateResult, getResult } = require("../db/results.js");
+
+    const run = createRun({ url: "http://har-test.example", model: "quick" });
+    const scenario = createScenario({ name: "har-test-scenario", description: "test HAR storage" });
+
+    const result = createResult({ runId: run.id, scenarioId: scenario.id, model: "quick", stepsTotal: 1 });
+    const harPath = "/tmp/hars/test-123.har";
+    updateResult(result.id, { status: "passed", metadata: { harPath } });
+
+    const retrieved = getResult(result.id);
+    expect(retrieved).toBeDefined();
+    expect(retrieved!.status).toBe("passed");
+    expect(retrieved!.metadata).toEqual({ harPath });
+  });
 });

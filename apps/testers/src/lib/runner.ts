@@ -3,6 +3,8 @@ import { BudgetExceededError } from "../types/index.js";
 import { runEvalScenario } from "./eval-runner.js";
 import { createRun, getRun, updateRun } from "../db/runs.js";
 import { createResult, updateResult } from "../db/results.js";
+import { mkdirSync } from "fs";
+import { join } from "path";
 import { analyzeFailure } from "./failure-analyzer.js";
 import { estimateRunCostCents } from "./costs.js";
 import { createScreenshot } from "../db/screenshots.js";
@@ -176,12 +178,28 @@ export async function runSingleScenario(
 
   let browser: Browser | null = null;
   let page: Page | null = null;
+  let context: import("playwright").BrowserContext | null = null;
+  let harPath: string | null = null;
 
   try {
     browser = await launchBrowser({ headless: !(effectiveOptions.headed ?? false), engine: effectiveOptions.engine });
-    page = await getPage(browser, {
-      viewport: config.browser.viewport,
-    });
+    // Create a context with HAR recording for network debugging (Playwright only)
+    const useHar = effectiveOptions.engine !== "lightpanda" && effectiveOptions.engine !== "bun";
+    if (useHar) {
+      const harDir = join(process.env["HASNA_TESTERS_DIR"] || join(process.env["HOME"] || "", ".hasna", "testers"), "hars");
+      mkdirSync(harDir, { recursive: true });
+      harPath = join(harDir, `${result.id}.har`);
+      context = await browser.newContext({
+        viewport: config.browser.viewport,
+        recordHar: { path: harPath, mode: "full" },
+      });
+      page = await context.newPage();
+    } else {
+      page = await getPage(browser, {
+        viewport: config.browser.viewport,
+        engine: effectiveOptions.engine,
+      });
+    }
 
     const targetUrl = scenario.targetPath
       ? `${options.url.replace(/\/$/, "")}${scenario.targetPath}`
@@ -314,6 +332,10 @@ export async function runSingleScenario(
     emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: errorMsg, runId });
     return updatedResult;
   } finally {
+    // Store HAR path on the result (even for failures — still captures useful network data)
+    if (harPath) {
+      try { updateResult(result.id, { metadata: { harPath } }); } catch { /* ignore */ }
+    }
     if (browser) await closeBrowser(browser, effectiveOptions.engine);
   }
 }
