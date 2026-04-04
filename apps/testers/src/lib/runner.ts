@@ -209,7 +209,13 @@ export async function runSingleScenario(
 
     // Attach listeners BEFORE page.goto() to capture initial page load events
     const consoleErrors: string[] = [];
-    page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
+    const consoleLogs: { step: number | null; type: string; text: string; timestamp: number }[] = [];
+    let currentStep = 0;
+    page.on("console", (msg) => {
+      const logEntry = { step: currentStep > 0 ? currentStep : null, type: msg.type(), text: msg.text(), timestamp: Date.now() };
+      consoleLogs.push(logEntry);
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
     page.on("pageerror", (err) => { consoleErrors.push(err.message); });
 
     await page.goto(targetUrl, { timeout: Math.min(scenarioTimeout, 30000) });
@@ -239,6 +245,7 @@ export async function runSingleScenario(
       onStep: (stepEvent) => {
         let stepDurationMs: number | undefined;
         if (stepEvent.type === "tool_call") {
+          currentStep = stepEvent.stepNumber;
           stepStartTimes.set(stepEvent.stepNumber, Date.now());
         } else if (stepEvent.type === "tool_result") {
           const startTime = stepStartTimes.get(stepEvent.stepNumber);
@@ -292,6 +299,7 @@ export async function runSingleScenario(
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
       tokensUsed: agentResult.tokensUsed,
       costCents: estimateCost(model, agentResult.tokensUsed),
+      metadata: { consoleLogs },
     });
 
     // Wire failure analysis for non-passing results
