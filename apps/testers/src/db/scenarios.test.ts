@@ -382,4 +382,28 @@ describe("scenarios", () => {
       expect(b.action).toBe("deduped");
     });
   });
+
+  describe("parameters (OPE9-00267)", () => {
+    test("creates a scenario with parameters", () => {
+      const scenario = createScenario({
+        name: "Parameterized test",
+        description: "Test with data-driven parameters",
+        parameters: { username: "admin", password: "secret", expectedRole: "editor" },
+      });
+      expect(scenario.parameters).toEqual({ username: "admin", password: "secret", expectedRole: "editor" });
+    });
+
+    test("updates scenario parameters", () => {
+      const created = createScenario({
+        name: "Param update test",
+        description: "Test parameter update",
+      });
+      expect(created.parameters).toBeNull();
+
+      const updated = updateScenario(created.id, {
+        parameters: { variant: "A", iterations: 5 },
+      }, 1);
+      expect(updated.parameters).toEqual({ variant: "A", iterations: 5 });
+    });
+  });
 });

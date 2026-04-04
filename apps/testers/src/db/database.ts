@@ -460,6 +460,9 @@ ALTER TABLE scenarios ADD COLUMN required_role TEXT;
   `
 ALTER TABLE results ADD COLUMN har_path TEXT;
   `,
+  `
+ALTER TABLE scenarios ADD COLUMN parameters TEXT;
+  `,
 ];
 
 function applyMigrations(database: Database): void {

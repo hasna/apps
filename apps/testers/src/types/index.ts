@@ -71,6 +71,7 @@ export interface ScenarioRow {
   updated_at: string;
   last_passed_at: string | null;
   last_passed_url: string | null;
+  parameters: string | null; // JSON object or array for data-driven scenarios
 }
 
 export interface RunRow {
@@ -221,6 +222,7 @@ export interface Scenario {
   updatedAt: string;
   lastPassedAt: string | null;
   lastPassedUrl: string | null;
+  parameters: Record<string, unknown> | null;
   flakinessScore?: number | null;
   recentRunCount?: number;
 }
@@ -314,6 +316,7 @@ export interface CreateScenarioInput {
   assertions?: Assertion[];
   metadata?: Record<string, unknown>;
   projectId?: string;
+  parameters?: Record<string, unknown>;
 }
 
 export interface UpdateScenarioInput {
@@ -329,6 +332,7 @@ export interface UpdateScenarioInput {
   authConfig?: AuthConfig;
   assertions?: Assertion[];
   metadata?: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
 }
 
 export interface CreateRunInput {
@@ -492,6 +496,7 @@ export function scenarioFromRow(row: ScenarioRow): Scenario {
     updatedAt: row.updated_at,
     lastPassedAt: row.last_passed_at ?? null,
     lastPassedUrl: row.last_passed_url ?? null,
+    parameters: row.parameters ? JSON.parse(row.parameters) : null,
   };
 }
 

@@ -35,8 +35,8 @@ export function createScenario(input: CreateScenarioInput): Scenario {
   const timestamp = now();
 
   db.query(`
-    INSERT INTO scenarios (id, short_id, project_id, name, description, steps, tags, priority, model, timeout_ms, target_path, requires_auth, auth_config, metadata, assertions, version, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    INSERT INTO scenarios (id, short_id, project_id, name, description, steps, tags, priority, model, timeout_ms, target_path, requires_auth, auth_config, metadata, assertions, parameters, version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `).run(
     id,
     short_id,
@@ -53,6 +53,7 @@ export function createScenario(input: CreateScenarioInput): Scenario {
     input.authConfig ? JSON.stringify(input.authConfig) : null,
     input.metadata ? JSON.stringify(input.metadata) : null,
     JSON.stringify(input.assertions ?? []),
+    input.parameters ? JSON.stringify(input.parameters) : null,
     timestamp,
     timestamp,
   );
@@ -234,6 +235,10 @@ export function updateScenario(id: string, input: UpdateScenarioInput, version: 
   if (input.assertions !== undefined) {
     sets.push("assertions = ?");
     params.push(JSON.stringify(input.assertions));
+  }
+  if (input.parameters !== undefined) {
+    sets.push("parameters = ?");
+    params.push(JSON.stringify(input.parameters));
   }
 
   if (sets.length === 0) {
