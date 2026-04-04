@@ -313,6 +313,55 @@ server.tool(
   },
 );
 
+// ─── 6b. retry_failed ────────────────────────────────────────────────────────
+
+server.tool(
+  "retry_failed",
+  "Re-run only failed/errored scenarios from a previous run. Creates a new run with only the failing scenarios.",
+  {
+    runId: z.string().describe("Previous run ID to retry failures from"),
+    url: z.string().optional().describe("Target URL (overrides original run URL)"),
+    model: z.string().optional().describe(MODEL_DESC),
+    headed: z.boolean().optional().describe("Run browser in headed mode"),
+    parallel: z.number().optional().describe("Number of parallel workers"),
+    maxRetries: z.number().int().min(0).max(3).optional().describe("Max retries per failed scenario"),
+    maxCostCents: z.number().optional().describe("Hard budget cap in cents"),
+  },
+  async ({ runId, url, model, headed, parallel, maxRetries, maxCostCents }) => {
+    try {
+      const run = getRun(runId);
+      if (!run) return errorResponse(notFoundErr(runId, "Run"));
+      if (run.status !== "failed") return errorResponse(new Error("Run is not in failed state. Can only retry failures from a failed run."));
+
+      const results = getResultsByRun(runId);
+      const failedResultIds = results.filter((r: any) => r.status === "failed" || r.status === "error").map((r: any) => r.scenarioId);
+      if (failedResultIds.length === 0) return errorResponse(new Error("No failed results found in this run."));
+
+      const resolvedUrl = url ?? run.url;
+      const { runId: newRunId, scenarioCount } = startRunAsync({
+        url: resolvedUrl,
+        scenarioIds: failedResultIds,
+        model,
+        headed,
+        parallel,
+        retry: maxRetries ?? 0,
+        maxCostCents,
+      });
+      return json({
+        runId: newRunId,
+        originalRunId: runId,
+        scenarioCount,
+        retriedScenarioIds: failedResultIds,
+        url: resolvedUrl,
+        status: "running",
+        message: "Poll with get_run to check progress.",
+      });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
+
 // ─── 7. get_run ──────────────────────────────────────────────────────────────
 
 server.tool(

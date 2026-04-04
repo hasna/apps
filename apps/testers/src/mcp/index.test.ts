@@ -2,7 +2,7 @@ process.env.TESTERS_DB_PATH = ":memory:";
 
 import { describe, test, expect } from "bun:test";
 import { createScenario, listScenarios, getScenario, deleteScenario } from "../db/scenarios.js";
-import { listRuns } from "../db/runs.js";
+import { listRuns, createRun, updateRun } from "../db/runs.js";
 import { getDatabase } from "../db/database.js";
 
 describe("MCP module dependencies", () => {
@@ -155,5 +155,31 @@ describe("MCP module dependencies", () => {
     expect(results[0].tags).toEqual(["batch"]);
     expect(results[1].priority).toBe("high");
     expect(results[2].tags).toEqual(["batch", "smoke"]);
+  });
+
+  test("retry_failed re-runs only failed scenarios from a run (OPE9-00254)", () => {
+    const { createRun } = require("../db/runs.js");
+    const { createResult, updateResult, getResultsByRun } = require("../db/results.js");
+    const { createScenario } = require("../db/scenarios.js");
+
+    const run = createRun({ url: "http://retry-test.example", model: "quick" });
+    const s1 = createScenario({ name: "Pass Test", description: "Should pass" });
+    const s2 = createScenario({ name: "Fail Test", description: "Should fail" });
+    const s3 = createScenario({ name: "Error Test", description: "Should error" });
+
+    const r1 = createResult({ runId: run.id, scenarioId: s1.id, model: "quick", stepsTotal: 1 });
+    updateResult(r1.id, { status: "passed" });
+    const r2 = createResult({ runId: run.id, scenarioId: s2.id, model: "quick", stepsTotal: 1 });
+    updateResult(r2.id, { status: "failed" });
+    const r3 = createResult({ runId: run.id, scenarioId: s3.id, model: "quick", stepsTotal: 1 });
+    updateResult(r3.id, { status: "error" });
+    updateRun(run.id, { status: "failed", passed: 1, failed: 2, total: 3 });
+
+    const results = getResultsByRun(run.id);
+    const failedIds = results.filter((r: any) => r.status === "failed" || r.status === "error").map((r: any) => r.scenarioId);
+    expect(failedIds).toHaveLength(2);
+    expect(failedIds).toContain(s2.id);
+    expect(failedIds).toContain(s3.id);
+    expect(failedIds).not.toContain(s1.id);
   });
 });
