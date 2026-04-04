@@ -485,6 +485,16 @@ CREATE TABLE IF NOT EXISTS step_results (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
   `,
+  // Migration 27: PR metadata on runs for GitHub integration
+  `
+ALTER TABLE runs ADD COLUMN pr_number INTEGER;
+ALTER TABLE runs ADD COLUMN pr_title TEXT;
+ALTER TABLE runs ADD COLUMN pr_branch TEXT;
+ALTER TABLE runs ADD COLUMN pr_base_branch TEXT;
+ALTER TABLE runs ADD COLUMN pr_commit_sha TEXT;
+ALTER TABLE runs ADD COLUMN pr_url TEXT;
+ALTER TABLE runs ADD COLUMN gh_app_installation_id TEXT;
+  `,
 ];
 
 function applyMigrations(database: Database): void {

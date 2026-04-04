@@ -13,8 +13,8 @@ export function createRun(input: CreateRunInput & { model: string }): Run {
   const timestamp = now();
 
   db.query(`
-    INSERT INTO runs (id, project_id, status, url, model, headed, parallel, total, passed, failed, started_at, finished_at, metadata, samples, flakiness_threshold)
-    VALUES (?, ?, 'pending', ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?)
+    INSERT INTO runs (id, project_id, status, url, model, headed, parallel, total, passed, failed, started_at, finished_at, metadata, samples, flakiness_threshold, pr_number, pr_title, pr_branch, pr_base_branch, pr_commit_sha, pr_url, gh_app_installation_id)
+    VALUES (?, ?, 'pending', ?, ?, ?, ?, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     input.projectId ?? null,
@@ -23,9 +23,16 @@ export function createRun(input: CreateRunInput & { model: string }): Run {
     input.headed ? 1 : 0,
     input.parallel ?? 1,
     timestamp,
-    input.model ? JSON.stringify({}) : null,
+    JSON.stringify({}),
     input.samples ?? 1,
     input.flakinessThreshold ?? 0.95,
+    input.prNumber ?? null,
+    input.prTitle ?? null,
+    input.prBranch ?? null,
+    input.prBaseBranch ?? null,
+    input.prCommitSha ?? null,
+    input.prUrl ?? null,
+    input.ghAppInstallationId ?? null,
   );
 
   return getRun(id)!;
@@ -203,4 +210,94 @@ export function deleteRun(id: string): boolean {
 
   const result = db.query("DELETE FROM runs WHERE id = ?").run(run.id);
   return result.changes > 0;
+}
+
+// ─── PR Run Helpers (OPE9-00279) ─────────────────────────────────────────────
+
+/**
+ * Get runs associated with a specific PR number.
+ */
+export function getRunsByPr(prNumber: number): Run[] {
+  const db = getDatabase();
+  const rows = db
+    .query("SELECT * FROM runs WHERE pr_number = ? ORDER BY started_at DESC")
+    .all(prNumber) as RunRow[];
+  return rows.map(runFromRow);
+}
+
+/**
+ * Get the latest run for a specific PR number.
+ */
+export function getLatestPrRun(prNumber: number): Run | null {
+  const db = getDatabase();
+  const row = db
+    .query("SELECT * FROM runs WHERE pr_number = ? ORDER BY started_at DESC, rowid DESC LIMIT 1")
+    .get(prNumber) as RunRow | null;
+  return row ? runFromRow(row) : null;
+}
+
+/**
+ * List all runs that have PR metadata, optionally filtered by branch.
+ */
+export function listPrRuns(filter?: { branch?: string; baseBranch?: string; limit?: number; offset?: number }): Run[] {
+  const db = getDatabase();
+  const conditions: string[] = ["pr_number IS NOT NULL"];
+  const params: (string | number | null)[] = [];
+
+  if (filter?.branch) {
+    conditions.push("pr_branch = ?");
+    params.push(filter.branch);
+  }
+  if (filter?.baseBranch) {
+    conditions.push("pr_base_branch = ?");
+    params.push(filter.baseBranch);
+  }
+
+  let sql = "SELECT * FROM runs WHERE " + conditions.join(" AND ") + " ORDER BY started_at DESC";
+  if (filter?.limit) {
+    sql += " LIMIT ?";
+    params.push(filter.limit);
+  }
+  if (filter?.offset) {
+    sql += " OFFSET ?";
+    params.push(filter.offset);
+  }
+
+  const rows = db.query(sql).all(...params) as RunRow[];
+  return rows.map(runFromRow);
+}
+
+/**
+ * Update PR-specific fields on an existing run.
+ */
+export function updatePrRunMetadata(runId: string, prData: {
+  prNumber: number;
+  prTitle?: string;
+  prBranch?: string;
+  prBaseBranch?: string;
+  prCommitSha?: string;
+  prUrl?: string;
+  ghAppInstallationId?: string;
+}): Run {
+  const db = getDatabase();
+  const existing = getRun(runId);
+  if (!existing) {
+    throw new Error(`Run not found: ${runId}`);
+  }
+
+  db.query(`
+    UPDATE runs SET pr_number = ?, pr_title = ?, pr_branch = ?, pr_base_branch = ?, pr_commit_sha = ?, pr_url = ?, gh_app_installation_id = ?
+    WHERE id = ?
+  `).run(
+    prData.prNumber,
+    prData.prTitle ?? null,
+    prData.prBranch ?? null,
+    prData.prBaseBranch ?? null,
+    prData.prCommitSha ?? null,
+    prData.prUrl ?? null,
+    prData.ghAppInstallationId ?? null,
+    runId,
+  );
+
+  return getRun(runId)!;
 }

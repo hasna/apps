@@ -92,6 +92,14 @@ export interface RunRow {
   is_baseline: number;
   samples: number;
   flakiness_threshold: number;
+  // PR metadata (OPE9-00279)
+  pr_number: number | null;
+  pr_title: string | null;
+  pr_branch: string | null;
+  pr_base_branch: string | null;
+  pr_commit_sha: string | null;
+  pr_url: string | null;
+  gh_app_installation_id: string | null;
 }
 
 export interface FailureAnalysis {
@@ -245,6 +253,14 @@ export interface Run {
   isBaseline: boolean;
   samples: number;
   flakinessThreshold: number;
+  // PR metadata (OPE9-00279)
+  prNumber: number | null;
+  prTitle: string | null;
+  prBranch: string | null;
+  prBaseBranch: string | null;
+  prCommitSha: string | null;
+  prUrl: string | null;
+  ghAppInstallationId: string | null;
 }
 
 export interface Result {
@@ -348,6 +364,14 @@ export interface CreateRunInput {
   projectId?: string;
   samples?: number;
   flakinessThreshold?: number;
+  // PR metadata (OPE9-00279)
+  prNumber?: number;
+  prTitle?: string;
+  prBranch?: string;
+  prBaseBranch?: string;
+  prCommitSha?: string;
+  prUrl?: string;
+  ghAppInstallationId?: string;
 }
 
 export interface ScenarioFilter {
@@ -519,6 +543,13 @@ export function runFromRow(row: RunRow): Run {
     isBaseline: row.is_baseline === 1,
     samples: row.samples ?? 1,
     flakinessThreshold: row.flakiness_threshold ?? 0.95,
+    prNumber: row.pr_number ?? null,
+    prTitle: row.pr_title ?? null,
+    prBranch: row.pr_branch ?? null,
+    prBaseBranch: row.pr_base_branch ?? null,
+    prCommitSha: row.pr_commit_sha ?? null,
+    prUrl: row.pr_url ?? null,
+    ghAppInstallationId: row.gh_app_installation_id ?? null,
   };
 }
 
