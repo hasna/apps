@@ -34,7 +34,7 @@ describe("getDefaultConfig", () => {
   it("returns headless browser by default", () => {
     const config = getDefaultConfig();
     expect(config.browser.headless).toBe(true);
-    expect(config.browser.timeout).toBe(60_000);
+    expect(config.browser.timeout).toBe(120_000);
   });
 
   it("includes all model presets", () => {

@@ -17,7 +17,7 @@ export function getDefaultConfig(): TestersConfig {
     browser: {
       headless: true,
       viewport: { width: 1280, height: 720 },
-      timeout: 60_000,
+      timeout: 120_000,
     },
     screenshots: {
       dir: join(getTestersDir(), "screenshots"),
