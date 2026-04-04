@@ -8,6 +8,7 @@ import { join } from "path";
 import { analyzeFailure } from "./failure-analyzer.js";
 import { estimateRunCostCents } from "./costs.js";
 import { createScreenshot } from "../db/screenshots.js";
+import { createStepResult, updateStepResult } from "../db/step-results.js";
 import { listScenarios, updateScenarioPassedCache } from "../db/scenarios.js";
 import { getPersona } from "../db/personas.js";
 import { launchBrowser, getPage, closeBrowser } from "./browser.js";
@@ -222,6 +223,7 @@ export async function runSingleScenario(
 
     // Per-step timing: track when each tool call started
     const stepStartTimes = new Map<number, number>();
+    const stepResultIds = new Map<number, string>();
 
     const agentResult = await withTimeout(runAgentLoop({
       client,
@@ -247,11 +249,31 @@ export async function runSingleScenario(
         if (stepEvent.type === "tool_call") {
           currentStep = stepEvent.stepNumber;
           stepStartTimes.set(stepEvent.stepNumber, Date.now());
+          // Create step_result record
+          const stepResult = createStepResult({
+            resultId: result.id,
+            stepNumber: stepEvent.stepNumber,
+            action: stepEvent.toolName ?? `step-${stepEvent.stepNumber}`,
+            toolName: stepEvent.toolName,
+            toolInput: stepEvent.toolInput,
+            thinking: stepEvent.thinking,
+          });
+          stepResultIds.set(stepEvent.stepNumber, stepResult.id);
         } else if (stepEvent.type === "tool_result") {
           const startTime = stepStartTimes.get(stepEvent.stepNumber);
           if (startTime !== undefined) {
             stepDurationMs = Date.now() - startTime;
             stepStartTimes.delete(stepEvent.stepNumber);
+          }
+          // Update step_result with result
+          const stepResultId = stepResultIds.get(stepEvent.stepNumber);
+          if (stepResultId) {
+            const isSuccess = !stepEvent.toolResult?.toLowerCase().includes("error") && !stepEvent.toolResult?.toLowerCase().includes("failed");
+            updateStepResult(stepResultId, {
+              status: isSuccess ? "passed" : "failed",
+              toolResult: stepEvent.toolResult,
+              durationMs: stepDurationMs,
+            });
           }
         }
         emit({

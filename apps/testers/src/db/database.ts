@@ -463,6 +463,23 @@ ALTER TABLE results ADD COLUMN har_path TEXT;
   `
 ALTER TABLE scenarios ADD COLUMN parameters TEXT;
   `,
+  `
+CREATE TABLE IF NOT EXISTS step_results (
+  id TEXT PRIMARY KEY,
+  result_id TEXT NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+  step_number INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('passed','failed','error','running','skipped')),
+  tool_name TEXT,
+  tool_input TEXT,
+  tool_result TEXT,
+  thinking TEXT,
+  error TEXT,
+  duration_ms INTEGER,
+  screenshot_id TEXT REFERENCES screenshots(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
