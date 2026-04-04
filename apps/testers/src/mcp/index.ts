@@ -290,8 +290,9 @@ server.tool(
     cacheMaxAgeMs: z.number().optional().describe("Skip scenarios that passed at the same URL within this many ms (0 = disabled)"),
     minimal: z.boolean().optional().describe("Fastest mode: cheapest model, max parallelism, min turns — ideal for CI smoke checks"),
     timeoutMs: z.number().optional().describe("Per-scenario timeout in ms (default 120000)"),
+    recordVideo: z.boolean().optional().describe("Record video of each scenario run (Playwright only)"),
   },
-  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeoutMs }) => {
+  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeoutMs, recordVideo }) => {
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
@@ -306,7 +307,7 @@ server.tool(
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs });
+      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs, recordVideo });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);

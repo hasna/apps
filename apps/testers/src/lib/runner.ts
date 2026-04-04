@@ -41,6 +41,7 @@ export interface RunOptions {
   skipBudgetCheck?: boolean; // bypass maxCostCents check
   cacheMaxAgeMs?: number; // skip scenario if it passed at the same URL within this many ms (0 = disabled)
   minimal?: boolean;  // fastest possible run: cheapest model, fastest browser, max parallelism, min turns
+  recordVideo?: boolean; // record video of each scenario run using Playwright recordVideo
 }
 
 export interface RunEvent {
@@ -187,13 +188,20 @@ export async function runSingleScenario(
     // Create a context with HAR recording for network debugging (Playwright only)
     const useHar = effectiveOptions.engine !== "lightpanda" && effectiveOptions.engine !== "bun";
     if (useHar) {
-      const harDir = join(process.env["HASNA_TESTERS_DIR"] || join(process.env["HOME"] || "", ".hasna", "testers"), "hars");
+      const testersDir = process.env["HASNA_TESTERS_DIR"] || join(process.env["HOME"] || "", ".hasna", "testers");
+      const harDir = join(testersDir, "hars");
       mkdirSync(harDir, { recursive: true });
       harPath = join(harDir, `${result.id}.har`);
-      context = await browser.newContext({
+      const contextOptions: import("playwright").BrowserContextOptions = {
         viewport: config.browser.viewport,
         recordHar: { path: harPath, mode: "full" },
-      });
+      };
+      if (effectiveOptions.recordVideo) {
+        const videoDir = join(testersDir, "videos");
+        mkdirSync(videoDir, { recursive: true });
+        contextOptions.recordVideo = { dir: videoDir, size: config.browser.viewport };
+      }
+      context = await browser.newContext(contextOptions);
       page = await context.newPage();
     } else {
       page = await getPage(browser, {
