@@ -283,6 +283,7 @@ server.tool(
     headed: z.boolean().optional().describe("Run browser in headed mode"),
     parallel: z.number().optional().describe("Number of parallel workers"),
     personaId: z.string().optional().describe("Override persona ID for this run"),
+    personaIds: z.array(z.string()).optional().describe("Run with multiple personas for divergence testing (each persona runs all scenarios)"),
     samples: z.number().int().min(1).max(20).optional().describe("Run each scenario N times for flakiness detection (default 1)"),
     flakinessThreshold: z.number().min(0).max(1).optional().describe("Pass rate below which scenario is marked flaky (default 0.95)"),
     maxCostCents: z.number().optional().describe("Hard budget cap in cents — run is rejected before starting if estimated cost exceeds this"),
@@ -290,7 +291,7 @@ server.tool(
     minimal: z.boolean().optional().describe("Fastest mode: cheapest model, max parallelism, min turns — ideal for CI smoke checks"),
     timeoutMs: z.number().optional().describe("Per-scenario timeout in ms (default 120000)"),
   },
-  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeoutMs }) => {
+  async ({ url, env, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeoutMs }) => {
     try {
       let resolvedUrl = url;
       if (!resolvedUrl && env) {
@@ -305,7 +306,7 @@ server.tool(
         if (defaultEnv) resolvedUrl = defaultEnv.url;
       }
       if (!resolvedUrl) return errorResponse(new Error("No URL provided and no default environment set. Pass url or env."));
-      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs });
+      const { runId, scenarioCount } = startRunAsync({ url: resolvedUrl, tags, scenarioIds, priority, model, headed, parallel, personaId, personaIds, samples, flakinessThreshold, maxCostCents, cacheMaxAgeMs, minimal, timeout: timeoutMs });
       return json({ runId, scenarioCount, url: resolvedUrl, status: "running", message: "Poll with get_run to check progress." });
     } catch (error) {
       return errorResponse(error);
