@@ -128,10 +128,11 @@ server.tool(
     model: z.string().optional().describe(MODEL_DESC),
     targetPath: z.string().optional().describe("URL path to navigate to"),
     requiresAuth: z.boolean().optional().describe("Whether scenario requires authentication"),
+    projectId: z.string().optional().describe("Project ID to scope this scenario to"),
   },
-  async ({ name, description, steps, tags, priority, model, targetPath, requiresAuth }) => {
+  async ({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId }) => {
     try {
-      const scenario = createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth });
+      const scenario = createScenario({ name, description, steps, tags, priority, model, targetPath, requiresAuth, projectId });
       return json(scenario);
     } catch (error) {
       return errorResponse(error);
