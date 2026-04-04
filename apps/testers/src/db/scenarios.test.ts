@@ -9,7 +9,9 @@ import {
   listScenarios,
   updateScenario,
   deleteScenario,
+  upsertScenario,
 } from "./scenarios.js";
+import { createProject } from "./projects.js";
 import { createProject } from "./projects.js";
 import { VersionConflictError } from "../types/index.js";
 
@@ -284,6 +286,100 @@ describe("scenarios", () => {
     test("returns false for non-existent scenario", () => {
       const deleted = deleteScenario("nonexistent-id");
       expect(deleted).toBe(false);
+    });
+  });
+
+  describe("upsertScenario (OPE9-00248)", () => {
+    test("creates new scenario when none exists", () => {
+      const result = upsertScenario({
+        name: "upsert-new",
+        description: "Brand new scenario",
+        steps: ["Step 1", "Step 2"],
+        tags: ["smoke"],
+      });
+      expect(result.action).toBe("created");
+      expect(result.scenario.name).toBe("upsert-new");
+    });
+
+    test("dedupes identical scenario", () => {
+      const first = upsertScenario({
+        name: "upsert-dedup",
+        description: "Same content",
+        steps: ["Step A"],
+        tags: ["test"],
+      });
+      expect(first.action).toBe("created");
+
+      const second = upsertScenario({
+        name: "upsert-dedup",
+        description: "Same content",
+        steps: ["Step A"],
+        tags: ["test"],
+      });
+      expect(second.action).toBe("deduped");
+      expect(second.scenario.id).toBe(first.scenario.id);
+    });
+
+    test("updates when content differs", () => {
+      const first = upsertScenario({
+        name: "upsert-update",
+        description: "Original",
+        steps: ["Old step"],
+        tags: ["test"],
+      });
+      expect(first.action).toBe("created");
+
+      const second = upsertScenario({
+        name: "upsert-update",
+        description: "Updated description",
+        steps: ["New step"],
+        tags: ["test", "updated"],
+      });
+      expect(second.action).toBe("updated");
+      expect(second.scenario.id).toBe(first.scenario.id);
+      expect(second.scenario.description).toBe("Updated description");
+    });
+
+    test("scopes dedup by projectId", () => {
+      const projA = createProject({ name: "ProjC" });
+
+      // Same name, no project -> different scenario
+      const global = upsertScenario({
+        name: "global-vs-project",
+        description: "Global version",
+      });
+      expect(global.action).toBe("created");
+
+      const proj = upsertScenario({
+        name: "global-vs-project",
+        description: "Project version",
+        projectId: projA.id,
+      });
+      expect(proj.action).toBe("created");
+      expect(proj.scenario.id).not.toBe(global.scenario.id);
+
+      // Upsert again in project — should dedupe
+      const proj2 = upsertScenario({
+        name: "global-vs-project",
+        description: "Project version",
+        projectId: projA.id,
+      });
+      expect(proj2.action).toBe("deduped");
+      expect(proj2.scenario.id).toBe(proj.scenario.id);
+    });
+
+    test("handles null projectId correctly", () => {
+      const a = upsertScenario({
+        name: "null-project",
+        description: "Global scenario",
+      });
+      expect(a.action).toBe("created");
+
+      const b = upsertScenario({
+        name: "null-project",
+        description: "Global scenario",
+      });
+      expect(b.action).toBe("deduped");
     });
   });
 });

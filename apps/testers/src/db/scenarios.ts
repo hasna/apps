@@ -330,3 +330,67 @@ export function deleteScenario(id: string): boolean {
   const result = db.query("DELETE FROM scenarios WHERE id = ?").run(scenario.id);
   return result.changes > 0;
 }
+
+export type UpsertScenarioResult = { scenario: Scenario; action: "created" | "updated" | "deduped" };
+
+/**
+ * Create or update a scenario by name+projectId to prevent duplicates.
+ * If a scenario with the same name and projectId exists, updates it (no version check).
+ * Returns the scenario and whether it was created, updated, or deduped (identical content).
+ */
+export function upsertScenario(input: CreateScenarioInput & { name: string }): UpsertScenarioResult {
+  const db = getDatabase();
+
+  // Find existing scenario with same name+projectId
+  const existing = db.query(
+    "SELECT * FROM scenarios WHERE name = ? AND project_id IS NOT DISTINCT FROM ?"
+  ).get(input.name, input.projectId ?? null) as ScenarioRow | null;
+
+  if (!existing) {
+    return { scenario: createScenario(input), action: "created" };
+  }
+
+  // Check if content is actually different (dedup)
+  const existingSteps = JSON.parse(existing.steps) as string[];
+  const existingTags = JSON.parse(existing.tags) as string[];
+  const newSteps = input.steps ?? [];
+  const newTags = input.tags ?? [];
+  const isIdentical =
+    existing.description === (input.description ?? "") &&
+    existingSteps.length === newSteps.length &&
+    existingSteps.every((s, i) => s === newSteps[i]) &&
+    existingTags.length === newTags.length &&
+    existingTags.every((t, i) => t === newTags[i]) &&
+    existing.priority === (input.priority ?? "medium");
+
+  if (isIdentical) {
+    return { scenario: scenarioFromRow(existing), action: "deduped" };
+  }
+
+  // Update with new content
+  const sets: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (input.description !== undefined) { sets.push("description = ?"); params.push(input.description); }
+  if (input.steps !== undefined) { sets.push("steps = ?"); params.push(JSON.stringify(input.steps)); }
+  if (input.tags !== undefined) { sets.push("tags = ?"); params.push(JSON.stringify(input.tags)); }
+  if (input.priority !== undefined) { sets.push("priority = ?"); params.push(input.priority); }
+  if (input.model !== undefined) { sets.push("model = ?"); params.push(input.model); }
+  if (input.timeoutMs !== undefined) { sets.push("timeout_ms = ?"); params.push(input.timeoutMs); }
+  if (input.targetPath !== undefined) { sets.push("target_path = ?"); params.push(input.targetPath); }
+  if (input.requiresAuth !== undefined) { sets.push("requires_auth = ?"); params.push(input.requiresAuth ? 1 : 0); }
+  if (input.authConfig !== undefined) { sets.push("auth_config = ?"); params.push(JSON.stringify(input.authConfig)); }
+  if (input.metadata !== undefined) { sets.push("metadata = ?"); params.push(JSON.stringify(input.metadata)); }
+  if (input.assertions !== undefined) { sets.push("assertions = ?"); params.push(JSON.stringify(input.assertions)); }
+
+  sets.push("version = ?", "updated_at = ?");
+  params.push(existing.version + 1, now());
+  params.push(existing.id);
+
+  const result = db.query(`UPDATE scenarios SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  if (result.changes === 0) {
+    return { scenario: scenarioFromRow(existing), action: "deduped" };
+  }
+
+  return { scenario: getScenario(existing.id)!, action: "updated" };
+}
