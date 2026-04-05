@@ -1,8 +1,8 @@
 import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
 import { randomUUID } from "crypto";
-import { mkdirSync, copyFileSync, statSync } from "fs";
-import { join, basename } from "path";
+import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
+import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 
 /** Strip null/undefined fields from a message for compact output. */
@@ -48,6 +48,26 @@ function parseMessage(row: Record<string, unknown>): Message {
 function getAttachmentsDir(): string {
   if (process.env.CONVERSATIONS_ATTACHMENTS_DIR) return process.env.CONVERSATIONS_ATTACHMENTS_DIR;
   return join(getDataDir(), "attachments");
+}
+
+/** Validate attachment source path and name to prevent arbitrary file read and path traversal. */
+function validateAttachment(sourcePath: string, name: string): { safeSource: string; safeName: string } {
+  // Resolve to absolute and verify the file exists and is a regular file
+  const absolute = resolve(sourcePath);
+  if (!existsSync(absolute)) {
+    throw new Error(`Attachment source not found: ${sourcePath}`);
+  }
+  const real = realpathSync(absolute);
+  const stat = statSync(real);
+  if (!stat.isFile()) {
+    throw new Error(`Attachment source must be a regular file: ${sourcePath}`);
+  }
+  // Sanitize the attachment name — strip any path components
+  const safeName = basename(name.replace(/\0/g, ""));
+  if (!safeName || safeName.startsWith(".")) {
+    throw new Error(`Invalid attachment name: ${name}`);
+  }
+  return { safeSource: real, safeName };
 }
 
 function guessMimeType(name: string): string {
@@ -144,14 +164,15 @@ export function sendMessage(opts: SendMessageOptions): Message {
 
     const attachmentInfos: Attachment[] = [];
     for (const att of opts.attachments) {
-      const destPath = join(attachmentsDir, att.name);
-      copyFileSync(att.source_path, destPath);
+      const { safeSource, safeName } = validateAttachment(att.source_path, att.name);
+      const destPath = join(attachmentsDir, safeName);
+      copyFileSync(safeSource, destPath);
       const stat = statSync(destPath);
       attachmentInfos.push({
-        name: att.name,
+        name: safeName,
         path: destPath,
         size: stat.size,
-        mime_type: guessMimeType(att.name),
+        mime_type: guessMimeType(safeName),
       });
     }
 
@@ -228,9 +249,11 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
       : 20;
   const order = isLatest ? "DESC" : (opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC");
 
-  const resolvedOffset = opts.offset && opts.offset > 0 ? Math.floor(opts.offset) : 0;
+  // SQLite LIMIT/OFFSET require literal integers — validated and bounded here
+  const safeLimit = Math.max(1, Math.min(resolvedLimit, 10000));
+  const safeOffset = Math.max(0, Math.floor(resolvedOffset));
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${resolvedLimit} OFFSET ${resolvedOffset}`
+    `SELECT * FROM messages ${where} ORDER BY created_at ${order}, id ${order} LIMIT ${safeLimit} OFFSET ${safeOffset}`
   ).all(...params) as Record<string, unknown>[];
 
   let messages = rows.map(parseMessage);
@@ -295,9 +318,27 @@ export function getMessageById(id: number): Message | null {
   return row ? parseMessage(row) : null;
 }
 
-export function markReadByIds(ids: number[]): number {
+export function markReadByIds(ids: number[], agent?: string): number {
   const db = getDb();
   if (ids.length === 0) return 0;
+
+  if (agent) {
+    // Use per-agent read receipts so other agents' unread status is preserved
+    const stmt = db.prepare(
+      `INSERT OR REPLACE INTO message_read_receipts (message_id, agent, read_at)
+       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`
+    );
+    const normalized = agent.toLowerCase();
+    for (const id of ids) stmt.run(id, normalized);
+    // Also update global read_at for backward compat
+    const placeholders = ids.map(() => "?").join(", ");
+    const update = db.prepare(
+      `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE id IN (${placeholders}) AND read_at IS NULL`
+    );
+    return update.run(...ids).changes;
+  }
+
+  // Legacy: no agent — update global read_at only
   const placeholders = ids.map(() => "?").join(", ");
   const stmt = db.prepare(
     `UPDATE messages SET read_at = strftime('%Y-%m-%dT%H:%M:%f', 'now') WHERE id IN (${placeholders}) AND read_at IS NULL`
@@ -503,12 +544,14 @@ export function getPinnedMessages(opts?: { space?: string; session_id?: string; 
   }
 
   const where = `WHERE ${conditions.join(" AND ")}`;
-  const limit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
-    ? `LIMIT ${Math.floor(opts!.limit as number)}`
-    : "";
+  // LIMIT must be a literal integer — validated and capped
+  const safeLimit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
+    ? Math.floor(opts!.limit as number)
+    : 0;
+  const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : "";
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limit}`
+    `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limitClause}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map(parseMessage);
@@ -740,12 +783,13 @@ export function getMessagesForAgent(agent: string, opts?: { space?: string; unre
   const params: (string | number)[] = [agent.toLowerCase()];
   if (opts?.space) { conditions.push("m.space = ?"); params.push(opts.space); }
   if (opts?.unread_only) { conditions.push("mm.notified_at IS NULL"); }
-  const limit = opts?.limit ?? 50;
+  // LIMIT must be a literal integer — validated and capped
+  const safeLimit = Math.max(1, Math.min(Math.floor(opts?.limit ?? 50), 1000));
   const rows = db.prepare(
     `SELECT m.*, mm.id AS mention_id FROM messages m
      JOIN message_mentions mm ON mm.message_id = m.id
      WHERE ${conditions.join(" AND ")}
-     ORDER BY m.created_at DESC LIMIT ${limit}`
+     ORDER BY m.created_at DESC LIMIT ${safeLimit}`
   ).all(...params) as Array<Record<string, unknown> & { mention_id: number }>;
   return rows.map(({ mention_id, ...row }) => ({ message: parseMessage(row), mention_id }));
 }

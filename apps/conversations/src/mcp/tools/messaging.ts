@@ -16,6 +16,9 @@ export function registerMessagingTools(
   resolveProjectId: (explicitProjectId: string | undefined, agentId: string) => string | undefined,
 ): void {
 
+  // Per-(sender, session) rate limiter for session-targeted injections
+  const _sessionInjectRate = new Map<string, { count: number; start: number }>();
+
   server.registerTool("send_message", {
     description: "Send a DM to an agent by name, or to a specific agent-claude session by ID. When target_session_id is provided, the message is routed to that exact session and auto-injected into its conversation.",
     inputSchema: {
@@ -60,6 +63,24 @@ export function registerMessagingTools(
     const { target_session_id, content, from: fromParam, priority } = args;
     const from = resolveIdentity(fromParam);
 
+    // Basic rate-limit: prevent session injection spam (allow 10 per minute per sender)
+    const rateKey = `session:${from}:${target_session_id}`;
+    const now = Date.now();
+    const windowMs = 60_000;
+    const maxPerWindow = 10;
+    const rateEntry = _sessionInjectRate.get(rateKey);
+    if (rateEntry && now - rateEntry.start < windowMs && rateEntry.count >= maxPerWindow) {
+      return {
+        content: [{ type: "text", text: `Rate limit: max ${maxPerWindow} session injections per minute. Try again soon.` }],
+        isError: true,
+      };
+    }
+    if (!rateEntry || now - rateEntry.start >= windowMs) {
+      _sessionInjectRate.set(rateKey, { count: 1, start: now });
+    } else {
+      rateEntry.count++;
+    }
+
     // Use session:<target_session_id> as the to field and store the real target in metadata
     const msg = sendMessage({
       from,
@@ -101,7 +122,7 @@ export function registerMessagingTools(
     });
 
     if (args.mark_read !== false && messages.length > 0) {
-      markReadByIds(messages.map((m) => m.id));
+      markReadByIds(messages.map((m) => m.id), agent);
     }
 
     return {

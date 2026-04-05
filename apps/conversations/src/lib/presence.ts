@@ -109,7 +109,7 @@ export function heartbeat(agent: string, status?: string, metadata?: Record<stri
   const normalizedAgent = agent.trim().toLowerCase();
 
   // Ensure id exists for agents registered before the migration
-  const existing = db.prepare("SELECT id FROM agent_presence WHERE agent = ?").get(agent) as { id: string } | null;
+  const existing = db.prepare("SELECT id FROM agent_presence WHERE agent = ?").get(normalizedAgent) as { id: string } | null;
   const id = existing?.id || crypto.randomUUID().slice(0, 8);
 
   db.prepare(`
