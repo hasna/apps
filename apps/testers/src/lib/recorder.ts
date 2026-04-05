@@ -1,6 +1,9 @@
 import { chromium, type BrowserContext } from "playwright";
 import type { CreateScenarioInput } from "../types/index.js";
 import { createScenario } from "../db/scenarios.js";
+// Use @hasna/browser's recording API for cross-tool session persistence
+import { startRecording, stopRecording } from "@hasna/browser";
+import { launchPlaywright } from "@hasna/browser";
 
 export interface RecordedAction {
   type: "navigate" | "click" | "fill" | "select" | "press" | "scroll";
@@ -19,9 +22,17 @@ export interface RecordingResult {
 
 export async function recordSession(
   url: string,
-  options?: { timeout?: number },
-): Promise<RecordingResult> {
-  const browser = await chromium.launch({ headless: false });
+  options?: { timeout?: number; projectId?: string; name?: string },
+): Promise<RecordingResult & { recordingId?: string }> {
+  // Register session in @hasna/browser DB for cross-tool visibility
+  let recordingId: string | undefined;
+  try {
+    const sessionId = `testers-${Date.now()}`;
+    const recording = await startRecording(sessionId, options?.name ?? `recording-${Date.now()}`, url);
+    recordingId = recording.id;
+  } catch { /* Non-fatal — continue without DB recording */ }
+
+  const browser = await launchPlaywright({ headless: false, viewport: { width: 1280, height: 720 } });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   const page = await context.newPage();
 
@@ -135,10 +146,16 @@ export async function recordSession(
 
   try { await browser.close(); } catch { /* already closed */ }
 
+  // Finalize recording in @hasna/browser DB
+  if (recordingId) {
+    try { await stopRecording(recordingId); } catch {}
+  }
+
   return {
     actions,
     url,
     duration: Date.now() - startTime,
+    recordingId,
   };
 }
 

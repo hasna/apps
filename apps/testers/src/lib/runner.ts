@@ -15,6 +15,9 @@ import { launchBrowser, getPage, closeBrowser } from "./browser.js";
 import { Screenshotter } from "./screenshotter.js";
 import { createClientForModel, runAgentLoop, resolveModel } from "./ai-client.js";
 import { loadConfig } from "./config.js";
+import { ensurePersonaAuthenticated, loginWithAuthConfig } from "./persona-auth.js";
+import { enableNetworkLogging } from "@hasna/browser";
+import { registerSession, closeSession as closeTrackedSession } from "./session-tracker.js";
 import { dispatchWebhooks } from "./webhooks.js";
 import { pushFailedRunToLogs } from "./logs-integration.js";
 import { createFailureTasks, notifyFailureToConversations, notifyRunToConversations } from "./failure-pipeline.js";
@@ -182,6 +185,8 @@ export async function runSingleScenario(
   let page: Page | null = null;
   let context: import("playwright").BrowserContext | null = null;
   let harPath: string | null = null;
+  let stopNetworkLogging: (() => void) | null = null;
+  const networkErrors: Array<{ url: string; status: number; method: string }> = [];
 
   try {
     browser = await launchBrowser({ headless: !(effectiveOptions.headed ?? false), engine: effectiveOptions.engine });
@@ -216,6 +221,30 @@ export async function runSingleScenario(
 
     const scenarioTimeout = scenario.timeoutMs ?? options.timeout ?? config.browser.timeout ?? 60000;
 
+    // Register session in open-browser's session DB (enables cross-tool session visibility)
+    registerSession({
+      resultId: result.id,
+      runId,
+      scenarioId: scenario.id,
+      engine: effectiveOptions.engine ?? "playwright",
+      startUrl: targetUrl,
+    });
+
+    // Capture network errors (4xx/5xx) per scenario using @hasna/browser network logging
+    try {
+      // Use result ID as session ID so network events are linked to this result
+      stopNetworkLogging = enableNetworkLogging(page, result.id);
+    } catch {
+      // Non-fatal — network logging is best-effort
+    }
+    // Also capture high-level request failures directly for metadata
+    page.on("response", (response) => {
+      const status = response.status();
+      if (status >= 400 && !response.url().includes("favicon")) {
+        networkErrors.push({ url: response.url(), status, method: response.request().method() });
+      }
+    });
+
     // Attach listeners BEFORE page.goto() to capture initial page load events
     const consoleErrors: string[] = [];
     const consoleLogs: { step: number | null; type: string; text: string; timestamp: number }[] = [];
@@ -226,6 +255,32 @@ export async function runSingleScenario(
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
     page.on("pageerror", (err) => { consoleErrors.push(err.message); });
+
+    // Authenticate using persona credentials (if persona has auth configured)
+    if (persona?.auth) {
+      const loginResult = await ensurePersonaAuthenticated(page, persona, options.url);
+      if (!loginResult.success) {
+        const updatedResult = updateResult(result.id, {
+          status: "error",
+          error: `Persona auth failed (${loginResult.method}): ${loginResult.error}`,
+          durationMs: Date.now() - new Date(result.createdAt).getTime(),
+        });
+        emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: updatedResult.error ?? "", runId });
+        return updatedResult;
+      }
+    } else if (scenario.requiresAuth && scenario.authConfig) {
+      // Authenticate using the scenario's authConfig (email/password or token-based)
+      const loginResult = await loginWithAuthConfig(page, scenario.authConfig, options.url);
+      if (!loginResult.success && loginResult.method !== "none") {
+        const updatedResult = updateResult(result.id, {
+          status: "error",
+          error: `Auth failed (${loginResult.method}): ${loginResult.error}`,
+          durationMs: Date.now() - new Date(result.createdAt).getTime(),
+        });
+        emit({ type: "scenario:error", scenarioId: scenario.id, scenarioName: scenario.name, error: updatedResult.error ?? "", runId });
+        return updatedResult;
+      }
+    }
 
     await page.goto(targetUrl, { timeout: Math.min(scenarioTimeout, 30000) });
 
@@ -321,7 +376,12 @@ export async function runSingleScenario(
       }
     }
 
+    // Stop network logging and close session tracking
+    if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
+    closeTrackedSession(result.id);
+
     const lightpandaNote = options.engine === "lightpanda" ? " (Running with Lightpanda — no screenshots)" : options.engine === "bun" ? " (Running with Bun.WebView — native, ~11x faster)" : "";
+    const networkMeta = networkErrors.length > 0 ? { networkErrors: networkErrors.slice(0, 20) } : {};
     let updatedResult = updateResult(result.id, {
       status: agentResult.status,
       reasoning: agentResult.reasoning ? agentResult.reasoning + lightpandaNote : lightpandaNote || undefined,
@@ -329,7 +389,7 @@ export async function runSingleScenario(
       durationMs: Date.now() - new Date(result.createdAt).getTime(),
       tokensUsed: agentResult.tokensUsed,
       costCents: estimateCost(model, agentResult.tokensUsed),
-      metadata: { consoleLogs },
+      metadata: { consoleLogs, ...(networkErrors.length > 0 ? networkMeta : {}) },
     });
 
     // Wire failure analysis for non-passing results
@@ -354,6 +414,8 @@ export async function runSingleScenario(
 
     return updatedResult;
   } catch (error) {
+    if (stopNetworkLogging) { try { stopNetworkLogging(); } catch {} }
+    closeTrackedSession(result.id);
     const errorMsg = error instanceof Error ? error.message : String(error);
     let updatedResult = updateResult(result.id, {
       status: "error",
@@ -593,8 +655,14 @@ export async function runByFilter(
   let scenarios: Scenario[];
 
   if (options.scenarioIds && options.scenarioIds.length > 0) {
+    // When explicit scenario IDs are provided, search within project first, then globally
     const all = listScenarios({ projectId: options.projectId });
     scenarios = all.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
+    // Fallback: if not found in project scope, search globally
+    if (scenarios.length === 0 && options.projectId) {
+      const global = listScenarios({});
+      scenarios = global.filter((s) => options.scenarioIds!.includes(s.id) || options.scenarioIds!.includes(s.shortId));
+    }
   } else {
     scenarios = listScenarios({
       projectId: options.projectId,

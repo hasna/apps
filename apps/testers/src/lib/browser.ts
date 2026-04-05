@@ -1,8 +1,14 @@
-import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
-
-export type BrowserEngine = "playwright" | "playwright-firefox" | "playwright-webkit" | "lightpanda" | "bun";
+// Use @hasna/browser for the Playwright engine launch/close — avoids reimplementing
+// the same chromium launch logic and keeps us in sync with open-browser improvements.
+import {
+  launchPlaywright,
+  getPage as getBrowserPage,
+  closeBrowser as closeBrowserBase,
+  connectToExistingBrowser,
+} from "@hasna/browser";
 
 interface ViewportSize {
   width: number;
@@ -12,7 +18,7 @@ interface ViewportSize {
 interface LaunchOptions {
   headless?: boolean;
   viewport?: ViewportSize;
-  engine?: BrowserEngine;
+  engine?: import("../types/index.js").BrowserEngine;
 }
 
 interface PageOptions {
@@ -32,7 +38,7 @@ const DEFAULT_VIEWPORT: ViewportSize = { width: 1280, height: 720 };
  * Launches a Chromium browser instance via Playwright.
  */
 export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
-  const engine = options?.engine ?? (process.env["TESTERS_BROWSER_ENGINE"] as BrowserEngine | undefined) ?? "playwright";
+  const engine = options?.engine ?? (process.env["TESTERS_BROWSER_ENGINE"] as import("../types/index.js").BrowserEngine | undefined) ?? "playwright";
 
   if (engine === "lightpanda") {
     const { launchLightpanda, isLightpandaAvailable } = await import("./browser-lightpanda.js");
@@ -40,6 +46,21 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
       throw new BrowserError("Lightpanda not installed. Run: testers install-browser --engine lightpanda");
     }
     return launchLightpanda({ viewport: options?.viewport });
+  }
+
+  if (engine === "cdp") {
+    // CDP engine: connect to an existing Chrome with remote debugging enabled.
+    // Set TESTERS_CDP_URL (e.g. http://localhost:9222); falls back to Playwright if unset.
+    const cdpUrl = process.env["TESTERS_CDP_URL"];
+    if (!cdpUrl) {
+      return launchPlaywright({ headless: options?.headless ?? true, viewport: options?.viewport ?? DEFAULT_VIEWPORT });
+    }
+    try {
+      return await connectToExistingBrowser(cdpUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BrowserError(`CDP connect to ${cdpUrl} failed: ${message}. Start Chrome with --remote-debugging-port=9222`);
+    }
   }
 
   if (engine === "bun") {
@@ -61,29 +82,25 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
     } as unknown as Browser;
   }
 
-  // Default: Playwright
+  // Playwright engines (firefox, webkit) — keep explicit support from HEAD
   const headless = options?.headless ?? true;
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
     if (engine === "playwright-firefox") {
+      const { firefox } = await import("playwright");
       const browser = await firefox.launch({ headless });
       return browser;
     }
 
     if (engine === "playwright-webkit") {
+      const { webkit } = await import("playwright");
       const browser = await webkit.launch({ headless });
       return browser;
     }
 
-    // Default: chromium
-    const browser = await chromium.launch({
-      headless,
-      args: [
-        `--window-size=${viewport.width},${viewport.height}`,
-      ],
-    });
-    return browser;
+    // Default: Playwright — delegate to @hasna/browser
+    return await launchPlaywright({ headless, viewport });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to launch browser: ${message}`);
@@ -96,7 +113,7 @@ export async function launchBrowser(options?: LaunchOptions): Promise<Browser> {
  */
 export async function getPage(
   browser: Browser,
-  options?: PageOptions & { engine?: BrowserEngine },
+  options?: PageOptions & { engine?: import("../types/index.js").BrowserEngine },
 ): Promise<Page> {
   const engine = options?.engine ?? "playwright";
 
@@ -115,13 +132,8 @@ export async function getPage(
   const viewport = options?.viewport ?? DEFAULT_VIEWPORT;
 
   try {
-    const context = await browser.newContext({
-      viewport,
-      userAgent: options?.userAgent,
-      locale: options?.locale,
-    });
-    const page = await context.newPage();
-    return page;
+    // Delegate to @hasna/browser's getPage which handles context creation
+    return await getBrowserPage(browser, { viewport, userAgent: options?.userAgent, locale: options?.locale });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to create page: ${message}`);
@@ -131,7 +143,7 @@ export async function getPage(
 /**
  * Closes a browser instance gracefully.
  */
-export async function closeBrowser(browser: Browser, engine?: BrowserEngine): Promise<void> {
+export async function closeBrowser(browser: Browser, engine?: import("../types/index.js").BrowserEngine): Promise<void> {
   if (engine === "lightpanda") {
     const { closeLightpanda } = await import("./browser-lightpanda.js");
     return closeLightpanda(browser);
@@ -144,7 +156,7 @@ export async function closeBrowser(browser: Browser, engine?: BrowserEngine): Pr
   }
 
   try {
-    await browser.close();
+    await closeBrowserBase(browser);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BrowserError(`Failed to close browser: ${message}`);
@@ -161,11 +173,11 @@ export class BrowserPool {
   private readonly headless: boolean;
   private readonly viewport: ViewportSize;
 
-  private readonly engine: BrowserEngine;
+  private readonly engine: import("../types/index.js").BrowserEngine;
 
   constructor(
     size: number,
-    options?: { headless?: boolean; viewport?: ViewportSize; engine?: BrowserEngine },
+    options?: { headless?: boolean; viewport?: ViewportSize; engine?: import("../types/index.js").BrowserEngine },
   ) {
     this.maxSize = size;
     this.headless = options?.headless ?? true;
@@ -249,7 +261,7 @@ export interface BrowserConfig {
 }
 
 export async function launchBrowserEngine(
-  engine: BrowserEngine,
+  engine: import("../types/index.js").BrowserEngine,
   config: BrowserConfig,
 ): Promise<Browser> {
   if (engine === "lightpanda") {
@@ -262,17 +274,14 @@ export async function launchBrowserEngine(
   if (engine === "bun") {
     return launchBrowser({ headless: config.headless, viewport: config.viewport, engine: "bun" });
   }
-  // Default: playwright chromium
-  return chromium.launch({
-    headless: config.headless,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  // Default: playwright chromium — delegate to @hasna/browser
+  return launchPlaywright({ headless: config.headless, viewport: config.viewport });
 }
 
 /**
  * Installs Chromium for Playwright using bunx.
  */
-export async function installBrowser(engine?: BrowserEngine): Promise<void> {
+export async function installBrowser(engine?: import("../types/index.js").BrowserEngine): Promise<void> {
   if (engine === "lightpanda") {
     const { installLightpanda } = await import("./browser-lightpanda.js");
     return installLightpanda();

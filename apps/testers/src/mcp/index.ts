@@ -17,7 +17,7 @@ import { matchFilesToScenarios } from "../lib/affected.js";
 import { listScanIssues, getScanIssue, resolveScanIssue } from "../db/scan-issues.js";
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
-import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from "../db/schedules.js";
+import { createSchedule, listSchedules, updateSchedule, deleteSchedule, getSchedule } from "../db/schedules.js";
 import { getNextRunTime } from "../lib/scheduler.js";
 import { getDatabase } from "../db/database.js";
 import { VersionConflictError } from "../types/index.js";
@@ -26,6 +26,24 @@ import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createPersona, getPersona, listPersonas, updatePersona, deletePersona } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
+
+const cliArgs = new Set(process.argv.slice(2));
+if (cliArgs.has("--help") || cliArgs.has("-h")) {
+  console.log(`Usage: testers-mcp [options]
+
+Open Testers MCP server (stdio transport)
+
+Options:
+  -h, --help       Show this help message
+  -V, --version    Show version
+`);
+  process.exit(0);
+}
+
+if (cliArgs.has("--version") || cliArgs.has("-V")) {
+  console.log("0.0.1");
+  process.exit(0);
+}
 
 // ─── Response Helpers ────────────────────────────────────────────────────────
 
@@ -607,26 +625,6 @@ server.tool(
   },
 );
 
-// ─── 15. import_from_todos ───────────────────────────────────────────────────
-
-server.tool(
-  "import_from_todos",
-  "Import test scenarios from the todos database",
-  {
-    projectName: z.string().optional().describe("Todos project name to filter by"),
-    tags: z.array(z.string()).optional().describe("Tags to filter todos tasks"),
-    projectId: z.string().optional().describe("Target project ID for imported scenarios"),
-  },
-  async ({ projectName, tags, projectId }) => {
-    try {
-      const result = importFromTodos({ projectName, tags, projectId });
-      return json(result);
-    } catch (error) {
-      return errorResponse(error);
-    }
-  },
-);
-
 // ─── 16. get_status ──────────────────────────────────────────────────────────
 
 server.tool(
@@ -667,134 +665,6 @@ server.tool(
       const scenarios = listScenarios({ projectId });
       const scenario = scenarios.find((s) => s.name === name) ?? null;
       return json({ exists: scenario !== null, scenario });
-    } catch (error) {
-      return errorResponse(error);
-    }
-  },
-);
-
-// ─── Schedule Tools ──────────────────────────────────────────────────────────
-
-server.tool(
-  "create_schedule",
-  {
-    name: z.string().describe("Schedule name"),
-    cronExpression: z.string().describe("Cron expression (5-field)"),
-    url: z.string().describe("Target URL to test"),
-    tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
-    priority: z.string().optional().describe("Filter scenarios by priority"),
-    model: z.string().optional().describe(MODEL_DESC),
-    headed: z.boolean().optional().describe("Run headed"),
-    parallel: z.number().optional().describe("Parallel count"),
-    projectId: z.string().optional().describe("Project ID"),
-  },
-  async (params) => {
-    try {
-      const schedule = createSchedule({
-        name: params.name,
-        cronExpression: params.cronExpression,
-        url: params.url,
-        scenarioFilter: { tags: params.tags, priority: params.priority as "low" | "medium" | "high" | "critical" | undefined },
-        model: params.model,
-        headed: params.headed,
-        parallel: params.parallel,
-        projectId: params.projectId,
-      });
-      const nextRun = getNextRunTime(schedule.cronExpression);
-      return json({ ...schedule, nextRunAt: nextRun.toISOString() });
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "list_schedules",
-  {
-    projectId: z.string().optional(),
-    enabled: z.boolean().optional(),
-    limit: z.number().optional(),
-  },
-  async (params) => {
-    try {
-      const schedules = listSchedules({ projectId: params.projectId, enabled: params.enabled, limit: params.limit });
-      return json({ items: schedules, total: schedules.length });
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "enable_schedule",
-  { id: z.string().describe("Schedule ID") },
-  async (params) => {
-    try {
-      const schedule = updateSchedule(params.id, { enabled: true });
-      return json(schedule);
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "disable_schedule",
-  { id: z.string().describe("Schedule ID") },
-  async (params) => {
-    try {
-      const schedule = updateSchedule(params.id, { enabled: false });
-      return json(schedule);
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-server.tool(
-  "delete_schedule",
-  { id: z.string().describe("Schedule ID") },
-  async (params) => {
-    try {
-      const deleted = deleteSchedule(params.id);
-      if (!deleted) return errorResponse(notFoundErr(params.id, "Schedule"));
-      return json({ deleted: true, id: params.id });
-    } catch (e) {
-      return errorResponse(e);
-    }
-  },
-);
-
-// ─── 17. wait_for_run ────────────────────────────────────────────────────────
-
-server.tool(
-  "wait_for_run",
-  "Poll a run until it reaches a terminal status (passed, failed, error, or cancelled). Blocks until done or timeout.",
-  {
-    runId: z.string().describe("Run ID to wait for"),
-    timeoutMs: z.number().optional().describe("Max wait time in ms (default 300000)"),
-    pollIntervalMs: z.number().optional().describe("Poll interval in ms (default 3000)"),
-  },
-  async ({ runId, timeoutMs = 300000, pollIntervalMs = 3000 }) => {
-    try {
-      const terminalStatuses = new Set(["passed", "failed", "error", "cancelled"]);
-      const deadline = Date.now() + timeoutMs;
-
-      while (Date.now() < deadline) {
-        const run = getRun(runId);
-        if (!run) return errorResponse(notFoundErr(runId, "Run"));
-
-        if (terminalStatuses.has(run.status)) {
-          const results = getResultsByRun(runId);
-          const passed = results.filter((r) => r.status === "passed").length;
-          const failed = results.filter((r) => r.status === "failed" || r.status === "error").length;
-          return json({ ...run, passedCount: passed, failedCount: failed });
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      }
-
-      return errorResponse(Object.assign(new Error(`Run ${runId} did not complete within ${timeoutMs}ms`), { name: "TimeoutError" }));
     } catch (error) {
       return errorResponse(error);
     }
@@ -1445,8 +1315,8 @@ server.tool(
     traits: z.array(z.string()).optional().describe("Personality traits (e.g. impatient, curious, detail-oriented)"),
     goals: z.array(z.string()).optional().describe("Goals the persona is trying to accomplish"),
     projectId: z.string().nullable().optional().describe("Project ID (null = global persona)"),
-    authEmail: z.string().optional().describe("Login email for multi-user session pool"),
-    authPassword: z.string().optional().describe("Login password for multi-user session pool"),
+    authEmail: z.string().optional().describe("Login email for multi-user session pool. Supports @secrets:<key> (vault lookup) or $ENV_VAR references."),
+    authPassword: z.string().optional().describe("Login password. Supports @secrets:<key> (e.g. '@secrets:hasnastudio/alumia/platform/test/admin/password') or $ENV_VAR references."),
     authLoginPath: z.string().optional().describe("Login page path (default: /login)"),
   },
   async ({ name, role, description, instructions, traits, goals, projectId, authEmail, authPassword, authLoginPath }) => {
@@ -2220,6 +2090,7 @@ server.tool(
   },
   async ({ resultId, includeContent }) => {
     try {
+      const { getResult } = await import("../db/results.js");
       const result = getResult(resultId);
       if (!result) return errorResponse(notFoundErr(resultId, "Result"));
 
@@ -2237,6 +2108,417 @@ server.tool(
 
       const harContent = await harFile.text();
       return json({ resultId, harPath, harAvailable: true, har: JSON.parse(harContent) });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 59b. wait_for_run ───────────────────────────────────────────────────────
+
+server.tool(
+  "wait_for_run",
+  "Poll a run until it reaches a terminal state (passed/failed/cancelled) and return the final results summary. Synchronous — blocks until complete or timeout.",
+  {
+    runId: z.string().describe("Run ID to wait for"),
+    timeoutMs: z.number().optional().default(300000).describe("Max wait time in ms (default 5 minutes)"),
+    pollIntervalMs: z.number().optional().default(2000).describe("Polling interval in ms (default 2s)"),
+  },
+  async ({ runId, timeoutMs = 300000, pollIntervalMs = 2000 }) => {
+    try {
+      const run = getRun(runId);
+      if (!run) return errorResponse(notFoundErr(runId, "Run"));
+
+      const deadline = Date.now() + (timeoutMs ?? 300000);
+      const interval = Math.max(500, pollIntervalMs ?? 2000);
+
+      const poll = (): Promise<typeof run> =>
+        new Promise((resolve, reject) => {
+          const check = () => {
+            const current = getRun(runId);
+            if (!current) return reject(new Error(`Run ${runId} disappeared`));
+            const terminal = ["passed", "failed", "cancelled"].includes(current.status);
+            if (terminal) return resolve(current);
+            if (Date.now() >= deadline) return reject(new Error(`wait_for_run timed out after ${timeoutMs}ms`));
+            setTimeout(check, interval);
+          };
+          check();
+        });
+
+      const finalRun = await poll();
+      const results = getResultsByRun(runId);
+      const failedResults = results.filter((r) => r.status !== "passed" && r.status !== "skipped");
+
+      return json({
+        runId,
+        status: finalRun.status,
+        passed: finalRun.passed,
+        failed: finalRun.failed,
+        total: finalRun.total,
+        durationMs: finalRun.finishedAt
+          ? new Date(finalRun.finishedAt).getTime() - new Date(finalRun.startedAt).getTime()
+          : null,
+        failedScenarios: failedResults.map((r) => ({
+          scenarioId: r.scenarioId,
+          status: r.status,
+          error: r.error ?? r.reasoning,
+        })),
+      });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 60. create_schedule ─────────────────────────────────────────────────────
+
+server.tool(
+  "create_schedule",
+  "Create a recurring test schedule (cron-based). The scheduler picks up enabled schedules and runs them automatically.",
+  {
+    name: z.string().describe("Schedule name"),
+    cronExpression: z.string().describe("Cron expression (e.g. '0 2 * * *' for daily at 2am)"),
+    url: z.string().describe("Target URL to test against"),
+    tags: z.array(z.string()).optional().describe("Run scenarios matching these tags"),
+    scenarioIds: z.array(z.string()).optional().describe("Run specific scenario IDs"),
+    projectId: z.string().optional().describe("Filter scenarios by project ID"),
+    model: z.string().optional().describe(MODEL_DESC),
+    parallel: z.number().optional().describe("Number of parallel workers"),
+    timeoutMs: z.number().optional().describe("Per-scenario timeout in ms"),
+  },
+  async ({ name, cronExpression, url, tags, scenarioIds, projectId, model, parallel, timeoutMs }) => {
+    try {
+      const schedule = createSchedule({
+        name,
+        cronExpression,
+        url,
+        scenarioFilter: { tags, scenarioIds },
+        projectId,
+        model,
+        parallel,
+        timeoutMs,
+      });
+      const nextRun = getNextRunTime(schedule.cronExpression);
+      return json({ ...schedule, nextRunAt: nextRun?.toISOString() ?? null });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 61. list_schedules ───────────────────────────────────────────────────────
+
+server.tool(
+  "list_schedules",
+  "List test schedules with optional filters",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+    enabled: z.boolean().optional().describe("Filter by enabled status"),
+  },
+  async ({ projectId, enabled }) => {
+    try {
+      const schedules = listSchedules({ projectId, enabled });
+      const enriched = schedules.map((s) => ({
+        ...s,
+        nextRunAt: getNextRunTime(s.cronExpression)?.toISOString() ?? null,
+      }));
+      return json({ items: enriched, total: enriched.length });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 62. delete_schedule ─────────────────────────────────────────────────────
+
+server.tool(
+  "delete_schedule",
+  "Delete a schedule by ID",
+  { id: z.string().describe("Schedule ID") },
+  async ({ id }) => {
+    try {
+      const deleted = deleteSchedule(id);
+      if (!deleted) return errorResponse(notFoundErr(id, "Schedule"));
+      return json({ deleted: true, id });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 63. enable_schedule / disable_schedule ───────────────────────────────────
+
+server.tool(
+  "enable_schedule",
+  "Enable a paused schedule",
+  { id: z.string().describe("Schedule ID") },
+  async ({ id }) => {
+    try {
+      const schedule = updateSchedule(id, { enabled: true });
+      return json(schedule);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+server.tool(
+  "disable_schedule",
+  "Pause a schedule without deleting it",
+  { id: z.string().describe("Schedule ID") },
+  async ({ id }) => {
+    try {
+      const schedule = updateSchedule(id, { enabled: false });
+      return json(schedule);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 64. import_from_todos ───────────────────────────────────────────────────
+
+server.tool(
+  "import_from_todos",
+  "Import pending tasks from open-todos as test scenarios — converts each task into a regression scenario that verifies the feature/fix is working",
+  {
+    projectId: z.string().optional().describe("Testers project ID to assign imported scenarios to"),
+    tags: z.array(z.string()).optional().describe("Filter todos tasks by tags before importing"),
+    dryRun: z.boolean().optional().describe("Preview what would be imported without creating scenarios"),
+    todosProjectId: z.string().optional().describe("open-todos project ID to import from (defaults to config.todosProjectId)"),
+  },
+  async ({ projectId, tags, dryRun, todosProjectId }) => {
+    try {
+      if (dryRun) {
+        // Preview: pull tasks without creating scenarios
+        const { pullTasks } = await import("../lib/todos-connector.js");
+        const tasks = pullTasks({ tags: tags ?? ["qa", "test", "testing"] });
+        return json({ dryRun: true, wouldImport: tasks.length, tasks: tasks.slice(0, 20) });
+      }
+      const result = importFromTodos({ projectId, tags, projectName: todosProjectId });
+      return json(result);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 65. import_personas_from_contacts ───────────────────────────────────────
+
+server.tool(
+  "import_personas_from_contacts",
+  "Import contacts tagged as test users from @hasna/contacts as personas. Skips contacts already linked to an existing persona.",
+  {
+    tags: z.array(z.string()).optional().default(["test-user", "tester", "qa"]).describe("Contact tags to filter by (default: test-user, tester, qa)"),
+    projectId: z.string().optional().describe("Project ID to assign imported personas to"),
+    dryRun: z.boolean().optional().describe("Preview what would be imported without creating personas"),
+  },
+  async ({ tags, projectId, dryRun }) => {
+    try {
+      const { importPersonasFromContacts } = await import("../lib/contacts-connector.js");
+      const result = importPersonasFromContacts({ tags: tags ?? ["test-user", "tester", "qa"], projectId, dryRun: dryRun ?? false });
+      return json({ ...result, dryRun: dryRun ?? false });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 66. sync_persona_from_contact ───────────────────────────────────────────
+
+server.tool(
+  "sync_persona_from_contact",
+  "Sync a persona's name/role/email from its linked @hasna/contacts contact record",
+  {
+    personaId: z.string().describe("Persona ID or short ID to sync"),
+  },
+  async ({ personaId }) => {
+    try {
+      const persona = getPersona(personaId);
+      if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
+      const { syncPersonaFromContact } = await import("../lib/contacts-connector.js");
+      const updated = syncPersonaFromContact(persona.id);
+      if (!updated) return json({ synced: false, message: "No linked contact found or no changes needed" });
+      return json({ synced: true, persona: updated });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 68. run_with_army ───────────────────────────────────────────────────────
+
+server.tool(
+  "run_with_army",
+  "Dispatch scenarios across multiple concurrent worker processes for maximum parallelism. Each worker runs a slice of scenarios independently. Returns immediately — poll with get_run or wait_for_run.",
+  {
+    url: z.string().describe("Target URL to test against"),
+    workers: z.number().int().min(1).max(20).optional().default(4).describe("Number of worker processes to spawn (default 4, max 20)"),
+    parallel: z.number().int().min(1).max(10).optional().default(2).describe("Parallel browsers per worker (default 2)"),
+    scenarioIds: z.array(z.string()).optional().describe("Specific scenario IDs to run (default: all)"),
+    tags: z.array(z.string()).optional().describe("Filter scenarios by tags"),
+    projectId: z.string().optional().describe("Filter scenarios by project ID"),
+    model: z.string().optional().describe(MODEL_DESC),
+    timeout: z.number().optional().describe("Per-scenario timeout in ms"),
+    personaId: z.string().optional().describe("Run all scenarios under this persona"),
+  },
+  async ({ url, workers, parallel, scenarioIds, tags, projectId, model, timeout, personaId }) => {
+    try {
+      const { runWithArmy } = await import("../lib/army-runner.js");
+      const result = await runWithArmy({ url, workers: workers ?? 4, parallel: parallel ?? 2, scenarioIds, tags, projectId, model, timeout, personaId });
+      return json(result);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 69. crawl_and_generate ──────────────────────────────────────────────────
+
+server.tool(
+  "crawl_and_generate",
+  "Crawl any web app from a URL and auto-generate test scenarios for each page discovered. Zero config — works for any app. Uses AI (Claude) to analyze each page and write practical test scenarios.",
+  {
+    url: z.string().describe("Root URL to crawl (e.g. https://app.example.com)"),
+    projectId: z.string().optional().describe("Project ID to attach generated scenarios to"),
+    maxPages: z.number().int().min(1).max(50).optional().default(20).describe("Max pages to crawl (default 20)"),
+    scenariosPerPage: z.number().int().min(1).max(10).optional().default(3).describe("Scenarios to generate per page (default 3)"),
+    model: z.string().optional().describe(MODEL_DESC),
+    skipPaths: z.array(z.string()).optional().describe("URL paths to skip (e.g. ['/logout', '/admin'])"),
+    tags: z.array(z.string()).optional().describe("Extra tags to add to all generated scenarios"),
+    headed: z.boolean().optional().describe("Run browser in headed mode"),
+  },
+  async ({ url, projectId, maxPages, scenariosPerPage, model, skipPaths, tags, headed }) => {
+    try {
+      const { crawlAndGenerate } = await import("../lib/crawl-and-generate.js");
+      const result = await crawlAndGenerate({
+        url,
+        projectId,
+        maxPages: maxPages ?? 20,
+        scenariosPerPage: scenariosPerPage ?? 3,
+        model,
+        skipPaths,
+        tags,
+        headed,
+      });
+      return json(result);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 70. create_environment ──────────────────────────────────────────────────
+
+server.tool(
+  "create_environment",
+  "Register a named environment (e.g. staging, production, local) with its base URL. Use env name in run_scenarios instead of hardcoding URLs.",
+  {
+    name: z.string().describe("Environment name (e.g. staging, production, local)"),
+    url: z.string().describe("Base URL for this environment (e.g. https://staging.example.com)"),
+    projectId: z.string().optional().describe("Scope to a specific project"),
+    isDefault: z.boolean().optional().describe("Set as default environment for this project"),
+    variables: z.record(z.string()).optional().describe("Environment variables (e.g. { API_KEY: 'test-key' })"),
+  },
+  async ({ name, url, projectId, isDefault, variables }) => {
+    try {
+      const { createEnvironment } = await import("../db/environments.js");
+      const env = createEnvironment({ name, url, projectId, isDefault, variables });
+      return json(env);
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 71. list_environments ────────────────────────────────────────────────────
+
+server.tool(
+  "list_environments",
+  "List registered environments with their URLs",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+  },
+  async ({ projectId }) => {
+    try {
+      const { listEnvironments } = await import("../db/environments.js");
+      const envs = listEnvironments(projectId);
+      return json({ items: envs, total: envs.length });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 72. delete_environment ───────────────────────────────────────────────────
+
+server.tool(
+  "delete_environment",
+  "Delete a named environment",
+  { name: z.string().describe("Environment name to delete") },
+  async ({ name }) => {
+    try {
+      const { deleteEnvironment } = await import("../db/environments.js");
+      const deleted = deleteEnvironment(name);
+      if (!deleted) return errorResponse(notFoundErr(name, "Environment"));
+      return json({ deleted: true, name });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 73. set_default_environment ─────────────────────────────────────────────
+
+server.tool(
+  "set_default_environment",
+  "Set an environment as the default — run_scenarios will use it when no url/env is specified",
+  { name: z.string().describe("Environment name to set as default") },
+  async ({ name }) => {
+    try {
+      const { setDefaultEnvironment, getEnvironment } = await import("../db/environments.js");
+      setDefaultEnvironment(name);
+      return json({ default: true, name, env: getEnvironment(name) });
+    } catch (e) {
+      return errorResponse(e);
+    }
+  },
+);
+
+// ─── 74. list_scenarios_by_page ───────────────────────────────────────────────
+
+server.tool(
+  "list_scenarios_by_page",
+  "Group scenarios by page (targetPath). Shows which pages have test coverage and which don't. Useful for spotting gaps.",
+  {
+    projectId: z.string().optional().describe("Filter by project ID"),
+  },
+  async ({ projectId }) => {
+    try {
+      const scenarios = listScenarios({ projectId });
+      const byPage: Record<string, Array<{ id: string; shortId: string; name: string; priority: string; tags: string[] }>> = {};
+      const noPath: Array<{ id: string; shortId: string; name: string }> = [];
+
+      for (const s of scenarios) {
+        if (s.targetPath) {
+          if (!byPage[s.targetPath]) byPage[s.targetPath] = [];
+          byPage[s.targetPath]!.push({ id: s.id, shortId: s.shortId, name: s.name, priority: s.priority, tags: s.tags });
+        } else {
+          noPath.push({ id: s.id, shortId: s.shortId, name: s.name });
+        }
+      }
+
+      const pages = Object.entries(byPage)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([path, items]) => ({ path, scenarioCount: items.length, scenarios: items }));
+
+      return json({
+        pages,
+        totalPages: pages.length,
+        totalScenarios: scenarios.length,
+        scenariosWithNoPage: noPath.length,
+        noPageScenarios: noPath,
+      });
     } catch (e) {
       return errorResponse(e);
     }

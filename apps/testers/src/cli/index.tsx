@@ -1052,13 +1052,68 @@ program
 program
   .command("screenshots <id>")
   .description("List screenshots for a run or result")
-  .action((id: string) => {
+  .option("--json", "Output as JSON", false)
+  .option("-l, --limit <n>", "Limit results", "200")
+  .option("--offset <n>", "Skip first N results", "0")
+  .action((id: string, opts) => {
     try {
+      const limit = Math.max(1, parseInt(opts.limit, 10) || 200);
+      const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
+
       // Try as run-id first: get all results, then all screenshots
       const run = getRun(id);
       if (run) {
         const results = getResultsByRun(run.id);
-        let total = 0;
+        const flattened: Array<{
+          screenshotId: string;
+          resultId: string;
+          scenarioId: string;
+          scenarioShortId: string | null;
+          scenarioName: string | null;
+          stepNumber: number;
+          action: string;
+          filePath: string;
+          timestamp: string;
+          width: number;
+          height: number;
+        }> = [];
+
+        for (const result of results) {
+          const screenshots = listScreenshots(result.id);
+          const scenario = getScenario(result.scenarioId);
+          for (const ss of screenshots) {
+            flattened.push({
+              screenshotId: ss.id,
+              resultId: result.id,
+              scenarioId: result.scenarioId,
+              scenarioShortId: scenario?.shortId ?? null,
+              scenarioName: scenario?.name ?? null,
+              stepNumber: ss.stepNumber,
+              action: ss.action,
+              filePath: ss.filePath,
+              timestamp: ss.timestamp,
+              width: ss.width,
+              height: ss.height,
+            });
+          }
+        }
+
+        const paged = flattened.slice(offset, offset + limit);
+        if (opts.json) {
+          log(JSON.stringify({
+            input: id,
+            type: "run",
+            runId: run.id,
+            total: flattened.length,
+            limit,
+            offset,
+            items: paged,
+          }, null, 2));
+          return;
+        }
+
+        let seen = 0;
+        let shown = 0;
         log("");
         log(chalk.bold(`  Screenshots for run ${run.id.slice(0, 8)}`));
         log("");
@@ -1068,17 +1123,31 @@ program
           if (screenshots.length > 0) {
             const scenario = getScenario(result.scenarioId);
             const label = scenario ? `${scenario.shortId}: ${scenario.name}` : result.scenarioId.slice(0, 8);
-            log(chalk.bold(`  ${label}`));
+            let sectionPrinted = false;
             for (const ss of screenshots) {
+              if (seen < offset) {
+                seen++;
+                continue;
+              }
+              if (shown >= limit) break;
+              if (!sectionPrinted) {
+                log(chalk.bold(`  ${label}`));
+                sectionPrinted = true;
+              }
               log(`    ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
-              total++;
+              seen++;
+              shown++;
             }
-            log("");
+            if (sectionPrinted) log("");
+            if (shown >= limit) break;
           }
         }
 
-        if (total === 0) {
+        if (flattened.length === 0 || shown === 0) {
           log(chalk.dim("  No screenshots found."));
+          log("");
+        } else if (offset + shown < flattened.length) {
+          log(chalk.dim(`  Showing ${shown} of ${flattened.length} screenshots (use --limit/--offset to paginate)`));
           log("");
         }
         return;
@@ -1086,12 +1155,38 @@ program
 
       // Try as result-id
       const screenshots = listScreenshots(id);
+      const paged = screenshots.slice(offset, offset + limit);
+      if (opts.json) {
+        log(JSON.stringify({
+          input: id,
+          type: "result",
+          resultId: id,
+          total: screenshots.length,
+          limit,
+          offset,
+          items: paged.map((ss) => ({
+            screenshotId: ss.id,
+            stepNumber: ss.stepNumber,
+            action: ss.action,
+            filePath: ss.filePath,
+            timestamp: ss.timestamp,
+            width: ss.width,
+            height: ss.height,
+          })),
+        }, null, 2));
+        return;
+      }
+
       if (screenshots.length > 0) {
         log("");
         log(chalk.bold(`  Screenshots for result ${id.slice(0, 8)}`));
         log("");
-        for (const ss of screenshots) {
+        for (const ss of paged) {
           log(`  ${chalk.dim(String(ss.stepNumber).padStart(3, "0"))} ${ss.action} — ${chalk.dim(ss.filePath)}`);
+        }
+        if (paged.length < screenshots.length) {
+          log("");
+          log(chalk.dim(`  Showing ${paged.length} of ${screenshots.length} screenshots (use --limit/--offset to paginate)`));
         }
         log("");
         return;
@@ -1340,20 +1435,53 @@ projectCmd
 projectCmd
   .command("list")
   .description("List all projects")
-  .action(() => {
+  .option("--json", "Output as JSON", false)
+  .option("--search <text>", "Filter by project name/path (case-insensitive substring)")
+  .option("-l, --limit <n>", "Limit results", "100")
+  .option("--offset <n>", "Skip first N results", "0")
+  .action((opts) => {
     try {
-      const projects = listProjects();
-      if (projects.length === 0) {
+      const limit = Math.max(1, parseInt(opts.limit, 10) || 100);
+      const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
+      const search = typeof opts.search === "string" && opts.search.trim().length > 0 ? opts.search.trim().toLowerCase() : null;
+
+      const allProjects = listProjects();
+      const filtered = search
+        ? allProjects.filter((p) => {
+            const name = p.name.toLowerCase();
+            const path = (p.path ?? "").toLowerCase();
+            return name.includes(search) || path.includes(search);
+          })
+        : allProjects;
+
+      const paged = filtered.slice(offset, offset + limit);
+
+      if (opts.json) {
+        log(JSON.stringify({
+          total: filtered.length,
+          limit,
+          offset,
+          items: paged,
+        }, null, 2));
+        return;
+      }
+
+      if (filtered.length === 0) {
         log(chalk.dim("No projects found."));
         return;
       }
+
       log("");
       log(chalk.bold("  Projects"));
       log("");
       log(`  ${"ID".padEnd(38)} ${"Name".padEnd(24)} ${"Path".padEnd(30)} Created`);
       log(`  ${"─".repeat(38)} ${"─".repeat(24)} ${"─".repeat(30)} ${"─".repeat(20)}`);
-      for (const p of projects) {
+      for (const p of paged) {
         log(`  ${p.id.padEnd(38)} ${p.name.padEnd(24)} ${(p.path ?? chalk.dim("—")).toString().padEnd(30)} ${p.createdAt}`);
+      }
+      if (offset + paged.length < filtered.length) {
+        log("");
+        log(chalk.dim(`  Showing ${paged.length} of ${filtered.length} projects (use --limit/--offset to paginate)`));
       }
       log("");
     } catch (error) {
@@ -1365,13 +1493,25 @@ projectCmd
 projectCmd
   .command("show <id>")
   .description("Show project details")
-  .action((id: string) => {
+  .option("--json", "Output as JSON", false)
+  .action((id: string, opts) => {
     try {
-      const project = getProject(id);
+      // Try full UUID, then partial prefix match, then name
+      let project = getProject(id);
+      if (!project) {
+        const all = listProjects();
+        project = all.find((p) => p.id.startsWith(id) || p.name === id) ?? null;
+      }
       if (!project) {
         logError(chalk.red(`Project not found: ${id}`));
         process.exit(1);
       }
+
+      if (opts.json) {
+        log(JSON.stringify(project, null, 2));
+        return;
+      }
+
       log("");
       log(chalk.bold(`  Project: ${project.name}`));
       log(`  ID:          ${project.id}`);
@@ -1389,7 +1529,8 @@ projectCmd
 projectCmd
   .command("use <name>")
   .description("Set active project (find or create)")
-  .action((name: string) => {
+  .option("--json", "Output as JSON", false)
+  .action((name: string, opts) => {
     try {
       const project = ensureProject(name, process.cwd());
       if (!existsSync(CONFIG_DIR)) {
@@ -1405,6 +1546,12 @@ projectCmd
       }
       config.activeProject = project.id;
       writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+
+      if (opts.json) {
+        log(JSON.stringify({ activeProject: project.id, project }, null, 2));
+        return;
+      }
+
       log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
@@ -1696,6 +1843,7 @@ program
   .option("-u, --url <url>", "Base URL")
   .option("-p, --path <path>", "Project path")
   .option("--ci <provider>", "Generate CI workflow (github)")
+  .option("-y, --yes", "Skip interactive prompts (non-interactive mode)", false)
   .action(async (opts) => {
     try {
       const { project, scenarios, framework, url } = initProject({
@@ -1741,6 +1889,8 @@ program
       log("");
 
       // ── Interactive post-init wizard ───────────────────────────────────
+      if (opts.yes) return; // skip wizard in non-interactive mode
+
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       const ask = (q: string): Promise<string> => new Promise((resolve) => rl.question(q, resolve));
 
@@ -2177,14 +2327,17 @@ program
 program
   .command("unchain <scenario-id>")
   .description("Remove a dependency from a scenario")
-  .requiredOption("--from <id>", "Dependency to remove")
+  .requiredOption("--depends-on <id>", "Dependency to remove (alias: --from)")
+  .option("--from <id>", "Dependency to remove (alias for --depends-on)")
   .action((scenarioId: string, opts) => {
     try {
       const scenario = getScenario(scenarioId) ?? getScenarioByShortId(scenarioId);
       if (!scenario) { logError(chalk.red(`Scenario not found: ${scenarioId}`)); process.exit(1); }
 
-      const dep = getScenario(opts.from) ?? getScenarioByShortId(opts.from);
-      if (!dep) { logError(chalk.red(`Dependency not found: ${opts.from}`)); process.exit(1); }
+      const depId = opts.dependsOn ?? opts.from;
+      if (!depId) { logError(chalk.red("Specify the dependency to remove with --depends-on <id>")); process.exit(1); }
+      const dep = getScenario(depId) ?? getScenarioByShortId(depId);
+      if (!dep) { logError(chalk.red(`Dependency not found: ${depId}`)); process.exit(1); }
 
       removeDependency(scenario.id, dep.id);
       log(chalk.green(`Removed dependency: ${scenario.shortId} no longer depends on ${dep.shortId}`));
@@ -2268,8 +2421,10 @@ flowCmd
   .command("list")
   .description("List all flows")
   .option("--project <id>", "Project ID")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     const flows = listFlows(resolveProject(opts.project) ?? undefined);
+    if (opts.json) { log(JSON.stringify(flows, null, 2)); return; }
     if (flows.length === 0) {
       log(chalk.dim("\n  No flows found.\n"));
       return;
@@ -2373,9 +2528,14 @@ envCmd
   .command("list")
   .description("List all environments")
   .option("--project <id>", "Filter by project ID")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const envs = listEnvironments(opts.project);
+      if (opts.json) {
+        log(JSON.stringify({ total: envs.length, items: envs }, null, 2));
+        return;
+      }
       if (envs.length === 0) {
         log(chalk.dim("No environments configured. Add one with: testers env add <name> --url <url>"));
         return;
@@ -2834,10 +2994,12 @@ scanCmd
   .option("--type <type>", "Filter by type: console_error|network_error|broken_link|performance")
   .option("--project <id>", "Filter by project ID")
   .option("--limit <n>", "Max results", "50")
+  .option("--json", "Output as JSON", false)
   .action((opts) => {
     try {
       const { listScanIssues } = require("../db/scan-issues.js");
       const issues = listScanIssues({ status: opts.status, type: opts.type, projectId: opts.project, limit: parseInt(opts.limit) });
+      if (opts.json) { log(JSON.stringify(issues, null, 2)); return; }
       if (issues.length === 0) { log(chalk.dim("No scan issues found.")); return; }
       for (const i of issues) {
         const statusColor = i.status === "open" ? chalk.red : i.status === "regressed" ? chalk.yellow : chalk.green;
@@ -2934,7 +3096,6 @@ SCAN_COMMON_OPTIONS(
     .option("--endpoint <path>", "API endpoint path (default: /api/chat)", "/api/chat")
     .option("--seed <values>", "Comma-separated known PII values to watch for (e.g. 'user@example.com,555-1234')")
     .option("--input-field <path>", "JSON path to inject prompt (e.g. messages[0].content)")
-    .option("--timeout <ms>", "Request timeout in ms", "15000")
 ).action(async (url: string, opts) => {
   try {
     const { scanPiiEndpoint } = await import("../lib/scanners/pii-scanner.js");
@@ -3148,12 +3309,39 @@ apiCmd
 
 apiCmd
   .command("add")
-  .description("Add a new API check interactively")
+  .description("Add a new API check (interactive if no --url given)")
   .option("--project <id>", "Project ID")
+  .option("-n, --name <name>", "Check name (non-interactive)")
+  .option("-u, --url <url>", "URL to check, full or path (non-interactive)")
+  .option("-m, --method <method>", "HTTP method (default: GET)")
+  .option("--status <code>", "Expected HTTP status code (default: 200)")
+  .option("--contains <text>", "Body must contain this string")
+  .option("--response-time <ms>", "Max acceptable response time in ms")
+  .option("-t, --tag <tag>", "Tag (repeatable)", [] as string[])
   .action(async (opts) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
     try {
+      // Non-interactive mode
+      if (opts.url) {
+        const projectId = resolveProject(opts.project);
+        const check = createApiCheck({
+          name: opts.name?.trim() || opts.url,
+          method: (opts.method?.toUpperCase() ?? "GET") as "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD",
+          url: opts.url.trim(),
+          expectedStatus: opts.status ? parseInt(opts.status, 10) : 200,
+          expectedBodyContains: opts.contains || undefined,
+          expectedResponseTimeMs: opts.responseTime ? parseInt(opts.responseTime, 10) : undefined,
+          tags: opts.tag ?? [],
+          projectId,
+        });
+        log("");
+        log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
+        log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
+        return;
+      }
+
+      // Interactive mode
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
       const name = await ask("Name: ");
       if (!name.trim()) { logError(chalk.red("Name is required")); process.exit(1); }
       const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
@@ -3181,7 +3369,6 @@ apiCmd
       log(chalk.green(`✓ Created API check ${chalk.bold(check.name)} (${check.shortId})`));
       log(chalk.dim(`  ${check.method} ${check.url} → expect ${check.expectedStatus}`));
     } catch (error) {
-      rl.close();
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
@@ -3543,13 +3730,47 @@ personaCmd
 
 personaCmd
   .command("add")
-  .description("Create a persona interactively")
+  .description("Create a persona (interactive if no --name/--role given)")
   .option("--global", "Create as a global persona (no project scope)", false)
   .option("--project <id>", "Project ID")
+  .option("-n, --name <name>", "Persona name (non-interactive)")
+  .option("-r, --role <role>", "Persona role (non-interactive)")
+  .option("-d, --description <text>", "Persona description")
+  .option("-i, --instructions <text>", "Behavior instructions")
+  .option("--traits <list>", "Comma-separated traits (e.g. impatient,curious)")
+  .option("--goals <list>", "Comma-separated goals")
+  .option("--auth-email <email>", "Login email for auth testing")
+  .option("--auth-password <pass>", "Login password for auth testing")
+  .option("--auth-login-path <path>", "Login page path (default: /login)")
   .action(async (opts) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
     try {
+      // Non-interactive mode: --name and --role provided
+      if (opts.name && opts.role) {
+        const projectId = opts.global ? undefined : resolveProject(opts.project);
+        const traits = opts.traits ? opts.traits.split(",").map((t: string) => t.trim()).filter(Boolean) : [];
+        const goals = opts.goals ? opts.goals.split(",").map((g: string) => g.trim()).filter(Boolean) : [];
+        const persona = createPersona({
+          name: opts.name.trim(),
+          role: opts.role.trim(),
+          description: opts.description?.trim() ?? "",
+          instructions: opts.instructions?.trim() ?? "",
+          traits,
+          goals,
+          projectId,
+          authEmail: opts.authEmail,
+          authPassword: opts.authPassword,
+          authLoginPath: opts.authLoginPath,
+        });
+        log("");
+        log(chalk.green(`Created persona ${chalk.bold(persona.shortId)}: ${persona.name}`));
+        log(chalk.dim(`  Role: ${persona.role}`));
+        log(chalk.dim(`  Scope: ${persona.projectId ? "project" : "global"}`));
+        return;
+      }
+
+      // Interactive mode
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((res) => rl.question(q, res));
       const name = await ask("Name: ");
       if (!name.trim()) { logError(chalk.red("Name is required")); rl.close(); process.exit(1); }
       const role = await ask("Role (e.g. first-time user, admin, power user): ");
@@ -3911,11 +4132,33 @@ const goldenCmd = program.command("golden").description("Manage golden answer ch
 
 goldenCmd
   .command("add")
-  .description("Add a golden answer check interactively")
+  .description("Add a golden answer check (interactive if no --question given)")
   .option("--project <id>", "Project ID")
+  .option("-q, --question <text>", "Question the endpoint should answer (non-interactive)")
+  .option("-a, --answer <text>", "Expected golden answer (non-interactive)")
+  .option("-e, --endpoint <path>", "Endpoint path or URL (non-interactive)")
+  .option("--judge-model <model>", "Model to use as judge")
   .action(async (opts) => {
     try {
       const { createGoldenAnswer } = await import("../db/golden-answers.js");
+
+      // Non-interactive mode
+      if (opts.question && opts.answer && opts.endpoint) {
+        const projectId = resolveProject(opts.project);
+        const golden = createGoldenAnswer({
+          question: opts.question,
+          goldenAnswer: opts.answer,
+          endpoint: opts.endpoint,
+          judgeModel: opts.judgeModel || undefined,
+          projectId,
+        });
+        log(chalk.green(`\nCreated golden answer check ${chalk.bold(golden.shortId)}`));
+        log(`  Endpoint: ${golden.endpoint}`);
+        log(`  Question: ${golden.question.slice(0, 60)}`);
+        return;
+      }
+
+      // Interactive mode
       const ask = (prompt: string): Promise<string> => {
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         return new Promise((resolve) => rl.question(prompt, (ans) => { rl.close(); resolve(ans.trim()); }));

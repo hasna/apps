@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, basename } from "path";
 import { getTestersDir } from "./paths.js";
-import { createScenario } from "../db/scenarios.js";
+import { createScenario, listScenarios } from "../db/scenarios.js";
 import { ensureProject } from "../db/projects.js";
 import type { CreateScenarioInput } from "../types/index.js";
 
@@ -309,13 +309,16 @@ export function initProject(options: InitOptions): InitResult {
   // Create or find the project
   const project = ensureProject(name, projectPath);
 
-  // Create starter scenarios
+  // Create starter scenarios (skip if project already has scenarios — idempotent)
   const starterInputs = getStarterScenarios(
     framework ?? { name: "Unknown", features: [] },
     project.id,
   );
 
-  const scenarios = starterInputs.map((input) => createScenario(input));
+  const existingScenarios = listScenarios({ projectId: project.id });
+  const scenarios = existingScenarios.length > 0
+    ? existingScenarios
+    : starterInputs.map((input) => { try { return createScenario(input); } catch { return null; } }).filter((s): s is NonNullable<typeof s> => s !== null);
 
   // Write activeProject to config
   const configDir = getTestersDir();

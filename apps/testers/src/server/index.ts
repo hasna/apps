@@ -20,6 +20,27 @@ import { listEnvironments, createEnvironment, updateEnvironment, deleteEnvironme
 import { createPersona, getPersona, listPersonas, updatePersona, deletePersona, countPersonas } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
 
+const cliArgs = new Set(process.argv.slice(2));
+if (cliArgs.has("--help") || cliArgs.has("-h")) {
+  console.log(`Usage: testers-serve [options]
+
+Open Testers HTTP server
+
+Options:
+  -h, --help       Show this help message
+  -V, --version    Show version
+
+Environment:
+  TESTERS_PORT     Port to bind (default: 19450)
+`);
+  process.exit(0);
+}
+
+if (cliArgs.has("--version") || cliArgs.has("-V")) {
+  console.log("0.0.1");
+  process.exit(0);
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function parseUrl(req: Request): { pathname: string; searchParams: URLSearchParams } {
