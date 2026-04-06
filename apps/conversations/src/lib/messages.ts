@@ -250,6 +250,7 @@ export function readMessages(opts: ReadMessagesOptions = {}): Message[] {
   const order = isLatest ? "DESC" : (opts.order?.toLowerCase() === "desc" ? "DESC" : "ASC");
 
   // SQLite LIMIT/OFFSET require literal integers — validated and bounded here
+  const resolvedOffset = Number.isFinite(opts.offset) ? Math.floor(opts.offset as number) : 0;
   const safeLimit = Math.max(1, Math.min(resolvedLimit, 10000));
   const safeOffset = Math.max(0, Math.floor(resolvedOffset));
   const rows = db.prepare(
