@@ -65,14 +65,60 @@ const MIME_TYPES: Record<string, string> = {
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
+  "X-XSS-Protection": "0", // Modern browsers ignore this, but safe to send
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=, microphone=, geolocation=",
 };
+
+/** Build CORS headers for a given request origin and port */
+function corsHeaders(origin: string | undefined, port?: number): Record<string, string> {
+  if (origin) {
+    const isAllowed = origin === `http://localhost:${port}` || origin === "http://localhost:0";
+    return {
+      "Access-Control-Allow-Origin": isAllowed ? origin : "null",
+      "Vary": "Origin",
+    };
+  }
+  return {};
+}
+
+/** Check API key auth — returns a Response if unauthorized, null if OK */
+function checkAuth(req: Request, apiKey: string | null): Response | null {
+  if (!apiKey) return null; // no key configured, skip auth
+  const provided = req.headers.get("x-api-key") || req.headers.get("authorization")?.replace("Bearer ", "");
+  if (!provided || provided !== apiKey) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json", ...SECURITY_HEADERS },
+    });
+  }
+  return null;
+}
+
+/** Simple in-memory rate limiter — tracks requests per IP per window */
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 120; // requests per window
+
+function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return { allowed: true };
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return { allowed: false, retryAfter: Math.ceil((entry.resetAt - now) / 1000) };
+  }
+  return { allowed: true };
+}
 
 function json(data: unknown, status = 200, port?: number): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": port ? `http://localhost:${port}` : "*",
       ...SECURITY_HEADERS,
     },
   });
@@ -85,7 +131,10 @@ function serveStaticFile(filePath: string): Response | null {
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
 
   return new Response(Bun.file(filePath), {
-    headers: { "Content-Type": contentType },
+    headers: {
+      "Content-Type": contentType,
+      ...SECURITY_HEADERS,
+    },
   });
 }
 
@@ -115,8 +164,9 @@ function taskToSummary(task: Task, fields?: string[]) {
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
-export async function startServer(port: number, options?: { open?: boolean; host?: string }): Promise<void> {
+export async function startServer(port: number, options?: { open?: boolean; host?: string; apiKey?: string }): Promise<void> {
   const shouldOpen = options?.open ?? true;
+  const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
 
   // Initialize database
   getDatabase();
@@ -135,20 +185,24 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
   function broadcastEvent(event: { type: string; task_id?: string; action: string; agent_id?: string | null; project_id?: string | null }) {
     const data = JSON.stringify({ ...event, timestamp: new Date().toISOString() });
-    // Broadcast to dashboard clients
+    const eventName = `task.${event.action}`;
+    // Broadcast to dashboard clients — collect dead clients first, delete after iteration
+    const deadClients: ReadableStreamDefaultController[] = [];
     for (const controller of sseClients) {
       try { controller.enqueue(`data: ${data}\n\n`); }
-      catch { sseClients.delete(controller); }
+      catch { deadClients.push(controller); }
     }
+    for (const controller of deadClients) sseClients.delete(controller);
     // Broadcast to filtered agent stream clients
-    const eventName = `task.${event.action}`;
+    const deadFiltered: FilteredClient[] = [];
     for (const client of filteredSseClients) {
       if (client.events && !client.events.has(eventName) && !client.events.has("*")) continue;
       if (client.agentId && event.agent_id !== client.agentId) continue;
       if (client.projectId && event.project_id !== client.projectId) continue;
       try { client.controller.enqueue(`event: ${eventName}\ndata: ${data}\n\n`); }
-      catch { filteredSseClients.delete(client); }
+      catch { deadFiltered.push(client); }
     }
+    for (const client of deadFiltered) filteredSseClients.delete(client);
   }
 
   const dashboardDir = resolveDashboardDir();
@@ -171,13 +225,36 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── CORS ──
       if (method === "OPTIONS") {
+        const reqOrigin = req.headers.get("origin") || undefined;
+        const allowed = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0");
         return new Response(null, {
-          headers: {
-            "Access-Control-Allow-Origin": `http://localhost:${port}`,
+          headers: allowed ? {
+            "Access-Control-Allow-Origin": reqOrigin,
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Headers": "Content-Type, X-API-Key, Authorization",
+            "Vary": "Origin",
+          } : {
+            "Vary": "Origin",
           },
         });
+      }
+
+      // ── Rate limiting (all requests) ──
+      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+        || req.headers.get("x-real-ip")
+        || "unknown";
+      const rl = checkRateLimit(ip);
+      if (!rl.allowed) {
+        return new Response(JSON.stringify({ error: "Too many requests", retry_after: rl.retryAfter }), {
+          status: 429,
+          headers: { "Content-Type": "application/json", "Retry-After": String(rl.retryAfter ?? 60), ...SECURITY_HEADERS },
+        });
+      }
+
+      // ── API key auth (all /api/* routes) ──
+      if (path.startsWith("/api/")) {
+        const authError = checkAuth(req, apiKey);
+        if (authError) return authError;
       }
 
       // ── SSE Event Stream (supports optional agent_id/project_id filtering) ──
@@ -200,7 +277,8 @@ export async function startServer(port: number, options?: { open?: boolean; host
               "Content-Type": "text/event-stream",
               "Cache-Control": "no-cache",
               "Connection": "keep-alive",
-              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Origin": `http://localhost:${port}`,
+              "Vary": "Origin",
             },
           });
         }
@@ -244,7 +322,8 @@ export async function startServer(port: number, options?: { open?: boolean; host
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": `http://localhost:${port}`,
+            "Vary": "Origin",
           },
         });
       }
@@ -471,7 +550,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
         }
         if (next) lines.push(`Next up: ${next.short_id || next.id.slice(0, 8)} [${next.priority}] ${next.title}`);
         const text = lines.join("\n");
-        return new Response(text, { headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" } });
+        return new Response(text, { headers: { "Content-Type": "text/plain", ...SECURITY_HEADERS } });
       }
 
       // ── API: Task attachments ──
@@ -529,8 +608,15 @@ export async function startServer(port: number, options?: { open?: boolean; host
             const body = await req.json() as Record<string, unknown>;
             const task = getTask(id);
             if (!task) return json({ error: "Task not found" }, 404, port);
+            // Allowlist of safe fields — exclude approved_by, requires_approval, recurrence_rule,
+            // status transitions (use dedicated start/complete/fail endpoints), and internal fields
+            const ALLOWED = new Set(["title", "description", "priority", "assigned_to", "plan_id", "task_list_id", "tags", "metadata", "due_at", "estimated_minutes", "task_type"]);
+            const safeBody: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(body)) {
+              if (ALLOWED.has(key)) safeBody[key] = value;
+            }
             const updated = updateTask(id, {
-              ...body,
+              ...safeBody,
               version: task.version,
             } as Parameters<typeof updateTask>[1]);
             return json(taskToSummary(updated), 200, port);

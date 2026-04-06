@@ -27,6 +27,9 @@ import { dispatchWebhook } from "./webhooks.js";
 import { taskFromTemplate } from "./templates.js";
 import { getChecklist } from "./checklists.js";
 
+// Maximum depth for template-spawned task chains to prevent infinite loops
+const MAX_SPAWN_DEPTH = 10;
+
 function rowToTask(row: TaskRow): Task {
   return {
     ...row,
@@ -198,6 +201,11 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     params.push(filter.project_id);
   }
 
+  if (filter.ids && filter.ids.length > 0) {
+    conditions.push(`id IN (${filter.ids.map(() => "?").join(",")})`);
+    params.push(...filter.ids);
+  }
+
   if (filter.parent_id !== undefined) {
     if (filter.parent_id === null) {
       conditions.push("parent_id IS NULL");
@@ -327,6 +335,11 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     params.push(filter.project_id);
   }
 
+  if (filter.ids && filter.ids.length > 0) {
+    conditions.push(`id IN (${filter.ids.map(() => "?").join(",")})`);
+    params.push(...filter.ids);
+  }
+
   if (filter.parent_id !== undefined) {
     if (filter.parent_id === null) {
       conditions.push("parent_id IS NULL");
@@ -387,6 +400,11 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   if (filter.task_list_id) {
     conditions.push("task_list_id = ?");
     params.push(filter.task_list_id);
+  }
+
+  // Exclude archived tasks by default (consistent with listTasks)
+  if (!filter.include_archived) {
+    conditions.push("archived_at IS NULL");
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -622,18 +640,32 @@ export function completeTask(
     completionMeta._completion = { confidence: options.confidence };
   }
   const hasMeta = Object.keys(completionMeta).length > 0;
-  if (hasMeta) {
-    const meta = { ...task.metadata, ...completionMeta };
-    d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [JSON.stringify(meta), id]);
-  }
 
   const timestamp = now();
   const confidence = options?.confidence !== undefined ? options.confidence : null;
-  d.run(
-    `UPDATE tasks SET status = 'completed', locked_by = NULL, locked_at = NULL, completed_at = ?, confidence = ?, version = version + 1, updated_at = ?
-     WHERE id = ?`,
-    [timestamp, confidence, timestamp, id],
-  );
+
+  // Perform both updates atomically in a transaction with optimistic locking
+  const tx = d.transaction(() => {
+    if (hasMeta) {
+      const meta = { ...task.metadata, ...completionMeta };
+      const metaResult = d.run(
+        "UPDATE tasks SET metadata = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?",
+        [JSON.stringify(meta), timestamp, id, task.version],
+      );
+      if (metaResult.changes === 0) {
+        const current = getTask(id, d);
+        throw new VersionConflictError(id, task.version, current?.version ?? -1);
+      }
+    }
+
+    d.run(
+      `UPDATE tasks SET status = 'completed', locked_by = NULL, locked_at = NULL, completed_at = ?, confidence = ?, version = version + 1, updated_at = ?
+       WHERE id = ?`,
+      [timestamp, confidence, timestamp, id],
+    );
+  });
+
+  tx();
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
   dispatchWebhook("task.completed", { id, agent_id: agentId, title: task.title, completed_at: timestamp }, d).catch(() => {});
@@ -647,16 +679,24 @@ export function completeTask(
   // Auto-spawn next task from template (pipeline/handoff chains)
   let spawnedFromTemplate: Task | null = null;
   if (task.spawns_template_id) {
-    try {
-      const input = taskFromTemplate(task.spawns_template_id, {
-        project_id: task.project_id ?? undefined,
-        plan_id: task.plan_id ?? undefined,
-        task_list_id: task.task_list_id ?? undefined,
-        assigned_to: task.assigned_to ?? undefined,
-      }, d);
-      spawnedFromTemplate = createTask(input, d);
-    } catch {
-      // Template may have been deleted; skip silently
+    // Prevent infinite spawn chains: track depth via metadata
+    const spawnDepth = (task.metadata as Record<string, unknown> | null)?._spawn_depth as number || 0;
+    if (spawnDepth >= MAX_SPAWN_DEPTH) {
+      console.warn(`[tasks] Task ${id} exceeded max spawn depth (${MAX_SPAWN_DEPTH}), skipping template spawn`);
+    } else {
+      try {
+        const input = taskFromTemplate(task.spawns_template_id, {
+          project_id: task.project_id ?? undefined,
+          plan_id: task.plan_id ?? undefined,
+          task_list_id: task.task_list_id ?? undefined,
+          assigned_to: task.assigned_to ?? undefined,
+        }, d);
+        // Set spawn depth on the new task
+        input.metadata = { ...(input.metadata || {}), _spawn_depth: spawnDepth + 1 };
+        spawnedFromTemplate = createTask(input, d);
+      } catch {
+        // Template may have been deleted; skip silently
+      }
     }
   }
 

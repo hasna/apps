@@ -14,6 +14,11 @@ const CONFLICT_TABLES = new Set([
   "task_templates", "webhooks", "project_sources", "task_checklists",
 ]);
 
+/** Tables that track machine-local state — not synced across machines */
+const MACHINE_LOCAL_TABLES = new Set([
+  "project_machine_paths", // per-machine project path overrides; local machine_id must be preserved
+]);
+
 /**
  * Detect conflicts between local SQLite rows and remote PG rows for a table.
  * Returns the count of conflicts found and stores them via @hasna/cloud.
@@ -127,7 +132,7 @@ export function registerCloudSyncTools(server: McpServer, { shouldRegisterTool, 
 
           const tableList = tablesStr
             ? tablesStr.split(",").map((t: string) => t.trim())
-            : listSqliteTables(local).filter((t: string) => !t.startsWith("_"));
+            : listSqliteTables(local).filter((t: string) => !t.startsWith("_") && !MACHINE_LOCAL_TABLES.has(t));
 
           // Stamp machine_id on all rows that don't have one
           for (const table of tableList) {
@@ -207,7 +212,7 @@ export function registerCloudSyncTools(server: McpServer, { shouldRegisterTool, 
             tableList = tablesStr.split(",").map((t: string) => t.trim());
           } else {
             try {
-              tableList = (await listPgTables(cloud)).filter((t: string) => !t.startsWith("_"));
+              tableList = (await listPgTables(cloud)).filter((t: string) => !t.startsWith("_") && !MACHINE_LOCAL_TABLES.has(t));
             } catch {
               local.close();
               await cloud.close();
@@ -283,13 +288,13 @@ export function registerCloudSyncTools(server: McpServer, { shouldRegisterTool, 
           const local = new SqliteAdapter(getDbPath("todos"));
           const cloud = new PgAdapterAsync(getConnectionString("todos"));
 
-          // Determine tables — union of local and remote
+          // Determine tables — union of local and remote, excluding machine-local tables
           let tableList: string[];
           if (tablesStr) {
             tableList = tablesStr.split(",").map((t: string) => t.trim());
           } else {
-            const localTables = new Set(listSqliteTables(local).filter((t: string) => !t.startsWith("_")));
-            const remoteTables = new Set((await listPgTables(cloud)).filter((t: string) => !t.startsWith("_")));
+            const localTables = new Set(listSqliteTables(local).filter((t: string) => !t.startsWith("_") && !MACHINE_LOCAL_TABLES.has(t)));
+            const remoteTables = new Set((await listPgTables(cloud)).filter((t: string) => !t.startsWith("_") && !MACHINE_LOCAL_TABLES.has(t)));
             tableList = [...new Set([...localTables, ...remoteTables])];
           }
 

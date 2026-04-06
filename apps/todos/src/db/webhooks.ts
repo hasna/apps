@@ -5,34 +5,42 @@ import { getDatabase, now, uuid } from "./database.js";
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000; // 1s, 2s, 4s exponential backoff
 
+/** Check if an IP address is in a private/reserved range (SSRF prevention) */
+function isPrivateOrInternal(ip: string): boolean {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return true;
+  if (parts[0] === 10) return true;
+  if (parts[0] === 127) return true;
+  if (parts[0] === 169 && parts[1] === 254) return true;
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  if (parts[0] === 0) return true;
+  return false;
+}
+
 /**
  * Validate webhook URL to prevent SSRF attacks.
  * Blocks localhost, private IPs, and cloud metadata endpoints.
  */
-export function validateWebhookUrl(urlString: string): void {
+export function validateWebhookUrl(urlString: string): { valid: false; error: string } | { valid: true } {
   try {
     const url = new URL(urlString);
 
     // Only allow HTTPS
     if (url.protocol !== "https:") {
-      throw new Error("Webhook URLs must use HTTPS");
+      return { valid: false, error: "Webhook URLs must use HTTPS" };
     }
 
     const hostname = url.hostname.toLowerCase();
 
     // Block localhost and loopback
-    if (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      hostname === "0.0.0.0"
-    ) {
-      throw new Error("Webhook URLs cannot target localhost");
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0") {
+      return { valid: false, error: "Webhook URLs cannot target localhost" };
     }
 
     // Block cloud metadata endpoints
     if (hostname === "169.254.169.254" || hostname.startsWith("169.254.")) {
-      throw new Error("Webhook URLs cannot target cloud metadata endpoints");
+      return { valid: false, error: "Webhook URLs cannot target cloud metadata endpoints" };
     }
 
     // Block private IP ranges
@@ -48,16 +56,39 @@ export function validateWebhookUrl(urlString: string): void {
 
     for (const range of privateRanges) {
       if (range.test(hostname)) {
-        throw new Error("Webhook URLs cannot target private IP ranges");
+        return { valid: false, error: "Webhook URLs cannot target private IP ranges" };
       }
     }
+
+    return { valid: true };
   } catch (e) {
     if (e instanceof Error && e.message.startsWith("Webhook URLs")) {
-      throw e;
+      return { valid: false, error: e.message };
     }
-    throw new Error(`Invalid webhook URL: ${urlString}`);
+    return { valid: false, error: `Invalid webhook URL: ${urlString}` };
   }
 }
+
+/** Resolve hostname and check if the resolved IP is private (SSRF prevention) */
+async function resolveAndCheckIp(hostname: string): Promise<{ allowed: false; error: string } | { allowed: true; ip: string }> {
+  try {
+    const resolved = await Bun.dns.lookup(hostname);
+    if (!resolved) return { allowed: false, error: `Could not resolve hostname: ${hostname}` };
+    const addresses = Array.isArray(resolved) ? resolved : [resolved];
+    for (const addr of addresses) {
+      if (isPrivateOrInternal(addr)) {
+        return { allowed: false, error: `Hostname ${hostname} resolves to blocked address ${addr}` };
+      }
+    }
+    return { allowed: true, ip: addresses[0]! };
+  } catch {
+    return { allowed: true, ip: "" };
+  }
+}
+
+// Limit concurrent in-flight webhook deliveries to prevent resource exhaustion
+let activeDeliveries = 0;
+const MAX_CONCURRENT_DELIVERIES = 20;
 
 export interface WebhookDelivery {
   id: string;
@@ -83,8 +114,11 @@ function rowToWebhook(row: any): Webhook {
 }
 
 export function createWebhook(input: CreateWebhookInput, db?: Database): Webhook {
+  const urlValidation = validateWebhookUrl(input.url);
+  if (!urlValidation.valid) {
+    throw new Error(`Invalid webhook URL: ${urlValidation.error}`);
+  }
   const d = db || getDatabase();
-  validateWebhookUrl(input.url);
   const id = uuid();
   d.run(
     `INSERT INTO webhooks (id, url, events, secret, project_id, task_list_id, agent_id, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -163,6 +197,31 @@ async function deliverWebhook(
   attempt: number,
   db: Database,
 ): Promise<void> {
+  // SSRF prevention: resolve hostname and verify the IP is not private/internal
+  try {
+    const url = new URL(wh.url);
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" || hostname === "::1") {
+      logDelivery(db, wh.id, event, body, null, "Blocked: webhook URL points to localhost", attempt);
+      return;
+    }
+    const ipCheck = await resolveAndCheckIp(hostname);
+    if (!ipCheck.allowed) {
+      logDelivery(db, wh.id, event, body, null, `Blocked: ${ipCheck.error}`, attempt);
+      return;
+    }
+  } catch {
+    logDelivery(db, wh.id, event, body, null, `Invalid URL at delivery time: ${wh.url}`, attempt);
+    return;
+  }
+
+  // Backpressure: drop delivery if too many in-flight
+  if (activeDeliveries >= MAX_CONCURRENT_DELIVERIES) {
+    logDelivery(db, wh.id, event, body, null, "Dropped: too many concurrent deliveries", attempt);
+    return;
+  }
+
+  activeDeliveries++;
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (wh.secret) {
@@ -175,24 +234,29 @@ async function deliverWebhook(
     const respText = await resp.text().catch(() => "");
     logDelivery(db, wh.id, event, body, resp.status, respText.slice(0, 1000), attempt);
 
-    // Retry on failure (status >= 400)
     if (resp.status >= 400 && attempt < MAX_RETRY_ATTEMPTS) {
       const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
       setTimeout(() => {
-        deliverWebhook(wh, event, body, attempt + 1, db).catch(() => {});
+        deliverWebhook(wh, event, body, attempt + 1, db).catch((retryErr) => {
+          console.error(`[webhook] Retry failed for webhook ${wh.id}:`, retryErr);
+        });
       }, delay);
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     logDelivery(db, wh.id, event, body, null, errorMsg.slice(0, 1000), attempt);
+    console.error(`[webhook] Delivery failed for webhook ${wh.id} (attempt ${attempt}):`, errorMsg);
 
-    // Retry on network error
     if (attempt < MAX_RETRY_ATTEMPTS) {
       const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
       setTimeout(() => {
-        deliverWebhook(wh, event, body, attempt + 1, db).catch(() => {});
+        deliverWebhook(wh, event, body, attempt + 1, db).catch((retryErr) => {
+          console.error(`[webhook] Retry failed for webhook ${wh.id}:`, retryErr);
+        });
       }, delay);
     }
+  } finally {
+    activeDeliveries--;
   }
 }
 
@@ -206,7 +270,8 @@ export async function dispatchWebhook(event: string, payload: unknown, db?: Data
     if (!matchesScope(wh, payloadObj)) continue;
 
     const body = JSON.stringify({ event, payload, timestamp: now() });
-    // Fire and forget — non-blocking
-    deliverWebhook(wh, event, body, 1, d).catch(() => {});
+    deliverWebhook(wh, event, body, 1, d).catch((err) => {
+      console.error(`[webhook] Dispatch failed for webhook ${wh.id}:`, err);
+    });
   }
 }

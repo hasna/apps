@@ -392,6 +392,8 @@ export interface TaskFilter {
   parent_id?: string | null;
   plan_id?: string;
   task_list_id?: string;
+  /** Filter to specific task IDs. When provided, only matching tasks are returned. */
+  ids?: string[];
   status?: TaskStatus | TaskStatus[];
   priority?: TaskPriority | TaskPriority[];
   assigned_to?: string;

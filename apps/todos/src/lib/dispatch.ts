@@ -30,9 +30,9 @@ export async function executeDispatch(
     // Resolve tasks from task_ids or task_list_id
     const tasks =
       dispatch.task_ids.length > 0
-        ? listTasks({ ids: dispatch.task_ids } as Parameters<typeof listTasks>[0], _db)
+        ? listTasks({ ids: dispatch.task_ids }, _db)
         : dispatch.task_list_id
-          ? listTasks({ task_list_id: dispatch.task_list_id, status: ["pending", "in_progress"] } as Parameters<typeof listTasks>[0], _db)
+          ? listTasks({ task_list_id: dispatch.task_list_id, status: ["pending", "in_progress"] }, _db)
           : [];
 
     message = formatDispatchMessage(tasks, opts.formatOpts ?? {});
