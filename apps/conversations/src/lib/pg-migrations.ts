@@ -76,14 +76,15 @@ export const PG_MIGRATIONS: string[] = [
 
   CREATE TABLE IF NOT EXISTS agent_presence (
     id TEXT NOT NULL DEFAULT '',
-    agent TEXT PRIMARY KEY,
+    agent TEXT NOT NULL,
     session_id TEXT,
     role TEXT NOT NULL DEFAULT 'agent',
-    project_id TEXT,
+    project_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'online',
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    metadata TEXT
+    metadata TEXT,
+    PRIMARY KEY (agent, project_id)
   );
 
   CREATE TABLE IF NOT EXISTS resource_locks (

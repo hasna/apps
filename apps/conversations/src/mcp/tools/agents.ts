@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { resolveIdentity, updateCachedAutoName } from "../../lib/identity.js";
-import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence } from "../../lib/presence.js";
+import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getPresence, setPresenceProject } from "../../lib/presence.js";
 import { setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { getSessionActivity } from "../../lib/sessions.js";
 import { getUnreadBlockers } from "../../lib/messages.js";
@@ -164,8 +164,7 @@ export function registerAgentTools(
     agentFocus.set(agent, { project_id });
 
     // Also persist to DB
-    const db = (await import("../../lib/db.js")).getDb();
-    db.prepare("UPDATE agent_presence SET project_id = ? WHERE agent = ?").run(project_id, agent);
+    setPresenceProject(agent, project_id);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, focused: true, project_id }) }],
@@ -206,8 +205,7 @@ export function registerAgentTools(
     agentFocus.delete(agent);
 
     // Clear from DB too
-    const db = (await import("../../lib/db.js")).getDb();
-    db.prepare("UPDATE agent_presence SET project_id = NULL WHERE agent = ?").run(agent);
+    setPresenceProject(agent, null);
 
     return {
       content: [{ type: "text", text: JSON.stringify({ agent, focused: false, project_id: null }) }],

@@ -5,6 +5,16 @@ import { homedir } from "os";
 
 let db: Database | null = null;
 
+type PresenceColumnInfo = {
+  name: string;
+  notnull: number;
+  pk: number;
+};
+
+type LegacyPresenceRow = Record<string, unknown> & {
+  _rowid: number;
+};
+
 export function getDataDir(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
   const newDir = join(home, ".hasna", "conversations");
@@ -29,6 +39,110 @@ export function getDbPath(): string {
   if (process.env.HASNA_CONVERSATIONS_DB_PATH) return process.env.HASNA_CONVERSATIONS_DB_PATH;
   if (process.env.CONVERSATIONS_DB_PATH) return process.env.CONVERSATIONS_DB_PATH;
   return join(getDataDir(), "messages.db");
+}
+
+function parsePresenceTimestamp(value: unknown): number {
+  if (typeof value !== "string" || !value) return 0;
+  return new Date(`${value}Z`).getTime() || 0;
+}
+
+function normalizePresenceText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+}
+
+function shouldRebuildAgentPresenceTable(columns: PresenceColumnInfo[]): boolean {
+  const byName = new Map(columns.map((column) => [column.name, column]));
+  const agentCol = byName.get("agent");
+  const projectCol = byName.get("project_id");
+
+  if (!agentCol) return false;
+  if (!projectCol) return true;
+
+  return agentCol.pk !== 1
+    || projectCol.pk !== 2
+    || projectCol.notnull !== 1
+    || byName.has("pid");
+}
+
+function rebuildLegacyAgentPresenceTable(db: Database): void {
+  const fallbackNow = (db.prepare(
+    "SELECT strftime('%Y-%m-%dT%H:%M:%f', 'now') AS now"
+  ).get() as { now: string }).now;
+  const legacyRows = db.prepare("SELECT rowid AS _rowid, * FROM agent_presence").all() as LegacyPresenceRow[];
+
+  legacyRows.sort((left, right) => {
+    const lastSeenDelta = parsePresenceTimestamp(right.last_seen_at) - parsePresenceTimestamp(left.last_seen_at);
+    if (lastSeenDelta !== 0) return lastSeenDelta;
+
+    const createdDelta = parsePresenceTimestamp(right.created_at) - parsePresenceTimestamp(left.created_at);
+    if (createdDelta !== 0) return createdDelta;
+
+    const projectDelta = Number(Boolean(normalizePresenceText(right.project_id))) - Number(Boolean(normalizePresenceText(left.project_id)));
+    if (projectDelta !== 0) return projectDelta;
+
+    return right._rowid - left._rowid;
+  });
+
+  const dedupedRows = new Map<string, LegacyPresenceRow>();
+  for (const row of legacyRows) {
+    const normalizedAgent = normalizePresenceText(row.agent)?.toLowerCase();
+    if (!normalizedAgent) continue;
+
+    const storedProjectId = normalizePresenceText(row.project_id) ?? "";
+    const dedupeKey = `${normalizedAgent}\u0000${storedProjectId}`;
+    if (dedupedRows.has(dedupeKey)) continue;
+    dedupedRows.set(dedupeKey, row);
+  }
+
+  db.exec("BEGIN");
+  try {
+    db.exec(`
+      CREATE TABLE agent_presence_new (
+        id TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        session_id TEXT,
+        role TEXT NOT NULL DEFAULT 'agent',
+        project_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'online',
+        last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        metadata TEXT,
+        PRIMARY KEY (agent, project_id)
+      )
+    `);
+
+    const insertPresence = db.prepare(`
+      INSERT INTO agent_presence_new (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const [dedupeKey, row] of dedupedRows) {
+      const [agent, projectKey] = dedupeKey.split("\u0000");
+      const id = normalizePresenceText(row.id) ?? crypto.randomUUID().slice(0, 8);
+      const sessionId = normalizePresenceText(row.session_id);
+      const role = normalizePresenceText(row.role) ?? "agent";
+      const projectId = projectKey;
+      const status = normalizePresenceText(row.status) ?? "online";
+      const lastSeenAt = normalizePresenceText(row.last_seen_at) ?? fallbackNow;
+      const createdAt = normalizePresenceText(row.created_at) ?? lastSeenAt;
+      const metadata = typeof row.metadata === "string"
+        ? row.metadata
+        : row.metadata == null
+          ? null
+          : JSON.stringify(row.metadata);
+
+      insertPresence.run(id, agent, sessionId, role, projectId, status, lastSeenAt, createdAt, metadata);
+    }
+
+    db.exec("DROP TABLE agent_presence");
+    db.exec("ALTER TABLE agent_presence_new RENAME TO agent_presence");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function getDb(): Database {
@@ -117,14 +231,15 @@ export function getDb(): Database {
   db.exec(`
     CREATE TABLE IF NOT EXISTS agent_presence (
       id TEXT NOT NULL,
-      agent TEXT PRIMARY KEY,
+      agent TEXT NOT NULL,
       session_id TEXT,
       role TEXT NOT NULL DEFAULT 'agent',
-      project_id TEXT,
+      project_id TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'online',
       last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
-      metadata TEXT
+      metadata TEXT,
+      PRIMARY KEY (agent, project_id)
     )
   `);
 
@@ -252,8 +367,16 @@ export function getDb(): Database {
   }
 
   // Migrate agent_presence: add id, session_id, role, created_at columns
-  const presenceCols = db.prepare("PRAGMA table_info(agent_presence)").all() as { name: string }[];
-  const presenceColNames = presenceCols.map((c) => c.name);
+  let presenceCols = db.prepare("PRAGMA table_info(agent_presence)").all() as PresenceColumnInfo[];
+  let presenceColNames = presenceCols.map((c) => c.name);
+
+  // Normalize legacy presence schemas into the current composite agent+project form.
+  if (shouldRebuildAgentPresenceTable(presenceCols)) {
+    rebuildLegacyAgentPresenceTable(db);
+    presenceCols = db.prepare("PRAGMA table_info(agent_presence)").all() as PresenceColumnInfo[];
+    presenceColNames = presenceCols.map((c) => c.name);
+  }
+
   if (!presenceColNames.includes("id")) {
     db.exec("ALTER TABLE agent_presence ADD COLUMN id TEXT NOT NULL DEFAULT ''");
     // Backfill existing rows with generated IDs
@@ -276,6 +399,7 @@ export function getDb(): Database {
   }
   if (!presenceColNames.includes("project_id")) {
     db.exec("ALTER TABLE agent_presence ADD COLUMN project_id TEXT");
+    db.exec("UPDATE agent_presence SET project_id = '' WHERE project_id IS NULL");
   }
 
   // Per-agent space message read receipts

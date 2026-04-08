@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { getDb, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { heartbeat, registerAgent, isAgentConflict, listAgents, removePresence, renameAgent, getPresence } from "../../lib/presence.js";
+import { heartbeat, registerAgent, isAgentConflict, listAgents, removePresence, renameAgent, getPresence, setPresenceProject } from "../../lib/presence.js";
 import { getProject, getProjectByName } from "../../lib/projects.js";
 
 type PresenceView = {
@@ -218,7 +218,7 @@ export function registerAgentCommands(program: Command): void {
         console.error(chalk.red(`Project "${projectArg}" not found.`));
         process.exit(1);
       }
-      getDb().prepare("UPDATE agent_presence SET project_id = ? WHERE agent = ?").run(project.id, agent);
+      setPresenceProject(agent, project.id);
 
       if (opts.json) {
         console.log(JSON.stringify({ agent, project_id: project.id, project_name: project.name, focused: true }));
@@ -235,7 +235,7 @@ export function registerAgentCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
-      getDb().prepare("UPDATE agent_presence SET project_id = NULL WHERE agent = ?").run(agent);
+      setPresenceProject(agent, null);
 
       if (opts.json) {
         console.log(JSON.stringify({ agent, project_id: null, focused: false }));

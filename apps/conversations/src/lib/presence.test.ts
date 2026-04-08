@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent, isAgentConflict } from "./presence";
+import { Database as SqliteDatabase } from "bun:sqlite";
+import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent, isAgentConflict, setPresenceProject } from "./presence";
 import { closeDb, getDb } from "./db";
 import type { AgentConflictError, RegisterAgentResult } from "../types";
 import { unlinkSync } from "fs";
@@ -19,6 +20,79 @@ afterEach(() => {
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
 });
+
+function seedLegacyPresenceDb(): void {
+  const db = new SqliteDatabase(TEST_DB);
+  db.exec(`
+    CREATE TABLE agent_presence (
+      id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      project_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT,
+      pid INTEGER,
+      role TEXT NOT NULL DEFAULT 'agent',
+      status TEXT NOT NULL DEFAULT 'online',
+      last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      metadata TEXT,
+      PRIMARY KEY (agent, project_id)
+    )
+  `);
+
+  const insertLegacyRow = db.prepare(`
+    INSERT INTO agent_presence (id, agent, project_id, session_id, pid, role, status, last_seen_at, created_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insertLegacyRow.run(
+    "oldagent1",
+    "legacy-agent",
+    "old-project",
+    "session-old",
+    101,
+    "agent",
+    "idle",
+    "2026-04-08T12:00:00.000",
+    "2026-04-08T12:00:00.000",
+    null
+  );
+  insertLegacyRow.run(
+    "newagent1",
+    "LEGACY-AGENT",
+    "new-project",
+    "session-new",
+    202,
+    "coordinator",
+    "busy",
+    "2026-04-08T14:00:00.000",
+    "2026-04-08T14:00:00.000",
+    "{\"task\":\"latest\"}"
+  );
+
+  db.close();
+}
+
+function seedSingleProjectPresenceDb(): void {
+  const db = new SqliteDatabase(TEST_DB);
+  db.exec(`
+    CREATE TABLE agent_presence (
+      id TEXT NOT NULL,
+      agent TEXT PRIMARY KEY,
+      session_id TEXT,
+      role TEXT NOT NULL DEFAULT 'agent',
+      project_id TEXT,
+      status TEXT NOT NULL DEFAULT 'online',
+      last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      metadata TEXT
+    )
+  `);
+  db.prepare(`
+    INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+    VALUES ('solo1111', 'solo-agent', 'session-solo', 'agent', NULL, 'busy', '2026-04-08T11:00:00.000', '2026-04-08T11:00:00.000', '{"source":"single"}')
+  `).run();
+  db.close();
+}
 
 describe("registerAgent", () => {
   test("creates new agent and returns created=true", () => {
@@ -124,6 +198,85 @@ describe("registerAgent", () => {
 });
 
 describe("heartbeat", () => {
+  test("migrates legacy composite-key presence tables before register and heartbeat", () => {
+    seedLegacyPresenceDb();
+
+    const created = registerAgent("fresh-agent", "session-fresh") as RegisterAgentResult;
+    expect(created.created).toBe(true);
+    expect(created.agent.project_id).toBeNull();
+
+    heartbeat("legacy-agent", "online", { source: "migration-test" }, "session-after");
+    const migratedLegacy = getPresence("legacy-agent");
+    expect(migratedLegacy).toBeTruthy();
+    expect(migratedLegacy!.project_id).toBe("new-project");
+    expect(migratedLegacy!.role).toBe("coordinator");
+    expect(migratedLegacy!.session_id).toBe("session-after");
+    expect(migratedLegacy!.status).toBe("online");
+
+    const db = getDb();
+    const cols = db.prepare("PRAGMA table_info(agent_presence)").all() as { name: string; notnull: number; pk: number }[];
+    const agentCol = cols.find((col) => col.name === "agent");
+    const projectCol = cols.find((col) => col.name === "project_id");
+    expect(agentCol?.pk).toBe(1);
+    expect(projectCol?.pk).toBe(2);
+    expect(projectCol?.notnull).toBe(1);
+    expect(cols.some((col) => col.name === "pid")).toBe(false);
+
+    const dedupedRows = db.prepare(`
+      SELECT agent, project_id, status, session_id
+      FROM agent_presence
+      WHERE agent = ?
+      ORDER BY project_id
+    `).all("legacy-agent") as {
+      agent: string;
+      project_id: string | null;
+      status: string;
+      session_id: string | null;
+    }[];
+    expect(dedupedRows).toHaveLength(2);
+    expect(dedupedRows).toEqual([
+      {
+        agent: "legacy-agent",
+        project_id: "new-project",
+        status: "online",
+        session_id: "session-after",
+      },
+      {
+        agent: "legacy-agent",
+        project_id: "old-project",
+        status: "idle",
+        session_id: "session-old",
+      },
+    ]);
+  });
+
+  test("migrates single-project presence tables into the composite schema", () => {
+    seedSingleProjectPresenceDb();
+
+    heartbeat("solo-agent", "online", { source: "single-migration" }, "session-updated");
+
+    const migrated = getPresence("solo-agent");
+    expect(migrated).toBeTruthy();
+    expect(migrated!.project_id).toBeNull();
+    expect(migrated!.session_id).toBe("session-updated");
+    expect(migrated!.status).toBe("online");
+
+    const db = getDb();
+    const cols = db.prepare("PRAGMA table_info(agent_presence)").all() as { name: string; notnull: number; pk: number }[];
+    const agentCol = cols.find((col) => col.name === "agent");
+    const projectCol = cols.find((col) => col.name === "project_id");
+    expect(agentCol?.pk).toBe(1);
+    expect(projectCol?.pk).toBe(2);
+    expect(projectCol?.notnull).toBe(1);
+
+    const row = db.prepare("SELECT project_id, metadata FROM agent_presence WHERE agent = ?").get("solo-agent") as {
+      project_id: string;
+      metadata: string | null;
+    };
+    expect(row.project_id).toBe("");
+    expect(row.metadata).toBe(JSON.stringify({ source: "single-migration" }));
+  });
+
   test("creates presence for new agent", () => {
     heartbeat("agent-1");
     const p = getPresence("agent-1");
@@ -162,6 +315,35 @@ describe("heartbeat", () => {
     heartbeat("agent-1");
     const p = getPresence("agent-1");
     expect(p!.metadata).toBeNull();
+  });
+
+  test("updates an existing composite-key presence row without relying on ON CONFLICT(agent)", () => {
+    const db = getDb();
+    db.exec("DROP TABLE agent_presence");
+    db.exec(`
+      CREATE TABLE agent_presence (
+        id TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
+        session_id TEXT,
+        role TEXT NOT NULL DEFAULT 'agent',
+        status TEXT NOT NULL DEFAULT 'online',
+        last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        metadata TEXT,
+        PRIMARY KEY (agent, project_id)
+      )
+    `);
+    db.prepare(`
+      INSERT INTO agent_presence (id, agent, project_id, session_id, role, status, last_seen_at, created_at, metadata)
+      VALUES ('aaaa1111', 'agent-1', 'proj-123', 'sess-1', 'agent', 'idle', '2024-01-01T00:00:00.000', '2024-01-01T00:00:00.000', '{"scope":"proj"}')
+    `).run();
+
+    heartbeat("agent-1", "busy");
+
+    const row = db.prepare("SELECT project_id, status FROM agent_presence WHERE agent = ?").get("agent-1") as { project_id: string; status: string };
+    expect(row.project_id).toBe("proj-123");
+    expect(row.status).toBe("busy");
   });
 });
 
@@ -287,5 +469,15 @@ describe("renameAgent", () => {
     heartbeat("agent-a");
     heartbeat("agent-b");
     expect(() => renameAgent("agent-a", "agent-b")).toThrow('Agent "agent-b" already exists');
+  });
+});
+
+describe("setPresenceProject", () => {
+  test("re-targets the latest presence row to the requested project", () => {
+    heartbeat("agent-1");
+    setPresenceProject("agent-1", "proj-abc");
+
+    const p = getPresence("agent-1");
+    expect(p!.project_id).toBe("proj-abc");
   });
 });

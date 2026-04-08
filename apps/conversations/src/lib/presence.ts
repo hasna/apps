@@ -4,6 +4,42 @@ import type { AgentPresence, AgentConflictError, RegisterAgentResult } from "../
 const ONLINE_THRESHOLD_SECONDS = 60;
 const CONFLICT_THRESHOLD_SECONDS = 30 * 60; // 30 minutes
 
+function normalizeAgentName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function toStoredProjectId(projectId?: string | null): string {
+  const normalized = projectId?.trim() ?? "";
+  return normalized || "";
+}
+
+function fromStoredProjectId(projectId: unknown): string | null {
+  const normalized = typeof projectId === "string" ? projectId.trim() : "";
+  return normalized || null;
+}
+
+function getPresenceByAgent(db: ReturnType<typeof getDb>, agent: string): Record<string, unknown> | null {
+  return db.prepare(`
+    SELECT * FROM agent_presence
+    WHERE LOWER(agent) = ?
+    ORDER BY last_seen_at DESC
+    LIMIT 1
+  `).get(agent) as Record<string, unknown> | null;
+}
+
+function getPresenceByAgentAndProject(
+  db: ReturnType<typeof getDb>,
+  agent: string,
+  projectId: string,
+): Record<string, unknown> | null {
+  return db.prepare(`
+    SELECT * FROM agent_presence
+    WHERE LOWER(agent) = ? AND COALESCE(project_id, '') = ?
+    ORDER BY last_seen_at DESC
+    LIMIT 1
+  `).get(agent, projectId) as Record<string, unknown> | null;
+}
+
 function parsePresence(row: Record<string, unknown>): AgentPresence {
   let metadata: Record<string, unknown> | null = null;
   if (row.metadata) {
@@ -24,7 +60,7 @@ function parsePresence(row: Record<string, unknown>): AgentPresence {
     agent: row.agent as string,
     session_id: (row.session_id as string | null) ?? null,
     role: (row.role as string) || "agent",
-    project_id: (row.project_id as string | null) ?? null,
+    project_id: fromStoredProjectId(row.project_id),
     status: row.status as string,
     last_seen_at: lastSeenAt,
     created_at: (row.created_at as string) || lastSeenAt,
@@ -50,11 +86,12 @@ export function registerAgent(
   projectId?: string
 ): RegisterAgentResult | AgentConflictError {
   const db = getDb();
-  const normalizedName = name.trim().toLowerCase();
+  const normalizedName = normalizeAgentName(name);
 
   // BEGIN IMMEDIATE acquires write lock at start — eliminates TOCTOU race
   const result = db.transaction(() => {
-    const existing = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown> | null;
+    const existing = getPresenceByAgent(db, normalizedName);
+    const storedProjectId = toStoredProjectId(projectId ?? (existing?.project_id as string | null | undefined));
 
     if (existing) {
       const lastSeenAt = existing.last_seen_at as string;
@@ -77,13 +114,34 @@ export function registerAgent(
 
       // Stale or same session — takeover/update
       const tookOver = existingSessionId !== sessionId;
-      db.prepare(`
-        UPDATE agent_presence
-        SET session_id = ?, role = ?, project_id = ?, last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
-        WHERE agent = ?
-      `).run(sessionId, role || (existing.role as string) || "agent", projectId ?? (existing.project_id as string | null) ?? null, normalizedName);
+      const existingId = existing.id as string;
+      const target = getPresenceByAgentAndProject(db, normalizedName, storedProjectId);
 
-      const updated = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
+      if (target && (target.id as string) !== existingId) {
+        db.prepare(`
+          UPDATE agent_presence
+          SET session_id = ?, role = ?, status = 'online', last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+          WHERE id = ?
+        `).run(sessionId, role || (existing.role as string) || "agent", target.id as string);
+        db.prepare("DELETE FROM agent_presence WHERE id = ?").run(existingId);
+      } else {
+        db.prepare(`
+          UPDATE agent_presence
+          SET session_id = ?, role = ?, project_id = ?, status = 'online', last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+          WHERE id = ?
+        `).run(
+          sessionId,
+          role || (existing.role as string) || "agent",
+          storedProjectId,
+          existingId,
+        );
+      }
+
+      const updated = getPresenceByAgentAndProject(db, normalizedName, storedProjectId)
+        ?? getPresenceByAgent(db, normalizedName);
+      if (!updated) {
+        throw new Error(`Failed to update presence for agent "${normalizedName}"`);
+      }
       return { agent: parsePresence(updated), created: false, took_over: tookOver };
     }
 
@@ -93,40 +151,76 @@ export function registerAgent(
     db.prepare(`
       INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at)
       VALUES (?, ?, ?, ?, ?, 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'))
-    `).run(id, normalizedName, sessionId, resolvedRole, projectId ?? null);
+    `).run(id, normalizedName, sessionId, resolvedRole, storedProjectId);
 
-    const created = db.prepare("SELECT * FROM agent_presence WHERE agent = ?").get(normalizedName) as Record<string, unknown>;
+    const created = getPresenceByAgentAndProject(db, normalizedName, storedProjectId)
+      ?? getPresenceByAgent(db, normalizedName);
+    if (!created) {
+      throw new Error(`Failed to create presence for agent "${normalizedName}"`);
+    }
     return { agent: parsePresence(created), created: true, took_over: false };
   });
 
   return result;
 }
 
-export function heartbeat(agent: string, status?: string, metadata?: Record<string, unknown>, sessionId?: string): void {
+export function heartbeat(
+  agent: string,
+  status?: string,
+  metadata?: Record<string, unknown>,
+  sessionId?: string,
+  projectId?: string | null,
+): void {
   const db = getDb();
   const metadataJson = metadata ? JSON.stringify(metadata) : null;
   const resolvedStatus = status || "online";
-  const normalizedAgent = agent.trim().toLowerCase();
+  const normalizedAgent = normalizeAgentName(agent);
 
-  // Ensure id exists for agents registered before the migration
-  const existing = db.prepare("SELECT id FROM agent_presence WHERE agent = ?").get(normalizedAgent) as { id: string } | null;
-  const id = existing?.id || crypto.randomUUID().slice(0, 8);
+  db.transaction(() => {
+    const existing = getPresenceByAgent(db, normalizedAgent);
+    const storedProjectId = toStoredProjectId(projectId ?? (existing?.project_id as string | null | undefined));
+    const id = (existing?.id as string | undefined) || crypto.randomUUID().slice(0, 8);
 
-  db.prepare(`
-    INSERT INTO agent_presence (id, agent, session_id, role, status, last_seen_at, created_at, metadata)
-    VALUES (?, ?, ?, 'agent', ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?)
-    ON CONFLICT(agent) DO UPDATE SET
-      status = excluded.status,
-      last_seen_at = excluded.last_seen_at,
-      session_id = COALESCE(excluded.session_id, agent_presence.session_id),
-      metadata = excluded.metadata
-  `).run(id, normalizedAgent, sessionId ?? null, resolvedStatus, metadataJson);
+    if (existing) {
+      const existingId = existing.id as string;
+      const target = getPresenceByAgentAndProject(db, normalizedAgent, storedProjectId);
+
+      if (target && (target.id as string) !== existingId) {
+        db.prepare(`
+          UPDATE agent_presence
+          SET status = ?,
+              last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now'),
+              session_id = COALESCE(?, session_id),
+              metadata = ?
+          WHERE id = ?
+        `).run(resolvedStatus, sessionId ?? null, metadataJson, target.id as string);
+        db.prepare("DELETE FROM agent_presence WHERE id = ?").run(existingId);
+        return;
+      }
+
+      db.prepare(`
+        UPDATE agent_presence
+        SET status = ?,
+            last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now'),
+            session_id = COALESCE(?, session_id),
+            metadata = ?,
+            project_id = ?
+        WHERE id = ?
+      `).run(resolvedStatus, sessionId ?? null, metadataJson, storedProjectId, existingId);
+      return;
+    }
+
+    db.prepare(`
+      INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+      VALUES (?, ?, ?, 'agent', ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'), ?)
+    `).run(id, normalizedAgent, sessionId ?? null, storedProjectId, resolvedStatus, metadataJson);
+  });
 }
 
 export function getPresence(agent: string): AgentPresence | null {
   const db = getDb();
-  const normalizedAgent = agent.trim().toLowerCase();
-  const row = db.prepare("SELECT * FROM agent_presence WHERE LOWER(agent) = ?").get(normalizedAgent) as Record<string, unknown> | null;
+  const normalizedAgent = normalizeAgentName(agent);
+  const row = getPresenceByAgent(db, normalizedAgent);
   return row ? parsePresence(row) : null;
 }
 
@@ -147,15 +241,15 @@ export function listAgents(opts?: { online_only?: boolean }): AgentPresence[] {
 
 export function removePresence(agent: string): boolean {
   const db = getDb();
-  const normalizedAgent = agent.trim().toLowerCase();
+  const normalizedAgent = normalizeAgentName(agent);
   const result = db.prepare("DELETE FROM agent_presence WHERE LOWER(agent) = ?").run(normalizedAgent);
   return result.changes > 0;
 }
 
 export function renameAgent(oldName: string, newName: string): boolean {
   const db = getDb();
-  const normalizedOld = oldName.trim().toLowerCase();
-  const normalizedNew = newName.trim().toLowerCase();
+  const normalizedOld = normalizeAgentName(oldName);
+  const normalizedNew = normalizeAgentName(newName);
 
   const existing = db.prepare("SELECT agent FROM agent_presence WHERE LOWER(agent) = ?").get(normalizedOld);
   if (!existing) return false;
@@ -165,4 +259,49 @@ export function renameAgent(oldName: string, newName: string): boolean {
 
   db.prepare("UPDATE agent_presence SET agent = ? WHERE LOWER(agent) = ?").run(normalizedNew, normalizedOld);
   return true;
+}
+
+export function setPresenceProject(agent: string, projectId: string | null): void {
+  const db = getDb();
+  const normalizedAgent = normalizeAgentName(agent);
+  const desiredProjectId = toStoredProjectId(projectId);
+  const latest = getPresenceByAgent(db, normalizedAgent);
+
+  if (!latest) {
+    heartbeat(normalizedAgent, "online", undefined, undefined, projectId);
+    return;
+  }
+
+  const currentProjectId = toStoredProjectId(latest.project_id as string | null | undefined);
+  if (currentProjectId === desiredProjectId) return;
+
+  db.transaction(() => {
+    const latestId = latest.id as string;
+    const target = getPresenceByAgentAndProject(db, normalizedAgent, desiredProjectId);
+
+    if (target && (target.id as string) !== latestId) {
+      db.prepare(`
+        UPDATE agent_presence
+        SET status = ?,
+            last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now'),
+            session_id = COALESCE(?, session_id),
+            metadata = COALESCE(?, metadata)
+        WHERE LOWER(agent) = ? AND COALESCE(project_id, '') = ?
+      `).run(
+        (latest.status as string) || (target.status as string) || "online",
+        (latest.session_id as string | null) ?? null,
+        (latest.metadata as string | null) ?? null,
+        normalizedAgent,
+        desiredProjectId,
+      );
+      db.prepare("DELETE FROM agent_presence WHERE id = ?").run(latestId);
+      return;
+    }
+
+    db.prepare(`
+      UPDATE agent_presence
+      SET project_id = ?, last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+      WHERE id = ?
+    `).run(desiredProjectId, latestId);
+  });
 }
