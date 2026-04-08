@@ -145,6 +145,54 @@ function rebuildLegacyAgentPresenceTable(db: Database): void {
   }
 }
 
+function collapseDuplicateAgentPresenceRows(db: Database): void {
+  const rows = db.prepare("SELECT rowid AS _rowid, * FROM agent_presence").all() as LegacyPresenceRow[];
+
+  rows.sort((left, right) => {
+    const lastSeenDelta = parsePresenceTimestamp(right.last_seen_at) - parsePresenceTimestamp(left.last_seen_at);
+    if (lastSeenDelta !== 0) return lastSeenDelta;
+
+    const createdDelta = parsePresenceTimestamp(right.created_at) - parsePresenceTimestamp(left.created_at);
+    if (createdDelta !== 0) return createdDelta;
+
+    const projectDelta = Number(Boolean(normalizePresenceText(right.project_id))) - Number(Boolean(normalizePresenceText(left.project_id)));
+    if (projectDelta !== 0) return projectDelta;
+
+    return right._rowid - left._rowid;
+  });
+
+  const rowIdsToDelete: number[] = [];
+  const seenAgents = new Set<string>();
+  for (const row of rows) {
+    const normalizedAgent = normalizePresenceText(row.agent)?.toLowerCase();
+    if (!normalizedAgent) continue;
+    if (seenAgents.has(normalizedAgent)) {
+      rowIdsToDelete.push(row._rowid);
+      continue;
+    }
+    seenAgents.add(normalizedAgent);
+  }
+
+  if (rowIdsToDelete.length === 0) return;
+
+  db.exec("BEGIN");
+  try {
+    const deleteRow = db.prepare("DELETE FROM agent_presence WHERE rowid = ?");
+    for (const rowId of rowIdsToDelete) {
+      deleteRow.run(rowId);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function ensureAgentPresenceAgentUniqueIndex(db: Database): void {
+  collapseDuplicateAgentPresenceRows(db);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_presence_agent_unique ON agent_presence(agent)");
+}
+
 export function getDb(): Database {
   if (db) return db;
 
@@ -242,6 +290,7 @@ export function getDb(): Database {
       PRIMARY KEY (agent, project_id)
     )
   `);
+  ensureAgentPresenceAgentUniqueIndex(db);
 
   // Resource locks table (advisory + exclusive write coordination)
   db.exec(`
@@ -401,6 +450,8 @@ export function getDb(): Database {
     db.exec("ALTER TABLE agent_presence ADD COLUMN project_id TEXT");
     db.exec("UPDATE agent_presence SET project_id = '' WHERE project_id IS NULL");
   }
+
+  ensureAgentPresenceAgentUniqueIndex(db);
 
   // Per-agent space message read receipts
   db.exec(`

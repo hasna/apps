@@ -233,19 +233,13 @@ describe("heartbeat", () => {
       status: string;
       session_id: string | null;
     }[];
-    expect(dedupedRows).toHaveLength(2);
+    expect(dedupedRows).toHaveLength(1);
     expect(dedupedRows).toEqual([
       {
         agent: "legacy-agent",
         project_id: "new-project",
         status: "online",
         session_id: "session-after",
-      },
-      {
-        agent: "legacy-agent",
-        project_id: "old-project",
-        status: "idle",
-        session_id: "session-old",
       },
     ]);
   });
@@ -343,6 +337,46 @@ describe("heartbeat", () => {
 
     const row = db.prepare("SELECT project_id, status FROM agent_presence WHERE agent = ?").get("agent-1") as { project_id: string; status: string };
     expect(row.project_id).toBe("proj-123");
+    expect(row.status).toBe("busy");
+  });
+
+  test("creates a unique agent index so stale ON CONFLICT(agent) writers still work", () => {
+    const db = getDb();
+
+    const indexes = db.prepare("PRAGMA index_list(agent_presence)").all() as {
+      name: string;
+      unique: number;
+    }[];
+    const uniqueAgentIndex = indexes.find((index) => index.name === "idx_agent_presence_agent_unique");
+    expect(uniqueAgentIndex?.unique).toBe(1);
+
+    db.prepare(`
+      INSERT INTO agent_presence (id, agent, project_id, session_id, role, status, last_seen_at, created_at)
+      VALUES ('idx11111', 'compat-agent', '', 'sess-1', 'agent', 'idle', '2024-01-01T00:00:00.000', '2024-01-01T00:00:00.000')
+      ON CONFLICT(agent) DO UPDATE SET
+        status = excluded.status,
+        session_id = excluded.session_id,
+        last_seen_at = excluded.last_seen_at
+    `).run();
+
+    db.prepare(`
+      INSERT INTO agent_presence (id, agent, project_id, session_id, role, status, last_seen_at, created_at)
+      VALUES ('idx22222', 'compat-agent', '', 'sess-2', 'agent', 'busy', '2024-01-02T00:00:00.000', '2024-01-01T00:00:00.000')
+      ON CONFLICT(agent) DO UPDATE SET
+        status = excluded.status,
+        session_id = excluded.session_id,
+        last_seen_at = excluded.last_seen_at
+    `).run();
+
+    const row = db.prepare("SELECT agent, project_id, session_id, status FROM agent_presence WHERE agent = ?").get("compat-agent") as {
+      agent: string;
+      project_id: string;
+      session_id: string | null;
+      status: string;
+    };
+    expect(row.agent).toBe("compat-agent");
+    expect(row.project_id).toBe("");
+    expect(row.session_id).toBe("sess-2");
     expect(row.status).toBe("busy");
   });
 });

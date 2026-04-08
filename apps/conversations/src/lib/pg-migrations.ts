@@ -86,6 +86,7 @@ export const PG_MIGRATIONS: string[] = [
     metadata TEXT,
     PRIMARY KEY (agent, project_id)
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_presence_agent_unique ON agent_presence(agent);
 
   CREATE TABLE IF NOT EXISTS resource_locks (
     resource_type TEXT NOT NULL,
