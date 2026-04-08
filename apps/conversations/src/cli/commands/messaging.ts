@@ -5,7 +5,7 @@ import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { heartbeat } from "../../lib/presence.js";
-import { getDb } from "../../lib/db.js";
+import { buildMessagePreview, listSpaceNotificationSubscriptions, markAllSpaceNotificationsRead, readSpaceNotifications } from "../../lib/space-notifications.js";
 
 export function registerMessagingCommands(program: Command): void {
   // ---- send ----
@@ -134,6 +134,41 @@ export function registerMessagingCommands(program: Command): void {
             console.log(indented);
           }
         }
+      }
+      closeDb();
+    });
+
+  // ---- show ----
+  program
+    .command("show")
+    .description("Show a full message by ID")
+    .argument("<id>", "Numeric message ID")
+    .option("-j, --json", "Output as JSON")
+    .action((idArg, opts) => {
+      const id = Number.parseInt(String(idArg), 10);
+      if (!Number.isFinite(id) || id <= 0) {
+        console.error(chalk.red("Message ID must be a positive integer."));
+        process.exit(1);
+      }
+
+      const msg = getMessageById(id);
+      if (!msg) {
+        console.error(chalk.red(`Message #${id} not found.`));
+        process.exit(1);
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify(msg, null, 2));
+      } else {
+        const time = chalk.dim(msg.created_at.slice(0, 19).replace("T", " "));
+        const destination = msg.space ? chalk.magenta(`#${msg.space}`) : chalk.yellow(msg.to_agent);
+        const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
+        const unread = !msg.read_at ? chalk.green(" [unread]") : "";
+        console.log(`${chalk.cyan(msg.from_agent)} → ${destination}${priority}${unread} ${chalk.dim(`[#${msg.id}] ${time}`)}`);
+        if (msg.attachments?.length) {
+          console.log(chalk.dim(`Attachments: ${msg.attachments.map((att) => att.name).join(", ")}`));
+        }
+        console.log(renderContent(msg.content));
       }
       closeDb();
     });
@@ -537,6 +572,58 @@ export function registerMessagingCommands(program: Command): void {
 
   // ---- watch ----
   program
+    .command("notifications")
+    .description("List preview-only notifications from subscribed spaces")
+    .option("--from <agent>", "Your agent identity")
+    .option("--space <name>", "Filter to a single space")
+    .option("--since <timestamp>", "Notifications after this ISO timestamp")
+    .option("--limit <n>", "Max notifications to return", parseInt)
+    .option("--all", "Include already-read notifications")
+    .option("--mark-read", "Mark returned notifications as read")
+    .option("--clear", "Mark all matching unread notifications as read without listing")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      const agent = resolveIdentity(opts.from);
+      heartbeat(agent);
+
+      if (opts.clear) {
+        const cleared = markAllSpaceNotificationsRead(agent, opts.space);
+        if (opts.json) {
+          console.log(JSON.stringify({ cleared, agent, space: opts.space || null }, null, 2));
+        } else {
+          console.log(chalk.green(`Cleared ${cleared} notification(s).`));
+        }
+        closeDb();
+        return;
+      }
+
+      const notifications = readSpaceNotifications({
+        agent,
+        space: opts.space,
+        since: opts.since,
+        unread_only: !opts.all,
+        limit: opts.limit,
+        mark_read: opts.markRead,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(notifications, null, 2));
+      } else if (notifications.length === 0) {
+        console.log(chalk.dim("No space notifications."));
+      } else {
+        for (const item of notifications) {
+          const time = chalk.dim(item.created_at.slice(11, 19));
+          const priority = item.priority !== "normal" ? chalk.red(` [${item.priority}]`) : "";
+          const unread = item.unread ? chalk.yellow(" [unread]") : "";
+          console.log(`${time} ${chalk.cyan(item.from_agent)} ${chalk.magenta(`#${item.space}`)}${priority}${unread} ${chalk.dim(`msg #${item.message_id}`)}`);
+          console.log(`  ${item.preview}`);
+        }
+        console.log(chalk.dim("\nInspect the full message later with: conversations show <message-id>"));
+      }
+      closeDb();
+    });
+
+  program
     .command("watch")
     .description("Watch for new messages with desktop notifications")
     .option("--from <agent>", "Your agent identity")
@@ -553,9 +640,7 @@ export function registerMessagingCommands(program: Command): void {
       // Resolve the agent's subscribed spaces when --all is used
       let agentSpaces: string[] = [];
       if (opts.all) {
-        const db = getDb();
-        const rows = db.prepare("SELECT space FROM space_members WHERE agent = ?").all(agent) as { space: string }[];
-        agentSpaces = rows.map(r => r.space);
+        agentSpaces = listSpaceNotificationSubscriptions(agent).map((row) => row.space);
       }
 
       const modeLabel = opts.all
@@ -608,20 +693,41 @@ export function registerMessagingCommands(program: Command): void {
         console.log("");
       };
 
+      const renderNotification = (notification: import("../../types.js").SpaceNotification) => {
+        const time = chalk.dim(notification.created_at.slice(11, 19));
+        const priority = notification.priority !== "normal"
+          ? (notification.priority === "urgent" ? chalk.red.bold(` [${notification.priority}]`) :
+             notification.priority === "high" ? chalk.yellow(` [${notification.priority}]`) :
+             chalk.dim(` [${notification.priority}]`))
+          : "";
+        const sender = chalk.cyan.bold(notification.from_agent);
+
+        console.log(`  ${sender}  ${chalk.magenta(`#${notification.space}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
+        console.log(`    ${notification.preview}`);
+        console.log(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
+        console.log(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
+        console.log("");
+      };
+
       // Show recent messages first
       if (opts.all) {
-        // Combine DMs and all space messages
         const dmRecent = readMessages({ to: agent, limit: 20, order: "asc" });
-        const spaceRecent: import("../../types.js").Message[] = [];
-        for (const sp of agentSpaces) {
-          spaceRecent.push(...readMessages({ space: sp, limit: 10, order: "asc" }));
+        const pendingNotifications = readSpaceNotifications({
+          agent,
+          unread_only: true,
+          limit: 20,
+          mark_read: true,
+        }).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+
+        if (dmRecent.length > 0) {
+          console.log(chalk.dim(`  ── Recent DMs (${dmRecent.length}) ──\n`));
+          for (const msg of dmRecent) { renderMessage(msg); }
         }
-        const recent = [...dmRecent, ...spaceRecent]
-          .sort((a, b) => a.created_at.localeCompare(b.created_at))
-          .slice(-20);
-        if (recent.length > 0) {
-          console.log(chalk.dim(`  ── Recent messages (${recent.length}) ──\n`));
-          for (const msg of recent) { renderMessage(msg); }
+        if (pendingNotifications.length > 0) {
+          console.log(chalk.dim(`  ── Pending space notifications (${pendingNotifications.length}) ──\n`));
+          for (const notification of pendingNotifications) { renderNotification(notification); }
+        }
+        if (dmRecent.length > 0 || pendingNotifications.length > 0) {
           console.log(chalk.dim(`  ── Live ──\n`));
         }
       } else {
@@ -645,28 +751,54 @@ export function registerMessagingCommands(program: Command): void {
 
           // Desktop notification (short preview)
           const where = msg.space ? `#${msg.space}` : "DM";
-          const preview = msg.content.replace(/[*#`~_>\-]/g, "").slice(0, 150);
+          const preview = buildMessagePreview(msg.content, 150);
           desktopNotify(`${msg.from_agent} (${where})`, preview);
         }
       };
 
-      if (opts.all) {
-        // Start a poller for DMs
-        startPolling({ to_agent: agent, interval_ms: interval, on_messages: onNewMessages });
-        // Start a poller for each subscribed space
-        for (const sp of agentSpaces) {
-          startPolling({ space: sp, interval_ms: interval, on_messages: onNewMessages });
+      const onNewNotifications = (notifications: import("../../types.js").SpaceNotification[]) => {
+        for (const notification of notifications) {
+          renderNotification(notification);
+          desktopNotify(`${notification.from_agent} (#${notification.space})`, notification.preview);
         }
+      };
+
+      const stops: Array<{ stop: () => void }> = [];
+
+      if (opts.all) {
+        stops.push(startPolling({ to_agent: agent, interval_ms: interval, on_messages: onNewMessages }));
+
+        let inFlightNotifications = false;
+        const timer = setInterval(() => {
+          if (inFlightNotifications) return;
+          inFlightNotifications = true;
+          try {
+            const notifications = readSpaceNotifications({
+              agent,
+              unread_only: true,
+              limit: 200,
+              mark_read: true,
+            }).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+
+            if (notifications.length > 0) {
+              onNewNotifications(notifications);
+            }
+          } finally {
+            inFlightNotifications = false;
+          }
+        }, interval);
+        stops.push({ stop: () => clearInterval(timer) });
       } else {
-        startPolling({
+        stops.push(startPolling({
           to_agent: opts.space ? undefined : agent,
           space: opts.space,
           interval_ms: interval,
           on_messages: onNewMessages,
-        });
+        }));
       }
 
       process.on("SIGINT", () => {
+        for (const stop of stops) stop.stop();
         console.log(chalk.dim("\n  Stopped watching."));
         closeDb();
         process.exit(0);

@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { sendMessage, readMessages } from "../../lib/messages.js";
+import { recordReadReceiptsBatch, sendMessage, readMessages } from "../../lib/messages.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace, getSpaceMembers } from "../../lib/spaces.js";
+import { listSpaceNotificationSubscriptions, markSpaceNotificationsRead, subscribeToSpaceNotifications, unsubscribeFromSpaceNotifications } from "../../lib/space-notifications.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
@@ -232,6 +233,7 @@ export function registerSpaceCommands(program: Command): void {
     .command("read")
     .description("Read messages from a space")
     .argument("<space>", "Space name")
+    .option("--from <agent>", "Agent reading the space")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to return", parseInt)
     .option("-j, --json", "Output as JSON")
@@ -246,6 +248,16 @@ export function registerSpaceCommands(program: Command): void {
         since: opts.since,
         limit: opts.limit,
       });
+
+      if (opts.from && messages.length > 0) {
+        const agent = resolveIdentity(opts.from).trim();
+        if (!agent) {
+          console.error(chalk.red("Agent identity is required."));
+          process.exit(1);
+        }
+        recordReadReceiptsBatch(messages.map((m) => m.id), agent);
+        markSpaceNotificationsRead(agent, messages.map((m) => m.id));
+      }
 
       if (opts.json) {
         console.log(JSON.stringify(messages, null, 2));
@@ -329,6 +341,101 @@ export function registerSpaceCommands(program: Command): void {
           console.log(chalk.green(`${agent} left #${spaceArg}`));
         } else {
           console.log(chalk.dim(`${agent} was not a member of #${spaceArg}`));
+        }
+      }
+      closeDb();
+    });
+
+  space
+    .command("subscribe")
+    .description("Subscribe to preview-only notifications for a space")
+    .argument("<space>", "Space name")
+    .option("--from <agent>", "Agent ID")
+    .option("--preview-chars <n>", "Preview length", parseInt)
+    .option("-j, --json", "Output as JSON")
+    .action((spaceName, opts) => {
+      const agent = resolveIdentity(opts.from).trim();
+      const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
+
+      if (!agent) {
+        console.error(chalk.red("Agent identity is required."));
+        process.exit(1);
+      }
+      if (!spaceArg) {
+        console.error(chalk.red("Space name cannot be empty."));
+        process.exit(1);
+      }
+
+      try {
+        const subscription = subscribeToSpaceNotifications(spaceArg, agent, { preview_chars: opts.previewChars });
+        if (opts.json) {
+          console.log(JSON.stringify(subscription, null, 2));
+        } else {
+          console.log(chalk.green(`${agent} subscribed to #${spaceArg} notifications`) + chalk.dim(` (${subscription.preview_chars} chars)`));
+        }
+      } catch (e: any) {
+        console.error(chalk.red(e.message));
+        process.exit(1);
+      }
+      closeDb();
+    });
+
+  space
+    .command("unsubscribe")
+    .description("Stop preview-only notifications for a space")
+    .argument("<space>", "Space name")
+    .option("--from <agent>", "Agent ID")
+    .option("-j, --json", "Output as JSON")
+    .action((spaceName, opts) => {
+      const agent = resolveIdentity(opts.from).trim();
+      const spaceArg = typeof spaceName === "string" ? spaceName.trim() : "";
+
+      if (!agent) {
+        console.error(chalk.red("Agent identity is required."));
+        process.exit(1);
+      }
+      if (!spaceArg) {
+        console.error(chalk.red("Space name cannot be empty."));
+        process.exit(1);
+      }
+
+      const unsubscribed = unsubscribeFromSpaceNotifications(spaceArg, agent);
+      if (opts.json) {
+        console.log(JSON.stringify({ space: spaceArg, agent, unsubscribed }));
+      } else if (unsubscribed) {
+        console.log(chalk.green(`${agent} unsubscribed from #${spaceArg} notifications`));
+      } else {
+        console.log(chalk.dim(`${agent} had no notification subscription for #${spaceArg}`));
+      }
+      closeDb();
+    });
+
+  space
+    .command("subscriptions")
+    .description("List preview-only space notification subscriptions")
+    .option("--from <agent>", "Agent ID")
+    .option("--space <name>", "Filter by space")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      const agent = resolveIdentity(opts.from).trim();
+      if (!agent) {
+        console.error(chalk.red("Agent identity is required."));
+        process.exit(1);
+      }
+
+      let subscriptions = listSpaceNotificationSubscriptions(agent);
+      if (opts.space) {
+        subscriptions = subscriptions.filter((row) => row.space === opts.space);
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify(subscriptions, null, 2));
+      } else if (subscriptions.length === 0) {
+        console.log(chalk.dim(`No notification subscriptions for ${agent}.`));
+      } else {
+        console.log(chalk.bold(`${agent} notification subscriptions:`));
+        for (const row of subscriptions) {
+          console.log(`  ${chalk.magenta(`#${row.space}`)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
         }
       }
       closeDb();

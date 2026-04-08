@@ -52,6 +52,17 @@ export {
 } from "./lib/spaces.js";
 
 export {
+  buildMessagePreview,
+  subscribeToSpaceNotifications,
+  unsubscribeFromSpaceNotifications,
+  listSpaceNotificationSubscriptions,
+  getSubscribedSpaces,
+  readSpaceNotifications,
+  markSpaceNotificationsRead,
+  markAllSpaceNotificationsRead,
+} from "./lib/space-notifications.js";
+
+export {
   createProject,
   listProjects,
   getProject,

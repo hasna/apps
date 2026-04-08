@@ -43,6 +43,24 @@ export const PG_MIGRATIONS: string[] = [
     PRIMARY KEY (space, agent)
   );
 
+  CREATE TABLE IF NOT EXISTS space_subscriptions (
+    space TEXT NOT NULL REFERENCES spaces(name),
+    agent TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    preview_chars INTEGER NOT NULL DEFAULT 140,
+    since_message_id BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (space, agent)
+  );
+  CREATE INDEX IF NOT EXISTS idx_space_subscriptions_agent ON space_subscriptions(agent);
+  CREATE INDEX IF NOT EXISTS idx_space_subscriptions_space ON space_subscriptions(space);
+  ALTER TABLE space_subscriptions ADD COLUMN IF NOT EXISTS since_message_id BIGINT NOT NULL DEFAULT 0;
+  UPDATE space_subscriptions ss
+  SET since_message_id = COALESCE(
+    (SELECT MAX(m.id) FROM messages m WHERE m.space = ss.space),
+    0
+  )
+  WHERE ss.since_message_id = 0;
+
   CREATE TABLE IF NOT EXISTS messages (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     uuid TEXT NOT NULL DEFAULT gen_random_uuid()::text UNIQUE,
@@ -119,6 +137,15 @@ export const PG_MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_read_receipts_message ON message_read_receipts(message_id);
   CREATE INDEX IF NOT EXISTS idx_read_receipts_agent ON message_read_receipts(agent);
+
+  CREATE TABLE IF NOT EXISTS space_notification_reads (
+    agent TEXT NOT NULL,
+    message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (agent, message_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_space_notification_reads_agent ON space_notification_reads(agent);
+  CREATE INDEX IF NOT EXISTS idx_space_notification_reads_message ON space_notification_reads(message_id);
 
   CREATE TABLE IF NOT EXISTS message_mentions (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

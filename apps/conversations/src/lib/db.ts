@@ -274,6 +274,18 @@ export function getDb(): Database {
       PRIMARY KEY (space, agent)
     )
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS space_subscriptions (
+      space TEXT NOT NULL REFERENCES spaces(name),
+      agent TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      preview_chars INTEGER NOT NULL DEFAULT 140,
+      since_message_id INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (space, agent)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_space_subscriptions_agent ON space_subscriptions(agent)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_space_subscriptions_space ON space_subscriptions(space)");
 
   // Agent presence table
   db.exec(`
@@ -320,6 +332,17 @@ export function getDb(): Database {
     )
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id)");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS space_notification_reads (
+      agent TEXT NOT NULL,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      PRIMARY KEY (agent, message_id)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_space_notification_reads_agent ON space_notification_reads(agent)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_space_notification_reads_message ON space_notification_reads(message_id)");
 
   // ---- Migrations for existing databases ----
 
@@ -381,6 +404,20 @@ export function getDb(): Database {
   }
   if (!spaceColNames.includes("topic")) {
     db.exec("ALTER TABLE spaces ADD COLUMN topic TEXT");
+  }
+
+  const spaceSubscriptionCols = db.prepare("PRAGMA table_info(space_subscriptions)").all() as { name: string }[];
+  const spaceSubscriptionColNames = spaceSubscriptionCols.map((c) => c.name);
+  if (!spaceSubscriptionColNames.includes("since_message_id")) {
+    db.exec("ALTER TABLE space_subscriptions ADD COLUMN since_message_id INTEGER NOT NULL DEFAULT 0");
+    db.exec(`
+      UPDATE space_subscriptions
+      SET since_message_id = COALESCE(
+        (SELECT MAX(m.id) FROM messages m WHERE m.space = space_subscriptions.space),
+        0
+      )
+      WHERE since_message_id = 0
+    `);
   }
 
   // Add edited_at and pinned_at columns if missing

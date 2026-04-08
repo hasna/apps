@@ -40,6 +40,8 @@ describe("db", () => {
     expect(tableNames).toContain("messages");
     expect(tableNames).toContain("spaces");
     expect(tableNames).toContain("space_members");
+    expect(tableNames).toContain("space_subscriptions");
+    expect(tableNames).toContain("space_notification_reads");
     expect(tableNames).toContain("projects");
   });
 
@@ -67,6 +69,8 @@ describe("db", () => {
     expect(names).toContain("idx_projects_status");
     expect(names).toContain("idx_spaces_parent");
     expect(names).toContain("idx_spaces_project");
+    expect(names).toContain("idx_space_subscriptions_agent");
+    expect(names).toContain("idx_space_notification_reads_agent");
   });
 
   test("closeDb closes and resets singleton", () => {
@@ -87,5 +91,12 @@ describe("db", () => {
     const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain("space");
+  });
+
+  test("space subscriptions track the subscription starting point", () => {
+    const db = getDb();
+    const cols = db.prepare("PRAGMA table_info(space_subscriptions)").all() as { name: string }[];
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).toContain("since_message_id");
   });
 });

@@ -411,10 +411,11 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   }, async (args: Record<string, any>) => {
     const { query } = args;
     const all = [
-      "send_message", "read_messages", "read_digest", "list_sessions", "reply",
+      "send_message", "read_messages", "get_message", "read_digest", "list_sessions", "reply",
       "mark_read", "search_messages", "export_messages",
       "create_space", "list_spaces", "send_to_space", "read_space",
       "join_space", "leave_space", "update_space", "archive_space", "unarchive_space",
+      "subscribe_space_notifications", "unsubscribe_space_notifications", "list_space_subscriptions", "read_space_notifications", "mark_space_notifications_read",
       "create_project", "list_projects", "get_project", "update_project", "delete_project",
       "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
       "build_graph", "get_related", "get_agent_network", "graph_stats",
@@ -443,6 +444,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       // DM tools
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
       read_messages: "Read messages with filters. Optional: session_id?, from?, to?, space?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
+      get_message: "Get the full content of a specific message by id. Required: id",
       read_digest: "Lightweight unread digest \u2014 preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: space?, session_id?, to?, since?(ISO), limit?, project_id?",
       list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
       reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
@@ -461,6 +463,11 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       update_space: "Update space fields. Required: name. Optional: description?, parent_id?(use 'null' to remove), project_id?(use 'null' to remove)",
       archive_space: "Archive a space (hidden from default list). Required: name",
       unarchive_space: "Restore archived space. Required: name",
+      subscribe_space_notifications: "Subscribe to preview-only notifications for a space. Required: space. Optional: from?, preview_chars?",
+      unsubscribe_space_notifications: "Stop preview-only notifications for a space. Required: space. Optional: from?",
+      list_space_subscriptions: "List preview-only space notification subscriptions for the current agent. Optional: from?, space?",
+      read_space_notifications: "Read preview-only notifications from subscribed spaces. Returns blurbs instead of full message bodies. Optional: from?, space?, unread_only?, since?, limit?, mark_read?",
+      mark_space_notifications_read: "Mark preview-only space notifications as read. Optional: from?, ids?(array), space?, all?(bool)",
       // Project tools
       create_project: "Create a project. Required: name. Optional: from?, description?, path?, repository?, tags?(JSON array), metadata?(JSON), settings?(JSON)",
       list_projects: "List projects. Optional: status?(active|archived)",

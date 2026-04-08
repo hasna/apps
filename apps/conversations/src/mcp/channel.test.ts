@@ -1,0 +1,135 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { unlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+import { closeDb } from "../lib/db.js";
+import { readMessages, sendMessage } from "../lib/messages.js";
+import { createSpace } from "../lib/spaces.js";
+import { readSpaceNotifications, subscribeToSpaceNotifications } from "../lib/space-notifications.js";
+import { registerChannelBridge, setSessionAgent } from "./channel.js";
+
+function createTestDbPath(): string {
+  return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 1500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await Bun.sleep(20);
+  }
+  throw new Error("Timed out waiting for channel bridge condition");
+}
+
+afterEach(() => {
+  closeDb();
+  const dbPath = process.env.CONVERSATIONS_DB_PATH;
+  if (dbPath) {
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(dbPath + "-wal"); } catch {}
+    try { unlinkSync(dbPath + "-shm"); } catch {}
+    delete process.env.CONVERSATIONS_DB_PATH;
+  }
+});
+
+describe("channel bridge delivery", () => {
+  test("retries space blurbs after a transient transport failure and only clears after delivery", async () => {
+    process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
+    closeDb();
+
+    createSpace("notify-bridge", "creator");
+    subscribeToSpaceNotifications("notify-bridge", "watcher", { preview_chars: 24 });
+    setSessionAgent("watcher", "claude-session-space");
+
+    let allowDelivery = false;
+    let attempts = 0;
+    const delivered: Array<{ method: string; params: any }> = [];
+    const stop = registerChannelBridge({
+      server: {
+        registerCapabilities() {},
+        async notification(payload: { method: string; params: any }) {
+          attempts += 1;
+          if (!allowDelivery) throw new Error("transport unavailable");
+          delivered.push(payload);
+        },
+      },
+    } as any, {
+      pollIntervalMs: 20,
+      startDelayMs: 0,
+    });
+
+    try {
+      sendMessage({
+        from: "alice",
+        to: "notify-bridge",
+        space: "notify-bridge",
+        session_id: "space:notify-bridge",
+        content: "Deployment status update after rollout completed",
+      });
+
+      await waitFor(() => attempts >= 1);
+      expect(readSpaceNotifications({ agent: "watcher", unread_only: true })).toHaveLength(1);
+      expect(delivered).toHaveLength(0);
+
+      allowDelivery = true;
+      await waitFor(() => delivered.length === 1);
+
+      expect(delivered[0].method).toBe("notifications/claude/channel");
+      expect(delivered[0].params.meta.mode).toBe("space_blurb");
+      expect(delivered[0].params.meta.space).toBe("notify-bridge");
+      expect(delivered[0].params.content).toContain("alice posted in #notify-bridge");
+      expect(delivered[0].params.content).toContain("Preview only for space message");
+      expect(readSpaceNotifications({ agent: "watcher", unread_only: true })).toHaveLength(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test("retries direct session deliveries after a transient transport failure", async () => {
+    process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
+    closeDb();
+
+    setSessionAgent("watcher", "claude-session-direct");
+
+    let allowDelivery = false;
+    let attempts = 0;
+    const delivered: Array<{ method: string; params: any }> = [];
+    const stop = registerChannelBridge({
+      server: {
+        registerCapabilities() {},
+        async notification(payload: { method: string; params: any }) {
+          attempts += 1;
+          if (!allowDelivery) throw new Error("transport unavailable");
+          delivered.push(payload);
+        },
+      },
+    } as any, {
+      pollIntervalMs: 20,
+      startDelayMs: 0,
+    });
+
+    try {
+      const message = sendMessage({
+        from: "alice",
+        to: "session:claude-session-direct",
+        session_id: "alice-session",
+        content: "Direct session note",
+      });
+
+      await waitFor(() => attempts >= 1);
+      expect(readMessages({ to: "session:claude-session-direct", unread_only: true })).toHaveLength(1);
+      expect(delivered).toHaveLength(0);
+
+      allowDelivery = true;
+      await waitFor(() => delivered.length === 1);
+
+      expect(delivered[0].method).toBe("notifications/claude/channel");
+      expect(delivered[0].params.meta.mode).toBe("direct");
+      expect(delivered[0].params.meta.message_id).toBe(String(message.id));
+      expect(readMessages({ to: "session:claude-session-direct", unread_only: true })).toHaveLength(0);
+    } finally {
+      stop();
+    }
+  });
+});

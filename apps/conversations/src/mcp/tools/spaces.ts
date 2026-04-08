@@ -1,6 +1,8 @@
 /**
  * Space tools: create_space, list_spaces, send_to_space, read_space,
  * join_space, leave_space, update_space, archive_space, unarchive_space,
+ * subscribe_space_notifications, unsubscribe_space_notifications,
+ * list_space_subscriptions, read_space_notifications, mark_space_notifications_read,
  * set_space_topic, get_space_topic, summarize_space
  */
 
@@ -8,6 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sendMessage, readMessages, markReadByIds } from "../../lib/messages.js";
 import { createSpace, updateSpace, archiveSpace, unarchiveSpace, listSpaces, getSpace, joinSpace, leaveSpace } from "../../lib/spaces.js";
+import { listSpaceNotificationSubscriptions, markAllSpaceNotificationsRead, markSpaceNotificationsRead, readSpaceNotifications, subscribeToSpaceNotifications, unsubscribeFromSpaceNotifications } from "../../lib/space-notifications.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { recordReadReceiptsBatch } from "../../lib/messages.js";
 import { getConversationSummary } from "../../lib/summary.js";
@@ -140,6 +143,7 @@ export function registerSpaceTools(server: McpServer): void {
     if (fromParam && messages.length > 0) {
       const agent = resolveIdentity(fromParam);
       recordReadReceiptsBatch(messages.map((m) => m.id), agent);
+      markSpaceNotificationsRead(agent, messages.map((m) => m.id));
     }
 
     return {
@@ -184,6 +188,93 @@ export function registerSpaceTools(server: McpServer): void {
     return {
       content: [{ type: "text", text: JSON.stringify({ space, agent, left }) }],
     };
+  });
+
+  server.registerTool("subscribe_space_notifications", {
+    description: "Subscribe an agent to preview-only notifications for a space.",
+    inputSchema: {
+      space: z.string(),
+      from: z.string().optional(),
+      preview_chars: z.coerce.number().optional(),
+    },
+  }, async (args: Record<string, any>) => {
+    const agent = resolveIdentity(args.from);
+    try {
+      const subscription = subscribeToSpaceNotifications(args.space, agent, { preview_chars: args.preview_chars });
+      return { content: [{ type: "text", text: JSON.stringify(subscription) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: e.message }], isError: true };
+    }
+  });
+
+  server.registerTool("unsubscribe_space_notifications", {
+    description: "Stop preview-only notifications for a space.",
+    inputSchema: {
+      space: z.string(),
+      from: z.string().optional(),
+    },
+  }, async (args: Record<string, any>) => {
+    const agent = resolveIdentity(args.from);
+    const unsubscribed = unsubscribeFromSpaceNotifications(args.space, agent);
+    return { content: [{ type: "text", text: JSON.stringify({ space: args.space, agent, unsubscribed }) }] };
+  });
+
+  server.registerTool("list_space_subscriptions", {
+    description: "List an agent's preview-only space notification subscriptions.",
+    inputSchema: {
+      from: z.string().optional(),
+      space: z.string().optional(),
+    },
+  }, async (args: Record<string, any>) => {
+    const agent = resolveIdentity(args.from);
+    const subscriptions = listSpaceNotificationSubscriptions(agent)
+      .filter((row) => !args.space || row.space === args.space);
+    return { content: [{ type: "text", text: JSON.stringify(subscriptions) }] };
+  });
+
+  server.registerTool("read_space_notifications", {
+    description: "Read preview-only notifications for an agent's subscribed spaces. Returns blurbs, not full message bodies.",
+    inputSchema: {
+      from: z.string().optional(),
+      space: z.string().optional(),
+      unread_only: z.coerce.boolean().optional(),
+      limit: z.coerce.number().optional(),
+      since: z.string().optional(),
+      mark_read: z.coerce.boolean().optional(),
+    },
+  }, async (args: Record<string, any>) => {
+    const agent = resolveIdentity(args.from);
+    const notifications = readSpaceNotifications({
+      agent,
+      space: args.space,
+      unread_only: args.unread_only,
+      limit: args.limit,
+      since: args.since,
+      mark_read: args.mark_read,
+    });
+    return { content: [{ type: "text", text: JSON.stringify({ notifications, count: notifications.length }) }] };
+  });
+
+  server.registerTool("mark_space_notifications_read", {
+    description: "Mark preview-only space notifications as read for an agent.",
+    inputSchema: {
+      from: z.string().optional(),
+      ids: z.array(z.coerce.number()).optional(),
+      space: z.string().optional(),
+      all: z.coerce.boolean().optional(),
+    },
+  }, async (args: Record<string, any>) => {
+    const agent = resolveIdentity(args.from);
+    let marked = 0;
+    if (args.all) {
+      marked = markAllSpaceNotificationsRead(agent, args.space);
+    } else if (Array.isArray(args.ids) && args.ids.length > 0) {
+      marked = markSpaceNotificationsRead(agent, args.ids);
+    } else {
+      return { content: [{ type: "text", text: "Provide ids or all=true" }], isError: true };
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify({ marked_read: marked }) }] };
   });
 
   server.registerTool("update_space", {

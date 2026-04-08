@@ -1,5 +1,5 @@
 /**
- * Messaging tools: send_message, read_messages, read_digest, list_sessions, reply,
+ * Messaging tools: send_message, read_messages, get_message, read_digest, list_sessions, reply,
  * mark_read, mark_unread, mark_space_read, search_messages, export_messages,
  * delete_message, edit_message, pin_message, unpin_message, get_pinned_messages,
  * mark_all_read, broadcast
@@ -127,6 +127,25 @@ export function registerMessagingTools(
 
     return {
       content: [{ type: "text", text: JSON.stringify({ messages, count: messages.length, offset: args.offset ?? 0 }) }],
+    };
+  });
+
+  server.registerTool("get_message", {
+    description: "Get the full content of a message by numeric ID. Use this to inspect a full space message after receiving a preview-only notification blurb.",
+    inputSchema: {
+      id: z.coerce.number().describe("Numeric message ID to fetch"),
+    },
+  }, async (args: Record<string, any>) => {
+    const message = getMessageById(args.id);
+    if (!message) {
+      return {
+        content: [{ type: "text", text: `Message #${args.id} not found` }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(message) }],
     };
   });
 

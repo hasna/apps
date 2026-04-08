@@ -63,6 +63,25 @@ export interface SpaceMember {
   joined_at: string;
 }
 
+export interface SpaceNotificationSubscription {
+  space: string;
+  agent: string;
+  created_at: string;
+  preview_chars: number;
+  since_message_id: number;
+}
+
+export interface SpaceNotification {
+  message_id: number;
+  space: string;
+  from_agent: string;
+  created_at: string;
+  priority: Priority;
+  preview: string;
+  unread: boolean;
+  has_attachments: boolean;
+}
+
 export interface SpaceInfo extends Space {
   member_count: number;
   message_count: number;

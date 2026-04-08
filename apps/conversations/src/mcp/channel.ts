@@ -17,8 +17,10 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readMessages, markReadByIds } from "../lib/messages.js";
+import { markSpaceNotificationsRead, readSpaceNotifications } from "../lib/space-notifications.js";
 
-const POLL_INTERVAL_MS = 1000;
+const DEFAULT_POLL_INTERVAL_MS = 1000;
+const DEFAULT_START_DELAY_MS = 2000;
 
 // Track agent identity and session for this MCP connection
 let sessionAgentId: string | null = null;
@@ -47,100 +49,141 @@ export function getClaudeSessionId(): string | null {
   return sessionClaudeId || process.env.CONVERSATIONS_SESSION_ID || null;
 }
 
-export function registerChannelBridge(server: McpServer): void {
+export function registerChannelBridge(
+  server: McpServer,
+  opts?: { pollIntervalMs?: number; startDelayMs?: number },
+): () => void {
   server.server.registerCapabilities({
     experimental: { 'claude/channel': {} },
   });
 
+  const pollIntervalMs = opts?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const startDelayMs = opts?.startDelayMs ?? DEFAULT_START_DELAY_MS;
   let lastAgentMsgId = 0;
   let lastSessionMsgId = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let startTimer: ReturnType<typeof setTimeout> | null = null;
+  let polling = false;
 
   function getSessionId(): string | null {
     return getClaudeSessionId();
   }
 
-  function seedLastSeen(): void {
-    const agent = getSessionAgent();
-    const sid = getSessionId();
-
-    if (agent) {
-      const latest = readMessages({ to: agent, order: "desc", limit: 1 });
-      if (latest.length > 0) lastAgentMsgId = latest[0].id;
-    }
-    if (sid) {
-      const latest = readMessages({ to: `session:${sid}`, order: "desc", limit: 1 });
-      if (latest.length > 0) lastSessionMsgId = latest[0].id;
-    }
-  }
-
-  function pushNotification(msg: {
+  async function pushNotification(msg: {
     id: number;
     content: string;
     from_agent: string;
     session_id: string;
     space?: string | null;
     priority?: string;
-  }, isDirect: boolean): void {
-    // Direct session messages are auto-marked as read
-    if (isDirect) {
-      try { markReadByIds([msg.id]); } catch { /* ok */ }
-    }
+  }, mode: "direct" | "dm" | "space_blurb"): Promise<boolean> {
+    const enrichedContent = mode === "space_blurb"
+      ? `${msg.from_agent} posted in #${msg.space}: ${msg.content}\n\n---\n[Preview only for space message #${msg.id}. To inspect the full message later, call get_message with id=${msg.id} or run conversations show ${msg.id}.]`
+      : `${msg.content}\n\n---\n[Via Conversations from ${msg.from_agent} (msg #${msg.id}). To reply, use conversations send_message with to="${msg.from_agent}". For direct session injection, use send_to_session with target_session_id from the sender's session.]`;
 
-    // Content: clean message for display, then instructions for the model after separator
-    // Include session ID so the model can do direct injection if needed
-    const senderSession = msg.session_id;
-    const replyHint = `To reply, use conversations send_message with to="${msg.from_agent}". For direct session injection, use send_to_session with target_session_id from the sender's session.`;
-    const enrichedContent = `${msg.content}\n\n---\n[Via Conversations from ${msg.from_agent} (msg #${msg.id}). ${replyHint}]`;
-
-    server.server.notification({
-      method: "notifications/claude/channel",
-      params: {
-        content: enrichedContent,
-        meta: {
-          from: msg.from_agent,
-          message_id: String(msg.id),
-          session_id: msg.session_id,
-          mode: isDirect ? "direct" : "dm",
-          ...(msg.space ? { space: msg.space } : {}),
-          ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
+    try {
+      await server.server.notification({
+        method: "notifications/claude/channel",
+        params: {
+          content: enrichedContent,
+          meta: {
+            from: msg.from_agent,
+            message_id: String(msg.id),
+            session_id: msg.session_id,
+            mode,
+            ...(msg.space ? { space: msg.space } : {}),
+            ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
+          },
         },
-      },
-    }).catch(() => { /* transport not ready or disconnected */ });
+      });
+
+      // Only acknowledge delivery after the channel transport accepts it.
+      if (mode === "direct") {
+        try { markReadByIds([msg.id]); } catch { /* ok */ }
+      } else if (mode === "space_blurb") {
+        const agent = getSessionAgent();
+        if (agent) {
+          try { markSpaceNotificationsRead(agent, [msg.id]); } catch { /* ok */ }
+        }
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function pollOnce(): Promise<void> {
+    if (polling) return;
+    polling = true;
+    try {
+      const agent = getSessionAgent();
+      const sid = getSessionId();
+
+      // Poll DMs to this agent — skip messages FROM self (no echoes)
+      if (agent) {
+        const msgs = readMessages({ to: agent, unread_only: true, order: "asc", limit: 20 })
+          .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
+        for (const msg of msgs) {
+          const delivered = await pushNotification(msg, "dm");
+          if (!delivered) break;
+          lastAgentMsgId = msg.id;
+        }
+      }
+
+      // Poll direct session-targeted messages — skip self (no echoes)
+      if (sid) {
+        const msgs = readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 })
+          .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
+        for (const msg of msgs) {
+          const delivered = await pushNotification(msg, "direct");
+          if (!delivered) break;
+          lastSessionMsgId = msg.id;
+        }
+      }
+
+      if (agent) {
+        const notifications = readSpaceNotifications({
+          agent,
+          unread_only: true,
+          limit: 20,
+          mark_read: false,
+        }).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+
+        for (const notification of notifications) {
+          const delivered = await pushNotification({
+            id: notification.message_id,
+            content: notification.preview,
+            from_agent: notification.from_agent,
+            session_id: `space:${notification.space}`,
+            space: notification.space,
+            priority: notification.priority,
+          }, "space_blurb");
+          if (!delivered) break;
+        }
+      }
+    } finally {
+      polling = false;
+    }
   }
 
   function startPolling(): void {
     if (pollTimer) return;
-    seedLastSeen();
 
     pollTimer = setInterval(() => {
-      try {
-        const agent = getSessionAgent();
-        const sid = getSessionId();
+      void pollOnce().catch(() => { /* silently continue */ });
+    }, pollIntervalMs);
 
-        // Poll DMs to this agent — skip messages FROM self (no echoes)
-        if (agent) {
-          const msgs = readMessages({ to: agent, order: "asc", limit: 20 })
-            .filter(m => m.id > lastAgentMsgId && m.from_agent !== agent);
-          for (const msg of msgs) {
-            lastAgentMsgId = msg.id;
-            pushNotification(msg, false);
-          }
-        }
-
-        // Poll direct session-targeted messages — skip self (no echoes)
-        if (sid) {
-          const msgs = readMessages({ to: `session:${sid}`, order: "asc", limit: 20 })
-            .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
-          for (const msg of msgs) {
-            lastSessionMsgId = msg.id;
-            pushNotification(msg, true);
-          }
-        }
-      } catch { /* silently continue */ }
-    }, POLL_INTERVAL_MS);
+    void pollOnce().catch(() => { /* silently continue */ });
   }
 
   // Start polling after connection established
-  setTimeout(() => startPolling(), 2000);
+  startTimer = setTimeout(() => startPolling(), startDelayMs);
+
+  return () => {
+    if (startTimer) clearTimeout(startTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    startTimer = null;
+    pollTimer = null;
+  };
 }

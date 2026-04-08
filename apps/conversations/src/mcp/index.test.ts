@@ -192,6 +192,80 @@ describe("send_to_space from parameter", () => {
   });
 });
 
+describe("space notification tools", () => {
+  test("subscribe and read space notifications return preview blurbs for new messages only", async () => {
+    createSpace("notify-space-a", "creator");
+    const historical = sendMessage({
+      from: "alice",
+      to: "notify-space-a",
+      space: "notify-space-a",
+      session_id: "space:notify-space-a",
+      content: "historical message before subscription",
+    });
+
+    const subscription = parseResult(await client.callTool({
+      name: "subscribe_space_notifications",
+      arguments: { from: "notify-agent-a", space: "notify-space-a", preview_chars: 18 },
+    }) as any) as any;
+
+    expect(subscription.space).toBe("notify-space-a");
+    expect(subscription.preview_chars).toBe(18);
+    expect(subscription.since_message_id).toBe(historical.id);
+
+    const fullContent = "## deployment _finished_ after a very long validation run";
+    const live = sendMessage({
+      from: "alice",
+      to: "notify-space-a",
+      space: "notify-space-a",
+      session_id: "space:notify-space-a",
+      content: fullContent,
+    });
+
+    const result = parseResult(await client.callTool({
+      name: "read_space_notifications",
+      arguments: { from: "notify-agent-a", unread_only: true },
+    }) as any) as any;
+
+    expect(result.count).toBe(1);
+    expect(result.notifications[0].space).toBe("notify-space-a");
+    expect(result.notifications[0].message_id).toBe(live.id);
+    expect(result.notifications[0].preview).not.toContain("##");
+    expect(result.notifications[0].preview).not.toBe(fullContent);
+  });
+
+  test("get_message returns the full message for later inspection", async () => {
+    createSpace("notify-space-b", "creator");
+    await client.callTool({
+      name: "subscribe_space_notifications",
+      arguments: { from: "notify-agent-b", space: "notify-space-b" },
+    });
+
+    const fullContent = "full body for on-demand inspection";
+    const sent = sendMessage({
+      from: "bob",
+      to: "notify-space-b",
+      space: "notify-space-b",
+      session_id: "space:notify-space-b",
+      content: fullContent,
+    });
+
+    const notificationResult = parseResult(await client.callTool({
+      name: "read_space_notifications",
+      arguments: { from: "notify-agent-b", unread_only: true },
+    }) as any) as any;
+
+    expect(notificationResult.notifications[0].message_id).toBe(sent.id);
+
+    const message = parseResult(await client.callTool({
+      name: "get_message",
+      arguments: { id: sent.id },
+    }) as any) as any;
+
+    expect(message.id).toBe(sent.id);
+    expect(message.content).toBe(fullContent);
+  });
+});
+
 // ---- join_space ----
 
 describe("join_space from parameter", () => {
@@ -215,6 +289,66 @@ describe("join_space from parameter", () => {
     });
     const data = parseResult(result as any) as any;
     expect(data.agent).toBe(autoName);
+  });
+});
+
+describe("space notification subscription tools", () => {
+  test("subscribes and lists preview-only space notifications", async () => {
+    createSpace("notify-space", "creator");
+
+    const subscribeResult = await client.callTool({
+      name: "subscribe_space_notifications",
+      arguments: { from: "watcher-agent", space: "notify-space", preview_chars: 80 },
+    });
+    const subscription = parseResult(subscribeResult as any) as any;
+    expect(subscription.space).toBe("notify-space");
+    expect(subscription.agent).toBe("watcher-agent");
+    expect(subscription.preview_chars).toBe(80);
+
+    const listResult = await client.callTool({
+      name: "list_space_subscriptions",
+      arguments: { from: "watcher-agent" },
+    });
+    const list = parseResult(listResult as any) as any[];
+    expect(list).toHaveLength(1);
+    expect(list[0].space).toBe("notify-space");
+  });
+
+  test("reads preview-only notifications and clears them after read_space", async () => {
+    createSpace("notify-space-read", "creator");
+    await client.callTool({
+      name: "subscribe_space_notifications",
+      arguments: { from: "watcher-agent", space: "notify-space-read", preview_chars: 24 },
+    });
+
+    const sent = sendMessage({
+      from: "alice",
+      to: "notify-space-read",
+      space: "notify-space-read",
+      session_id: "space:notify-space-read",
+      content: "Deployment status update for the shared space",
+    });
+
+    const notificationsResult = await client.callTool({
+      name: "read_space_notifications",
+      arguments: { from: "watcher-agent" },
+    });
+    const notificationsPayload = parseResult(notificationsResult as any) as any;
+    expect(notificationsPayload.count).toBe(1);
+    expect(notificationsPayload.notifications[0].message_id).toBe(sent.id);
+    expect(notificationsPayload.notifications[0].preview).not.toContain("shared space");
+
+    await client.callTool({
+      name: "read_space",
+      arguments: { from: "watcher-agent", space: "notify-space-read", limit: 10 },
+    });
+
+    const afterReadResult = await client.callTool({
+      name: "read_space_notifications",
+      arguments: { from: "watcher-agent" },
+    });
+    const afterReadPayload = parseResult(afterReadResult as any) as any;
+    expect(afterReadPayload.count).toBe(0);
   });
 });
 
