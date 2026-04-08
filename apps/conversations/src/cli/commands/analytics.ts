@@ -10,6 +10,7 @@ import { listHotSessions } from "../../lib/hot.js";
 import { getSpaceTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
 import { getConversationSummary } from "../../lib/summary.js";
 import { buildGraph, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
+import { listSpaceNotificationSubscriptions, readSpaceNotifications } from "../../lib/space-notifications.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import pkg from "../../../package.json";
 
@@ -217,10 +218,25 @@ export function registerAnalyticsCommands(program: Command): void {
         ORDER BY s.name
       `).all(agent) as { name: string; description: string | null; unread: number }[];
 
+      const subscriptions = listSpaceNotificationSubscriptions(agent);
+      const spaceNotifications = readSpaceNotifications({
+        agent,
+        unread_only: true,
+        limit: 5,
+      });
+
       // Recent DMs (last 3 messages to me)
       const recentDMs = readMessages({ to: agent, limit: 3 });
 
-      const context = { agent, online_agents: onlineAgents, unread_dms: unreadDMs, spaces: mySpaces, recent_dms: recentDMs };
+      const context = {
+        agent,
+        online_agents: onlineAgents,
+        unread_dms: unreadDMs,
+        spaces: mySpaces,
+        space_subscriptions: subscriptions,
+        space_notifications: spaceNotifications,
+        recent_dms: recentDMs,
+      };
 
       if (opts.json) {
         console.log(JSON.stringify(context, null, 2));
@@ -254,6 +270,28 @@ export function registerAnalyticsCommands(program: Command): void {
           }
         } else {
           console.log(`${chalk.bold("My spaces:")} ${chalk.dim("none")}`);
+        }
+
+        if (subscriptions.length > 0) {
+          console.log(`${chalk.bold("Subscribed spaces:")}`);
+          for (const row of subscriptions) {
+            console.log(`  ${chalk.magenta("#" + row.space)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
+          }
+        } else {
+          console.log(`${chalk.bold("Subscribed spaces:")} ${chalk.dim("none")}`);
+        }
+
+        if (spaceNotifications.length > 0) {
+          console.log(`${chalk.bold("Space notifications:")}`);
+          for (const notification of spaceNotifications) {
+            console.log(
+              `  ${chalk.dim(notification.created_at.slice(11, 16))} ${chalk.cyan(notification.from_agent)} ${chalk.magenta("#" + notification.space)} ${chalk.dim(`msg #${notification.message_id}`)}`
+            );
+            console.log(`    ${chalk.dim(notification.preview)}`);
+          }
+          console.log(chalk.dim("  Inspect with: conversations show <message-id>"));
+        } else {
+          console.log(`${chalk.bold("Space notifications:")} ${chalk.dim("none")}`);
         }
       }
       closeDb();
