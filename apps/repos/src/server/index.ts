@@ -15,10 +15,10 @@ import {
   getGlobalStats,
   getRepoStats,
 } from "../db/repos.js";
-import { scanRepos } from "../lib/scanner.js";
+import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-index.js";
 import { getHealthReport } from "../lib/utils.js";
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -79,6 +79,13 @@ function parseQuery(url: URL): Record<string, string> {
 }
 
 const dashboardDir = join(import.meta.dir, "../../dashboard/dist");
+
+const autoIndexWorker = await startAutoIndexWorker(undefined, {
+  onProgress: (msg) => console.log(`[auto-index] ${msg}`),
+});
+
+process.on("SIGINT", () => autoIndexWorker.stop());
+process.on("SIGTERM", () => autoIndexWorker.stop());
 
 Bun.serve({
   port: PORT,
@@ -183,9 +190,15 @@ Bun.serve({
 
     if (path === "/api/scan" && req.method === "POST") {
       const body = req.headers.get("content-type")?.includes("json") ? await req.json() : {};
-      const result = await scanRepos(body.roots, { full: body.full });
-      broadcast("scan:complete", result);
-      return json(result);
+      const result = await ensureWorkspaceBootstrap(body.roots, { force: true, full: body.full });
+      const hookSummary = {
+        installed: result.hooks.installed,
+        updated: result.hooks.updated,
+        unchanged: result.hooks.unchanged,
+        skipped: result.hooks.skipped,
+      };
+      broadcast("scan:complete", { ...result.scan, hooks: hookSummary });
+      return json({ ...result.scan, hooks: hookSummary });
     }
 
     // ── Dashboard static files ──

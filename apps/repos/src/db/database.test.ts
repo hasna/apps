@@ -60,6 +60,12 @@ describe("database", () => {
     expect(tables).toBeTruthy();
   });
 
+  it("should create automation_state table", () => {
+    const db = getDb(":memory:");
+    const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='automation_state'").get();
+    expect(tables).toBeTruthy();
+  });
+
   it("should create FTS5 tables", () => {
     const db = getDb(":memory:");
     const ftsRepos = db.query("SELECT name FROM sqlite_master WHERE name='fts_repos'").get();
@@ -73,9 +79,11 @@ describe("database", () => {
   it("should track migrations", () => {
     const db = getDb(":memory:");
     const migrations = db.query("SELECT version FROM migrations ORDER BY version").all() as { version: number }[];
-    expect(migrations.length).toBeGreaterThanOrEqual(2);
+    expect(migrations.length).toBeGreaterThanOrEqual(4);
     expect(migrations[0]!.version).toBe(1);
     expect(migrations[1]!.version).toBe(2);
+    expect(migrations[2]!.version).toBe(3);
+    expect(migrations[3]!.version).toBe(4);
   });
 
   it("should have foreign keys enabled", () => {

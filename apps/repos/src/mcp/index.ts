@@ -17,12 +17,12 @@ import {
   getGlobalStats,
   listRemotes,
 } from "../db/repos.js";
-import { scanRepos } from "../lib/scanner.js";
+import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-index.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
 import { buildGraph, queryNode, queryRelated, findPath, getDeps, getGraphStats } from "../lib/graph.js";
 import { getDb } from "../db/database.js";
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -167,11 +167,24 @@ server.tool("search", "Search across all entities (repos, commits, PRs)", {
 // ── Scanner ──
 
 server.tool("scan_repos", "Scan directories to discover and index git repos", {
-  roots: z.array(z.string()).optional().describe("Root directories to scan (default: ~/Workspace)"),
+  roots: z.array(z.string()).optional().describe("Root directories to scan (default: ~/workspace)"),
   full: z.boolean().optional().describe("Full re-scan (default: incremental)"),
 }, async ({ roots, full }) => {
-  const result = scanRepos(roots, { full });
-  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  const result = await ensureWorkspaceBootstrap(roots, { force: true, full });
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        ...result.scan,
+        hooks: {
+          installed: result.hooks.installed,
+          updated: result.hooks.updated,
+          unchanged: result.hooks.unchanged,
+          skipped: result.hooks.skipped,
+        },
+      }, null, 2),
+    }],
+  };
 });
 
 // ── Stats ──
@@ -306,6 +319,11 @@ server.tool("list_agents", "List registered agents", {}, async () => {
 // ── Start ──
 
 async function main() {
+  const worker = await startAutoIndexWorker(undefined, {
+    onProgress: (msg) => console.error(`[auto-index] ${msg}`),
+  });
+  process.on("SIGINT", () => worker.stop());
+  process.on("SIGTERM", () => worker.stop());
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

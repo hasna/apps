@@ -6,7 +6,11 @@ describe("repos command pagination flags", () => {
       cmd: ["bun", "run", "src/cli/index.tsx", "repos", "--json", "--limit", "1", "--offset", "0"],
       stdout: "pipe",
       stderr: "pipe",
-      env: process.env,
+      env: {
+        ...process.env,
+        HASNA_REPOS_AUTO_BOOTSTRAP: "0",
+        HASNA_REPOS_DB_PATH: ":memory:",
+      },
     });
 
     expect(result.exitCode).toBe(0);

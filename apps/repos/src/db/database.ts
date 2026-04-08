@@ -281,4 +281,14 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
     `,
   },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS automation_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `,
+  },
 ];

@@ -1,6 +1,8 @@
 export * from "./types/index.js";
 export { getDb, closeDb } from "./db/database.js";
-export { scanRepos, watchRepos } from "./lib/scanner.js";
+export { ensureWorkspaceBootstrap, startAutoIndexWorker, syncRepoCatalog } from "./lib/auto-index.js";
+export { drainHookQueue, installPostCommitHook, installPostCommitHooks } from "./lib/repo-hooks.js";
+export { discoverRepos, scanRepoPaths, scanRepos, watchRepos } from "./lib/scanner.js";
 export { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "./lib/github.js";
 export {
   listRepos,

@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { execSync } from "node:child_process";
-import { basename } from "node:path";
 import { program } from "commander";
 import { getCliVersion } from "./version.js";
 import { parseIntOption } from "./args.js";
@@ -16,7 +15,7 @@ import {
   getGlobalStats,
   getRepoStats,
 } from "../db/repos.js";
-import { scanRepos, watchRepos } from "../lib/scanner.js";
+import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-index.js";
 import { getFilterAlias } from "../lib/config.js";
 import { formatRepoNotFoundMessage } from "./messages.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
@@ -33,6 +32,8 @@ const ORG_ALIASES: Record<string, string> = {
   education: "hasnaeducation",
   family: "hasnafamily",
 };
+
+const AUTO_BOOTSTRAP_SKIP_COMMANDS = new Set(["scan", "watch", "backup", "restore", "completions", "import"]);
 
 program
   .name("repos")
@@ -64,6 +65,26 @@ function intFlag(value: string, flagName: string, min = 0) {
   }
 }
 
+async function bootstrapCliIfNeeded(argv: string[]) {
+  if (process.env["HASNA_REPOS_AUTO_BOOTSTRAP"] === "0") {
+    return;
+  }
+
+  if (argv.includes("--help") || argv.includes("-h") || argv.includes("--version") || argv.includes("-V")) {
+    return;
+  }
+
+  const command = argv.find((arg) => !arg.startsWith("-"));
+  if (!command || AUTO_BOOTSTRAP_SKIP_COMMANDS.has(command)) {
+    return;
+  }
+
+  const quiet = argv.includes("--json");
+  await ensureWorkspaceBootstrap(undefined, {
+    onProgress: quiet ? undefined : (msg) => console.log(chalk.dim(`[auto-index] ${msg}`)),
+  });
+}
+
 // ── Scan ──
 program
   .command("scan")
@@ -83,51 +104,63 @@ program
     if (opts.filter && !roots?.length) {
       console.log(chalk.yellow(`Filter '${opts.filter}' has no paths defined`));
     }
-    const result = await scanRepos(roots, {
+    const result = await ensureWorkspaceBootstrap(roots, {
+      force: true,
       full: opts.full,
       workers: intFlag(opts.workers, "--workers", 1),
       onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
     });
+    const scan = result.scan ?? {
+      repos_found: 0,
+      repos_new: 0,
+      repos_updated: 0,
+      commits_indexed: 0,
+      branches_indexed: 0,
+      tags_indexed: 0,
+      duration_ms: 0,
+    };
+    const hookSummary = {
+      installed: result.hooks.installed,
+      updated: result.hooks.updated,
+      unchanged: result.hooks.unchanged,
+      skipped: result.hooks.skipped,
+    };
     if (opts.json) {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify({ ...scan, hooks: hookSummary }, null, 2));
     } else {
-      console.log(chalk.green(`\n✓ Scan complete in ${(result.duration_ms / 1000).toFixed(1)}s`));
-      console.log(`  Repos found: ${result.repos_found} (${result.repos_new} new, ${result.repos_updated} updated)`);
-      console.log(`  Commits indexed: ${result.commits_indexed}`);
-      console.log(`  Branches indexed: ${result.branches_indexed}`);
-      console.log(`  Tags indexed: ${result.tags_indexed}`);
+      console.log(chalk.green(`\n✓ Scan complete in ${(scan.duration_ms / 1000).toFixed(1)}s`));
+      console.log(`  Repos found: ${scan.repos_found} (${scan.repos_new} new, ${scan.repos_updated} updated)`);
+      console.log(`  Commits indexed: ${scan.commits_indexed}`);
+      console.log(`  Branches indexed: ${scan.branches_indexed}`);
+      console.log(`  Tags indexed: ${scan.tags_indexed}`);
+      console.log(`  Hooks: ${hookSummary.installed} installed, ${hookSummary.updated} updated, ${hookSummary.unchanged} unchanged`);
     }
   });
 
 // ── Watch ──
 program
   .command("watch")
-  .description("Watch repos for changes and re-index on changes")
+  .description("Run the workspace auto-index worker (new repos + post-commit re-indexing)")
   .option("--root <paths...>", "Root directories to watch")
   .option("--filter <name>", "Use a saved filter alias to get root paths")
   .option("--full", "Full re-index on change (not incremental)")
-  .action((opts) => {
+  .option("-w, --workers <n>", "Number of parallel workers for bootstrap scans", "4")
+  .action(async (opts) => {
     const alias = opts.filter ? getFilterAlias(opts.filter) : undefined;
     if (opts.filter && !alias) {
       console.log(chalk.red(`Filter '${opts.filter}' not found in config.`));
       process.exit(1);
     }
     const roots = alias?.paths ?? opts.root;
-    console.log(chalk.blue("Starting watch mode..."));
-    const watcher = watchRepos(roots, {
+    console.log(chalk.blue("Starting auto-index worker..."));
+    const worker = await startAutoIndexWorker(roots, {
       full: opts.full,
+      workers: intFlag(opts.workers, "--workers", 1),
       onProgress: (msg) => console.log(chalk.dim(msg)),
-      onRepoChanged: async (repoPath) => {
-        console.log(chalk.yellow(`\n→ Re-scanning ${basename(repoPath)}...`));
-        await scanRepos([repoPath], {
-          full: opts.full,
-          onProgress: (msg) => console.log(chalk.dim(`  ${msg}`)),
-        });
-      },
     });
 
     process.on("SIGINT", () => {
-      watcher.stop();
+      worker.stop();
       process.exit(0);
     });
   });
@@ -997,4 +1030,5 @@ function collectCommands(cmd: any, prefix = ""): string[] {
   return results;
 }
 
-program.parse();
+await bootstrapCliIfNeeded(process.argv.slice(2));
+await program.parseAsync(process.argv);

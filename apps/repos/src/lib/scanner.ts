@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync, watch } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import cliProgress from "cli-progress";
 import { getDb } from "../db/database.js";
-import { getConfig } from "./config.js";
+import { getConfig, getWorkspaceRoots } from "./config.js";
 import {
   upsertRepo,
   bulkInsertCommits,
@@ -30,7 +30,7 @@ function isGitRepo(dir: string): boolean {
   return existsSync(join(dir, ".git"));
 }
 
-function discoverRepos(rootDirs: string[], maxDepth?: number): string[] {
+export function discoverRepos(rootDirs: string[], maxDepth?: number): string[] {
   const cfg = getConfig();
   const depth = maxDepth ?? cfg.scanDepth ?? 5;
   const excluded = new Set(cfg.excludedPaths ?? ["node_modules", "dist", "vendor", ".git"]);
@@ -255,18 +255,12 @@ function indexRepo(repoPath: string, full = false): {
   return { commits: commitsInserted, branches: branchesInserted, tags: tagsInserted, isNew };
 }
 
-export async function scanRepos(
-  rootDirs?: string[],
+export async function scanRepoPaths(
+  repoPaths: string[],
   opts: { full?: boolean; onProgress?: (msg: string) => void; workers?: number } = {}
 ): Promise<ScanResult> {
   const start = Date.now();
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const roots = rootDirs || [join(home, "Workspace")];
   const { full = false, onProgress, workers: maxWorkers = 4 } = opts;
-
-  onProgress?.(`Discovering repos in: ${roots.join(", ")}`);
-  const repoPaths = discoverRepos(roots);
-  onProgress?.(`Found ${repoPaths.length} repositories (using ${maxWorkers} workers)`);
 
   const progressBar = new cliProgress.SingleBar({
     format: "  indexing [{bar}] {percentage}% | {value}/{total} | {filename}",
@@ -320,54 +314,82 @@ export async function scanRepos(
   };
 }
 
+export async function scanRepos(
+  rootDirs?: string[],
+  opts: { full?: boolean; onProgress?: (msg: string) => void; workers?: number } = {},
+): Promise<ScanResult> {
+  const roots = getWorkspaceRoots(rootDirs);
+  opts.onProgress?.(`Discovering repos in: ${roots.join(", ")}`);
+  const repoPaths = discoverRepos(roots);
+  opts.onProgress?.(`Found ${repoPaths.length} repositories`);
+  return scanRepoPaths(repoPaths, opts);
+}
+
 export function watchRepos(
   rootDirs?: string[],
   opts: {
     full?: boolean;
     onProgress?: (msg: string) => void;
     onRepoChanged?: (repoPath: string) => Promise<void> | void;
+    onRepoDiscovered?: (repoPath: string) => Promise<void> | void;
   } = {}
 ): { stop: () => void } {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const roots = rootDirs || [join(home, "Workspace")];
+  const roots = getWorkspaceRoots(rootDirs);
 
   const repoPaths = discoverRepos(roots);
   const watchedDirs = new Set<string>();
+  const watchers: Array<ReturnType<typeof watch>> = [];
+
+  const attachRepoWatcher = (repoPath: string) => {
+    if (watchedDirs.has(repoPath)) return;
+    watchedDirs.add(repoPath);
+
+    try {
+      const watcher = watch(repoPath, { recursive: true }, (_eventType, filename) => {
+        if (filename && !filename.includes(".git/objects")) {
+          opts.onProgress?.(`[change] ${filename} in ${basename(repoPath)}`);
+          const cb = opts.onRepoChanged?.(repoPath);
+          if (cb instanceof Promise) cb.catch(() => {});
+        }
+      });
+      watchers.push(watcher);
+    } catch (error) {
+      opts.onProgress?.(`[watch] Failed to watch ${repoPath}: ${(error as Error).message}`);
+    }
+  };
 
   for (const repoPath of repoPaths) {
-    watchedDirs.add(repoPath);
-    watch(repoPath, { recursive: true }, (_eventType, filename) => {
-      if (filename && !filename.includes(".git/objects")) {
-        opts.onProgress?.(`[change] ${filename} in ${basename(repoPath)}`);
-        const cb = opts.onRepoChanged?.(repoPath);
-        if (cb instanceof Promise) cb.catch(() => {});
-      }
-    });
+    attachRepoWatcher(repoPath);
   }
 
   for (const root of roots) {
-    watch(root, { recursive: true }, (_eventType, filename) => {
-      if (filename && filename.endsWith(".git") && !watchedDirs.has(resolve(root, filename))) {
-        const newRepoPath = resolve(root, filename.replace("/.git", ""));
-        if (existsSync(newRepoPath)) {
+    try {
+      const watcher = watch(root, { recursive: true }, (_eventType, filename) => {
+        if (!filename) return;
+        const normalized = filename.toString().replace(/\\/g, "/");
+        const gitMarkerIndex = normalized.indexOf("/.git");
+        if (gitMarkerIndex === -1) return;
+        const newRepoPath = resolve(root, normalized.slice(0, gitMarkerIndex));
+        if (existsSync(join(newRepoPath, ".git")) && !watchedDirs.has(newRepoPath)) {
           opts.onProgress?.(`[new] Discovered new repo: ${basename(newRepoPath)}`);
-          watchedDirs.add(newRepoPath);
-          watch(newRepoPath, { recursive: true }, (et, fn) => {
-            if (fn && !fn.includes(".git/objects")) {
-              opts.onProgress?.(`[${et}] ${fn} in ${basename(newRepoPath)}`);
-              const cb = opts.onRepoChanged?.(newRepoPath);
-              if (cb instanceof Promise) cb.catch(() => {});
-            }
-          });
+          attachRepoWatcher(newRepoPath);
+          const cb = opts.onRepoDiscovered?.(newRepoPath);
+          if (cb instanceof Promise) cb.catch(() => {});
         }
-      }
-    });
+      });
+      watchers.push(watcher);
+    } catch (error) {
+      opts.onProgress?.(`[watch] Failed to watch ${root}: ${(error as Error).message}`);
+    }
   }
 
   opts.onProgress?.(`Watching ${repoPaths.length} repos for changes...`);
 
   return {
     stop: () => {
+      for (const watcher of watchers) {
+        watcher.close();
+      }
       opts.onProgress?.("Stopped watching repos");
     },
   };
