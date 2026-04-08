@@ -4,6 +4,7 @@ import {
   getDb, listScans, listFindings, suppressFinding, createBaseline, getSecurityScore,
 } from "../../db/index.js";
 import { initProject } from "../../lib/index.js";
+import { installPrePushHook } from "../../lib/git-hooks.js";
 
 function parseScoreFormat(value: string): "terminal" | "json" {
   const normalized = value.toLowerCase();
@@ -16,12 +17,24 @@ export function registerManageCommands(program: Command): void {
   program
     .command("init")
     .description("Initialize security for this repository")
-    .action(async () => {
+    .option("--install-pre-push", "Install the open-security pre-push hook")
+    .option("--force-hook", "Overwrite an existing pre-push hook when installing")
+    .action(async (options) => {
       const cwd = process.cwd();
       initProject(cwd);
       console.log(chalk.green(`\n  Initialized security in ${chalk.cyan(cwd)}`));
       console.log(chalk.gray("  Created .security/config.json"));
-      console.log(chalk.gray("  Run `security scan` to start scanning.\n"));
+
+      if (options.installPrePush) {
+        const result = installPrePushHook(cwd, { force: options.forceHook });
+        if (result.skipped) {
+          console.log(chalk.yellow(`  Skipped hook install: ${result.reason}`));
+        } else {
+          console.log(chalk.gray(`  Installed pre-push hook at ${result.hookPath}`));
+        }
+      }
+
+      console.log(chalk.gray("  Run `security scan` or `security secrets` to start scanning.\n"));
     });
 
   // baseline

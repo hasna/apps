@@ -14,8 +14,13 @@ import {
 } from "../../db/index.js";
 import { runAllScanners, runScanner } from "../../scanners/index.js";
 import { analyzeFinding as llmAnalyze, isLLMAvailable } from "../../llm/index.js";
-import { ScannerType, ScanStatus } from "../../types/index.js";
+import { ScannerType, ScanStatus, Severity } from "../../types/index.js";
 import type { FindingInput } from "../../types/index.js";
+import {
+  scanSecretExposure,
+  filterSecretExposureBySeverity,
+  summarizeSecretExposure,
+} from "../../lib/secret-exposure.js";
 
 type JsonResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -119,6 +124,51 @@ export function registerScanTools(
           (f) => f.file === absPath || f.file === filePath || f.file.endsWith(filePath),
         );
         return jsonResult({ file: absPath, findings: fileFindings, count: fileFindings.length });
+      } catch (error) {
+        return jsonResult({ error: String(error) });
+      }
+    },
+  );
+
+  // 3. scan_secret_exposure
+  server.tool(
+    "scan_secret_exposure",
+    "Scan repo files, git history, running processes, and tmux panes for exposed secrets",
+    {
+      path: z.string().describe("Path to the repository or directory to scan"),
+      include_git_history: z.boolean().optional().describe("Whether to include git history scanning"),
+      include_processes: z.boolean().optional().describe("Whether to include running process environment scanning"),
+      include_tmux: z.boolean().optional().describe("Whether to include tmux metadata/history scanning"),
+      severity: z.string().optional().describe("Minimum severity threshold (critical/high/medium/low/info)"),
+    },
+    async ({ path, include_git_history, include_processes, include_tmux, severity }) => {
+      try {
+        const parsedSeverity = severity
+          ? (() => {
+            const normalized = severity.toLowerCase();
+            const allowed = Object.values(Severity);
+            if (!allowed.includes(normalized as Severity)) {
+              throw new Error(`Invalid severity '${severity}'. Allowed values: ${allowed.join(", ")}`);
+            }
+            return normalized as Severity;
+          })()
+          : Severity.Info;
+
+        const result = await scanSecretExposure({
+          path: resolve(path),
+          include_git_history: include_git_history ?? true,
+          include_processes: include_processes ?? true,
+          include_tmux: include_tmux ?? true,
+        });
+
+        const findings = filterSecretExposureBySeverity(result.findings, parsedSeverity);
+        return jsonResult({
+          path: result.path,
+          severity_threshold: parsedSeverity,
+          summary: summarizeSecretExposure(findings),
+          findings,
+          count: findings.length,
+        });
       } catch (error) {
         return jsonResult({ error: String(error) });
       }

@@ -19,6 +19,9 @@ bun install -g @hasna/security
 # Scan your repo for security issues
 security scan .
 
+# Focused secret-exposure scan (repo files, git history, processes, tmux)
+security secrets .
+
 # Check if a package is compromised (axios/litellm/Trivy supply chain attacks)
 security check-package axios 1.14.1
 security check-package litellm 1.82.8 --ecosystem pypi
@@ -28,6 +31,9 @@ security advisories
 
 # Quick scan (secrets + dependencies only)
 security scan . --quick
+
+# Install a pre-push hook that blocks pushes on exposed secrets
+security init --install-pre-push
 ```
 
 ## Scanners
@@ -121,6 +127,7 @@ API endpoints:
 
 ```
 security scan [path]              Run security scan
+security secrets [options] [path] Focused secret-exposure scan (files + live context)
 security findings                 List findings
 security explain <id>             AI explanation for a finding
 security fix <id>                 AI-suggested fix
@@ -138,6 +145,23 @@ security serve                    Start web dashboard
 ## Data
 
 Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
+
+## Secret Exposure Workflow
+
+`security secrets` combines four sources:
+
+- repository files such as `.env` files and config files
+- git history across all branches
+- running process environments
+- tmux pane/session metadata plus recent pane history
+
+Useful flags:
+
+```bash
+security secrets . --repo-only
+security secrets . --json
+security secrets . --severity high --fail-on medium
+```
 
 ## Cloud Sync
 

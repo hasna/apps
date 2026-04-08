@@ -10,6 +10,7 @@ import { registerMcpInstallCommand } from "./commands/mcp-install.js";
 import { registerServeCommand } from "./commands/serve.js";
 import { registerSupplyChainCommands } from "./commands/supply-chain.js";
 import { registerAlertsCommand } from "./commands/alerts.js";
+import { registerSecretsCommand } from "./commands/secrets.js";
 
 const program = new Command();
 
@@ -27,5 +28,6 @@ registerMcpInstallCommand(program);
 registerServeCommand(program);
 registerSupplyChainCommands(program);
 registerAlertsCommand(program);
+registerSecretsCommand(program);
 
 program.parse();
