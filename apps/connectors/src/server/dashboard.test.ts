@@ -3,7 +3,7 @@ import { getDashboardHtml } from "./dashboard.js";
 
 describe("getDashboardHtml", () => {
   test("returns valid HTML string", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("<!DOCTYPE html>");
     expect(html).toContain("<html");
     expect(html).toContain("</html>");
@@ -19,18 +19,18 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes page title", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("<title>Connectors Dashboard</title>");
   });
 
   test("includes dashboard header", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("Connectors");
     expect(html).toContain("Dashboard");
   });
 
   test("includes stats section", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("stat-installed");
     expect(html).toContain("stat-configured");
     expect(html).toContain("stat-needs-auth");
@@ -40,13 +40,13 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes search bar", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("search-bar");
     expect(html).toContain("Filter connectors...");
   });
 
   test("includes table with correct columns", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("<table>");
     expect(html).toContain("Connector");
     expect(html).toContain("Category");
@@ -56,19 +56,19 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes modal for API key configuration", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("modal-overlay");
     expect(html).toContain("modal");
     expect(html).toContain("key-input");
   });
 
   test("includes toast notification element", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("toast");
   });
 
   test("includes JavaScript for API interaction", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("<script>");
     expect(html).toContain("/api/connectors");
     expect(html).toContain("fetch(");
@@ -77,7 +77,7 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes CSS styling", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("<style>");
     expect(html).toContain("font-family");
     expect(html).toContain("badge-oauth");
@@ -86,7 +86,7 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes OAuth and key management functions", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("startOAuth");
     expect(html).toContain("saveKey");
     expect(html).toContain("refreshToken");
@@ -95,7 +95,7 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes event listeners", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("addEventListener");
     expect(html).toContain("Escape");
     expect(html).toContain("oauth-complete");
@@ -111,12 +111,12 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes timeAgo function", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("function timeAgo(");
   });
 
   test("includes status indicators", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("status-ok");
     expect(html).toContain("status-no");
     expect(html).toContain("Configured");
@@ -124,7 +124,7 @@ describe("getDashboardHtml", () => {
   });
 
   test("includes loading state", () => {
-    const html = getDashboardHtml(19426);
+    const html = getDashboardHtml(9876);
     expect(html).toContain("Loading connectors...");
   });
 });

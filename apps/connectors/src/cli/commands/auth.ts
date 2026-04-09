@@ -106,12 +106,13 @@ export function registerCommands(program: Command): void {
         console.log();
 
         try {
-          const port = 19426; // Fixed port — OAuth redirect URIs must match
+          const port = 9876; // Fixed port — OAuth redirect URIs must be pre-registered
           const { startServer } = await import("../../server/serve.js");
 
           console.log(chalk.dim(`Starting temporary server on port ${port}...`));
           // startServer registers its own SIGINT handler and calls process.exit
-          await startServer(port, { open: false });
+          // strict: true ensures we fail if port 9876 is busy (OAuth requires exact port match)
+          await startServer(port, { open: false, strict: true });
 
           const oauthUrl = `http://localhost:${port}/oauth/${connector}/start`;
           console.log(chalk.bold(`\nOpen this URL to authenticate:\n`));

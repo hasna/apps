@@ -205,9 +205,9 @@ export function registerCommands(program: Command): void {
             // Start server and open browser for OAuth
             console.log(`  ${chalk.yellow("⟳")} OAuth authentication required — starting server...`);
             try {
-              const port = 19426;
+              const port = 9876; // Fixed port — OAuth redirect URIs must be pre-registered
               const { startServer } = await import("../../server/serve.js");
-              await startServer(port, { open: false });
+              await startServer(port, { open: false, strict: true });
 
               const oauthUrl = `http://localhost:${port}/oauth/${name}/start`;
               console.log(`\n  ${chalk.bold("Open this URL to authenticate:")}`);

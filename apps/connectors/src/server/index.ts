@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
  * Standalone entry point for the connector auth dashboard server.
- * Usage: connectors-serve [--port 19426]
+ * Usage: connectors-serve [--port 9876]
  */
 
 import { startServer } from "./serve.js";
 import pkg from "../../package.json" with { type: "json" };
 
-const DEFAULT_PORT = 19426;
+const DEFAULT_PORT = 9876;
 
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);

@@ -17,7 +17,7 @@ function mockFetch(status: number, body: unknown) {
 let client: ConnectorsClient;
 
 beforeEach(() => {
-  client = new ConnectorsClient({ serverUrl: "http://localhost:19426" });
+  client = new ConnectorsClient({ serverUrl: "http://localhost:9876" });
 });
 
 afterEach(() => {
@@ -32,17 +32,17 @@ describe("ConnectorsClient", () => {
   describe("constructor", () => {
     it("uses default serverUrl when none provided", () => {
       const c = new ConnectorsClient();
-      // If no server, the request should still hit localhost:19426
+      // If no server, the request should still hit localhost:9876
       expect(c).toBeDefined();
     });
 
     it("strips trailing slash from serverUrl", async () => {
       const fetchMock = mockFetch(200, []);
       global.fetch = fetchMock;
-      const c = new ConnectorsClient({ serverUrl: "http://localhost:19426/" });
+      const c = new ConnectorsClient({ serverUrl: "http://localhost:9876/" });
       await c.list();
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors");
+      expect(url).toBe("http://localhost:9876/api/connectors");
     });
   });
 
@@ -52,7 +52,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.list();
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors");
+      expect(url).toBe("http://localhost:9876/api/connectors");
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe("github");
     });
@@ -81,7 +81,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.get("github");
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github");
+      expect(url).toBe("http://localhost:9876/api/connectors/github");
       expect(result.name).toBe("github");
     });
 
@@ -103,7 +103,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.listOperations("github");
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github/operations");
+      expect(url).toBe("http://localhost:9876/api/connectors/github/operations");
       expect(result.commands).toContain("repo");
     });
   });
@@ -120,7 +120,7 @@ describe("ConnectorsClient", () => {
       const result = await client.getOperationHelp("github", "user");
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(
-        "http://localhost:19426/api/connectors/github/operations/user"
+        "http://localhost:9876/api/connectors/github/operations/user"
       );
       expect(result.help).toContain("connect-github user");
     });
@@ -141,7 +141,7 @@ describe("ConnectorsClient", () => {
       });
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(
-        "http://localhost:19426/api/connectors/github/operations/run"
+        "http://localhost:9876/api/connectors/github/operations/run"
       );
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({
@@ -159,7 +159,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.install("github");
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github/install");
+      expect(url).toBe("http://localhost:9876/api/connectors/github/install");
       expect(init.method).toBe("POST");
       expect(result.success).toBe(true);
     });
@@ -171,7 +171,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.uninstall("github");
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github/uninstall");
+      expect(url).toBe("http://localhost:9876/api/connectors/github/uninstall");
       expect(init.method).toBe("POST");
       expect(result.success).toBe(true);
     });
@@ -183,7 +183,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.setKey("github", "ghp_secret");
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github/key");
+      expect(url).toBe("http://localhost:9876/api/connectors/github/key");
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({ key: "ghp_secret" });
       expect(result.success).toBe(true);
@@ -204,7 +204,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.refresh("google");
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/google/refresh");
+      expect(url).toBe("http://localhost:9876/api/connectors/google/refresh");
       expect(init.method).toBe("POST");
       expect(result.success).toBe(true);
       expect(result.expiresAt).toBe(1700000000000);
@@ -218,7 +218,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.getProfiles("github");
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github/profiles");
+      expect(url).toBe("http://localhost:9876/api/connectors/github/profiles");
       expect(result.current).toBe("default");
       expect(result.profiles).toHaveLength(2);
     });
@@ -230,7 +230,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.switchProfile("github", "work");
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/connectors/github/profiles/switch");
+      expect(url).toBe("http://localhost:9876/api/connectors/github/profiles/switch");
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({ profile: "work" });
       expect(result.profile).toBe("work");
@@ -247,7 +247,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.getActivity();
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/activity");
+      expect(url).toBe("http://localhost:9876/api/activity");
       expect(result).toHaveLength(2);
     });
 
@@ -270,7 +270,7 @@ describe("ConnectorsClient", () => {
       global.fetch = fetchMock;
       const result = await client.update();
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://localhost:19426/api/update");
+      expect(url).toBe("http://localhost:9876/api/update");
       expect(init.method).toBe("POST");
       expect(result.count).toBe(0);
     });

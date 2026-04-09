@@ -226,7 +226,19 @@ export interface ServeOptions {
   open?: boolean;
 }
 
-async function findAvailablePort(preferred: number): Promise<number> {
+async function findAvailablePort(preferred: number, strict = false): Promise<number> {
+  if (strict) {
+    try {
+      const server = Bun.serve({ port: preferred, fetch() { return new Response(); } });
+      server.stop(true);
+      return preferred;
+    } catch {
+      throw new Error(
+        `Port ${preferred} is already in use. OAuth requires a fixed port.\n` +
+        `Free the port and try again: lsof -ti :${preferred} | xargs kill`
+      );
+    }
+  }
   for (let port = preferred; port < preferred + 100; port++) {
     try {
       const server = Bun.serve({ port, fetch() { return new Response(); } });
@@ -239,8 +251,9 @@ async function findAvailablePort(preferred: number): Promise<number> {
   throw new Error(`No available port found in range ${preferred}-${preferred + 99}`);
 }
 
-export async function startServer(requestedPort: number, options?: { open?: boolean }): Promise<void> {
+export async function startServer(requestedPort: number, options?: { open?: boolean; strict?: boolean }): Promise<void> {
   const shouldOpen = options?.open ?? true;
+  const strict = options?.strict ?? false;
   loadConnectorVersions();
 
   const dashboardDir = resolveDashboardDir();
@@ -254,7 +267,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
     console.error(`  bun run build:dashboard\n`);
   }
 
-  const port = await findAvailablePort(requestedPort);
+  const port = await findAvailablePort(requestedPort, strict);
   if (port !== requestedPort) {
     console.log(`Port ${requestedPort} is in use, using port ${port} instead`);
   }

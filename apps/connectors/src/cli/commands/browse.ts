@@ -499,7 +499,7 @@ export function registerCommands(program: Command): void {
     .command("serve")
     .alias("dashboard")
     .alias("open")
-    .option("-p, --port <port>", "Port to run the dashboard on", "19426")
+    .option("-p, --port <port>", "Port to run the dashboard on", "9876")
     .option("--open", "Open dashboard in browser (default)", true)
     .option("--no-open", "Don't open browser automatically")
     .description("Start local dashboard for connector auth management")

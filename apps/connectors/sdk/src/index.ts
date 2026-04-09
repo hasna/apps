@@ -1,7 +1,7 @@
 /**
  * @hasna/connectors-sdk
  * Zero-dependency TypeScript SDK for the @hasna/connectors REST API.
- * Default server port: 19426 (matches connectors-serve default).
+ * Default server port: 9876 (matches connectors-serve default).
  */
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ export interface ApiError {
 }
 
 export interface ConnectorsClientOptions {
-  /** Base URL of the connectors server. Defaults to http://localhost:19426 */
+  /** Base URL of the connectors server. Defaults to http://localhost:9876 */
   serverUrl?: string;
 }
 
@@ -132,7 +132,7 @@ export class ConnectorsClient {
   private readonly baseUrl: string;
 
   constructor(options: ConnectorsClientOptions = {}) {
-    this.baseUrl = (options.serverUrl ?? "http://localhost:19426").replace(/\/$/, "");
+    this.baseUrl = (options.serverUrl ?? "http://localhost:9876").replace(/\/$/, "");
   }
 
   private async request<T>(
