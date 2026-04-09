@@ -53,6 +53,9 @@ Commands:
   aws pull <key>              pull secret from AWS Secrets Manager
   aws sync                    bidirectional sync
 
+  serve                       start local HTTP server for Chrome extension (port 27462)
+  serve token                 print the current serve token
+
   feedback <message>          send feedback [--email <email>] [--category <cat>]
   mcp                         start MCP server (stdio)
   mcp install [--target claude|codex|gemini]  install MCP into AI agents
@@ -332,6 +335,25 @@ switch (command) {
       default:
         console.error(`Unknown aws subcommand: ${sub}`);
         process.exit(1);
+    }
+    break;
+  }
+
+  case "serve": {
+    const [sub] = positional;
+    if (sub === "token") {
+      const { existsSync, readFileSync } = await import("fs");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+      const tokenPath = join(homedir(), ".hasna", "secrets", ".serve-token");
+      if (!existsSync(tokenPath)) {
+        console.error("No serve token yet. Run: secrets serve  (to generate one)");
+        process.exit(1);
+      }
+      console.log(readFileSync(tokenPath, "utf-8").trim());
+    } else {
+      const { startHttpServer } = await import("./serve.js");
+      await startHttpServer();
     }
     break;
   }
