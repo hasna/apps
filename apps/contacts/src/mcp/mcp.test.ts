@@ -1,4 +1,7 @@
 import { describe, it, expect } from "bun:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerContactsTools } from "./register-tools.js";
+import { TOOL_DEFINITIONS } from "./tools.js";
 
 // Verify that the MCP tool definitions are importable and have the expected shape.
 // We test the static tool list by importing the expected tool names from the actual
@@ -59,5 +62,19 @@ describe("MCP tool registration", () => {
 
   it("tool count matches expected", () => {
     expect(EXPECTED_TOOLS.length).toBe(22);
+  });
+
+  it("registers the real tool definitions with the current MCP SDK", () => {
+    const server = new McpServer({ name: "contacts-test", version: "0.0.0" });
+
+    expect(() => registerContactsTools(server)).not.toThrow();
+
+    const registeredTools = Object.keys(
+      (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
+    );
+
+    expect(registeredTools).toContain("create_contact");
+    expect(registeredTools).toContain("search_contacts");
+    expect(registeredTools.length).toBe(TOOL_DEFINITIONS.length);
   });
 });
