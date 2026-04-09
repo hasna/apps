@@ -6,6 +6,7 @@ import { openDatabase, querySummary, querySessions, queryTopSessions, queryModel
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
+import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
@@ -16,7 +17,7 @@ const program = new Command()
 program
   .name('economy')
   .description('AI coding cost tracker — Claude Code, Codex, and Gemini')
-  .version('0.2.2')
+  .version(packageMetadata.version)
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
