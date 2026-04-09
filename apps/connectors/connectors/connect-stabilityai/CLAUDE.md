@@ -76,7 +76,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-stabilityai/
+~/.hasna/connectors/connect-stabilityai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

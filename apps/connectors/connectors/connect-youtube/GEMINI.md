@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-youtube/
+~/.hasna/connectors/connect-youtube/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

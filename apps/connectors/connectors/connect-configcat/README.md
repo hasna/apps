@@ -53,10 +53,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-configcat/`:
+Configuration stored in `~/.hasna/connectors/connect-configcat/`:
 
 ```
-~/.connect/connect-configcat/
+~/.hasna/connectors/connect-configcat/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

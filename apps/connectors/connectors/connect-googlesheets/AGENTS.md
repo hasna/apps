@@ -131,7 +131,7 @@ connect-googlesheets sheet copy <spreadsheetId> <sheetId> <destSpreadsheetId>
 ## Data Storage
 
 ```
-~/.connectors/connect-googlesheets/
+~/.hasna/connectors/connect-googlesheets/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

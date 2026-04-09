@@ -53,10 +53,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-codeclimate/`:
+Configuration stored in `~/.hasna/connectors/connect-codeclimate/`:
 
 ```
-~/.connect/connect-codeclimate/
+~/.hasna/connectors/connect-codeclimate/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

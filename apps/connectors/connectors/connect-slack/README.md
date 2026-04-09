@@ -119,10 +119,10 @@ const users = await slack.users.list();
 
 ## Configuration Files
 
-Configuration is stored in `~/.connect/connect-slack/`:
+Configuration is stored in `~/.hasna/connectors/connect-slack/`:
 
 ```
-~/.connect/connect-slack/
+~/.hasna/connectors/connect-slack/
 ├── current_profile          # Active profile name
 └── profiles/
     ├── default/

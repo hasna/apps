@@ -60,7 +60,7 @@ src/
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/{connector-name}/profiles/`:
+Profiles stored in `~/.hasna/connectors/{connector-name}/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -107,7 +107,7 @@ When customizing this scaffold, search for `TODO` comments:
 ## Data Storage
 
 ```
-~/.connect/{connector-name}/
+~/.hasna/connectors/{connector-name}/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

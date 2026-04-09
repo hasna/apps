@@ -64,7 +64,7 @@ Environment variables:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-airtable/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-airtable/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -101,7 +101,7 @@ Supported field types:
 ## Data Storage
 
 ```
-~/.connect/connect-airtable/
+~/.hasna/connectors/connect-airtable/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

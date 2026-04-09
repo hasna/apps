@@ -106,7 +106,7 @@ connect-anthropic profile list|use|create|delete|show
 ## Data Storage
 
 ```
-~/.connectors/connect-anthropic/
+~/.hasna/connectors/connect-anthropic/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -75,7 +75,7 @@ Each Supabase project has multiple APIs:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-supabase/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-supabase/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -110,7 +110,7 @@ Use PostgREST syntax for filters:
 ## Data Storage
 
 ```
-~/.connect/connect-supabase/
+~/.hasna/connectors/connect-supabase/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

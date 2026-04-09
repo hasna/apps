@@ -121,10 +121,10 @@ const client = new Googlemaps({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-googlemaps/`:
+Configuration stored in `~/.hasna/connectors/connect-googlemaps/`:
 
 ```
-~/.connectors/connect-googlemaps/
+~/.hasna/connectors/connect-googlemaps/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

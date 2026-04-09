@@ -137,7 +137,7 @@ https://cloud.digitalocean.com/account/api/tokens
 ## Data Storage
 
 ```
-~/.connect/connect-digitalocean/
+~/.hasna/connectors/connect-digitalocean/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

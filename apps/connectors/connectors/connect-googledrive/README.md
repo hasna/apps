@@ -63,10 +63,10 @@ const client = new Googledrive({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-googledrive/`:
+Configuration stored in `~/.hasna/connectors/connect-googledrive/`:
 
 ```
-~/.connectors/connect-googledrive/
+~/.hasna/connectors/connect-googledrive/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -115,7 +115,7 @@ Supported sites:
 ## Data Storage
 
 ```
-~/.connect/connect-datadog/
+~/.hasna/connectors/connect-datadog/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

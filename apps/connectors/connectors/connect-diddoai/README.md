@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-diddoai/`:
+Configuration stored in `~/.hasna/connectors/connect-diddoai/`:
 
 ```
-~/.connect/connect-diddoai/
+~/.hasna/connectors/connect-diddoai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

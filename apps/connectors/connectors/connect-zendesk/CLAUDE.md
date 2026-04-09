@@ -50,7 +50,7 @@ connect-zendesk/
 1. **API Client**: All API calls go through `ZendeskClient` which handles auth and request formatting
 2. **Resource APIs**: Each resource type gets its own API class (e.g., `UsersApi`, `OrdersApi`)
 3. **CLI Commands**: Commander-based with subcommands for each resource
-4. **Configuration**: Stored in `~/.connect-zendesk/config.json`
+4. **Configuration**: Stored in `~/.hasna/connectors/connect-zendesk/config.json`
 5. **Environment Variables**: `ZENDESK_API_KEY` for API authentication
 
 ## APIs

@@ -114,7 +114,7 @@ https://{dc}.api.mailchimp.com/3.0
 ## Data Storage
 
 ```
-~/.connect/connect-mailchimp/
+~/.hasna/connectors/connect-mailchimp/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

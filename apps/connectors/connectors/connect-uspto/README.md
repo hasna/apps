@@ -67,10 +67,10 @@ const client = new Uspto({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-uspto/`:
+Configuration stored in `~/.hasna/connectors/connect-uspto/`:
 
 ```
-~/.connectors/connect-uspto/
+~/.hasna/connectors/connect-uspto/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

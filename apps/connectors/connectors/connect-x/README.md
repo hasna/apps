@@ -71,10 +71,10 @@ const client = new X({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-x/`:
+Configuration stored in `~/.hasna/connectors/connect-x/`:
 
 ```
-~/.connectors/connect-x/
+~/.hasna/connectors/connect-x/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

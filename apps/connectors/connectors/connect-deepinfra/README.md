@@ -95,10 +95,10 @@ src/
 
 ## Multi-Profile Configuration
 
-Profiles are stored in `~/.connect/{connector-name}/profiles/`:
+Profiles are stored in `~/.hasna/connectors/{connector-name}/profiles/`:
 
 ```
-~/.connect/connector/
+~/.hasna/connectors/connector/
 ├── current_profile   # Name of active profile
 └── profiles/
     ├── default.json  # Default profile

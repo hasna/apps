@@ -110,7 +110,7 @@ spawn('npx', ['shadcn@latest', ...args], {
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-shadcn/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-shadcn/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -133,7 +133,7 @@ Profiles stored in `~/.connectors/connect-shadcn/profiles/`:
 ## Data Storage
 
 ```
-~/.connectors/connect-shadcn/
+~/.hasna/connectors/connect-shadcn/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -63,7 +63,7 @@ src/
 ├── types/
 │   └── index.ts        # Type definitions
 ├── utils/
-│   ├── config.ts       # Multi-profile config (~/.connect/connect-abstract/)
+│   ├── config.ts       # Multi-profile config (~/.hasna/connectors/connect-abstract/)
 │   └── output.ts       # CLI output formatting
 └── index.ts            # Library exports
 ```

@@ -70,7 +70,7 @@ None required. The arXiv API is free and open.
 ## Data Storage
 
 ```
-~/.connectors/connect-arxiv/
+~/.hasna/connectors/connect-arxiv/
 └── config.json    # User preferences (category, max results, output dir)
 ```
 

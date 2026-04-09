@@ -163,10 +163,10 @@ await wipo.close();
 
 ## Configuration
 
-Configuration stored in `~/.connect/connect-wipo/`:
+Configuration stored in `~/.hasna/connectors/connect-wipo/`:
 
 ```
-~/.connect/connect-wipo/
+~/.hasna/connectors/connect-wipo/
 ├── current_profile
 └── profiles/
     ├── default.json

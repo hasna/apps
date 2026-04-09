@@ -10,9 +10,9 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override (set by CLI before commands run)
 let profileOverride: string | undefined;
 
-// Store config in ~/.connectors/connect-googledrive/ (always in home directory)
+// Store config in ~/.hasna/connectors/connect-googledrive/ (always in home directory)
 function resolveBaseConfigDir(): string {
-  return join(homedir(), '.connectors', 'connect-googledrive');
+  return join(homedir(), '.hasna', 'connectors', 'connect-googledrive');
 }
 
 const BASE_CONFIG_DIR = resolveBaseConfigDir();

@@ -111,7 +111,7 @@ Requires:
 ## Data Storage
 
 ```
-~/.connect/connect-linkedin/
+~/.hasna/connectors/connect-linkedin/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

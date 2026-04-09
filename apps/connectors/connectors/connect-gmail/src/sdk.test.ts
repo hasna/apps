@@ -2,6 +2,7 @@ import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:
 import { GmailClient } from './api/client';
 import { Gmail } from './api/index';
 import type { GmailTokens } from './api/index';
+import * as auth from './utils/auth';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -53,14 +54,21 @@ describe('GmailClient tokenProvider', () => {
   });
 
   test('default behavior (no options) calls getValidAccessToken path', async () => {
-    // Without tokenProvider, the client should attempt file-based auth.
-    // Since there are no tokens on disk in test env, it will throw.
+    const accessToken = 'default-auth-token';
+    const getValidAccessTokenSpy = spyOn(auth, 'getValidAccessToken').mockResolvedValue(accessToken);
     const client = new GmailClient();
 
-    global.fetch = mock(async () => makeFetchResponse({})) as unknown as typeof global.fetch;
+    const captured = { auth: '' };
+    global.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured.auth = (init?.headers as Record<string, string>)?.['Authorization'] ?? '';
+      return makeFetchResponse({ emailAddress: 'test@example.com', messagesTotal: 0, threadsTotal: 0, historyId: '1' });
+    }) as unknown as typeof global.fetch;
 
-    // The error is expected because loadTokens() returns null in a test environment
-    await expect(client.request('/users/me/profile')).rejects.toThrow();
+    await client.request('/users/me/profile');
+
+    expect(getValidAccessTokenSpy).toHaveBeenCalledTimes(1);
+    expect(captured.auth).toBe(`Bearer ${accessToken}`);
+    getValidAccessTokenSpy.mockRestore();
   });
 });
 

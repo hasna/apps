@@ -112,7 +112,7 @@ interface ChatOptions {
 ## Data Storage
 
 ```
-~/.connect/connect-perplexity/
+~/.hasna/connectors/connect-perplexity/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

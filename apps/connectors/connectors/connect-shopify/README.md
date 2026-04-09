@@ -122,10 +122,10 @@ const client = new Shopify({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-shopify/`:
+Configuration stored in `~/.hasna/connectors/connect-shopify/`:
 
 ```
-~/.connectors/connect-shopify/
+~/.hasna/connectors/connect-shopify/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

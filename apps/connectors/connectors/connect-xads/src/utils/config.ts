@@ -4,7 +4,7 @@ import * as os from 'os';
 import type { XAdsConfig } from '../types';
 
 const CONNECTOR_NAME = 'connect-xads';
-const CONFIG_DIR = path.join(os.homedir(), '.connectors', CONNECTOR_NAME);
+const CONFIG_DIR = path.join(os.homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = path.join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = path.join(CONFIG_DIR, 'current_profile');
 

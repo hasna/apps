@@ -63,10 +63,10 @@ const client = new Google({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-google/`:
+Configuration stored in `~/.hasna/connectors/connect-google/`:
 
 ```
-~/.connectors/connect-google/
+~/.hasna/connectors/connect-google/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

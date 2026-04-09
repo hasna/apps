@@ -132,10 +132,10 @@ const client = new Wix({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-wix/`:
+Configuration stored in `~/.hasna/connectors/connect-wix/`:
 
 ```
-~/.connectors/connect-wix/
+~/.hasna/connectors/connect-wix/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

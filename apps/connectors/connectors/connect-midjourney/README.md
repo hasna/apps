@@ -65,10 +65,10 @@ const client = new Midjourney({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-midjourney/`:
+Configuration stored in `~/.hasna/connectors/connect-midjourney/`:
 
 ```
-~/.connectors/connect-midjourney/
+~/.hasna/connectors/connect-midjourney/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

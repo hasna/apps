@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
-const CONFIG_DIR = join(homedir(), '.connectors', 'connect-arxiv');
+const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', 'connect-arxiv');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 export interface CliConfig {

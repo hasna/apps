@@ -142,10 +142,10 @@ const client = new Webflow({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-webflow/`:
+Configuration stored in `~/.hasna/connectors/connect-webflow/`:
 
 ```
-~/.connectors/connect-webflow/
+~/.hasna/connectors/connect-webflow/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

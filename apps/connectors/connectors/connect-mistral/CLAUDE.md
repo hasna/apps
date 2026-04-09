@@ -107,7 +107,7 @@ connect-mistral profile list|use|create|delete|show
 ## Data Storage
 
 ```
-~/.connectors/connect-mistral/
+~/.hasna/connectors/connect-mistral/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -95,7 +95,7 @@ src/
 ## Data Storage
 
 ```
-~/.connect/connect-wipo/
+~/.hasna/connectors/connect-wipo/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

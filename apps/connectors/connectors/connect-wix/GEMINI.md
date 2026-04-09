@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-wix/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-wix/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -168,7 +168,7 @@ connect-wix config show
 ## Data Storage
 
 ```
-~/.connectors/connect-wix/
+~/.hasna/connectors/connect-wix/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

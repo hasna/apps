@@ -65,10 +65,10 @@ const client = new Heygen({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-heygen/`:
+Configuration stored in `~/.hasna/connectors/connect-heygen/`:
 
 ```
-~/.connectors/connect-heygen/
+~/.hasna/connectors/connect-heygen/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

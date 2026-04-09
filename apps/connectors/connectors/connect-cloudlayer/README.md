@@ -60,10 +60,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-cloudlayer/`:
+Configuration stored in `~/.hasna/connectors/connect-cloudlayer/`:
 
 ```
-~/.connect/connect-cloudlayer/
+~/.hasna/connectors/connect-cloudlayer/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -114,10 +114,10 @@ const client = new Zoom({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-zoom/`:
+Configuration stored in `~/.hasna/connectors/connect-zoom/`:
 
 ```
-~/.connectors/connect-zoom/
+~/.hasna/connectors/connect-zoom/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

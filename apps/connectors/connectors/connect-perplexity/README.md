@@ -153,10 +153,10 @@ const chat = await perplexity.chat.create([
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-perplexity/`:
+Configuration stored in `~/.hasna/connectors/connect-perplexity/`:
 
 ```
-~/.connect/connect-perplexity/
+~/.hasna/connectors/connect-perplexity/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

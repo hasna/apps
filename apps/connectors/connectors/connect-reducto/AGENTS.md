@@ -123,7 +123,7 @@ connect-reducto profile delete <name>
 ## Data Storage
 
 ```
-~/.connectors/connect-reducto/
+~/.hasna/connectors/connect-reducto/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

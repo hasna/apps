@@ -293,10 +293,10 @@ const customSearch = await pv.patents.search(
 
 ## Data Storage
 
-Configuration is stored in `~/.connect/connect-patentsview/`:
+Configuration is stored in `~/.hasna/connectors/connect-patentsview/`:
 
 ```
-~/.connect/connect-patentsview/
+~/.hasna/connectors/connect-patentsview/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

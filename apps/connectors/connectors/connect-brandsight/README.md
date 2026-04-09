@@ -34,7 +34,7 @@ connect-brandsight config set-secret <api-secret>
 connect-brandsight config set-customer-id <customer-id>
 connect-brandsight config show
 
-# Contact Management (stored in ~/.connectors/connect-brandsight/contacts/)
+# Contact Management (stored in ~/.hasna/connectors/connect-brandsight/contacts/)
 connect-brandsight contacts add <name> \
   --first-name "John" --last-name "Doe" \
   --email "john@example.com" --phone "+1.5551234567" \
@@ -98,10 +98,10 @@ const client = new Brandsight({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-brandsight/`:
+Configuration stored in `~/.hasna/connectors/connect-brandsight/`:
 
 ```
-~/.connectors/connect-brandsight/
+~/.hasna/connectors/connect-brandsight/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

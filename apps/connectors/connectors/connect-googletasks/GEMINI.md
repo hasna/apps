@@ -109,7 +109,7 @@ connect-googletasks profile delete <name>
 ## Data Storage
 
 ```
-~/.connectors/connect-googletasks/
+~/.hasna/connectors/connect-googletasks/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

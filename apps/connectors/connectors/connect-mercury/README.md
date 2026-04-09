@@ -115,10 +115,10 @@ const client = new Mercury({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-mercury/`:
+Configuration stored in `~/.hasna/connectors/connect-mercury/`:
 
 ```
-~/.connectors/connect-mercury/
+~/.hasna/connectors/connect-mercury/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

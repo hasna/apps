@@ -91,7 +91,7 @@ https://vercel.com/account/tokens
 ## Data Storage
 
 ```
-~/.connect/connect-vercel/
+~/.hasna/connectors/connect-vercel/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

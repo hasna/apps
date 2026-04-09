@@ -112,7 +112,7 @@ Uses Bearer token authentication:
 ## Data Storage
 
 ```
-~/.connect/connect-sendgrid/
+~/.hasna/connectors/connect-sendgrid/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

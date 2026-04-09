@@ -9,8 +9,8 @@ const DEFAULT_PROFILE = 'default';
 // Store for --profile flag override (set by CLI before commands run)
 let profileOverride: string | undefined;
 
-// Config directory: ~/.connectors/connect-googlecontacts/
-const CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
+// Config directory: ~/.hasna/connectors/connect-googlecontacts/
+const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
 

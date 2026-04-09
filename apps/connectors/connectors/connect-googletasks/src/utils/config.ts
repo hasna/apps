@@ -12,7 +12,7 @@ const PROFILES_DIR = 'profiles';
 let profileOverride: string | undefined;
 
 function resolveBaseConfigDir(): string {
-  return join(homedir(), '.connectors', CONNECTOR_NAME);
+  return join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 }
 
 const BASE_CONFIG_DIR = resolveBaseConfigDir();

@@ -86,10 +86,10 @@ const client = new Googlecontacts({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-googlecontacts/`:
+Configuration stored in `~/.hasna/connectors/connect-googlecontacts/`:
 
 ```
-~/.connectors/connect-googlecontacts/
+~/.hasna/connectors/connect-googlecontacts/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

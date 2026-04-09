@@ -94,10 +94,10 @@ const response = await client.chat('Solve this hard problem', {
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-anthropic/`:
+Configuration stored in `~/.hasna/connectors/connect-anthropic/`:
 
 ```
-~/.connectors/connect-anthropic/
+~/.hasna/connectors/connect-anthropic/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-docparser/`:
+Configuration stored in `~/.hasna/connectors/connect-docparser/`:
 
 ```
-~/.connect/connect-docparser/
+~/.hasna/connectors/connect-docparser/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

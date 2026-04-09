@@ -66,10 +66,10 @@ const client = new Docker({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-docker/`:
+Configuration stored in `~/.hasna/connectors/connect-docker/`:
 
 ```
-~/.connectors/connect-docker/
+~/.hasna/connectors/connect-docker/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

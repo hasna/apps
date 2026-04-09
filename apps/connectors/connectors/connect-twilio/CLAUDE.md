@@ -72,7 +72,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-twilio/
+~/.hasna/connectors/connect-twilio/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

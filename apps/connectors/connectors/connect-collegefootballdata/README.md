@@ -53,10 +53,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-collegefootballdata/`:
+Configuration stored in `~/.hasna/connectors/connect-collegefootballdata/`:
 
 ```
-~/.connect/connect-collegefootballdata/
+~/.hasna/connectors/connect-collegefootballdata/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

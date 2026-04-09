@@ -28,7 +28,7 @@ export interface StoredContact extends ContactInfo {
   updatedAt: string;
 }
 
-const CONFIG_DIR = join(homedir(), '.connectors', 'connect-brandsight');
+const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', 'connect-brandsight');
 const CONTACTS_DIR = join(CONFIG_DIR, 'contacts');
 const DEFAULT_CONTACT_FILE = join(CONFIG_DIR, 'default-contact.txt');
 

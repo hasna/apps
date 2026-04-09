@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-exa/
+~/.hasna/connectors/connect-exa/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

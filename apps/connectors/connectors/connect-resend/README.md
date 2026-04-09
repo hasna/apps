@@ -63,10 +63,10 @@ const client = new Resend({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-resend/`:
+Configuration stored in `~/.hasna/connectors/connect-resend/`:
 
 ```
-~/.connectors/connect-resend/
+~/.hasna/connectors/connect-resend/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

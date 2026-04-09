@@ -66,10 +66,10 @@ const client = new Huggingface({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-huggingface/`:
+Configuration stored in `~/.hasna/connectors/connect-huggingface/`:
 
 ```
-~/.connectors/connect-huggingface/
+~/.hasna/connectors/connect-huggingface/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

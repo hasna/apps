@@ -53,10 +53,10 @@ const client = new Coinbase({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-coinbase/`:
+Configuration stored in `~/.hasna/connectors/connect-coinbase/`:
 
 ```
-~/.connect/connect-coinbase/
+~/.hasna/connectors/connect-coinbase/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

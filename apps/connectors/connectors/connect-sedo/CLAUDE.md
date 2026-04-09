@@ -65,7 +65,7 @@ API Key authentication. Credentials can be set via:
 1. **API Client**: All API calls go through `SedoClient` which handles XML responses
 2. **Domains API**: Domain marketplace operations including search, status, list, add, edit, delete
 3. **CLI Commands**: Commander-based with subcommands for domains and config
-4. **Configuration**: Stored in `~/.connect-sedo/config.json`
+4. **Configuration**: Stored in `~/.hasna/connectors/connect-sedo/config.json`
 5. **Environment Variables**: `SEDO_PARTNER_ID`, `SEDO_API_KEY`, `SEDO_USERNAME`, `SEDO_PASSWORD`
 
 ## CLI Commands
@@ -104,7 +104,7 @@ connect-sedo domains remove example.com
 ## Data Storage
 
 ```
-~/.connectors/connect-sedo/
+~/.hasna/connectors/connect-sedo/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

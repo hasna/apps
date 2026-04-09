@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-quo/
+~/.hasna/connectors/connect-quo/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

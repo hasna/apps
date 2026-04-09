@@ -81,7 +81,7 @@ scripts/
 ## Data Storage
 
 ```
-~/.connect/connect-7todos/
+~/.hasna/connectors/connect-7todos/
 ├── current_profile     # Active profile name
 ├── settings.json       # User preferences
 └── profiles/

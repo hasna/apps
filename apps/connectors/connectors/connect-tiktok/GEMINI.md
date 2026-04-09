@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-tiktok/
+~/.hasna/connectors/connect-tiktok/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

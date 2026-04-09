@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-discourse/`:
+Configuration stored in `~/.hasna/connectors/connect-discourse/`:
 
 ```
-~/.connect/connect-discourse/
+~/.hasna/connectors/connect-discourse/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

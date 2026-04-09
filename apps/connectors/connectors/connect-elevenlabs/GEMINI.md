@@ -67,7 +67,7 @@ API Key (Header) authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-elevenlabs/
+~/.hasna/connectors/connect-elevenlabs/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

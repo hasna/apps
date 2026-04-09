@@ -66,7 +66,7 @@ Two API endpoints:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-amplitude/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-amplitude/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -100,7 +100,7 @@ Profiles stored in `~/.connect/connect-amplitude/profiles/`:
 ## Data Storage
 
 ```
-~/.connect/connect-amplitude/
+~/.hasna/connectors/connect-amplitude/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

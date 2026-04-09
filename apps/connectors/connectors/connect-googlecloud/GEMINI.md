@@ -58,7 +58,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/googlecloud/profiles/`:
+Profiles stored in `~/.hasna/connectors/googlecloud/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -97,7 +97,7 @@ const client = new GoogleCloud({ credentialsPath: '/path/to/creds.json' });
 ## Data Storage
 
 ```
-~/.connectors/connect-googlecloud/
+~/.hasna/connectors/connect-googlecloud/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

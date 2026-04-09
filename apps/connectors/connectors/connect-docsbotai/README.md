@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-docsbotai/`:
+Configuration stored in `~/.hasna/connectors/connect-docsbotai/`:
 
 ```
-~/.connect/connect-docsbotai/
+~/.hasna/connectors/connect-docsbotai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

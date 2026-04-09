@@ -64,7 +64,7 @@ src/
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-browseruse/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-browseruse/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -165,7 +165,7 @@ connect-browseruse config show                   # Show current config
 ## Data Storage
 
 ```
-~/.connect/connect-browseruse/
+~/.hasna/connectors/connect-browseruse/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

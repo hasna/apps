@@ -91,7 +91,7 @@ Bearer Token authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-firecrawl/
+~/.hasna/connectors/connect-firecrawl/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

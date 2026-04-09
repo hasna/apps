@@ -56,7 +56,7 @@ src/
 
 OAuth authentication (Google OAuth2). Credentials can be set via:
 - OAuth flow through the dashboard
-- Profile configuration with client credentials at `~/.connectors/connect-googledrive/credentials.json`
+- Profile configuration with client credentials at `~/.hasna/connectors/connect-googledrive/credentials.json`
 
 ## Environment Variables
 
@@ -68,7 +68,7 @@ OAuth authentication (Google OAuth2). Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-googledrive/
+~/.hasna/connectors/connect-googledrive/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -58,7 +58,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-xads/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-xads/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -170,7 +170,7 @@ connect-xads auth status
 ## Data Storage
 
 ```
-~/.connectors/connect-xads/
+~/.hasna/connectors/connect-xads/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

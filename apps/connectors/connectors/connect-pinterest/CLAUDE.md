@@ -102,7 +102,7 @@ Requires:
 ## Data Storage
 
 ```
-~/.connect/connect-pinterest/
+~/.hasna/connectors/connect-pinterest/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

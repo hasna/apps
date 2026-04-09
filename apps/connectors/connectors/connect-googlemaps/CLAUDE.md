@@ -145,7 +145,7 @@ connect-googlemaps staticmap --center "New York, NY" --zoom 12 --markers "40.712
 ## Data Storage
 
 ```
-~/.connectors/connect-googlemaps/
+~/.hasna/connectors/connect-googlemaps/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

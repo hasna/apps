@@ -63,10 +63,10 @@ const client = new Tiktok({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-tiktok/`:
+Configuration stored in `~/.hasna/connectors/connect-tiktok/`:
 
 ```
-~/.connectors/connect-tiktok/
+~/.hasna/connectors/connect-tiktok/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

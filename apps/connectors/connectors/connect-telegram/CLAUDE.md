@@ -63,7 +63,7 @@ src/
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-telegram/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-telegram/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -148,7 +148,7 @@ connect-telegram config clear                    # Clear config
 ## Data Storage
 
 ```
-~/.connect/connect-telegram/
+~/.hasna/connectors/connect-telegram/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

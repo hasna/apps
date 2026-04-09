@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/docker/profiles/`:
+Profiles stored in `~/.hasna/connectors/docker/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -99,7 +99,7 @@ The client handles JWT token acquisition and renewal automatically.
 ## Data Storage
 
 ```
-~/.connectors/connect-docker/
+~/.hasna/connectors/connect-docker/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -59,7 +59,7 @@ src/
 ├── types/
 │   └── index.ts      # Type definitions
 ├── utils/
-│   ├── config.ts     # Multi-profile config (~/.connect/connect-abuselpdb/)
+│   ├── config.ts     # Multi-profile config (~/.hasna/connectors/connect-abuselpdb/)
 │   └── output.ts     # CLI output formatting
 └── index.ts          # Library exports
 ```

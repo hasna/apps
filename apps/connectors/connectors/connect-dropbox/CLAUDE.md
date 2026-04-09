@@ -67,7 +67,7 @@ Two API endpoints:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-dropbox/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-dropbox/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -99,7 +99,7 @@ Download requests return file content in body and metadata in `Dropbox-API-Resul
 ## Data Storage
 
 ```
-~/.connect/connect-dropbox/
+~/.hasna/connectors/connect-dropbox/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

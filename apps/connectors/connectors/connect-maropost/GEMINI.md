@@ -97,7 +97,7 @@ Bearer Token authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-maropost/
+~/.hasna/connectors/connect-maropost/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

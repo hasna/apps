@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-dockcerts/`:
+Configuration stored in `~/.hasna/connectors/connect-dockcerts/`:
 
 ```
-~/.connect/connect-dockcerts/
+~/.hasna/connectors/connect-dockcerts/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

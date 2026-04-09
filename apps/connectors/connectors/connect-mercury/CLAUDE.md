@@ -138,7 +138,7 @@ connect-mercury profile list|use|create|delete|show
 ## Data Storage
 
 ```
-~/.connectors/connect-mercury/
+~/.hasna/connectors/connect-mercury/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

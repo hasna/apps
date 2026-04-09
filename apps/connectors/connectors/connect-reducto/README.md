@@ -114,10 +114,10 @@ const client = new Reducto({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-reducto/`:
+Configuration stored in `~/.hasna/connectors/connect-reducto/`:
 
 ```
-~/.connectors/connect-reducto/
+~/.hasna/connectors/connect-reducto/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

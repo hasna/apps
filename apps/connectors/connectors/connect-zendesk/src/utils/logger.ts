@@ -1,16 +1,19 @@
 import { appendFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
-
-const CONFIG_DIR = join(homedir(), '.connect-zendesk');
-const LOG_FILE = join(CONFIG_DIR, 'connect-zendesk.log');
+import { getBaseConfigDir, getLogFile } from './config';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 function ensureLogDir(): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const configDir = getBaseConfigDir();
+
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
   }
+}
+
+function getResolvedLogFile(): string {
+  ensureLogDir();
+  return getLogFile();
 }
 
 function formatTimestamp(): string {
@@ -30,7 +33,7 @@ function writeLog(level: LogLevel, message: string, meta?: Record<string, unknow
   try {
     ensureLogDir();
     const logEntry = formatMessage(level, message, meta);
-    appendFileSync(LOG_FILE, logEntry, 'utf-8');
+    appendFileSync(getResolvedLogFile(), logEntry, 'utf-8');
   } catch {
     // Silently fail if logging fails - don't crash the CLI
   }
@@ -100,6 +103,6 @@ export const logger = {
    * Get log file path
    */
   getLogPath(): string {
-    return LOG_FILE;
+    return getResolvedLogFile();
   },
 };

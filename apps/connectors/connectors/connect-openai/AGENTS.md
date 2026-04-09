@@ -79,7 +79,7 @@ Bearer Token authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-openai/
+~/.hasna/connectors/connect-openai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

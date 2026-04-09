@@ -53,10 +53,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-cloudshare/`:
+Configuration stored in `~/.hasna/connectors/connect-cloudshare/`:
 
 ```
-~/.connect/connect-cloudshare/
+~/.hasna/connectors/connect-cloudshare/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

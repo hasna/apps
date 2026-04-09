@@ -52,10 +52,10 @@ src/
 
 ## Multi-Profile Configuration
 
-Configuration stored in `~/.connect/connect-slack/`:
+Configuration stored in `~/.hasna/connectors/connect-slack/`:
 
 ```
-~/.connect/connect-slack/
+~/.hasna/connectors/connect-slack/
 ├── current_profile
 └── profiles/
     └── default/

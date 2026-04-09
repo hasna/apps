@@ -114,7 +114,7 @@ https://app.netlify.com/user/applications#personal-access-tokens
 ## Data Storage
 
 ```
-~/.connect/connect-netlify/
+~/.hasna/connectors/connect-netlify/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-connect-gmail is a TypeScript CLI and library for interacting with Gmail API. It provides OAuth2 authentication with browser-based login flow and stores tokens securely in `.connectors/connect-gmail/`.
+connect-gmail is a TypeScript CLI and library for interacting with Gmail API. It provides OAuth2 authentication with browser-based login flow and stores tokens securely in `~/.hasna/connectors/connect-gmail/`.
 
 ## Build & Run Commands
 
@@ -88,7 +88,7 @@ OAuth authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-gmail/
+~/.hasna/connectors/connect-gmail/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

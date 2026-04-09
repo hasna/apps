@@ -93,10 +93,10 @@ const client = new Googlesheets({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-googlesheets/`:
+Configuration stored in `~/.hasna/connectors/connect-googlesheets/`:
 
 ```
-~/.connectors/connect-googlesheets/
+~/.hasna/connectors/connect-googlesheets/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

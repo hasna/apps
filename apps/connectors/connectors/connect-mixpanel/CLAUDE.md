@@ -69,7 +69,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-mixpanel/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-mixpanel/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -176,7 +176,7 @@ connect-mixpanel config show
 ## Data Storage
 
 ```
-~/.connectors/connect-mixpanel/
+~/.hasna/connectors/connect-mixpanel/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -63,10 +63,10 @@ const client = new Youtube({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-youtube/`:
+Configuration stored in `~/.hasna/connectors/connect-youtube/`:
 
 ```
-~/.connectors/connect-youtube/
+~/.hasna/connectors/connect-youtube/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

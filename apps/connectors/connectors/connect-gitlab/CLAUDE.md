@@ -107,7 +107,7 @@ Required scopes depend on operations:
 ## Data Storage
 
 ```
-~/.connect/connect-gitlab/
+~/.hasna/connectors/connect-gitlab/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

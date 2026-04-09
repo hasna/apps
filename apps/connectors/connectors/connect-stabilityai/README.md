@@ -63,10 +63,10 @@ const client = new Stabilityai({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-stabilityai/`:
+Configuration stored in `~/.hasna/connectors/connect-stabilityai/`:
 
 ```
-~/.connectors/connect-stabilityai/
+~/.hasna/connectors/connect-stabilityai/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -101,7 +101,7 @@ connect-openweathermap geo reverse <lat> <lon>
 ## Data Storage
 
 ```
-~/.connectors/connect-openweathermap/
+~/.hasna/connectors/connect-openweathermap/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

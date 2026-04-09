@@ -108,7 +108,7 @@ The EPO OPS API uses OAuth2 with client credentials grant:
 ## Data Storage
 
 ```
-~/.connect/connect-epo/
+~/.hasna/connectors/connect-epo/
 ├── current_profile   # Active profile name
 ├── token.json        # Cached OAuth token
 └── profiles/

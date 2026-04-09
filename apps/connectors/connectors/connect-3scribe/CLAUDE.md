@@ -72,7 +72,7 @@ scripts/
 ## Data Storage
 
 ```
-~/.connect/connect-3scribe/
+~/.hasna/connectors/connect-3scribe/
 ├── current_profile
 ├── settings.json
 ├── data/

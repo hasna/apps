@@ -152,10 +152,10 @@ const buffer = await photos.media.download(items[0]);
 
 ## Configuration Storage
 
-Configuration is stored in `~/.connect/connect-googlephotos/`:
+Configuration is stored in `~/.hasna/connectors/connect-googlephotos/`:
 
 ```
-~/.connect/connect-googlephotos/
+~/.hasna/connectors/connect-googlephotos/
 ├── credentials.json          # OAuth client credentials (shared)
 ├── current_profile           # Current active profile
 └── profiles/

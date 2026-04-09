@@ -13,7 +13,7 @@ interface GlobalConfig {
   activeProfile?: string;
 }
 
-const CONFIG_DIR = join(homedir(), '.connectors', 'connect-sedo');
+const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', 'connect-sedo');
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const GLOBAL_CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const DEFAULT_PROFILE = 'default';

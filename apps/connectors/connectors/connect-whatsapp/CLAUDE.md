@@ -100,7 +100,7 @@ Requires:
 ## Data Storage
 
 ```
-~/.connect/connect-whatsapp/
+~/.hasna/connectors/connect-whatsapp/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

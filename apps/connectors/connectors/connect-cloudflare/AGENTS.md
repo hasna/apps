@@ -59,7 +59,7 @@ API Key authentication. Credentials can be set via:
 1. **API Client**: All API calls go through `{{SERVICE_NAME_PASCAL}}Client` which handles auth and request formatting
 2. **Resource APIs**: Each resource type gets its own API class (e.g., `UsersApi`, `OrdersApi`)
 3. **CLI Commands**: Commander-based with subcommands for each resource
-4. **Configuration**: Stored in `~/.connect-{{CONNECTOR_NAME}}/config.json`
+4. **Configuration**: Stored in `~/.hasna/connectors/connect-{{CONNECTOR_NAME}}/config.json`
 5. **Environment Variables**: `{{SERVICE_NAME_UPPER}}_API_KEY` for API authentication
 
 ## Environment Variables
@@ -71,7 +71,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-cloudflare/
+~/.hasna/connectors/connect-cloudflare/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

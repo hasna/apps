@@ -91,7 +91,7 @@ Get your API token from: https://todoist.com/app/settings/integrations/developer
 ## Data Storage
 
 ```
-~/.connect/connect-todoist/
+~/.hasna/connectors/connect-todoist/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

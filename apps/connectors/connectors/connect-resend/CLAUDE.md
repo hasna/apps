@@ -84,7 +84,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-resend/
+~/.hasna/connectors/connect-resend/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

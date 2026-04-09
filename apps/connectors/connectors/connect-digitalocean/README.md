@@ -115,10 +115,10 @@ const client = new DigitalOcean({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-digitalocean/`:
+Configuration stored in `~/.hasna/connectors/connect-digitalocean/`:
 
 ```
-~/.connect/connect-digitalocean/
+~/.hasna/connectors/connect-digitalocean/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

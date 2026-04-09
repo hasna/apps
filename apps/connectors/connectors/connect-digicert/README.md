@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-digicert/`:
+Configuration stored in `~/.hasna/connectors/connect-digicert/`:
 
 ```
-~/.connect/connect-digicert/
+~/.hasna/connectors/connect-digicert/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

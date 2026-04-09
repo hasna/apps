@@ -77,7 +77,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-webflow/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-webflow/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -199,7 +199,7 @@ connect-webflow config show
 ## Data Storage
 
 ```
-~/.connectors/connect-webflow/
+~/.hasna/connectors/connect-webflow/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

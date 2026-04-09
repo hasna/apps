@@ -156,10 +156,10 @@ console.log(`Credits: ${billing.credits}`);
 
 ## Multi-Profile Configuration
 
-Profiles are stored in `~/.connect/connect-browseruse/profiles/`:
+Profiles are stored in `~/.hasna/connectors/connect-browseruse/profiles/`:
 
 ```
-~/.connect/connect-browseruse/
+~/.hasna/connectors/connect-browseruse/
 ├── current_profile   # Name of active profile
 └── profiles/
     ├── default.json  # Default profile

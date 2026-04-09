@@ -235,10 +235,10 @@ connect-epo search "ic=H01L AND ti=transistor"
 
 ## Data Storage
 
-Configuration and tokens are stored in `~/.connect/connect-epo/`:
+Configuration and tokens are stored in `~/.hasna/connectors/connect-epo/`:
 
 ```
-~/.connect/connect-epo/
+~/.hasna/connectors/connect-epo/
 ├── current_profile   # Active profile name
 ├── token.json        # Cached OAuth token
 └── profiles/

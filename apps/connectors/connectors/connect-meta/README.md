@@ -63,10 +63,10 @@ const client = new Meta({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-meta/`:
+Configuration stored in `~/.hasna/connectors/connect-meta/`:
 
 ```
-~/.connectors/connect-meta/
+~/.hasna/connectors/connect-meta/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

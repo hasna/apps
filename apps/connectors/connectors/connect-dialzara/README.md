@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-dialzara/`:
+Configuration stored in `~/.hasna/connectors/connect-dialzara/`:
 
 ```
-~/.connect/connect-dialzara/
+~/.hasna/connectors/connect-dialzara/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

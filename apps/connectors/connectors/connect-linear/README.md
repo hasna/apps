@@ -34,7 +34,7 @@ Or use the CLI to save your API key:
 connect-linear config set-api-key lin_api_xxxxx
 ```
 
-Configuration is stored in `~/.connect/connect-linear/`.
+Configuration is stored in `~/.hasna/connectors/connect-linear/`.
 
 ## CLI Usage
 

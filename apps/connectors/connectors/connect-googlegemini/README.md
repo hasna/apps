@@ -112,10 +112,10 @@ const client = new Googlegemini({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-googlegemini/`:
+Configuration stored in `~/.hasna/connectors/connect-googlegemini/`:
 
 ```
-~/.connectors/connect-googlegemini/
+~/.hasna/connectors/connect-googlegemini/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

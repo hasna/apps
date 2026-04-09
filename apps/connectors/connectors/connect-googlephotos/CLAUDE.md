@@ -46,7 +46,7 @@ connect-googlephotos profiles switch <name>
 connect-googlephotos -p <profile> media list
 ```
 
-Profiles are stored in `~/.connect/connect-googlephotos/profiles/`.
+Profiles are stored in `~/.hasna/connectors/connect-googlephotos/profiles/`.
 
 ## Commands
 

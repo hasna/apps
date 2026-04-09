@@ -59,10 +59,10 @@ The Linear API uses GraphQL. The client architecture:
 
 ## Multi-Profile Configuration
 
-Configuration stored in `~/.connect/connect-linear/`:
+Configuration stored in `~/.hasna/connectors/connect-linear/`:
 
 ```
-~/.connect/connect-linear/
+~/.hasna/connectors/connect-linear/
 ├── current_profile
 └── profiles/
     └── default/

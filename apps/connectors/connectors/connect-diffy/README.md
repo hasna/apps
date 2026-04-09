@@ -65,10 +65,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-diffy/`:
+Configuration stored in `~/.hasna/connectors/connect-diffy/`:
 
 ```
-~/.connect/connect-diffy/
+~/.hasna/connectors/connect-diffy/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

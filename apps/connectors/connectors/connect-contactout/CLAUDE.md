@@ -132,7 +132,7 @@ token: <YOUR_API_TOKEN>
 
 ## Multi-Profile Configuration
 
-Profiles stored in `~/.connect/connect-contactout/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-contactout/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command

@@ -118,7 +118,7 @@ Requires:
 ## Data Storage
 
 ```
-~/.connect/connect-intercom/
+~/.hasna/connectors/connect-intercom/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

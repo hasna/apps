@@ -81,10 +81,10 @@ const client = new Sedo({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-sedo/`:
+Configuration stored in `~/.hasna/connectors/connect-sedo/`:
 
 ```
-~/.connectors/connect-sedo/
+~/.hasna/connectors/connect-sedo/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

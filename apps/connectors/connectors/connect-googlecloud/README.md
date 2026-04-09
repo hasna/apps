@@ -65,10 +65,10 @@ const client = new Googlecloud({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-googlecloud/`:
+Configuration stored in `~/.hasna/connectors/connect-googlecloud/`:
 
 ```
-~/.connectors/connect-googlecloud/
+~/.hasna/connectors/connect-googlecloud/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

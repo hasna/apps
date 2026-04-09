@@ -11,8 +11,8 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override
 let profileOverride: string | undefined;
 
-// Config directory: ~/.connectors/connect-linear/
-const BASE_CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
+// Config directory: ~/.hasna/connectors/connect-linear/
+const BASE_CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 
 // ============================================
 // Profile Management

@@ -65,10 +65,10 @@ const client = new Maropost({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-maropost/`:
+Configuration stored in `~/.hasna/connectors/connect-maropost/`:
 
 ```
-~/.connectors/connect-maropost/
+~/.hasna/connectors/connect-maropost/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

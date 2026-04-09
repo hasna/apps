@@ -63,10 +63,10 @@ const client = new Shadcn({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-shadcn/`:
+Configuration stored in `~/.hasna/connectors/connect-shadcn/`:
 
 ```
-~/.connectors/connect-shadcn/
+~/.hasna/connectors/connect-shadcn/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

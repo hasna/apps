@@ -58,7 +58,7 @@ API Key authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-icons8/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-icons8/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -88,7 +88,7 @@ url.searchParams.append('token', this.apiKey);
 ## Data Storage
 
 ```
-~/.connectors/connect-icons8/
+~/.hasna/connectors/connect-icons8/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

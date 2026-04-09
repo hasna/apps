@@ -139,7 +139,7 @@ The PatentsView API uses JSON queries with:
 ## Data Storage
 
 ```
-~/.connect/connect-patentsview/
+~/.hasna/connectors/connect-patentsview/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -15,8 +15,8 @@ const PROFILES_DIR = 'profiles';
 // Store for --profile flag override
 let profileOverride: string | undefined;
 
-// Config directory: ~/.connectors/connect-clickbank/
-const BASE_CONFIG_DIR = join(homedir(), '.connectors', CONNECTOR_NAME);
+// Config directory: ~/.hasna/connectors/connect-clickbank/
+const BASE_CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 
 // Old config location for migration
 const OLD_CONFIG_DIR = join(homedir(), '.connect-clickbank');

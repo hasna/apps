@@ -63,7 +63,7 @@ API Key authentication. Credentials can be set via:
 ## Data Storage
 
 ```
-~/.connectors/connect-googledrive/
+~/.hasna/connectors/connect-googledrive/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

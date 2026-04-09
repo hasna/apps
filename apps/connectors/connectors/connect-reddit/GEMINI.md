@@ -58,7 +58,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-reddit/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-reddit/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -163,7 +163,7 @@ connect-reddit profile show                  # Show current profile
 ## Data Storage
 
 ```
-~/.connectors/connect-reddit/
+~/.hasna/connectors/connect-reddit/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

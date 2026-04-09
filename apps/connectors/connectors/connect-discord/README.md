@@ -127,10 +127,10 @@ const client = new Discord({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-discord/`:
+Configuration stored in `~/.hasna/connectors/connect-discord/`:
 
 ```
-~/.connectors/connect-discord/
+~/.hasna/connectors/connect-discord/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

@@ -97,7 +97,7 @@ scripts/
 ## Data Storage
 
 ```
-~/.connect/connect-ably/
+~/.hasna/connectors/connect-ably/
 ├── current_profile     # Active profile name
 ├── settings.json       # User preferences
 └── profiles/

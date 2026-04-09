@@ -53,10 +53,10 @@ const client = new Connector({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connect/connect-codefresh/`:
+Configuration stored in `~/.hasna/connectors/connect-codefresh/`:
 
 ```
-~/.connect/connect-codefresh/
+~/.hasna/connectors/connect-codefresh/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

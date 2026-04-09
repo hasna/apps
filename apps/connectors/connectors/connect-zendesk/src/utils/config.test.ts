@@ -5,7 +5,7 @@ import { join } from 'path';
 
 // We need to test the config module with a custom config dir
 // to avoid messing with actual user config
-const TEST_CONFIG_DIR = join(homedir(), '.connect-zendesk-test');
+const TEST_CONFIG_DIR = join(homedir(), '.hasna', 'connectors', 'connect-zendesk-test');
 const TEST_CONFIG_FILE = join(TEST_CONFIG_DIR, 'config.json');
 
 describe('Config utilities', () => {

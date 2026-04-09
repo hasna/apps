@@ -63,10 +63,10 @@ const client = new Cloudflare({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-cloudflare/`:
+Configuration stored in `~/.hasna/connectors/connect-cloudflare/`:
 
 ```
-~/.connectors/connect-cloudflare/
+~/.hasna/connectors/connect-cloudflare/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

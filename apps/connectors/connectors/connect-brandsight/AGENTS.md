@@ -59,7 +59,7 @@ SSO Key authentication. Credentials can be set via:
 1. **API Client**: All API calls go through `BrandsightClient` which handles sso-key authentication
 2. **Domains API**: Domain operations including availability check, purchase, DNS management
 3. **CLI Commands**: Commander-based with subcommands for domains, dns, config
-4. **Configuration**: Stored in `~/.connect-brandsight/config.json`
+4. **Configuration**: Stored in `~/.hasna/connectors/connect-brandsight/config.json`
 5. **Environment Variables**: `BRANDSIGHT_API_KEY`, `BRANDSIGHT_API_SECRET`, `BRANDSIGHT_CUSTOMER_ID`
 
 ## CLI Commands
@@ -78,7 +78,7 @@ connect-brandsight config set-secret <api-secret>
 connect-brandsight config set-customer-id <customer-id>
 connect-brandsight config show
 
-# Contact Management (stored in ~/.connectors/connect-brandsight/contacts/)
+# Contact Management (stored in ~/.hasna/connectors/connect-brandsight/contacts/)
 connect-brandsight contacts add <name> \
   --first-name "John" --last-name "Doe" \
   --email "john@example.com" --phone "+1.5551234567" \
@@ -115,7 +115,7 @@ connect-brandsight dns add <domain> <type> <name> <data>
 ## Data Storage
 
 ```
-~/.connectors/connect-brandsight/
+~/.hasna/connectors/connect-brandsight/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

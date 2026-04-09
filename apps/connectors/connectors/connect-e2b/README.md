@@ -104,10 +104,10 @@ const client = new E2b({ apiKey: 'YOUR_API_KEY' });
 
 ## Data Storage
 
-Configuration stored in `~/.connectors/connect-e2b/`:
+Configuration stored in `~/.hasna/connectors/connect-e2b/`:
 
 ```
-~/.connectors/connect-e2b/
+~/.hasna/connectors/connect-e2b/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile

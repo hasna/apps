@@ -65,7 +65,7 @@ OAuth authentication. Credentials can be set via:
 
 ### Multi-Profile Configuration
 
-Profiles stored in `~/.connectors/connect-googlecontacts/profiles/`:
+Profiles stored in `~/.hasna/connectors/connect-googlecontacts/profiles/`:
 - Each profile is a separate JSON file
 - `current_profile` file tracks active profile
 - `--profile` flag overrides for single command
@@ -93,7 +93,7 @@ This connector uses OAuth2 with Google:
 ### Data Storage
 
 ```
-~/.connectors/connect-googlecontacts/
+~/.hasna/connectors/connect-googlecontacts/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile
@@ -153,7 +153,7 @@ Profile JSON structure:
 ### Data Storage
 
 ```
-~/.connectors/connect-googlecontacts/
+~/.hasna/connectors/connect-googlecontacts/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile
@@ -175,7 +175,7 @@ Profile JSON structure:
 ## Data Storage
 
 ```
-~/.connectors/connect-googlecontacts/
+~/.hasna/connectors/connect-googlecontacts/
 ├── current_profile   # Active profile name
 └── profiles/
     ├── default.json  # Default profile
