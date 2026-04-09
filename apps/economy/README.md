@@ -8,7 +8,7 @@ AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claud
 ## Install
 
 ```bash
-npm install -g @hasna/economy
+bun install -g @hasna/economy
 ```
 
 ## CLI Usage
@@ -20,13 +20,24 @@ economy --help
 ## MCP Server
 
 ```bash
-economy-mcp
+economy-mcp --help
 ```
 
 ## REST API
 
 ```bash
-economy-serve
+economy-serve --help
+```
+
+## Native macOS Menubar
+
+The `menubar/` app is a native SwiftUI menu bar app built with `MenuBarExtra`, not Electron. It targets macOS 26 and talks to the REST API exposed by `economy-serve`. The server URL is configurable inside the app and defaults to `http://127.0.0.1:3456`.
+
+Build it on macOS with Xcode / Swift 6.2:
+
+```bash
+cd menubar
+swift build -c release
 ```
 
 ## Cloud Sync
@@ -42,6 +53,8 @@ cloud sync pull --service economy
 ## Data Directory
 
 Data is stored in `~/.hasna/economy/`.
+
+The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.economy/` data is auto-migrated on first open.
 
 ## License
 

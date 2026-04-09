@@ -5,12 +5,12 @@ AI coding cost tracker — `@hasna/economy`
 ## Stack
 - Runtime: Bun
 - Language: TypeScript
-- DB: SQLite via `bun:sqlite` at `~/.economy/economy.db`
+- DB: SQLite via `@hasna/cloud` `SqliteAdapter` at `~/.hasna/economy/economy.db`
 - CLI: Commander.js
 - MCP: @modelcontextprotocol/sdk
 - Server: Bun.serve
 - Dashboard: React + Vite (dashboard/)
-- Menubar: Electron (menubar/)
+- Menubar: native SwiftUI menu bar app (menubar/)
 - SDK: @hasna/economy-sdk (sdk/)
 
 ## Data Sources
@@ -25,17 +25,19 @@ AI coding cost tracker — `@hasna/economy`
 - `economy watch` — live cost stream
 - `economy budget` — manage budgets
 - `economy project` — manage projects
-- `economy serve` — start REST API on port 3456
-- `economy mcp` — install MCP server
+- `economy-serve` — start REST API on port 3456
+- `economy-mcp` — start MCP stdio server
 
 ## Key Files
 - `src/db/database.ts` — SQLite layer
 - `src/lib/pricing.ts` — model pricing table
 - `src/ingest/claude.ts` — Claude Code telemetry ingest
 - `src/ingest/codex.ts` — Codex SQLite ingest
+- `src/ingest/gemini.ts` — Gemini CLI ingest
 - `src/cli/index.ts` — CLI entry
 - `src/mcp/index.ts` — MCP server
 - `src/server/index.ts` — REST API
+- `menubar/Sources/EconomyBar` — native SwiftUI menu bar app
 
 ## Testing
-`bun test` — must pass 100% coverage
+`bun test`
