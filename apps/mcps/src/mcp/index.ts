@@ -2,9 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
-import { readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
 import {
   addServer,
   removeServer,
@@ -46,19 +43,14 @@ import {
   seedDefaultMachines,
 } from "../lib/machines.js";
 import { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "../lib/fleet.js";
+import { readPackageVersion } from "../lib/version.js";
 
 function redactServerEnv<T extends { env: Record<string, string> }>(server: T): T {
   return { ...server, env: {} };
 }
 
 const VERSION = (() => {
-  try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string };
-    return pkg.version || "0.0.1";
-  } catch {
-    return "0.0.1";
-  }
+  return readPackageVersion(import.meta.url);
 })();
 
 const server = new McpServer({

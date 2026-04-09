@@ -47,4 +47,8 @@ describe("index exports", () => {
     expect(typeof api.removeMachine).toBe("function");
     expect(typeof api.seedDefaultMachines).toBe("function");
   });
+
+  it("exports version helpers", () => {
+    expect(typeof api.readPackageVersion).toBe("function");
+  });
 });

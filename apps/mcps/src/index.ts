@@ -61,6 +61,7 @@ export {
   DEFAULT_MACHINE_SEEDS,
 } from "./lib/machines.js";
 export { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "./lib/fleet.js";
+export { readPackageVersion } from "./lib/version.js";
 
 export {
   connectToServer,

@@ -5,8 +5,6 @@ import React from "react";
 import { render } from "ink";
 import chalk from "chalk";
 import { readFileSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
 import {
   addServer,
   removeServer,
@@ -59,6 +57,7 @@ import * as readline from "readline";
 import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
 import { App } from "./components/App.js";
+import { readPackageVersion } from "../lib/version.js";
 import type {
   FleetHealthReport,
   FleetInstallReport,
@@ -70,13 +69,7 @@ import type {
 } from "../types.js";
 
 const VERSION = (() => {
-  try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string };
-    return pkg.version || "0.0.1";
-  } catch {
-    return "0.0.1";
-  }
+  return readPackageVersion(import.meta.url);
 })();
 
 const MACHINE_PLATFORMS = ["linux", "darwin", "unknown"] as const;
