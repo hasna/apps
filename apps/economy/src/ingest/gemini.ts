@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { Database } from 'bun:sqlite'
+import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { upsertSession, rollupSession, getIngestState, setIngestState } from '../db/database.js'
 import type { EconomySession } from '../types/index.js'
 

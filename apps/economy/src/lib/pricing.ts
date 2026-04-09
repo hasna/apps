@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite'
+import type { SqliteAdapter as Database } from '@hasna/cloud'
 import type { ModelPricing } from '../types/index.js'
 import { getModelPricing, seedModelPricing } from '../db/database.js'
 

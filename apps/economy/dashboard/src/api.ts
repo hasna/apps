@@ -28,16 +28,15 @@ export interface DailyEntry {
 }
 
 export interface Session {
-  session_id: string
+  id: string
   agent: string
-  project: string
+  project_name: string
   project_path?: string
-  cost_usd: number
+  total_cost_usd: number
   total_tokens: number
-  requests: number
+  request_count: number
   started_at: string
-  ended_at?: string
-  model?: string
+  ended_at?: string | null
 }
 
 export interface ModelStat {
@@ -57,12 +56,14 @@ export interface ProjectStat {
 }
 
 export interface Budget {
-  id: number
-  project_path: string
-  period: string
+  id: string
+  project_path: string | null
+  period: "daily" | "weekly" | "monthly"
   limit_usd: number
+  alert_at_percent: number
   current_spend_usd: number
   percent_used: number
+  is_over_limit: boolean
   is_over_alert: boolean
 }
 
@@ -101,14 +102,14 @@ export interface SessionRequest {
 // Sessions
 export const getSessions = (params: {
   agent?: string
-  project?: string
+  search?: string
   limit?: number
   offset?: number
   since?: string
 }) => {
   const q = new URLSearchParams()
   if (params.agent) q.set('agent', params.agent)
-  if (params.project) q.set('project', params.project)
+  if (params.search) q.set('search', params.search)
   if (params.limit != null) q.set('limit', String(params.limit))
   if (params.offset != null) q.set('offset', String(params.offset))
   if (params.since) q.set('since', params.since)
@@ -141,7 +142,7 @@ export const getBudgets = () =>
 
 export const createBudget = (body: {
   project_path?: string
-  period: string
+  period: "daily" | "weekly" | "monthly"
   limit_usd: number
   alert_at_percent?: number
 }) =>
@@ -150,7 +151,7 @@ export const createBudget = (body: {
     body: JSON.stringify(body),
   })
 
-export const deleteBudget = (id: number) =>
+export const deleteBudget = (id: string) =>
   request<{ success: boolean }>(`/api/budgets/${id}`, { method: 'DELETE' })
 
 // Pricing
@@ -169,7 +170,7 @@ export const deletePricing = (model: string) =>
   })
 
 // Sync
-export const syncSources = (sources: 'all' | 'claude' | 'codex' = 'all') =>
+export const syncSources = (sources: 'all' | 'claude' | 'codex' | 'gemini' = 'all') =>
   request<{ success: boolean }>('/api/sync', {
     method: 'POST',
     body: JSON.stringify({ sources }),

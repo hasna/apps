@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, basename } from 'path'
-import { Database } from 'bun:sqlite'
+import { Database as BunDatabase } from 'bun:sqlite'
+import type { SqliteAdapter as Database } from '@hasna/cloud'
 import {
   upsertSession, getIngestState, setIngestState,
 } from '../db/database.js'
@@ -36,11 +37,11 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
     return { sessions: 0 }
   }
 
-  let codexDb: Database | null = null
+  let codexDb: BunDatabase | null = null
   let ingested = 0
 
   try {
-    codexDb = new Database(CODEX_DB_PATH, { readonly: true })
+    codexDb = new BunDatabase(CODEX_DB_PATH, { readonly: true })
     const threads = codexDb.prepare(
       `SELECT id, cwd, created_at, updated_at, tokens_used, title FROM threads WHERE tokens_used > 0`
     ).all() as CodexThread[]

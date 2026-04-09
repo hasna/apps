@@ -92,7 +92,7 @@ export function SessionsTab() {
     setError(null);
     try {
       const res = await getSessions({
-        project: search || undefined,
+        search: search || undefined,
         limit: pageSize,
         offset: page * pageSize,
         since: dateFrom || undefined,
@@ -123,7 +123,7 @@ export function SessionsTab() {
     setRequestsError(null);
     setRequestsLoading(true);
     try {
-      const res = await getSessionRequests(session.session_id);
+      const res = await getSessionRequests(session.id);
       setSessionRequests(res.data);
     } catch (e) {
       setRequestsError(e instanceof Error ? e.message : "Failed to load requests");
@@ -161,7 +161,7 @@ export function SessionsTab() {
           {/* Filters row */}
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              placeholder="Search by project..."
+              placeholder="Search by project, agent, or session..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -235,13 +235,13 @@ export function SessionsTab() {
                   ) : (
                     filteredSessions.map((session) => (
                       <TableRow
-                        key={session.session_id}
+                        key={session.id}
                         className="cursor-pointer hover:bg-muted/50"
                         onClick={() => handleRowClick(session)}
                       >
                         <TableCell>
                           <code className="text-xs text-muted-foreground">
-                            {truncate(session.session_id, 16)}
+                            {truncate(session.id, 16)}
                           </code>
                         </TableCell>
                         <TableCell>
@@ -249,11 +249,11 @@ export function SessionsTab() {
                         </TableCell>
                         <TableCell>
                           <span className="text-sm truncate block max-w-[200px]">
-                            {truncate(String(session.project || session.project_path || ""), 30)}
+                            {truncate(String(session.project_name || session.project_path || ""), 30)}
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
-                          <span className="font-medium text-sm">{formatUsd(session.cost_usd)}</span>
+                          <span className="font-medium text-sm">{formatUsd(session.total_cost_usd)}</span>
                         </TableCell>
                         <TableCell className="text-right">
                           <span className="text-sm text-muted-foreground">
@@ -261,7 +261,7 @@ export function SessionsTab() {
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
-                          <span className="text-sm text-muted-foreground">{session.requests}</span>
+                          <span className="text-sm text-muted-foreground">{session.request_count}</span>
                         </TableCell>
                         <TableCell>
                           <span className="text-xs text-muted-foreground">
@@ -275,7 +275,7 @@ export function SessionsTab() {
                             className="size-7"
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard.writeText(session.session_id);
+                              navigator.clipboard.writeText(session.id);
                             }}
                             title="Copy session ID"
                           >
@@ -352,17 +352,17 @@ export function SessionsTab() {
           <DialogHeader>
             <DialogTitle className="text-sm">
               Session:{" "}
-              <code className="font-mono text-xs">{selectedSession?.session_id}</code>
+              <code className="font-mono text-xs">{selectedSession?.id}</code>
             </DialogTitle>
             <DialogDescription className="text-xs">
               {selectedSession && (
                 <>
                   <AgentBadge agent={selectedSession.agent} />{" "}
                   <span className="ml-1">
-                    {truncate(String(selectedSession.project || selectedSession.project_path || ""), 50)}
+                    {truncate(String(selectedSession.project_name || selectedSession.project_path || ""), 50)}
                   </span>
                   <span className="ml-2 text-muted-foreground">
-                    · {formatUsd(selectedSession.cost_usd)} total · {selectedSession.requests} requests
+                    · {formatUsd(selectedSession.total_cost_usd)} total · {selectedSession.request_count} requests
                   </span>
                 </>
               )}

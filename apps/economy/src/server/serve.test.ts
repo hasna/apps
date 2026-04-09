@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertModelPricing } from '../db/database.js'
 import { createHandler } from './serve.js'
-import type { Database } from 'bun:sqlite'
+import type { SqliteAdapter as Database } from '@hasna/cloud'
 
 const NOW = new Date().toISOString()
 
@@ -70,6 +70,18 @@ describe('REST API server', () => {
     expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
   })
 
+  it('GET /api/sessions supports search across session id, agent, and project name', async () => {
+    let response = await req(handler, '/api/sessions?search=proj-a')
+    expect(response.status).toBe(200)
+    expect(((response.data as Record<string, unknown>)['data'] as unknown[]).length).toBe(1)
+
+    response = await req(handler, '/api/sessions?search=claude')
+    expect(((response.data as Record<string, unknown>)['data'] as unknown[]).length).toBe(1)
+
+    response = await req(handler, '/api/sessions?search=sess-1')
+    expect(((response.data as Record<string, unknown>)['data'] as unknown[]).length).toBe(1)
+  })
+
   it('GET /api/top returns top sessions', async () => {
     const { status, data } = await req(handler, '/api/top?n=5')
     expect(status).toBe(200)
@@ -101,6 +113,16 @@ describe('REST API server', () => {
       period: 'daily', limit_usd: 10, alert_at_percent: 70,
     })
     expect(status).toBe(200)
+  })
+
+  it('POST /api/budgets normalizes day/week/month aliases', async () => {
+    const { status } = await req(handler, '/api/budgets', 'POST', {
+      period: 'month', limit_usd: 15,
+    })
+    expect(status).toBe(200)
+
+    const latest = db.prepare(`SELECT period FROM budgets ORDER BY created_at DESC LIMIT 1`).get() as { period: string } | null
+    expect(latest?.period).toBe('monthly')
   })
 
   it('DELETE /api/budgets/:id removes a budget', async () => {

@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite'
+import type { SqliteAdapter as Database } from '@hasna/cloud'
 import {
   querySummary, querySessions, queryTopSessions,
   queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown,
@@ -10,6 +10,7 @@ import {
 } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
+import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
 import type { Period, Agent } from '../types/index.js'
@@ -33,6 +34,21 @@ function ok(data: unknown, meta?: Record<string, unknown>): Response {
 
 function err(message: string, status = 400): Response {
   return json({ error: message }, status)
+}
+
+function normalizeBudgetPeriod(value: unknown): 'daily' | 'weekly' | 'monthly' {
+  switch (value) {
+    case 'day':
+    case 'daily':
+      return 'daily'
+    case 'week':
+    case 'weekly':
+      return 'weekly'
+    case 'month':
+    case 'monthly':
+    default:
+      return 'monthly'
+  }
 }
 
 /** Apply ?fields=f1,f2 filtering — reduces response size by 50-89% */
@@ -64,16 +80,24 @@ export function createHandler(db: Database) {
       return ok(queryDailyBreakdown(db, days))
     }
 
-    // Sessions — supports ?fields=id,agent,cost_usd for lean responses
+    // Sessions — supports ?search=project|agent|session and legacy ?project=
     if (path === '/api/sessions' && method === 'GET') {
       const agent = url.searchParams.get('agent') as Agent | null
       const project = url.searchParams.get('project') ?? undefined
+      const search = url.searchParams.get('search') ?? undefined
       const limit = Number(url.searchParams.get('limit') ?? 50)
       const offset = Number(url.searchParams.get('offset') ?? 0)
       const since = url.searchParams.get('since') ?? undefined
       const fieldsParam = url.searchParams.get('fields')
       const fields = fieldsParam ? fieldsParam.split(',').map(f => f.trim()).filter(Boolean) : undefined
-      const sessions = querySessions(db, { agent: agent ?? undefined, project, limit, offset, since })
+      const sessions = querySessions(db, {
+        agent: agent ?? undefined,
+        project,
+        search,
+        limit,
+        offset,
+        since,
+      })
       return ok(fields ? sessions.map(s => applyFields(s as unknown as Record<string, unknown>, fields)) : sessions, { limit, offset })
     }
 
@@ -111,7 +135,7 @@ export function createHandler(db: Database) {
         id: randomUUID(),
         project_path: (body['project_path'] as string | null) ?? null,
         agent: (body['agent'] as Agent | null) ?? null,
-        period: (body['period'] as 'daily' | 'weekly' | 'monthly') ?? 'monthly',
+        period: normalizeBudgetPeriod(body['period']),
         limit_usd: Number(body['limit_usd']),
         alert_at_percent: Number(body['alert_at_percent'] ?? 80),
         created_at: now,
@@ -178,6 +202,7 @@ export function createHandler(db: Database) {
       const results: Record<string, unknown> = {}
       if (sources === 'all' || sources === 'claude') results['claude'] = await ingestClaude(db)
       if (sources === 'all' || sources === 'codex') results['codex'] = await ingestCodex(db)
+      if (sources === 'all' || sources === 'gemini') results['gemini'] = await ingestGemini(db)
       return ok(results)
     }
 

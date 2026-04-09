@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { openDatabase } from '../db/database.js'
 import { ingestClaude } from './claude.js'
-import type { Database } from 'bun:sqlite'
+import type { SqliteAdapter as Database } from '@hasna/cloud'
 
 const TMP = '/tmp/economy-claude-test-' + Date.now()
 const TELEMETRY_DIR = join(TMP, '.claude', 'telemetry')

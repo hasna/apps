@@ -79,7 +79,7 @@ export function BudgetsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [projectPath, setProjectPath] = useState("");
-  const [period, setPeriod] = useState("month");
+  const [period, setPeriod] = useState<Budget["period"]>("monthly");
   const [limitUsd, setLimitUsd] = useState("");
   const [alertAt, setAlertAt] = useState("80");
   const [saving, setSaving] = useState(false);
@@ -102,7 +102,7 @@ export function BudgetsTab() {
     };
   }, [load]);
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     try {
       await deleteBudget(id);
       load();
@@ -198,12 +198,12 @@ export function BudgetsTab() {
                 <label className="text-xs font-medium text-muted-foreground">Period</label>
                 <select
                   value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
+                  onChange={(e) => setPeriod(e.target.value as Budget["period"])}
                   className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
-                  <option value="day">Day</option>
-                  <option value="week">Week</option>
-                  <option value="month">Month</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
                 </select>
               </div>
               <div className="space-y-1.5">
