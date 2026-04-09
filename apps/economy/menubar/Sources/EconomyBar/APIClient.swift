@@ -7,13 +7,36 @@ enum APIError: Error {
 }
 
 actor APIClient {
-  private let base = "http://localhost:3456"
+  static let defaultsKey = "economy.apiBaseURL"
+  static let defaultBaseURL = "http://127.0.0.1:3456"
+
+  private var base: String
   private let session: URLSession
 
   init() {
+    base = Self.storedBaseURL()
     let config = URLSessionConfiguration.default
     config.timeoutIntervalForRequest = 5
     session = URLSession(configuration: config)
+  }
+
+  static func storedBaseURL() -> String {
+    normalizeBaseURL(UserDefaults.standard.string(forKey: defaultsKey) ?? defaultBaseURL)
+  }
+
+  static func normalizeBaseURL(_ value: String) -> String {
+    var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if normalized.isEmpty { normalized = defaultBaseURL }
+    if !normalized.contains("://") { normalized = "http://\(normalized)" }
+    if normalized.hasSuffix("/") { normalized.removeLast() }
+    return normalized
+  }
+
+  func setBaseURL(_ value: String) -> String {
+    let normalized = Self.normalizeBaseURL(value)
+    base = normalized
+    UserDefaults.standard.set(normalized, forKey: Self.defaultsKey)
+    return normalized
   }
 
   func isOnline() async -> Bool {
@@ -34,8 +57,16 @@ actor APIClient {
     try await get("/api/projects")
   }
 
-  func fetchGoals() async throws -> [GoalStatus] {
-    try await get("/api/goals")
+  func fetchSessions(search: String, limit: Int) async throws -> [SessionStat] {
+    var components = URLComponents(string: "\(base)/api/sessions")!
+    var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+    let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmed.isEmpty {
+      queryItems.append(URLQueryItem(name: "search", value: trimmed))
+    }
+    components.queryItems = queryItems
+    guard let url = components.url else { throw APIError.offline }
+    return try await get(url)
   }
 
   func sync() async throws {
@@ -52,6 +83,10 @@ actor APIClient {
 
   private func get<T: Decodable>(_ path: String) async throws -> T {
     let url = URL(string: "\(base)\(path)")!
+    return try await get(url)
+  }
+
+  private func get<T: Decodable>(_ url: URL) async throws -> T {
     do {
       let (data, response) = try await session.data(from: url)
       guard let http = response as? HTTPURLResponse else { throw APIError.offline }

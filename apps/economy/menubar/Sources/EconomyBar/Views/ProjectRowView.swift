@@ -5,7 +5,7 @@ struct ProjectRowView: View {
 
   var body: some View {
     HStack {
-      Text(project.project_name.isEmpty ? project.project_path.split(separator: "/").last.map(String.init) ?? "—" : project.project_name)
+      Text(project.displayName)
         .font(.system(size: 12))
         .lineLimit(1)
         .truncationMode(.middle)

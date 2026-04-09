@@ -6,19 +6,23 @@ struct CostCardView: View {
   let sessions: Int
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline) {
+    VStack(alignment: .leading, spacing: 6) {
       Text(label)
-        .font(.subheadline)
+        .font(.caption)
+        .fontWeight(.semibold)
         .foregroundStyle(.secondary)
-        .frame(width: 52, alignment: .leading)
+
       Text(fmtCost(cost))
-        .font(.subheadline.weight(.semibold).monospacedDigit())
+        .font(.headline.monospacedDigit())
         .foregroundStyle(.primary)
-      Spacer()
+
       Text("\(sessions) session\(sessions == 1 ? "" : "s")")
         .font(.caption)
         .foregroundStyle(.tertiary)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(10)
+    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
   }
 
   private func fmtCost(_ usd: Double) -> String {
