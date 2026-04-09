@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, uuid, now } from "./database.js";
 
 export interface ContactLearning {
@@ -36,7 +36,7 @@ function rowToLearning(r: Record<string, unknown>): ContactLearning {
 export function saveLearning(
   contactId: string,
   input: CreateLearningInput,
-  db?: Database,
+  db?: ContactsDatabase,
 ): ContactLearning {
   const _db = db || getDatabase();
   const id = uuid();
@@ -66,7 +66,7 @@ export function saveLearning(
 export function getLearnings(
   contactId: string,
   opts: { type?: string; min_importance?: number; visibility?: string } = {},
-  db?: Database,
+  db?: ContactsDatabase,
 ): ContactLearning[] {
   const _db = db || getDatabase();
   let sql = `SELECT * FROM contact_learnings WHERE contact_id=?`;
@@ -90,7 +90,7 @@ export function getLearnings(
 export function searchLearnings(
   query: string,
   opts: { type?: string; contact_id?: string } = {},
-  db?: Database,
+  db?: ContactsDatabase,
 ): Array<ContactLearning & { contact_id: string }> {
   const _db = db || getDatabase();
   let sql = `SELECT * FROM contact_learnings WHERE content LIKE ?`;
@@ -109,7 +109,7 @@ export function searchLearnings(
   ) as Array<ContactLearning & { contact_id: string }>;
 }
 
-export function confirmLearning(learningId: string, _agentName: string, db?: Database): void {
+export function confirmLearning(learningId: string, _agentName: string, db?: ContactsDatabase): void {
   const _db = db || getDatabase();
   _db
     .query(
@@ -118,7 +118,7 @@ export function confirmLearning(learningId: string, _agentName: string, db?: Dat
     .run(now(), learningId);
 }
 
-export function decayLearnings(db?: Database): number {
+export function decayLearnings(db?: ContactsDatabase): number {
   const _db = db || getDatabase();
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
   const result = _db
@@ -129,7 +129,7 @@ export function decayLearnings(db?: Database): number {
   return (result as { changes?: number }).changes || 0;
 }
 
-export function deleteLearning(learningId: string, db?: Database): void {
+export function deleteLearning(learningId: string, db?: ContactsDatabase): void {
   const _db = db || getDatabase();
   _db.query(`DELETE FROM contact_learnings WHERE id=?`).run(learningId);
 }

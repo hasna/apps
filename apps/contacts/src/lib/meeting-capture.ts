@@ -1,5 +1,5 @@
 import { getDatabase, now as _now } from "../db/database.js";
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 
 export async function ingestMeetingParticipants(
   event: {
@@ -8,7 +8,7 @@ export async function ingestMeetingParticipants(
     attendees: Array<{ name: string; email: string }>;
     context?: string;
   },
-  db?: Database,
+  db?: ContactsDatabase,
 ): Promise<{ created: number; updated: number; contact_ids: string[] }> {
   const { findOrCreateContact } = await import('../db/contacts.js');
   const { logEvent } = await import('../db/events.js');

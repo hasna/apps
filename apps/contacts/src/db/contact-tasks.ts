@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   ContactTask,
   CreateContactTaskInput,
@@ -45,7 +45,7 @@ function rowToContactTask(row: ContactTaskRow): ContactTask {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function createContactTask(input: CreateContactTaskInput, db?: Database): ContactTask {
+export function createContactTask(input: CreateContactTaskInput, db?: ContactsDatabase): ContactTask {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -77,7 +77,7 @@ export function createContactTask(input: CreateContactTaskInput, db?: Database):
   );
 }
 
-export function getContactTask(id: string, db?: Database): ContactTask | null {
+export function getContactTask(id: string, db?: ContactsDatabase): ContactTask | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contact_tasks WHERE id = ?`).get(id) as ContactTaskRow | null;
   return row ? rowToContactTask(row) : null;
@@ -90,7 +90,7 @@ export interface ListContactTasksOptions {
   priority?: ContactTask["priority"];
 }
 
-export function listContactTasks(opts: ListContactTasksOptions = {}, db?: Database): ContactTask[] {
+export function listContactTasks(opts: ListContactTasksOptions = {}, db?: ContactsDatabase): ContactTask[] {
   const d = db || getDatabase();
 
   const conditions: string[] = [];
@@ -109,7 +109,7 @@ export function listContactTasks(opts: ListContactTasksOptions = {}, db?: Databa
   return rows.map(rowToContactTask);
 }
 
-export function updateContactTask(id: string, input: UpdateContactTaskInput, db?: Database): ContactTask {
+export function updateContactTask(id: string, input: UpdateContactTaskInput, db?: ContactsDatabase): ContactTask {
   const d = db || getDatabase();
 
   const setClauses: string[] = ["updated_at = ?"];
@@ -133,12 +133,12 @@ export function updateContactTask(id: string, input: UpdateContactTaskInput, db?
   );
 }
 
-export function deleteContactTask(id: string, db?: Database): void {
+export function deleteContactTask(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM contact_tasks WHERE id = ?`, [id]);
 }
 
-export function listOverdueTasks(db?: Database): ContactTask[] {
+export function listOverdueTasks(db?: ContactsDatabase): ContactTask[] {
   const d = db || getDatabase();
   const now_iso = new Date().toISOString();
   const rows = d.query(
@@ -149,7 +149,7 @@ export function listOverdueTasks(db?: Database): ContactTask[] {
   return rows.map(rowToContactTask);
 }
 
-export function checkEscalations(db?: Database): Array<{ task: ContactTask; rules_triggered: EscalationRule[] }> {
+export function checkEscalations(db?: ContactsDatabase): Array<{ task: ContactTask; rules_triggered: EscalationRule[] }> {
   const overdue = listOverdueTasks(db);
   const now_ms = Date.now();
 

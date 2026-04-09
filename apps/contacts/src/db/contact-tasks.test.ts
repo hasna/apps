@@ -45,8 +45,8 @@ describe("createContactTask", () => {
   it("creates a task with all fields", () => {
     const c = createContact({ display_name: "Bob" });
     const escalationRules = [
-      { after_days: 3, action: "notify", target: "manager@example.com" },
-      { after_days: 7, action: "escalate", target: "vp@example.com" },
+      { after_days: 3, escalate_to_contact_id: c.id, method: "email" as const },
+      { after_days: 7, escalate_to_contact_id: c.id, method: "both" as const },
     ];
     const co = createCompany({ name: "Entity Co" });
     const task = createContactTask({
@@ -172,7 +172,7 @@ describe("updateContactTask", () => {
   it("updates escalation rules", () => {
     const c = createContact({ display_name: "Alice" });
     const task = createContactTask({ title: "Test", contact_id: c.id });
-    const rules = [{ after_days: 5, action: "notify", target: "boss@example.com" }];
+    const rules = [{ after_days: 5, escalate_to_contact_id: c.id, method: "email" as const }];
     const updated = updateContactTask(task.id, { escalation_rules: rules });
     expect(updated.escalation_rules).toHaveLength(1);
     expect(updated.escalation_rules[0]!.after_days).toBe(5);
@@ -228,8 +228,8 @@ describe("checkEscalations", () => {
       deadline: "2020-01-01T00:00:00Z",
       status: "pending",
       escalation_rules: [
-        { after_days: 1, action: "notify", target: "manager@example.com" },
-        { after_days: 365, action: "escalate", target: "ceo@example.com" },
+        { after_days: 1, escalate_to_contact_id: c.id, method: "email" as const },
+        { after_days: 365, escalate_to_contact_id: c.id, method: "both" as const },
       ],
     });
     const results = checkEscalations();
@@ -256,7 +256,7 @@ describe("checkEscalations", () => {
       title: "No Deadline",
       contact_id: c.id,
       status: "pending",
-      escalation_rules: [{ after_days: 1, action: "notify", target: "x@example.com" }],
+      escalation_rules: [{ after_days: 1, escalate_to_contact_id: c.id, method: "email" as const }],
     });
     // listOverdueTasks requires deadline < now, so no deadline means not overdue
     const results = checkEscalations();

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   AddressRow,
   Company,
@@ -96,7 +96,7 @@ function rowToCompany(row: CompanyRow): Company {
 
 // ─── Sub-entity inserters ─────────────────────────────────────────────────────
 
-function insertEmails(db: Database, contactId: string | null, companyId: string | null, emails: CreateEmailInput[]): void {
+function insertEmails(db: ContactsDatabase, contactId: string | null, companyId: string | null, emails: CreateEmailInput[]): void {
   for (const e of emails) {
     db.run(
       `INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -105,7 +105,7 @@ function insertEmails(db: Database, contactId: string | null, companyId: string 
   }
 }
 
-function insertPhones(db: Database, contactId: string | null, companyId: string | null, phones: CreatePhoneInput[]): void {
+function insertPhones(db: ContactsDatabase, contactId: string | null, companyId: string | null, phones: CreatePhoneInput[]): void {
   for (const p of phones) {
     db.run(
       `INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -114,7 +114,7 @@ function insertPhones(db: Database, contactId: string | null, companyId: string 
   }
 }
 
-function insertAddresses(db: Database, contactId: string | null, companyId: string | null, addresses: CreateAddressInput[]): void {
+function insertAddresses(db: ContactsDatabase, contactId: string | null, companyId: string | null, addresses: CreateAddressInput[]): void {
   for (const a of addresses) {
     db.run(
       `INSERT INTO addresses (id, contact_id, company_id, type, street, city, state, zip, country, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -123,7 +123,7 @@ function insertAddresses(db: Database, contactId: string | null, companyId: stri
   }
 }
 
-function insertSocialProfiles(db: Database, contactId: string | null, companyId: string | null, profiles: CreateSocialProfileInput[]): void {
+function insertSocialProfiles(db: ContactsDatabase, contactId: string | null, companyId: string | null, profiles: CreateSocialProfileInput[]): void {
   for (const s of profiles) {
     db.run(
       `INSERT INTO social_profiles (id, contact_id, company_id, platform, handle, url, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -134,7 +134,7 @@ function insertSocialProfiles(db: Database, contactId: string | null, companyId:
 
 // ─── Detail loader ────────────────────────────────────────────────────────────
 
-function loadContactDetails(db: Database, contact: Contact): ContactWithDetails {
+function loadContactDetails(db: ContactsDatabase, contact: Contact): ContactWithDetails {
   const emails = (db.query(`SELECT * FROM emails WHERE contact_id = ?`).all(contact.id) as EmailRow[]).map(rowToEmail);
   const phones = (db.query(`SELECT * FROM phones WHERE contact_id = ?`).all(contact.id) as PhoneRow[]).map(rowToPhone);
   const addresses = (db.query(`SELECT * FROM addresses WHERE contact_id = ?`).all(contact.id) as AddressRow[]).map(rowToAddress);
@@ -154,7 +154,7 @@ function loadContactDetails(db: Database, contact: Contact): ContactWithDetails 
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function createContact(input: CreateContactInput, db?: Database): ContactWithDetails {
+export function createContact(input: CreateContactInput, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -212,14 +212,14 @@ export function createContact(input: CreateContactInput, db?: Database): Contact
   return loadContactDetails(d, rowToContact(row));
 }
 
-export function getContact(id: string, db?: Database): ContactWithDetails {
+export function getContact(id: string, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
   if (!row) throw new ContactNotFoundError(id);
   return loadContactDetails(d, rowToContact(row));
 }
 
-export function listContacts(opts: ContactListOptions = {}, db?: Database): { contacts: ContactWithDetails[]; total: number } {
+export function listContacts(opts: ContactListOptions = {}, db?: ContactsDatabase): { contacts: ContactWithDetails[]; total: number } {
   const d = db || getDatabase();
   const {
     limit = 50,
@@ -323,7 +323,7 @@ export function listContacts(opts: ContactListOptions = {}, db?: Database): { co
   return { contacts, total: totalRow.total };
 }
 
-export function updateContact(id: string, input: UpdateContactInput, db?: Database): ContactWithDetails {
+export function updateContact(id: string, input: UpdateContactInput, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const existing = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
   if (!existing) throw new ContactNotFoundError(id);
@@ -382,7 +382,7 @@ export function updateContact(id: string, input: UpdateContactInput, db?: Databa
   return loadContactDetails(d, rowToContact(row));
 }
 
-export function deleteContact(id: string, db?: Database): void {
+export function deleteContact(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
   if (!row) throw new ContactNotFoundError(id);
@@ -393,7 +393,7 @@ export function deleteContact(id: string, db?: Database): void {
   d.run(`DELETE FROM contacts WHERE id = ?`, [id]);
 }
 
-export function searchContacts(query: string, db?: Database): ContactWithDetails[] {
+export function searchContacts(query: string, db?: ContactsDatabase): ContactWithDetails[] {
   const d = db || getDatabase();
 
   // FTS5 search
@@ -441,7 +441,7 @@ export function searchContacts(query: string, db?: Database): ContactWithDetails
   return allRows.map(row => loadContactDetails(d, rowToContact(row)));
 }
 
-export function listRecentContacts(limit: number, db?: Database): ContactWithDetails[] {
+export function listRecentContacts(limit: number, db?: ContactsDatabase): ContactWithDetails[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT * FROM contacts ORDER BY updated_at DESC LIMIT ?`
@@ -449,7 +449,7 @@ export function listRecentContacts(limit: number, db?: Database): ContactWithDet
   return rows.map(row => loadContactDetails(d, rowToContact(row)));
 }
 
-export function mergeContacts(keepId: string, mergeId: string, db?: Database): ContactWithDetails {
+export function mergeContacts(keepId: string, mergeId: string, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
 
   const keepRow = d.query(`SELECT * FROM contacts WHERE id = ?`).get(keepId) as ContactRow | null;
@@ -522,7 +522,7 @@ export function mergeContacts(keepId: string, mergeId: string, db?: Database): C
   return loadContactDetails(d, rowToContact(finalRow));
 }
 
-export function getContactByEmail(email: string, db?: Database): ContactWithDetails | null {
+export function getContactByEmail(email: string, db?: ContactsDatabase): ContactWithDetails | null {
   const d = db || getDatabase();
   const emailRow = d.query(`SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`).get(email) as { contact_id: string } | null;
   if (!emailRow) return null;
@@ -531,7 +531,7 @@ export function getContactByEmail(email: string, db?: Database): ContactWithDeta
   return loadContactDetails(d, rowToContact(row));
 }
 
-export function addEmailToContact(contactId: string, email: CreateEmailInput, db?: Database): ContactWithDetails {
+export function addEmailToContact(contactId: string, email: CreateEmailInput, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
   if (!row) throw new ContactNotFoundError(contactId);
@@ -544,7 +544,7 @@ export function addEmailToContact(contactId: string, email: CreateEmailInput, db
   return loadContactDetails(d, rowToContact(updated));
 }
 
-export function addPhoneToContact(contactId: string, phone: CreatePhoneInput, db?: Database): ContactWithDetails {
+export function addPhoneToContact(contactId: string, phone: CreatePhoneInput, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
   if (!row) throw new ContactNotFoundError(contactId);
@@ -557,7 +557,7 @@ export function addPhoneToContact(contactId: string, phone: CreatePhoneInput, db
   return loadContactDetails(d, rowToContact(updated));
 }
 
-export function archiveContact(id: string, db?: Database): ContactWithDetails {
+export function archiveContact(id: string, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
   if (!row) throw new ContactNotFoundError(id);
@@ -567,7 +567,7 @@ export function archiveContact(id: string, db?: Database): ContactWithDetails {
   return loadContactDetails(d, rowToContact(updated));
 }
 
-export function unarchiveContact(id: string, db?: Database): ContactWithDetails {
+export function unarchiveContact(id: string, db?: ContactsDatabase): ContactWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(id) as ContactRow | null;
   if (!row) throw new ContactNotFoundError(id);
@@ -577,7 +577,7 @@ export function unarchiveContact(id: string, db?: Database): ContactWithDetails 
   return loadContactDetails(d, rowToContact(updated));
 }
 
-export function listColdContacts(days: number, db?: Database): ContactWithDetails[] {
+export function listColdContacts(days: number, db?: ContactsDatabase): ContactWithDetails[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT c.* FROM contacts c
@@ -591,7 +591,7 @@ export function listColdContacts(days: number, db?: Database): ContactWithDetail
 
 export async function findOrCreateContact(
   input: CreateContactInput,
-  db?: Database,
+  db?: ContactsDatabase,
 ): Promise<{ contact: ContactWithDetails; created: boolean }> {
   const d = db || getDatabase();
   // Search by email first (exact match)
@@ -622,7 +622,7 @@ export async function findOrCreateContact(
   return { contact, created: true };
 }
 
-export function autoLinkContactToCompany(contactId: string, db?: Database): ContactWithDetails | null {
+export function autoLinkContactToCompany(contactId: string, db?: ContactsDatabase): ContactWithDetails | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
   if (!row || row.company_id) return null;
@@ -640,29 +640,29 @@ export function autoLinkContactToCompany(contactId: string, db?: Database): Cont
 
 // ── Contact-Project Linking ────────────────────────────────────────────────────
 
-export function linkContactToProject(contactId: string, projectId: string, db?: Database): void {
+export function linkContactToProject(contactId: string, projectId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`INSERT OR IGNORE INTO contact_projects (contact_id, project_id) VALUES (?, ?)`, [contactId, projectId]);
 }
 
-export function unlinkContactFromProject(contactId: string, projectId: string, db?: Database): void {
+export function unlinkContactFromProject(contactId: string, projectId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM contact_projects WHERE contact_id = ? AND project_id = ?`, [contactId, projectId]);
 }
 
-export function getContactProjectIds(contactId: string, db?: Database): string[] {
+export function getContactProjectIds(contactId: string, db?: ContactsDatabase): string[] {
   const d = db || getDatabase();
   const rows = d.query(`SELECT project_id FROM contact_projects WHERE contact_id = ?`).all(contactId) as { project_id: string }[];
   return rows.map(r => r.project_id);
 }
 
-export function listContactIdsByProject(projectId: string, db?: Database): string[] {
+export function listContactIdsByProject(projectId: string, db?: ContactsDatabase): string[] {
   const d = db || getDatabase();
   const rows = d.query(`SELECT contact_id FROM contact_projects WHERE project_id = ?`).all(projectId) as { contact_id: string }[];
   return rows.map(r => r.contact_id);
 }
 
-export function setContactProjects(contactId: string, projectIds: string[], db?: Database): void {
+export function setContactProjects(contactId: string, projectIds: string[], db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM contact_projects WHERE contact_id = ?`, [contactId]);
   for (const pid of projectIds) {

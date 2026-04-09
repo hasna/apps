@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase } from "./database.js";
 
 export interface PathNode {
@@ -8,7 +8,7 @@ export interface PathNode {
   via_relationship?: string;
 }
 
-export function computeRelationshipStrength(contactId: string, db?: Database): number {
+export function computeRelationshipStrength(contactId: string, db?: ContactsDatabase): number {
   const _db = db || getDatabase();
   const contact = _db
     .query(
@@ -36,7 +36,7 @@ export function computeRelationshipStrength(contactId: string, db?: Database): n
 export function findWarmPath(
   fromContactId: string,
   toContactId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): PathNode[] {
   const _db = db || getDatabase();
   // BFS through contact_relationships
@@ -75,7 +75,7 @@ export function findWarmPath(
 
 export function findConnectionsAtCompany(
   companyId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): Array<{ contact_id: string; display_name: string; job_title?: string; strength: number }> {
   const _db = db || getDatabase();
   return _db
@@ -91,7 +91,7 @@ export function findConnectionsAtCompany(
 }
 
 export function detectCoolingRelationships(
-  db?: Database,
+  db?: ContactsDatabase,
 ): Array<{ contact_id: string; display_name: string; days_since: number }> {
   const _db = db || getDatabase();
   const cutoff = new Date(Date.now() - 45 * 86400000).toISOString();

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import type { ContactWithDetails } from "../types/index.js";
 import { getDatabase } from "../db/database.js";
 
@@ -39,7 +39,7 @@ export function auditContact(contact: ContactWithDetails): AuditResult {
   return { contact_id: contact.id, display_name: contact.display_name, score, missing, suggestions };
 }
 
-export async function listContactAudit(db?: Database): Promise<AuditResult[]> {
+export async function listContactAudit(db?: ContactsDatabase): Promise<AuditResult[]> {
   const _db = db || getDatabase();
   // Use dynamic import to avoid circular dependency with contacts.ts
   const { listContacts } = await import('../db/contacts.js');

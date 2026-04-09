@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   VendorCommunication,
   CreateVendorCommunicationInput,
@@ -51,7 +51,7 @@ function rowToVendorComm(row: VendorCommRow): VendorCommunication {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function logVendorCommunication(input: CreateVendorCommunicationInput, db?: Database): VendorCommunication {
+export function logVendorCommunication(input: CreateVendorCommunicationInput, db?: ContactsDatabase): VendorCommunication {
   const d = db || getDatabase();
   const id = uuid();
 
@@ -92,7 +92,7 @@ export interface ListVendorCommsOptions {
 export function listVendorCommunications(
   companyId: string,
   opts: ListVendorCommsOptions = {},
-  db?: Database
+  db?: ContactsDatabase
 ): VendorCommunication[] {
   const d = db || getDatabase();
 
@@ -114,7 +114,7 @@ export function listVendorCommunications(
 export function updateVendorCommunication(
   id: string,
   input: UpdateVendorCommunicationInput,
-  db?: Database
+  db?: ContactsDatabase
 ): VendorCommunication {
   const d = db || getDatabase();
 
@@ -144,12 +144,12 @@ export function updateVendorCommunication(
   );
 }
 
-export function deleteVendorCommunication(id: string, db?: Database): void {
+export function deleteVendorCommunication(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM vendor_communications WHERE id = ?`, [id]);
 }
 
-export function listPendingFollowUps(db?: Database): VendorCommunication[] {
+export function listPendingFollowUps(db?: ContactsDatabase): VendorCommunication[] {
   const d = db || getDatabase();
   const today = new Date().toISOString().slice(0, 10);
   const rows = d.query(
@@ -160,7 +160,7 @@ export function listPendingFollowUps(db?: Database): VendorCommunication[] {
   return rows.map(rowToVendorComm);
 }
 
-export function listMissingInvoices(db?: Database): VendorCommunication[] {
+export function listMissingInvoices(db?: ContactsDatabase): VendorCommunication[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT * FROM vendor_communications
@@ -170,7 +170,7 @@ export function listMissingInvoices(db?: Database): VendorCommunication[] {
   return rows.map(rowToVendorComm);
 }
 
-export function markFollowUpDone(id: string, db?: Database): VendorCommunication {
+export function markFollowUpDone(id: string, db?: ContactsDatabase): VendorCommunication {
   const d = db || getDatabase();
   d.run(`UPDATE vendor_communications SET follow_up_done = 1 WHERE id = ?`, [id]);
   return rowToVendorComm(

@@ -1,6 +1,6 @@
 import { getDatabase, uuid, now } from "./database.js";
 import { requireVault } from "../lib/vault.js";
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 
 export interface EmergencyContact {
   name: string;
@@ -40,7 +40,7 @@ export interface SetHealthInput {
   notes?: string;
 }
 
-export function setHealthData(contactId: string, input: SetHealthInput, db?: Database): ContactHealth {
+export function setHealthData(contactId: string, input: SetHealthInput, db?: ContactsDatabase): ContactHealth {
   requireVault();
   const _db = db || getDatabase();
   const existing = _db.query(`SELECT id FROM contact_health WHERE contact_id = ?`).get(contactId) as { id: string } | null;
@@ -74,7 +74,7 @@ export function setHealthData(contactId: string, input: SetHealthInput, db?: Dat
   return getHealthData(contactId, _db)!;
 }
 
-export function getHealthData(contactId: string, db?: Database): ContactHealth | null {
+export function getHealthData(contactId: string, db?: ContactsDatabase): ContactHealth | null {
   requireVault();
   const _db = db || getDatabase();
   const row = _db.query(`SELECT * FROM contact_health WHERE contact_id = ?`).get(contactId) as Record<string, unknown> | null;
@@ -95,7 +95,7 @@ export function getHealthData(contactId: string, db?: Database): ContactHealth |
   };
 }
 
-export function deleteHealthData(contactId: string, db?: Database): void {
+export function deleteHealthData(contactId: string, db?: ContactsDatabase): void {
   const _db = db || getDatabase();
   _db.query(`DELETE FROM contact_health WHERE contact_id = ?`).run(contactId);
 }

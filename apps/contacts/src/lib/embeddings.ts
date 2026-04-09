@@ -1,5 +1,5 @@
 import { getDatabase, now } from "../db/database.js";
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 
 // Simple TF-IDF based similarity (no external API required)
 function tokenize(text: string): string[] {
@@ -38,7 +38,7 @@ export function buildContactEmbeddingText(contact: Record<string, unknown>): str
   return parts.join(' ');
 }
 
-export async function embedContact(contactId: string, db?: Database): Promise<void> {
+export async function embedContact(contactId: string, db?: ContactsDatabase): Promise<void> {
   const { getContact } = await import('../db/contacts.js');
   const _db = db || getDatabase();
   const contact = getContact(contactId, _db);
@@ -51,7 +51,7 @@ export async function embedContact(contactId: string, db?: Database): Promise<vo
     .run(contactId, embedding, text.slice(0, 500), now(), now());
 }
 
-export async function embedAllContacts(db?: Database): Promise<number> {
+export async function embedAllContacts(db?: ContactsDatabase): Promise<number> {
   const _db = db || getDatabase();
   const contacts = _db.query(`SELECT id FROM contacts WHERE archived=0`).all() as { id: string }[];
   for (const c of contacts) {
@@ -60,7 +60,7 @@ export async function embedAllContacts(db?: Database): Promise<number> {
   return contacts.length;
 }
 
-export function semanticSearch(query: string, limit = 10, db?: Database): Array<{ contact_id: string; score: number }> {
+export function semanticSearch(query: string, limit = 10, db?: ContactsDatabase): Array<{ contact_id: string; score: number }> {
   const _db = db || getDatabase();
   const queryTokens = buildTfIdf(tokenize(query));
   let embeddings: Array<{ contact_id: string; embedding: string }> = [];

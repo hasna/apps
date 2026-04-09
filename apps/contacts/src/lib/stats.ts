@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase } from "../db/database.js";
 
 export interface NetworkStats {
@@ -23,7 +23,7 @@ export interface NetworkStats {
   active_deals_value: number;
 }
 
-export function getNetworkStats(db?: Database): NetworkStats {
+export function getNetworkStats(db?: ContactsDatabase): NetworkStats {
   const _db = db || getDatabase();
   const q = (sql: string) => (_db.query(sql).get() as { c: number });
   const today = new Date().toISOString().slice(0, 10);

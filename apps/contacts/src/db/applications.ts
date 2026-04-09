@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   Application,
   CreateApplicationInput,
@@ -56,7 +56,7 @@ function rowToApplication(row: ApplicationRow): Application {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function createApplication(input: CreateApplicationInput, db?: Database): Application {
+export function createApplication(input: CreateApplicationInput, db?: ContactsDatabase): Application {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -92,13 +92,13 @@ export function createApplication(input: CreateApplicationInput, db?: Database):
   );
 }
 
-export function getApplication(id: string, db?: Database): Application | null {
+export function getApplication(id: string, db?: ContactsDatabase): Application | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM applications WHERE id = ?`).get(id) as ApplicationRow | null;
   return row ? rowToApplication(row) : null;
 }
 
-export function listApplications(opts: ListApplicationsOptions = {}, db?: Database): Application[] {
+export function listApplications(opts: ListApplicationsOptions = {}, db?: ContactsDatabase): Application[] {
   const d = db || getDatabase();
 
   const conditions: string[] = [];
@@ -117,7 +117,7 @@ export function listApplications(opts: ListApplicationsOptions = {}, db?: Databa
   return rows.map(rowToApplication);
 }
 
-export function updateApplication(id: string, input: UpdateApplicationInput, db?: Database): Application {
+export function updateApplication(id: string, input: UpdateApplicationInput, db?: ContactsDatabase): Application {
   const d = db || getDatabase();
 
   const setClauses: string[] = ["updated_at = ?"];
@@ -146,12 +146,12 @@ export function updateApplication(id: string, input: UpdateApplicationInput, db?
   );
 }
 
-export function deleteApplication(id: string, db?: Database): void {
+export function deleteApplication(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM applications WHERE id = ?`, [id]);
 }
 
-export function listFollowUpDue(db?: Database): Application[] {
+export function listFollowUpDue(db?: ContactsDatabase): Application[] {
   const d = db || getDatabase();
   const today = new Date().toISOString().slice(0, 10);
   const rows = d.query(
@@ -162,7 +162,7 @@ export function listFollowUpDue(db?: Database): Application[] {
   return rows.map(rowToApplication);
 }
 
-export function listPendingApplications(db?: Database): Application[] {
+export function listPendingApplications(db?: ContactsDatabase): Application[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT * FROM applications

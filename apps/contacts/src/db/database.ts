@@ -1,4 +1,4 @@
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteAdapter } from "@hasna/cloud";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -566,13 +566,15 @@ const MIGRATIONS = [
   `,
 ];
 
-let _db: Database | null = null;
+export type ContactsDatabase = InstanceType<typeof SqliteAdapter>;
 
-export function getDatabase(path?: string): Database {
+let _db: ContactsDatabase | null = null;
+
+export function getDatabase(path?: string): ContactsDatabase {
   if (_db) return _db;
   const dbPath = path || getDbPath();
   ensureDir(dbPath);
-  const db = new Database(dbPath, { create: true });
+  const db = new SqliteAdapter(dbPath);
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   // Compatibility shim: older @hasna/cloud versions may lack .query().
@@ -597,7 +599,7 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-function runMigrations(db: Database): void {
+function runMigrations(db: ContactsDatabase): void {
   try {
     const row = db.query("SELECT MAX(version) as v FROM _migrations").get() as { v: number | null };
     const current = row?.v ?? -1;

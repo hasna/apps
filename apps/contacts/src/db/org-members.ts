@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type { OrgMember, CreateOrgMemberInput, UpdateOrgMemberInput } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 
@@ -34,7 +34,7 @@ function rowToOrgMember(row: OrgMemberRow): OrgMember {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function addOrgMember(input: CreateOrgMemberInput, db?: Database): OrgMember {
+export function addOrgMember(input: CreateOrgMemberInput, db?: ContactsDatabase): OrgMember {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -61,13 +61,13 @@ export function addOrgMember(input: CreateOrgMemberInput, db?: Database): OrgMem
   );
 }
 
-export function getOrgMember(id: string, db?: Database): OrgMember | null {
+export function getOrgMember(id: string, db?: ContactsDatabase): OrgMember | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM org_members WHERE id = ?`).get(id) as OrgMemberRow | null;
   return row ? rowToOrgMember(row) : null;
 }
 
-export function listOrgMembers(companyId: string, db?: Database): OrgMember[] {
+export function listOrgMembers(companyId: string, db?: ContactsDatabase): OrgMember[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT * FROM org_members WHERE company_id = ? ORDER BY created_at ASC`
@@ -75,7 +75,7 @@ export function listOrgMembers(companyId: string, db?: Database): OrgMember[] {
   return rows.map(rowToOrgMember);
 }
 
-export function updateOrgMember(id: string, input: UpdateOrgMemberInput, db?: Database): OrgMember {
+export function updateOrgMember(id: string, input: UpdateOrgMemberInput, db?: ContactsDatabase): OrgMember {
   const d = db || getDatabase();
 
   const setClauses: string[] = ["updated_at = ?"];
@@ -95,12 +95,12 @@ export function updateOrgMember(id: string, input: UpdateOrgMemberInput, db?: Da
   );
 }
 
-export function removeOrgMember(id: string, db?: Database): void {
+export function removeOrgMember(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM org_members WHERE id = ?`, [id]);
 }
 
-export function listOrgMembersForContact(contactId: string, db?: Database): OrgMember[] {
+export function listOrgMembersForContact(contactId: string, db?: ContactsDatabase): OrgMember[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT * FROM org_members WHERE contact_id = ? ORDER BY created_at ASC`

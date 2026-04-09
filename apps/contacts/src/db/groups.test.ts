@@ -10,16 +10,16 @@ import {
 } from "./groups.js";
 import { createContact } from "./contacts.js";
 import { createCompany } from "./companies.js";
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 
 let tmpDir: string;
-let db: Database;
+let db: ContactsDatabase;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "contacts-test-"));
   process.env["CONTACTS_DB_PATH"] = join(tmpDir, "test.db");
   resetDatabase();
-  db = getDatabase() as unknown as Database;
+  db = getDatabase();
 });
 
 afterEach(() => {

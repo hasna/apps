@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, uuid, now } from "./database.js";
 
 export interface JobHistoryEntry {
@@ -33,7 +33,7 @@ function rowToJob(r: Record<string, unknown>): JobHistoryEntry {
 export function addJobEntry(
   contactId: string,
   input: CreateJobEntryInput,
-  db?: Database,
+  db?: ContactsDatabase,
 ): JobHistoryEntry {
   const _db = db || getDatabase();
   if (input.is_current) {
@@ -66,7 +66,7 @@ export function addJobEntry(
   );
 }
 
-export function getJobHistory(contactId: string, db?: Database): JobHistoryEntry[] {
+export function getJobHistory(contactId: string, db?: ContactsDatabase): JobHistoryEntry[] {
   const _db = db || getDatabase();
   return (
     _db
@@ -77,7 +77,7 @@ export function getJobHistory(contactId: string, db?: Database): JobHistoryEntry
   ).map(rowToJob);
 }
 
-export function getCurrentRole(contactId: string, db?: Database): JobHistoryEntry | null {
+export function getCurrentRole(contactId: string, db?: ContactsDatabase): JobHistoryEntry | null {
   const _db = db || getDatabase();
   const r = _db
     .query(`SELECT * FROM job_history WHERE contact_id=? AND is_current=1`)
@@ -85,7 +85,7 @@ export function getCurrentRole(contactId: string, db?: Database): JobHistoryEntr
   return r ? rowToJob(r as Record<string, unknown>) : null;
 }
 
-export function getPreviousEmployers(contactId: string, db?: Database): JobHistoryEntry[] {
+export function getPreviousEmployers(contactId: string, db?: ContactsDatabase): JobHistoryEntry[] {
   const _db = db || getDatabase();
   return (
     _db

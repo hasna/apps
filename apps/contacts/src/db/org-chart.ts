@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, uuid, now } from "./database.js";
 
 export type OrgEdgeType = "reports_to" | "manages" | "collaborates_with" | "peer";
@@ -36,7 +36,7 @@ export function addOrgChartEdge(
   contactBId: string,
   edgeType: OrgEdgeType,
   inferred = false,
-  db?: Database,
+  db?: ContactsDatabase,
 ): OrgChartEdge {
   const _db = db || getDatabase();
   const id = uuid();
@@ -54,7 +54,7 @@ export function addOrgChartEdge(
 
 export function listOrgChart(
   companyId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): Array<OrgChartEdge & { contact_a_name: string; contact_b_name: string }> {
   const _db = db || getDatabase();
   return _db
@@ -68,7 +68,7 @@ export function setDealContactRole(
   dealId: string,
   contactId: string,
   accountRole: AccountRole,
-  db?: Database,
+  db?: ContactsDatabase,
 ): DealContactRole {
   const _db = db || getDatabase();
   const id = uuid();
@@ -84,7 +84,7 @@ export function setDealContactRole(
 
 export function getDealTeam(
   dealId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): Array<DealContactRole & { display_name: string; job_title?: string }> {
   const _db = db || getDatabase();
   return _db
@@ -96,7 +96,7 @@ export function getDealTeam(
 
 export function getCoverageGaps(
   companyId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): {
   total_contacts: number;
   has_manager: boolean;

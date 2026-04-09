@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, now } from "./database.js";
 
 export interface FieldFreshness {
@@ -20,7 +20,7 @@ export interface FreshnessScore {
 
 const SCORED_FIELDS = ["display_name", "job_title", "company_id", "emails", "phones", "last_contacted_at"] as const;
 
-export function getFreshnessScore(contactId: string, db?: Database): FreshnessScore {
+export function getFreshnessScore(contactId: string, db?: ContactsDatabase): FreshnessScore {
   const _db = db || getDatabase();
   const contact = _db
     .query(`SELECT * FROM contacts WHERE id=?`)
@@ -106,7 +106,7 @@ export function getFreshnessScore(contactId: string, db?: Database): FreshnessSc
   };
 }
 
-export function getStaleContacts(threshold = 40, db?: Database): Array<{ contact_id: string; display_name: string; score: number }> {
+export function getStaleContacts(threshold = 40, db?: ContactsDatabase): Array<{ contact_id: string; display_name: string; score: number }> {
   const _db = db || getDatabase();
   // Simple heuristic: contacts with missing key fields
   const rows = _db
@@ -128,7 +128,7 @@ export function getStaleContacts(threshold = 40, db?: Database): Array<{ contact
   return rows;
 }
 
-export function markFieldVerified(contactId: string, fieldName: string, source?: string, db?: Database): void {
+export function markFieldVerified(contactId: string, fieldName: string, source?: string, db?: ContactsDatabase): void {
   const _db = db || getDatabase();
   try {
     _db

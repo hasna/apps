@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   Contact,
   ContactRow,
@@ -18,7 +18,7 @@ function rowToTag(row: TagRow): Tag {
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
-export function createTag(input: CreateTagInput, db?: Database): Tag {
+export function createTag(input: CreateTagInput, db?: ContactsDatabase): Tag {
   const d = db || getDatabase();
 
   const existing = d.query(`SELECT id FROM tags WHERE name = ?`).get(input.name);
@@ -32,25 +32,25 @@ export function createTag(input: CreateTagInput, db?: Database): Tag {
   return rowToTag(d.query(`SELECT * FROM tags WHERE id = ?`).get(id) as TagRow);
 }
 
-export function getTag(id: string, db?: Database): Tag {
+export function getTag(id: string, db?: ContactsDatabase): Tag {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM tags WHERE id = ?`).get(id) as TagRow | null;
   if (!row) throw new TagNotFoundError(id);
   return rowToTag(row);
 }
 
-export function getTagByName(name: string, db?: Database): Tag | null {
+export function getTagByName(name: string, db?: ContactsDatabase): Tag | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM tags WHERE name = ?`).get(name) as TagRow | null;
   return row ? rowToTag(row) : null;
 }
 
-export function listTags(db?: Database): Tag[] {
+export function listTags(db?: ContactsDatabase): Tag[] {
   const d = db || getDatabase();
   return (d.query(`SELECT * FROM tags ORDER BY name ASC`).all() as TagRow[]).map(rowToTag);
 }
 
-export function updateTag(id: string, input: UpdateTagInput, db?: Database): Tag {
+export function updateTag(id: string, input: UpdateTagInput, db?: ContactsDatabase): Tag {
   const d = db || getDatabase();
   const existing = d.query(`SELECT * FROM tags WHERE id = ?`).get(id) as TagRow | null;
   if (!existing) throw new TagNotFoundError(id);
@@ -75,7 +75,7 @@ export function updateTag(id: string, input: UpdateTagInput, db?: Database): Tag
   return rowToTag(d.query(`SELECT * FROM tags WHERE id = ?`).get(id) as TagRow);
 }
 
-export function deleteTag(id: string, db?: Database): void {
+export function deleteTag(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   const row = d.query(`SELECT id FROM tags WHERE id = ?`).get(id);
   if (!row) throw new TagNotFoundError(id);
@@ -84,7 +84,7 @@ export function deleteTag(id: string, db?: Database): void {
 
 // ─── Contact tag operations ───────────────────────────────────────────────────
 
-export function addTagToContact(contactId: string, tagId: string, db?: Database): void {
+export function addTagToContact(contactId: string, tagId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   const contact = d.query(`SELECT id FROM contacts WHERE id = ?`).get(contactId);
   if (!contact) throw new ContactNotFoundError(contactId);
@@ -93,12 +93,12 @@ export function addTagToContact(contactId: string, tagId: string, db?: Database)
   d.run(`INSERT OR IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)`, [contactId, tagId]);
 }
 
-export function removeTagFromContact(contactId: string, tagId: string, db?: Database): void {
+export function removeTagFromContact(contactId: string, tagId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM contact_tags WHERE contact_id = ? AND tag_id = ?`, [contactId, tagId]);
 }
 
-export function listContactsByTag(tagId: string, db?: Database): Contact[] {
+export function listContactsByTag(tagId: string, db?: ContactsDatabase): Contact[] {
   const d = db || getDatabase();
   const tag = d.query(`SELECT id FROM tags WHERE id = ?`).get(tagId);
   if (!tag) throw new TagNotFoundError(tagId);
@@ -128,7 +128,7 @@ export function listContactsByTag(tagId: string, db?: Database): Contact[] {
 
 // ─── Company tag operations ───────────────────────────────────────────────────
 
-export function addTagToCompany(companyId: string, tagId: string, db?: Database): void {
+export function addTagToCompany(companyId: string, tagId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   const company = d.query(`SELECT id FROM companies WHERE id = ?`).get(companyId);
   if (!company) throw new CompanyNotFoundError(companyId);
@@ -137,7 +137,7 @@ export function addTagToCompany(companyId: string, tagId: string, db?: Database)
   d.run(`INSERT OR IGNORE INTO company_tags (company_id, tag_id) VALUES (?, ?)`, [companyId, tagId]);
 }
 
-export function removeTagFromCompany(companyId: string, tagId: string, db?: Database): void {
+export function removeTagFromCompany(companyId: string, tagId: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM company_tags WHERE company_id = ? AND tag_id = ?`, [companyId, tagId]);
 }

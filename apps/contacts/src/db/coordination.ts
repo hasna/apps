@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, uuid, now } from "./database.js";
 
 export interface ContactLock {
@@ -27,7 +27,7 @@ export function acquireLock(
   ttlSeconds = 300,
   reason?: string,
   sessionId?: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): { acquired: boolean; lock?: ContactLock; held_by?: string } {
   const _db = db || getDatabase();
   cleanExpiredLocks(_db);
@@ -48,7 +48,7 @@ export function acquireLock(
   };
 }
 
-export function releaseLock(contactId: string, agentName: string, db?: Database): boolean {
+export function releaseLock(contactId: string, agentName: string, db?: ContactsDatabase): boolean {
   const _db = db || getDatabase();
   const result = _db
     .query(`DELETE FROM contact_locks WHERE contact_id=? AND agent_name=?`)
@@ -56,7 +56,7 @@ export function releaseLock(contactId: string, agentName: string, db?: Database)
   return ((result as { changes?: number }).changes || 0) > 0;
 }
 
-export function checkLock(contactId: string, db?: Database): ContactLock | null {
+export function checkLock(contactId: string, db?: ContactsDatabase): ContactLock | null {
   const _db = db || getDatabase();
   cleanExpiredLocks(_db);
   return _db
@@ -64,7 +64,7 @@ export function checkLock(contactId: string, db?: Database): ContactLock | null 
     .get(contactId) as ContactLock | null;
 }
 
-export function cleanExpiredLocks(db?: Database): void {
+export function cleanExpiredLocks(db?: ContactsDatabase): void {
   const _db = db || getDatabase();
   _db.query(`DELETE FROM contact_locks WHERE expires_at<?`).run(now());
 }
@@ -75,7 +75,7 @@ export function logAgentActivity(
   action: string,
   details?: string,
   sessionId?: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): void {
   const _db = db || getDatabase();
   _db
@@ -88,7 +88,7 @@ export function logAgentActivity(
 export function getAgentActivity(
   contactId: string,
   limit = 20,
-  db?: Database,
+  db?: ContactsDatabase,
 ): AgentActivity[] {
   const _db = db || getDatabase();
   return _db

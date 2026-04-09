@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type { ActivityLog, ActivityRow, CreateActivityInput } from "../types/index.js";
 import { getDatabase, uuid } from "./database.js";
 
@@ -6,7 +6,7 @@ function rowToActivity(row: ActivityRow): ActivityLog {
   return { ...row };
 }
 
-export function logActivity(db: Database, input: CreateActivityInput): ActivityLog {
+export function logActivity(db: ContactsDatabase, input: CreateActivityInput): ActivityLog {
   const id = uuid();
   db.run(
     `INSERT INTO activity_log (id, contact_id, company_id, action, details) VALUES (?, ?, ?, ?, ?)`,
@@ -22,7 +22,7 @@ export interface ListActivityOptions {
   offset?: number;
 }
 
-export function listActivity(opts: ListActivityOptions = {}, db?: Database): { entries: ActivityLog[]; total: number } {
+export function listActivity(opts: ListActivityOptions = {}, db?: ContactsDatabase): { entries: ActivityLog[]; total: number } {
   const d = db || getDatabase();
   const { limit = 50, offset = 0, contact_id, company_id } = opts;
 
@@ -39,7 +39,7 @@ export function listActivity(opts: ListActivityOptions = {}, db?: Database): { e
   return { entries: rows.map(rowToActivity), total: totalRow.total };
 }
 
-export function getActivity(id: string, db?: Database): ActivityLog | null {
+export function getActivity(id: string, db?: ContactsDatabase): ActivityLog | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM activity_log WHERE id = ?`).get(id) as ActivityRow | null;
   return row ? rowToActivity(row) : null;

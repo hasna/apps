@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase } from "../db/database.js";
 
 export type UpcomingItemType = 'follow_up' | 'birthday' | 'task_deadline' | 'application_followup' | 'vendor_followup';
@@ -14,7 +14,7 @@ export interface UpcomingItem {
   urgency: 'overdue' | 'today' | 'soon' | 'upcoming';
 }
 
-export function getUpcomingItems(days = 7, db?: Database): UpcomingItem[] {
+export function getUpcomingItems(days = 7, db?: ContactsDatabase): UpcomingItem[] {
   const _db = db || getDatabase();
   const items: UpcomingItem[] = [];
   const now = new Date();

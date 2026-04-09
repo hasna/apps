@@ -272,7 +272,16 @@ export interface CreateDealInput {
   notes?: string;
 }
 
-export type UpdateDealInput = Partial<CreateDealInput>;
+export interface UpdateDealInput {
+  title?: string;
+  contact_id?: string | null;
+  company_id?: string | null;
+  stage?: DealStage;
+  value_usd?: number | null;
+  currency?: string;
+  close_date?: string | null;
+  notes?: string | null;
+}
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 
@@ -882,6 +891,12 @@ export interface CreateGroupInput {
   name: string;
   description?: string;
   project_id?: string;
+}
+
+export interface UpdateGroupInput {
+  name?: string;
+  description?: string | null;
+  project_id?: string | null;
 }
 
 // ─── Dedup ────────────────────────────────────────────────────────────────────

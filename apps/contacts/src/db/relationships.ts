@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   ContactRelationship,
   CreateRelationshipInput,
@@ -17,7 +17,7 @@ function rowToRelationship(row: RelationshipRow): ContactRelationship {
   };
 }
 
-export function createRelationship(input: CreateRelationshipInput, db?: Database): ContactRelationship {
+export function createRelationship(input: CreateRelationshipInput, db?: ContactsDatabase): ContactRelationship {
   const d = db || getDatabase();
 
   const a = d.query(`SELECT id FROM contacts WHERE id = ?`).get(input.contact_a_id);
@@ -40,7 +40,7 @@ export interface ListRelationshipsOptions {
   relationship_type?: ContactRelationship["relationship_type"];
 }
 
-export function listRelationships(opts: ListRelationshipsOptions = {}, db?: Database): ContactRelationship[] {
+export function listRelationships(opts: ListRelationshipsOptions = {}, db?: ContactsDatabase): ContactRelationship[] {
   const d = db || getDatabase();
   const { contact_id, relationship_type } = opts;
 
@@ -63,13 +63,13 @@ export function listRelationships(opts: ListRelationshipsOptions = {}, db?: Data
   return rows.map(rowToRelationship);
 }
 
-export function getRelationship(id: string, db?: Database): ContactRelationship | null {
+export function getRelationship(id: string, db?: ContactsDatabase): ContactRelationship | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contact_relationships WHERE id = ?`).get(id) as RelationshipRow | null;
   return row ? rowToRelationship(row) : null;
 }
 
-export function deleteRelationship(id: string, db?: Database): void {
+export function deleteRelationship(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM contact_relationships WHERE id = ?`, [id]);
 }
@@ -87,7 +87,7 @@ function rowToCompanyRelationship(row: CompanyRelationshipRow): CompanyRelations
   };
 }
 
-export function createCompanyRelationship(input: CreateCompanyRelationshipInput, db?: Database): CompanyRelationship {
+export function createCompanyRelationship(input: CreateCompanyRelationshipInput, db?: ContactsDatabase): CompanyRelationship {
   const d = db || getDatabase();
 
   const contact = d.query(`SELECT id FROM contacts WHERE id = ?`).get(input.contact_id);
@@ -123,7 +123,7 @@ export interface ListCompanyRelationshipsOptions {
   relationship_type?: CompanyRelationship["relationship_type"];
 }
 
-export function listCompanyRelationships(opts: ListCompanyRelationshipsOptions = {}, db?: Database): CompanyRelationship[] {
+export function listCompanyRelationships(opts: ListCompanyRelationshipsOptions = {}, db?: ContactsDatabase): CompanyRelationship[] {
   const d = db || getDatabase();
   const conditions: string[] = [];
   const params: string[] = [];
@@ -137,7 +137,7 @@ export function listCompanyRelationships(opts: ListCompanyRelationshipsOptions =
   return rows.map(rowToCompanyRelationship);
 }
 
-export function deleteCompanyRelationship(id: string, db?: Database): void {
+export function deleteCompanyRelationship(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM company_relationships WHERE id = ?`, [id]);
 }
@@ -153,7 +153,7 @@ export interface EntityTeamMember {
   notes: string | null;
 }
 
-export function getEntityTeam(companyId: string, db?: Database): EntityTeamMember[] {
+export function getEntityTeam(companyId: string, db?: ContactsDatabase): EntityTeamMember[] {
   const d = db || getDatabase();
   const rows = d.query(
     `SELECT id, contact_id, relationship_type, is_primary, status, start_date, end_date, notes

@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase } from "./database.js";
 
 export interface RelationshipSignal {
@@ -12,7 +12,7 @@ export interface RelationshipSignal {
   reason: string;
 }
 
-export function getRelationshipSignals(contactId: string, db?: Database): RelationshipSignal[] {
+export function getRelationshipSignals(contactId: string, db?: ContactsDatabase): RelationshipSignal[] {
   const _db = db || getDatabase();
   const row = _db
     .query(
@@ -45,7 +45,7 @@ export function getRelationshipSignals(contactId: string, db?: Database): Relati
   return signals;
 }
 
-export function getGhostContacts(db?: Database): RelationshipSignal[] {
+export function getGhostContacts(db?: ContactsDatabase): RelationshipSignal[] {
   const _db = db || getDatabase();
   const rows = _db
     .query(
@@ -67,7 +67,7 @@ export function getGhostContacts(db?: Database): RelationshipSignal[] {
   }));
 }
 
-export function getWarmingContacts(db?: Database): RelationshipSignal[] {
+export function getWarmingContacts(db?: ContactsDatabase): RelationshipSignal[] {
   const _db = db || getDatabase();
   const rows = _db
     .query(
@@ -89,7 +89,7 @@ export function getWarmingContacts(db?: Database): RelationshipSignal[] {
   }));
 }
 
-export function recomputeAllSignals(db?: Database): { updated: number } {
+export function recomputeAllSignals(db?: ContactsDatabase): { updated: number } {
   const _db = db || getDatabase();
   // Recompute engagement_status based on interaction counts and last_contacted_at
   _db.query(`

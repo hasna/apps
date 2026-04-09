@@ -1,9 +1,9 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase, now } from "../db/database.js";
 
 export function computeRelationshipSignals(
   contactId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): {
   health: number;
   engagement_status: string;
@@ -74,7 +74,7 @@ export function computeRelationshipSignals(
   };
 }
 
-export function recomputeAllSignals(db?: Database): number {
+export function recomputeAllSignals(db?: ContactsDatabase): number {
   const _db = db || getDatabase();
   const contacts = _db.query(`SELECT id FROM contacts WHERE archived=0`).all() as { id: string }[];
   for (const c of contacts) {

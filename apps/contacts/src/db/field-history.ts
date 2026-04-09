@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, uuid, now } from "./database.js";
 
 export interface ContactFieldHistory {
@@ -21,7 +21,7 @@ export function recordFieldChange(
   newValue: unknown,
   source?: string,
   createdBy?: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): void {
   const _db = db || getDatabase();
   _db
@@ -44,7 +44,7 @@ export function recordFieldChange(
 export function getFieldHistory(
   contactId: string,
   fieldName?: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): ContactFieldHistory[] {
   const _db = db || getDatabase();
   if (fieldName) {
@@ -64,7 +64,7 @@ export function getFieldHistory(
 export function getContactAt(
   contactId: string,
   timestamp: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): Record<string, string> {
   const _db = db || getDatabase();
   // Get all field changes up to timestamp, return last value per field

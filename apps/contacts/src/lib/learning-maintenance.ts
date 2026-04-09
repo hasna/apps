@@ -1,8 +1,8 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { decayLearnings, searchLearnings, type ContactLearning } from "../db/learnings.js";
 import { getDatabase } from "../db/database.js";
 
-export function runMaintenance(db?: Database): { decayed: number; stale_learnings: number } {
+export function runMaintenance(db?: ContactsDatabase): { decayed: number; stale_learnings: number } {
   const _db = db || getDatabase();
   const decayed = decayLearnings(_db);
   const stale = searchLearnings("", {}, _db).filter((l) => l.confidence < 30).length;
@@ -12,7 +12,7 @@ export function runMaintenance(db?: Database): { decayed: number; stale_learning
 export function getStaleLearnings(
   daysOld = 30,
   minConfidence = 40,
-  db?: Database,
+  db?: ContactsDatabase,
 ): ContactLearning[] {
   const _db = db || getDatabase();
   const cutoff = new Date(Date.now() - daysOld * 86400000).toISOString();

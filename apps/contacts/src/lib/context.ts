@@ -1,10 +1,10 @@
 import { getDatabase } from "../db/database.js";
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getContact } from "../db/contacts.js";
 import { listNotes } from "../db/notes.js";
 import { getLearnings } from "../db/learnings.js";
 
-export function getContactCard(contactId: string, db?: Database): object {
+export function getContactCard(contactId: string, db?: ContactsDatabase): object {
   const _db = db || getDatabase();
   const c = getContact(contactId, _db);
   const emails = c.emails as Array<{ address: string; is_primary?: boolean }> | undefined;
@@ -20,7 +20,7 @@ export function getContactCard(contactId: string, db?: Database): object {
   };
 }
 
-export function getContactBrief(contactId: string, taskContext?: string, db?: Database): object {
+export function getContactBrief(contactId: string, taskContext?: string, db?: ContactsDatabase): object {
   const _db = db || getDatabase();
   const c = getContact(contactId, _db);
   const notes = listNotes(contactId, _db).slice(0, 3);
@@ -56,7 +56,7 @@ export function getContactBrief(contactId: string, taskContext?: string, db?: Da
   return brief;
 }
 
-export async function assembleContext(contactIds: string[], format: 'meeting_prep' | 'deal_review' | 'outreach' | 'research' = 'meeting_prep', db?: Database): Promise<object> {
+export async function assembleContext(contactIds: string[], format: 'meeting_prep' | 'deal_review' | 'outreach' | 'research' = 'meeting_prep', db?: ContactsDatabase): Promise<object> {
   const _db = db || getDatabase();
   const briefs = contactIds.map(id => {
     try { return getContactBrief(id, format, _db); }

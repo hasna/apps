@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type { Deal, CreateDealInput, UpdateDealInput, DealStage } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 
@@ -36,7 +36,7 @@ function rowToDeal(row: DealRow): Deal {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function createDeal(input: CreateDealInput, db?: Database): Deal {
+export function createDeal(input: CreateDealInput, db?: ContactsDatabase): Deal {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -60,7 +60,7 @@ export function createDeal(input: CreateDealInput, db?: Database): Deal {
   return rowToDeal(d.query(`SELECT * FROM deals WHERE id = ?`).get(id) as DealRow);
 }
 
-export function getDeal(id: string, db?: Database): Deal | null {
+export function getDeal(id: string, db?: ContactsDatabase): Deal | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM deals WHERE id = ?`).get(id) as DealRow | null;
   return row ? rowToDeal(row) : null;
@@ -72,7 +72,7 @@ export interface ListDealsOptions {
   company_id?: string;
 }
 
-export function listDeals(opts: ListDealsOptions = {}, db?: Database): Deal[] {
+export function listDeals(opts: ListDealsOptions = {}, db?: ContactsDatabase): Deal[] {
   const d = db || getDatabase();
   const conditions: string[] = [];
   const params: (string | number | null)[] = [];
@@ -86,7 +86,7 @@ export function listDeals(opts: ListDealsOptions = {}, db?: Database): Deal[] {
   return rows.map(rowToDeal);
 }
 
-export function updateDeal(id: string, input: UpdateDealInput, db?: Database): Deal | null {
+export function updateDeal(id: string, input: UpdateDealInput, db?: ContactsDatabase): Deal | null {
   const d = db || getDatabase();
   const existing = d.query(`SELECT * FROM deals WHERE id = ?`).get(id) as DealRow | null;
   if (!existing) return null;
@@ -108,12 +108,12 @@ export function updateDeal(id: string, input: UpdateDealInput, db?: Database): D
   return rowToDeal(d.query(`SELECT * FROM deals WHERE id = ?`).get(id) as DealRow);
 }
 
-export function deleteDeal(id: string, db?: Database): void {
+export function deleteDeal(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM deals WHERE id = ?`, [id]);
 }
 
-export function getDealsByStage(db?: Database): Record<DealStage, Deal[]> {
+export function getDealsByStage(db?: ContactsDatabase): Record<DealStage, Deal[]> {
   const d = db || getDatabase();
   const rows = d.query(`SELECT * FROM deals ORDER BY stage, created_at DESC`).all() as DealRow[];
   const result: Record<string, Deal[]> = {};

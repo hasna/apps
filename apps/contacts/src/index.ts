@@ -234,6 +234,7 @@ export type {
   Webhook,
   Group,
   CreateGroupInput,
+  UpdateGroupInput,
   ContactNote,
   OrgMember,
   VendorCommunication,

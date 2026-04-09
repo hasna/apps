@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type { ContactEvent, CreateEventInput, EventType } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 
@@ -42,7 +42,7 @@ function rowToEvent(row: EventRow): ContactEvent {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function logEvent(input: CreateEventInput, db?: Database): ContactEvent {
+export function logEvent(input: CreateEventInput, db?: ContactsDatabase): ContactEvent {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -66,7 +66,7 @@ export function logEvent(input: CreateEventInput, db?: Database): ContactEvent {
   return rowToEvent(d.query(`SELECT * FROM events WHERE id = ?`).get(id) as EventRow);
 }
 
-export function getEvent(id: string, db?: Database): ContactEvent | null {
+export function getEvent(id: string, db?: ContactsDatabase): ContactEvent | null {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM events WHERE id = ?`).get(id) as EventRow | null;
   return row ? rowToEvent(row) : null;
@@ -80,7 +80,7 @@ export interface ListEventsOptions {
   date_to?: string;
 }
 
-export function listEvents(opts: ListEventsOptions = {}, db?: Database): ContactEvent[] {
+export function listEvents(opts: ListEventsOptions = {}, db?: ContactsDatabase): ContactEvent[] {
   const d = db || getDatabase();
   const conditions: string[] = [];
   const params: (string | number | null)[] = [];
@@ -100,7 +100,7 @@ export function listEvents(opts: ListEventsOptions = {}, db?: Database): Contact
   return rows.map(rowToEvent);
 }
 
-export function deleteEvent(id: string, db?: Database): void {
+export function deleteEvent(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   d.run(`DELETE FROM events WHERE id = ?`, [id]);
 }

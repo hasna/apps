@@ -1,7 +1,7 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 
 // Find contacts sharing the same email address
-export function findEmailDuplicates(db: Database): Array<{ email: string; contact_ids: string[] }> {
+export function findEmailDuplicates(db: ContactsDatabase): Array<{ email: string; contact_ids: string[] }> {
   const rows = db.query(`
     SELECT e.address as email, GROUP_CONCAT(e.contact_id) as ids
     FROM emails e
@@ -25,7 +25,7 @@ function levenshtein(a: string, b: string): number {
   return dp[m]![n]!;
 }
 
-export function findNameDuplicates(db: Database): Array<{ contact_ids: [string, string]; similarity: number }> {
+export function findNameDuplicates(db: ContactsDatabase): Array<{ contact_ids: [string, string]; similarity: number }> {
   const contacts = db.query(`SELECT id, display_name FROM contacts`).all() as { id: string; display_name: string }[];
   const pairs: Array<{ contact_ids: [string, string]; similarity: number }> = [];
   for (let i = 0; i < contacts.length; i++) {

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import type {
   AddressRow,
   Company,
@@ -39,7 +39,7 @@ function rowToCompany(row: CompanyRow): Company {
 
 // ─── Sub-entity inserters ─────────────────────────────────────────────────────
 
-function insertEmails(db: Database, companyId: string, emails: CreateEmailInput[]): void {
+function insertEmails(db: ContactsDatabase, companyId: string, emails: CreateEmailInput[]): void {
   for (const e of emails) {
     db.run(
       `INSERT INTO emails (id, contact_id, company_id, address, type, is_primary) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -48,7 +48,7 @@ function insertEmails(db: Database, companyId: string, emails: CreateEmailInput[
   }
 }
 
-function insertPhones(db: Database, companyId: string, phones: CreatePhoneInput[]): void {
+function insertPhones(db: ContactsDatabase, companyId: string, phones: CreatePhoneInput[]): void {
   for (const p of phones) {
     db.run(
       `INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -57,7 +57,7 @@ function insertPhones(db: Database, companyId: string, phones: CreatePhoneInput[
   }
 }
 
-function insertAddresses(db: Database, companyId: string, addresses: CreateAddressInput[]): void {
+function insertAddresses(db: ContactsDatabase, companyId: string, addresses: CreateAddressInput[]): void {
   for (const a of addresses) {
     db.run(
       `INSERT INTO addresses (id, contact_id, company_id, type, street, city, state, zip, country, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -66,7 +66,7 @@ function insertAddresses(db: Database, companyId: string, addresses: CreateAddre
   }
 }
 
-function insertSocialProfiles(db: Database, companyId: string, profiles: CreateSocialProfileInput[]): void {
+function insertSocialProfiles(db: ContactsDatabase, companyId: string, profiles: CreateSocialProfileInput[]): void {
   for (const s of profiles) {
     db.run(
       `INSERT INTO social_profiles (id, contact_id, company_id, platform, handle, url, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -77,7 +77,7 @@ function insertSocialProfiles(db: Database, companyId: string, profiles: CreateS
 
 // ─── Detail loader ────────────────────────────────────────────────────────────
 
-function loadCompanyDetails(db: Database, company: Company): CompanyWithDetails {
+function loadCompanyDetails(db: ContactsDatabase, company: Company): CompanyWithDetails {
   const emails = (db.query(`SELECT * FROM emails WHERE company_id = ?`).all(company.id) as EmailRow[]).map(row => ({
     ...row,
     type: row.type as "work" | "personal" | "other",
@@ -123,7 +123,7 @@ function loadCompanyDetails(db: Database, company: Company): CompanyWithDetails 
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function createCompany(input: CreateCompanyInput, db?: Database): CompanyWithDetails {
+export function createCompany(input: CreateCompanyInput, db?: ContactsDatabase): CompanyWithDetails {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -166,14 +166,14 @@ export function createCompany(input: CreateCompanyInput, db?: Database): Company
   return loadCompanyDetails(d, rowToCompany(row));
 }
 
-export function getCompany(id: string, db?: Database): CompanyWithDetails {
+export function getCompany(id: string, db?: ContactsDatabase): CompanyWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
   if (!row) throw new CompanyNotFoundError(id);
   return loadCompanyDetails(d, rowToCompany(row));
 }
 
-export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { companies: CompanyWithDetails[]; total: number } {
+export function listCompanies(opts: CompanyListOptions = {}, db?: ContactsDatabase): { companies: CompanyWithDetails[]; total: number } {
   const d = db || getDatabase();
   const {
     limit = 50,
@@ -224,7 +224,7 @@ export function listCompanies(opts: CompanyListOptions = {}, db?: Database): { c
   return { companies, total: totalRow.total };
 }
 
-export function updateCompany(id: string, input: UpdateCompanyInput, db?: Database): CompanyWithDetails {
+export function updateCompany(id: string, input: UpdateCompanyInput, db?: ContactsDatabase): CompanyWithDetails {
   const d = db || getDatabase();
   const existing = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
   if (!existing) throw new CompanyNotFoundError(id);
@@ -254,7 +254,7 @@ export function updateCompany(id: string, input: UpdateCompanyInput, db?: Databa
   return loadCompanyDetails(d, rowToCompany(row));
 }
 
-export function deleteCompany(id: string, db?: Database): void {
+export function deleteCompany(id: string, db?: ContactsDatabase): void {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
   if (!row) throw new CompanyNotFoundError(id);
@@ -264,7 +264,7 @@ export function deleteCompany(id: string, db?: Database): void {
   d.run(`DELETE FROM companies WHERE id = ?`, [id]);
 }
 
-export function searchCompanies(query: string, db?: Database): CompanyWithDetails[] {
+export function searchCompanies(query: string, db?: ContactsDatabase): CompanyWithDetails[] {
   const d = db || getDatabase();
 
   const rows = d.query(`
@@ -276,7 +276,7 @@ export function searchCompanies(query: string, db?: Database): CompanyWithDetail
   return rows.map(row => loadCompanyDetails(d, rowToCompany(row)));
 }
 
-export function listCompanyEmployees(companyId: string, db?: Database): Contact[] {
+export function listCompanyEmployees(companyId: string, db?: ContactsDatabase): Contact[] {
   const d = db || getDatabase();
   const row = d.query(`SELECT id FROM companies WHERE id = ?`).get(companyId) as { id: string } | null;
   if (!row) throw new CompanyNotFoundError(companyId);
@@ -298,7 +298,7 @@ export function listCompanyEmployees(companyId: string, db?: Database): Contact[
   }));
 }
 
-export function archiveCompany(id: string, db?: Database): CompanyWithDetails {
+export function archiveCompany(id: string, db?: ContactsDatabase): CompanyWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
   if (!row) throw new CompanyNotFoundError(id);
@@ -308,7 +308,7 @@ export function archiveCompany(id: string, db?: Database): CompanyWithDetails {
   return loadCompanyDetails(d, rowToCompany(updated));
 }
 
-export function unarchiveCompany(id: string, db?: Database): CompanyWithDetails {
+export function unarchiveCompany(id: string, db?: ContactsDatabase): CompanyWithDetails {
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM companies WHERE id = ?`).get(id) as CompanyRow | null;
   if (!row) throw new CompanyNotFoundError(id);
@@ -318,6 +318,6 @@ export function unarchiveCompany(id: string, db?: Database): CompanyWithDetails 
   return loadCompanyDetails(d, rowToCompany(updated));
 }
 
-export function listOwnedEntities(db?: Database): { companies: CompanyWithDetails[]; total: number } {
+export function listOwnedEntities(db?: ContactsDatabase): { companies: CompanyWithDetails[]; total: number } {
   return listCompanies({ is_owned_entity: true } as CompanyListOptions & { is_owned_entity?: boolean }, db);
 }

@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase } from "../db/database.js";
 
 export type TimelineItemType =
@@ -20,7 +20,7 @@ export interface TimelineItem {
   metadata?: Record<string, unknown>;
 }
 
-export function getContactTimeline(contactId: string, limit = 50, db?: Database): TimelineItem[] {
+export function getContactTimeline(contactId: string, limit = 50, db?: ContactsDatabase): TimelineItem[] {
   const _db = db || getDatabase();
   const items: TimelineItem[] = [];
 

@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase, uuid, now } from "../db/database.js";
 
 export interface FreshnessResult {
@@ -8,7 +8,7 @@ export interface FreshnessResult {
   needs_enrichment: boolean;
 }
 
-export function getFreshnessScore(contactId: string, db?: Database): FreshnessResult {
+export function getFreshnessScore(contactId: string, db?: ContactsDatabase): FreshnessResult {
   const _db = db || getDatabase();
   const contact = _db.query(`SELECT * FROM contacts WHERE id=?`).get(contactId) as Record<
     string,
@@ -64,7 +64,7 @@ export function getFreshnessScore(contactId: string, db?: Database): FreshnessRe
 
 export function getStaleContacts(
   _threshold = 40,
-  db?: Database,
+  db?: ContactsDatabase,
 ): Array<{ id: string; display_name: string; score: number }> {
   const _db = db || getDatabase();
   // Rough stale check: no email OR no last_contacted_at OR last contacted >90 days
@@ -82,7 +82,7 @@ export function markFieldVerified(
   contactId: string,
   fieldName: string,
   source: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): void {
   const _db = db || getDatabase();
   _db

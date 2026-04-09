@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 import { getDatabase, uuid, now } from "./database.js";
 
 export interface ContactIdentity {
@@ -23,7 +23,7 @@ export function addIdentity(
   externalId: string,
   externalUrl?: string,
   confidence: "verified" | "inferred" = "inferred",
-  db?: Database,
+  db?: ContactsDatabase,
 ): ContactIdentity {
   const _db = db || getDatabase();
   const id = uuid();
@@ -38,7 +38,7 @@ export function addIdentity(
 export function resolveIdentity(
   system: string,
   externalId: string,
-  db?: Database,
+  db?: ContactsDatabase,
 ): { id: string; display_name: string } | null {
   const _db = db || getDatabase();
   const row = _db
@@ -51,7 +51,7 @@ export function resolveIdentity(
 
 export function resolveByPartial(
   partial: { name?: string; email?: string; phone?: string; linkedin_url?: string },
-  db?: Database,
+  db?: ContactsDatabase,
 ): IdentityMatch[] {
   const _db = db || getDatabase();
   const matches: Map<string, IdentityMatch> = new Map();
@@ -109,7 +109,7 @@ export function resolveByPartial(
   return Array.from(matches.values()).sort((a, b) => b.confidence_score - a.confidence_score);
 }
 
-export function getIdentities(contactId: string, db?: Database): ContactIdentity[] {
+export function getIdentities(contactId: string, db?: ContactsDatabase): ContactIdentity[] {
   const _db = db || getDatabase();
   return _db
     .query(`SELECT * FROM contact_identities WHERE contact_id=? ORDER BY created_at DESC`)

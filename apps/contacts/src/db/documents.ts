@@ -2,7 +2,7 @@ import { getDatabase, uuid, now } from "./database.js";
 import { encrypt, decrypt, storeFile, getDocumentFilePath, requireVault, getDocumentsDir } from "../lib/vault.js";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import type { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "./database.js";
 
 export const DOCUMENT_TYPES = [
   "passport", "national_id", "tax_id", "ssn", "drivers_license",
@@ -46,7 +46,7 @@ export interface CreateDocumentInput {
   expires_at?: string;
 }
 
-export function addDocument(input: CreateDocumentInput, db?: Database): ContactDocument {
+export function addDocument(input: CreateDocumentInput, db?: ContactsDatabase): ContactDocument {
   requireVault(); // must be unlocked
   const _db = db || getDatabase();
   const id = uuid();
@@ -60,7 +60,7 @@ export function addDocument(input: CreateDocumentInput, db?: Database): ContactD
   return getDocument(id, _db);
 }
 
-export function getDocument(id: string, db?: Database): ContactDocument {
+export function getDocument(id: string, db?: ContactsDatabase): ContactDocument {
   requireVault();
   const _db = db || getDatabase();
   const row = _db.query(`SELECT * FROM contact_documents WHERE id = ?`).get(id) as Record<string, unknown> | null;
@@ -68,7 +68,7 @@ export function getDocument(id: string, db?: Database): ContactDocument {
   return rowToDoc(row);
 }
 
-export function listDocuments(contactId: string, db?: Database): ContactDocumentSummary[] {
+export function listDocuments(contactId: string, db?: ContactsDatabase): ContactDocumentSummary[] {
   // List does NOT require vault — shows metadata only, not values
   const _db = db || getDatabase();
   const rows = _db.query(`SELECT id, doc_type, label, encrypted_file_path, expires_at, created_at FROM contact_documents WHERE contact_id = ? ORDER BY created_at DESC`).all(contactId) as Array<Record<string, unknown>>;
@@ -79,7 +79,7 @@ export function listDocuments(contactId: string, db?: Database): ContactDocument
   }));
 }
 
-export function deleteDocument(id: string, db?: Database): void {
+export function deleteDocument(id: string, db?: ContactsDatabase): void {
   const _db = db || getDatabase();
   const row = _db.query(`SELECT encrypted_file_path FROM contact_documents WHERE id = ?`).get(id) as { encrypted_file_path: string | null } | null;
   if (row?.encrypted_file_path && existsSync(row.encrypted_file_path)) {

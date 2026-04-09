@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { ContactsDatabase } from "../db/database.js";
 import { getDatabase } from "../db/database.js";
 import { getContact } from "../db/contacts.js";
 import { listNotes } from "../db/notes.js";
@@ -6,7 +6,7 @@ import { listContactTasks } from "../db/contact-tasks.js";
 import { listCompanyRelationships } from "../db/relationships.js";
 import { getContactTimeline } from "./timeline.js";
 
-export function generateBrief(contactId: string, db?: Database): string {
+export function generateBrief(contactId: string, db?: ContactsDatabase): string {
   const _db = db || getDatabase();
   const contact = getContact(contactId, _db);
   const notes = listNotes(contactId, _db);
