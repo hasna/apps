@@ -156,8 +156,6 @@ export async function ensureWorkspaceBootstrap(
 ): Promise<WorkspaceBootstrapResult> {
   const roots = getWorkspaceRoots(rootDirs).map((root) => resolve(root));
   const shouldSyncCloud = opts.syncCloud ?? true;
-
-  const cloudPull = shouldSyncCloud ? await syncRepoCatalog("pull", opts.onProgress) : undefined;
   const state = getAutomationState<{ roots: string[] }>(WORKSPACE_BOOTSTRAP_STATE_KEY);
   const repoCount = getRepoCount();
   const expectedRoots = JSON.stringify(roots);
@@ -169,9 +167,10 @@ export async function ensureWorkspaceBootstrap(
       bootstrapped: false,
       roots,
       hooks: emptyHookSummary(),
-      cloudPull,
     };
   }
+
+  const cloudPull = shouldSyncCloud ? await syncRepoCatalog("pull", opts.onProgress) : undefined;
 
   const repoPaths = discoverRepos(roots);
   const hooks = installPostCommitHooks(repoPaths, getHookQueuePath());

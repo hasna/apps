@@ -18,7 +18,7 @@ import {
 import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-index.js";
 import { getHealthReport } from "../lib/utils.js";
 
-const VERSION = "0.1.4";
+const VERSION = "0.1.5";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {

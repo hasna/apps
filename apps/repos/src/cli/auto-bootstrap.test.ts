@@ -54,4 +54,35 @@ describe("cli auto bootstrap", () => {
     expect(repos.some((repo) => repo.name === "workspace-repo")).toBe(true);
     expect(hookContent).toContain("hasna repos auto-index");
   });
+
+  it("stays local for implicit bootstrap even when cloud env is present", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "open-repos-cli-cloud-"));
+    const homeDir = join(tempDir, "home");
+    const workspaceRoot = join(homeDir, "workspace");
+    mkdirSync(workspaceRoot, { recursive: true });
+    createTestRepo(workspaceRoot, "workspace-repo");
+
+    const env = {
+      ...process.env,
+      HOME: homeDir,
+      HASNA_REPOS_DB_PATH: join(tempDir, "repos.db"),
+      HASNA_REPOS_CONFIG_PATH: join(tempDir, "config.json"),
+      HASNA_REPOS_HOOK_QUEUE_PATH: join(tempDir, "hook-events.tsv"),
+      HASNA_RDS_HOST: "example.invalid",
+      HASNA_RDS_PORT: "5432",
+      HASNA_RDS_USERNAME: "test",
+      HASNA_RDS_PASSWORD: "test",
+    };
+
+    const stdout = execSync("bun run src/cli/index.tsx repos --json", {
+      cwd: join(import.meta.dir, "../.."),
+      env,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 5000,
+    });
+
+    const repos = JSON.parse(stdout) as Array<{ name: string }>;
+    expect(repos.some((repo) => repo.name === "workspace-repo")).toBe(true);
+  });
 });

@@ -22,7 +22,7 @@ import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/githu
 import { buildGraph, queryNode, queryRelated, findPath, getDeps, getGraphStats } from "../lib/graph.js";
 import { getDb } from "../db/database.js";
 
-const VERSION = "0.1.4";
+const VERSION = "0.1.5";
 
 function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
