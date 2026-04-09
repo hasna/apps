@@ -5,6 +5,16 @@ export type {
   RegistryServer,
   ConnectedServer,
   FinderResult,
+  MachineEntry,
+  AddMachineOptions,
+  MachinePlatform,
+  MachineArch,
+  MachineInstaller,
+  HasnaMcpCatalogEntry,
+  MachinePackageHealth,
+  FleetHealthReport,
+  FleetInstallPackageResult,
+  FleetInstallReport,
 } from "./types.js";
 
 export {
@@ -40,6 +50,17 @@ export {
 export { installToAgents } from "./lib/install.js";
 export type { AgentTarget, InstallResult } from "./lib/install.js";
 export type { McpSource, AddSourceOptions } from "./types.js";
+export {
+  addMachine,
+  upsertMachine,
+  listMachines,
+  getMachine,
+  updateMachine,
+  removeMachine,
+  seedDefaultMachines,
+  DEFAULT_MACHINE_SEEDS,
+} from "./lib/machines.js";
+export { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "./lib/fleet.js";
 
 export {
   connectToServer,

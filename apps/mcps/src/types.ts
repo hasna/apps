@@ -105,3 +105,102 @@ export interface AddSourceOptions {
   url: string;
   description?: string;
 }
+
+export type MachinePlatform = "linux" | "darwin" | "unknown";
+export type MachineArch = "arm64" | "x64" | "unknown";
+export type MachineInstaller = "auto" | "bun" | "npm";
+
+export interface MachineEntry {
+  id: string;
+  name: string;
+  host: string;
+  username: string;
+  port: number;
+  platform: MachinePlatform;
+  arch: MachineArch;
+  bun_path: string | null;
+  npm_path: string | null;
+  installer: MachineInstaller;
+  ssh_key_path: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string | null;
+  last_error: string | null;
+}
+
+export interface AddMachineOptions {
+  id?: string;
+  name?: string;
+  host: string;
+  username?: string;
+  port?: number;
+  platform?: MachinePlatform;
+  arch?: MachineArch;
+  bun_path?: string;
+  npm_path?: string;
+  installer?: MachineInstaller;
+  ssh_key_path?: string;
+  enabled?: boolean;
+}
+
+export interface HasnaMcpCatalogEntry {
+  name: string;
+  version: string;
+  description: string;
+  keywords: string[];
+  repository: string | null;
+  bins: Record<string, string>;
+  mcpBin: string | null;
+}
+
+export interface MachinePackageHealth {
+  packageName: string;
+  latestVersion: string;
+  installedVersion: string | null;
+  drift: "missing" | "outdated" | "current";
+  binaryName: string | null;
+  binaryPath: string | null;
+  handshakeOk: boolean | null;
+  handshakeError: string | null;
+}
+
+export interface FleetHealthReport {
+  machine: MachineEntry;
+  checkedAt: string;
+  runtime: {
+    hostname: string | null;
+    platform: MachinePlatform;
+    arch: MachineArch;
+    nodePath: string | null;
+    npmPath: string | null;
+    bunPath: string | null;
+  };
+  packages: MachinePackageHealth[];
+  summary: {
+    total: number;
+    current: number;
+    missing: number;
+    outdated: number;
+    unresponsive: number;
+  };
+  error: string | null;
+}
+
+export interface FleetInstallPackageResult {
+  packageName: string;
+  requestedVersion: string;
+  installer: Exclude<MachineInstaller, "auto">;
+  command: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+export interface FleetInstallReport {
+  machine: MachineEntry;
+  installer: Exclude<MachineInstaller, "auto"> | null;
+  attempted: number;
+  results: FleetInstallPackageResult[];
+  error: string | null;
+}

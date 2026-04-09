@@ -19,6 +19,9 @@ describe("index exports", () => {
     expect(typeof api.searchRegistry).toBe("function");
     expect(typeof api.getRegistryServer).toBe("function");
     expect(typeof api.installFromRegistry).toBe("function");
+    expect(typeof api.listHasnaMcpCatalog).toBe("function");
+    expect(typeof api.runFleetHealthCheck).toBe("function");
+    expect(typeof api.runFleetInstall).toBe("function");
   });
 
   it("exports proxy functions", () => {
@@ -33,5 +36,15 @@ describe("index exports", () => {
   it("exports database functions", () => {
     expect(typeof api.getDb).toBe("function");
     expect(typeof api.closeDb).toBe("function");
+  });
+
+  it("exports machine registry functions", () => {
+    expect(typeof api.addMachine).toBe("function");
+    expect(typeof api.upsertMachine).toBe("function");
+    expect(typeof api.listMachines).toBe("function");
+    expect(typeof api.getMachine).toBe("function");
+    expect(typeof api.updateMachine).toBe("function");
+    expect(typeof api.removeMachine).toBe("function");
+    expect(typeof api.seedDefaultMachines).toBe("function");
   });
 });

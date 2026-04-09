@@ -27,6 +27,31 @@ mcps --help
 - `mcps call`
 - `mcps info`
 - `mcps doctor`
+- `mcps machines list`
+- `mcps machines add --host spark01 --platform linux --arch arm64`
+- `mcps machines seed-defaults`
+- `mcps fleet catalog`
+- `mcps fleet health --refresh`
+- `mcps fleet install --yes`
+
+## Fleet Operations
+
+Use machine registration plus fleet health/install commands to manage `@hasna/*`
+MCP packages across multiple hosts over SSH.
+
+```bash
+mcps machines add --host spark01 --username hasna --platform linux --arch arm64
+mcps machines add --host apple01 --platform darwin --arch arm64
+mcps fleet health --refresh
+mcps fleet install --yes --mode missing-or-outdated
+```
+
+Notes:
+
+- Fleet commands only target enabled machines.
+- `mcps fleet install` requires `--yes` because it performs remote installs.
+- Targets need SSH access plus `node` and either `bun` or `npm` available remotely.
+- Use `-j` or `--json` on the new `machines` and `fleet` commands for scriptable output.
 
 ## MCP Server
 
@@ -34,7 +59,7 @@ mcps --help
 mcps-mcp
 ```
 
-26 tools available.
+The MCP server exposes registry, finder, machine registry, and fleet orchestration tools.
 
 ## Cloud Sync
 

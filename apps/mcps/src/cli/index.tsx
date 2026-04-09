@@ -46,10 +46,28 @@ import {
 } from "../lib/proxy.js";
 import { getCachedTools } from "../lib/registry.js";
 import { closeDb, getDb, getAdapter } from "../lib/db.js";
+import {
+  addMachine,
+  getMachine as getRegisteredMachine,
+  listMachines,
+  removeMachine as removeRegisteredMachine,
+  seedDefaultMachines,
+  updateMachine as updateRegisteredMachine,
+} from "../lib/machines.js";
+import { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "../lib/fleet.js";
 import * as readline from "readline";
 import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
 import { App } from "./components/App.js";
+import type {
+  FleetHealthReport,
+  FleetInstallReport,
+  HasnaMcpCatalogEntry,
+  MachineArch,
+  MachineEntry,
+  MachineInstaller,
+  MachinePlatform,
+} from "../types.js";
 
 const VERSION = (() => {
   try {
@@ -60,6 +78,127 @@ const VERSION = (() => {
     return "0.0.1";
   }
 })();
+
+const MACHINE_PLATFORMS = ["linux", "darwin", "unknown"] as const;
+const MACHINE_ARCHES = ["arm64", "x64", "unknown"] as const;
+const MACHINE_INSTALLERS = ["auto", "bun", "npm"] as const;
+const FLEET_INSTALL_MODES = ["missing", "missing-or-outdated", "all"] as const;
+
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function parseIntegerOption(value: string, label: string, { min = 0, max }: { min?: number; max?: number } = {}): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed < min || (max !== undefined && parsed > max)) {
+    throw new Error(`${label} must be an integer${max !== undefined ? ` between ${min} and ${max}` : ` >= ${min}`}`);
+  }
+  return parsed;
+}
+
+function parseChoice<T extends string>(value: string | undefined, label: string, choices: readonly T[]): T | undefined {
+  if (value === undefined) return undefined;
+  if ((choices as readonly string[]).includes(value)) {
+    return value as T;
+  }
+  throw new Error(`${label} must be one of: ${choices.join(", ")}`);
+}
+
+function formatMachineTarget(machine: MachineEntry): string {
+  const userPrefix = machine.username ? `${machine.username}@` : "";
+  return `${userPrefix}${machine.host}:${machine.port}`;
+}
+
+function renderMachines(machines: MachineEntry[]): void {
+  if (machines.length === 0) {
+    console.log(chalk.dim("No machines registered. Use `mcps machines add` or `mcps machines seed-defaults`."));
+    return;
+  }
+
+  for (const machine of machines) {
+    const status = machine.enabled ? chalk.green("enabled") : chalk.red("disabled");
+    const runtime = `${machine.platform}/${machine.arch}`;
+    console.log(`  ${chalk.bold(machine.name)} ${chalk.dim(`[${machine.id}]`)} — ${status}`);
+    console.log(`    ${chalk.dim(`${formatMachineTarget(machine)} · installer=${machine.installer} · ${runtime}`)}`);
+    if (machine.last_seen_at) console.log(`    ${chalk.dim(`last seen: ${machine.last_seen_at}`)}`);
+    if (machine.last_error) console.log(`    ${chalk.red(machine.last_error)}`);
+  }
+}
+
+function renderCatalog(entries: HasnaMcpCatalogEntry[]): void {
+  if (entries.length === 0) {
+    console.log(chalk.dim("No @hasna MCP packages found."));
+    return;
+  }
+
+  for (const entry of entries) {
+    const binLabel = entry.mcpBin ? chalk.dim(`bin=${entry.mcpBin}`) : chalk.yellow("no MCP bin");
+    console.log(`  ${chalk.bold(entry.name)} ${chalk.dim(`@${entry.version}`)} ${binLabel}`);
+    if (entry.description) console.log(`    ${chalk.dim(entry.description)}`);
+  }
+}
+
+function renderFleetHealth(reports: FleetHealthReport[]): void {
+  if (reports.length === 0) {
+    console.log(chalk.dim("No machines selected."));
+    return;
+  }
+
+  for (const report of reports) {
+    console.log(`  ${chalk.bold(report.machine.name)} ${chalk.dim(`[${report.machine.id}]`)} — ${chalk.dim(formatMachineTarget(report.machine))}`);
+    if (report.error) {
+      console.log(`    ${chalk.red(report.error)}`);
+      continue;
+    }
+
+    console.log(
+      `    ${chalk.dim(
+        `${report.runtime.platform}/${report.runtime.arch} · current=${report.summary.current} · missing=${report.summary.missing} · outdated=${report.summary.outdated} · unresponsive=${report.summary.unresponsive}`,
+      )}`,
+    );
+
+    for (const pkg of report.packages) {
+      const driftColor =
+        pkg.drift === "current" ? chalk.green : pkg.drift === "missing" ? chalk.red : chalk.yellow;
+      const handshakeLabel =
+        pkg.handshakeOk === null ? chalk.dim("n/a") : pkg.handshakeOk ? chalk.green("ok") : chalk.red("failed");
+      const installed = pkg.installedVersion ?? "missing";
+      console.log(
+        `    ${driftColor(pkg.drift.padEnd(8))} ${pkg.packageName} ${chalk.dim(`${installed} -> ${pkg.latestVersion} · handshake=${handshakeLabel}`)}`,
+      );
+      if (pkg.handshakeError) console.log(`      ${chalk.red(pkg.handshakeError)}`);
+    }
+  }
+}
+
+function renderFleetInstall(reports: FleetInstallReport[]): void {
+  if (reports.length === 0) {
+    console.log(chalk.dim("No machines selected."));
+    return;
+  }
+
+  for (const report of reports) {
+    const installerLabel = report.installer ? chalk.dim(`installer=${report.installer}`) : chalk.dim("installer=none");
+    console.log(`  ${chalk.bold(report.machine.name)} ${chalk.dim(`[${report.machine.id}]`)} ${installerLabel}`);
+    if (report.error) {
+      console.log(`    ${chalk.red(report.error)}`);
+      continue;
+    }
+
+    if (report.attempted === 0) {
+      console.log(`    ${chalk.dim("Nothing to install.")}`);
+      continue;
+    }
+
+    for (const result of report.results) {
+      const icon = result.success ? chalk.green("✓") : chalk.red("✗");
+      console.log(`    ${icon} ${result.packageName}@${result.requestedVersion}`);
+      if (!result.success && result.stderr.trim()) {
+        console.log(`      ${chalk.red(result.stderr.trim())}`);
+      }
+    }
+  }
+}
 
 const program = new Command();
 
@@ -614,7 +753,7 @@ program
   .argument("<shell>", "Shell type: bash, zsh, fish")
   .description("Generate shell completion script")
   .action((shell: string) => {
-    const commands = ["list","search","find","add","remove","enable","disable","info","status","tools","call","doctor","install","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
+    const commands = ["list","search","find","add","remove","enable","disable","info","status","tools","call","doctor","install","machines","fleet","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
 
     if (shell === "bash") {
       console.log(`# Add to ~/.bashrc: eval "$(mcps completion bash)"
@@ -1084,6 +1223,254 @@ program
       }
     }
     closeDb();
+  });
+
+// --- machines ---
+const machinesCmd = program.command("machines").description("Manage registered machines for fleet operations");
+
+machinesCmd
+  .command("list")
+  .description("List registered machines")
+  .option("-j, --json", "Output as JSON")
+  .option("--enabled-only", "Only show enabled machines")
+  .action((opts) => {
+    const machines = listMachines().filter((machine) => (opts.enabledOnly ? machine.enabled : true));
+    if (opts.json) {
+      printJson(machines);
+      closeDb();
+      return;
+    }
+    renderMachines(machines);
+    closeDb();
+  });
+
+machinesCmd
+  .command("add")
+  .description("Register a machine for fleet health checks and installs")
+  .requiredOption("--host <host>", "Hostname or SSH target")
+  .option("--id <id>", "Stable machine ID")
+  .option("--name <name>", "Display name (defaults to host)")
+  .option("--username <username>", "SSH username")
+  .option("--port <port>", "SSH port", "22")
+  .option("--platform <platform>", `Machine platform: ${MACHINE_PLATFORMS.join(", ")}`)
+  .option("--arch <arch>", `Machine architecture: ${MACHINE_ARCHES.join(", ")}`)
+  .option("--bun-path <path>", "Explicit path to bun on the remote machine")
+  .option("--npm-path <path>", "Explicit path to npm on the remote machine")
+  .option("--installer <installer>", `Preferred installer: ${MACHINE_INSTALLERS.join(", ")}`)
+  .option("--ssh-key-path <path>", "SSH private key path")
+  .option("--disabled", "Register the machine but leave it disabled")
+  .option("-j, --json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const machine = addMachine({
+        id: opts.id,
+        name: opts.name,
+        host: opts.host,
+        username: opts.username,
+        port: parseIntegerOption(opts.port, "--port", { min: 1, max: 65535 }),
+        platform: parseChoice(opts.platform, "--platform", MACHINE_PLATFORMS) as MachinePlatform | undefined,
+        arch: parseChoice(opts.arch, "--arch", MACHINE_ARCHES) as MachineArch | undefined,
+        bun_path: opts.bunPath,
+        npm_path: opts.npmPath,
+        installer: parseChoice(opts.installer, "--installer", MACHINE_INSTALLERS) as MachineInstaller | undefined,
+        ssh_key_path: opts.sshKeyPath,
+        enabled: !opts.disabled,
+      });
+
+      if (opts.json) {
+        printJson(machine);
+      } else {
+        console.log(chalk.green(`Added machine: ${machine.name} [${machine.id}]`));
+        console.log(chalk.dim(`  ${formatMachineTarget(machine)} · installer=${machine.installer}`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`Failed to add machine: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+machinesCmd
+  .command("remove")
+  .argument("<id>", "Machine ID to remove")
+  .description("Remove a registered machine")
+  .option("--yes", "Confirm removal")
+  .option("-j, --json", "Output as JSON")
+  .action((id: string, opts) => {
+    try {
+      const machine = getRegisteredMachine(id);
+      if (!machine) throw new Error(`Machine "${id}" not found.`);
+      if (!opts.yes) throw new Error("Refusing to remove a machine without --yes");
+      removeRegisteredMachine(id);
+      if (opts.json) {
+        printJson({ removed: true, machine });
+      } else {
+        console.log(chalk.green(`Removed machine: ${machine.name} [${machine.id}]`));
+      }
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+machinesCmd
+  .command("enable")
+  .argument("<id>", "Machine ID to enable")
+  .description("Enable a registered machine for fleet operations")
+  .action((id: string) => {
+    try {
+      const machine = getRegisteredMachine(id);
+      if (!machine) throw new Error(`Machine "${id}" not found.`);
+      updateRegisteredMachine(id, { enabled: true, last_error: null });
+      console.log(chalk.green(`Enabled machine: ${machine.name} [${machine.id}]`));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+machinesCmd
+  .command("disable")
+  .argument("<id>", "Machine ID to disable")
+  .description("Disable a registered machine for fleet operations")
+  .action((id: string) => {
+    try {
+      const machine = getRegisteredMachine(id);
+      if (!machine) throw new Error(`Machine "${id}" not found.`);
+      updateRegisteredMachine(id, { enabled: false });
+      console.log(chalk.yellow(`Disabled machine: ${machine.name} [${machine.id}]`));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+machinesCmd
+  .command("seed-defaults")
+  .description("Seed the standard spark/apple machine inventory")
+  .option("-j, --json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const machines = seedDefaultMachines();
+      if (opts.json) {
+        printJson(machines);
+      } else {
+        console.log(chalk.green(`Seeded ${machines.length} machines.`));
+        renderMachines(machines);
+      }
+    } catch (err) {
+      console.error(chalk.red(`Failed to seed default machines: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+// --- fleet ---
+const fleetCmd = program.command("fleet").description("Run cross-machine @hasna MCP health checks and installs");
+
+fleetCmd
+  .command("catalog")
+  .description("List the discovered @hasna MCP package catalog")
+  .option("--refresh", "Refresh the npm catalog instead of using cache")
+  .option("--package <packages...>", "Filter to specific package names")
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts) => {
+    try {
+      const catalog = await listHasnaMcpCatalog({ refresh: opts.refresh });
+      const packages = opts.package as string[] | undefined;
+      const entries = packages ? catalog.filter((entry) => packages.includes(entry.name)) : catalog;
+      if (opts.json) {
+        printJson(entries);
+      } else {
+        renderCatalog(entries);
+      }
+    } catch (err) {
+      console.error(chalk.red(`Catalog lookup failed: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    } finally {
+      closeDb();
+    }
+  });
+
+fleetCmd
+  .command("health")
+  .alias("doctor")
+  .argument("[machineIds...]", "Optional machine IDs to check")
+  .description("Run fleet-wide MCP health checks across registered machines")
+  .option("--package <packages...>", "Restrict the check to specific @hasna package names")
+  .option("--refresh", "Refresh the package catalog before checking")
+  .option("--timeout <ms>", "Remote timeout in milliseconds", String(180_000))
+  .option("-j, --json", "Output as JSON")
+  .action(async (machineIds: string[] | undefined, opts) => {
+    try {
+      const reports = await runFleetHealthCheck({
+        machineIds,
+        packages: opts.package,
+        refreshCatalog: opts.refresh,
+        timeoutMs: parseIntegerOption(opts.timeout, "--timeout", { min: 1_000 }),
+      });
+
+      if (opts.json) {
+        printJson(reports);
+      } else {
+        renderFleetHealth(reports);
+      }
+    } catch (err) {
+      console.error(chalk.red(`Fleet health check failed: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    } finally {
+      closeDb();
+    }
+  });
+
+fleetCmd
+  .command("install")
+  .argument("[machineIds...]", "Optional machine IDs to target")
+  .description("Batch-install missing or outdated @hasna MCP packages across machines")
+  .option("--package <packages...>", "Restrict installs to specific package names")
+  .option("--mode <mode>", `Install mode: ${FLEET_INSTALL_MODES.join(", ")}`, "missing-or-outdated")
+  .option("--installer <installer>", `Override installer: ${MACHINE_INSTALLERS.join(", ")}`, "auto")
+  .option("--refresh", "Refresh the package catalog before installing")
+  .option("--timeout <ms>", "Remote timeout in milliseconds", String(180_000))
+  .option("--yes", "Confirm remote installs")
+  .option("-j, --json", "Output as JSON")
+  .action(async (machineIds: string[] | undefined, opts) => {
+    try {
+      if (!opts.yes) {
+        throw new Error("Refusing to install across remote machines without --yes");
+      }
+
+      const reports = await runFleetInstall({
+        machineIds,
+        packages: opts.package,
+        mode: parseChoice(opts.mode, "--mode", FLEET_INSTALL_MODES) ?? "missing-or-outdated",
+        installer: parseChoice(opts.installer, "--installer", MACHINE_INSTALLERS) ?? "auto",
+        refreshCatalog: opts.refresh,
+        timeoutMs: parseIntegerOption(opts.timeout, "--timeout", { min: 1_000 }),
+      });
+
+      if (opts.json) {
+        printJson(reports);
+      } else {
+        renderFleetInstall(reports);
+      }
+    } catch (err) {
+      console.error(chalk.red(`Fleet install failed: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
+    } finally {
+      closeDb();
+    }
   });
 
 // --- export ---

@@ -63,6 +63,29 @@ export function getDb(): Database {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS machines (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      host TEXT NOT NULL,
+      username TEXT NOT NULL DEFAULT '',
+      port INTEGER NOT NULL DEFAULT 22,
+      platform TEXT NOT NULL DEFAULT 'unknown',
+      arch TEXT NOT NULL DEFAULT 'unknown',
+      bun_path TEXT,
+      npm_path TEXT,
+      installer TEXT NOT NULL DEFAULT 'auto',
+      ssh_key_path TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT,
+      last_error TEXT
+    )
+  `);
+
+  db.exec("CREATE INDEX IF NOT EXISTS idx_machines_enabled ON machines(enabled)");
+
   // Seed default sources if table is empty
   const count = (db.query("SELECT COUNT(*) as c FROM sources").get() as { c: number }).c;
   if (count === 0) {

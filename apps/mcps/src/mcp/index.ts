@@ -38,6 +38,14 @@ import {
 import { diagnoseServer } from "../lib/doctor.js";
 import { TOOL_PREFIX_SEPARATOR } from "../lib/config.js";
 import { getAdapter } from "../lib/db.js";
+import {
+  addMachine,
+  getMachine as getRegisteredMachine,
+  listMachines,
+  removeMachine as removeRegisteredMachine,
+  seedDefaultMachines,
+} from "../lib/machines.js";
+import { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "../lib/fleet.js";
 
 function redactServerEnv<T extends { env: Record<string, string> }>(server: T): T {
   return { ...server, env: {} };
@@ -491,6 +499,153 @@ server.tool(
     if (!entry) return { content: [{ type: "text", text: `Server "${id}" not found.` }], isError: true };
     const report = await diagnoseServer(entry);
     return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+  }
+);
+
+server.tool(
+  "list_machines",
+  "List registered fleet machines",
+  {
+    enabled_only: z.boolean().optional().describe("When true, only return enabled machines"),
+  },
+  async ({ enabled_only }) => {
+    const machines = listMachines().filter((machine) => (enabled_only ? machine.enabled : true));
+    return {
+      content: [{ type: "text", text: JSON.stringify(machines, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "add_machine",
+  "Register a machine for fleet health checks and installs",
+  {
+    host: z.string().describe("Hostname or SSH target"),
+    id: z.string().optional().describe("Stable machine ID"),
+    name: z.string().optional().describe("Display name"),
+    username: z.string().optional().describe("SSH username"),
+    port: z.number().int().min(1).max(65535).optional().describe("SSH port"),
+    platform: z.enum(["linux", "darwin", "unknown"]).optional().describe("Machine platform"),
+    arch: z.enum(["arm64", "x64", "unknown"]).optional().describe("Machine architecture"),
+    bun_path: z.string().optional().describe("Explicit path to bun on the remote machine"),
+    npm_path: z.string().optional().describe("Explicit path to npm on the remote machine"),
+    installer: z.enum(["auto", "bun", "npm"]).optional().describe("Preferred installer"),
+    ssh_key_path: z.string().optional().describe("SSH private key path"),
+    enabled: z.boolean().optional().describe("Whether the machine should be enabled"),
+  },
+  async ({ host, id, name, username, port, platform, arch, bun_path, npm_path, installer, ssh_key_path, enabled }) => {
+    const machine = addMachine({
+      host,
+      id,
+      name,
+      username,
+      port,
+      platform,
+      arch,
+      bun_path,
+      npm_path,
+      installer,
+      ssh_key_path,
+      enabled,
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(machine, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "remove_machine",
+  "Remove a registered machine",
+  { id: z.string().describe("Machine ID to remove") },
+  async ({ id }) => {
+    const machine = getRegisteredMachine(id);
+    if (!machine) {
+      return {
+        content: [{ type: "text", text: `Machine "${id}" not found.` }],
+        isError: true,
+      };
+    }
+    removeRegisteredMachine(id);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ removed: true, machine }, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "seed_default_machines",
+  "Seed the standard spark/apple machine inventory",
+  {},
+  async () => {
+    const machines = seedDefaultMachines();
+    return {
+      content: [{ type: "text", text: JSON.stringify(machines, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "list_hasna_mcp_catalog",
+  "List the discovered @hasna MCP package catalog",
+  {
+    packages: z.array(z.string()).optional().describe("Optional package-name filter"),
+    refresh: z.boolean().optional().describe("Refresh npm metadata instead of using cache"),
+  },
+  async ({ packages, refresh }) => {
+    const catalog = await listHasnaMcpCatalog({ refresh });
+    const filtered = packages?.length ? catalog.filter((entry) => packages.includes(entry.name)) : catalog;
+    return {
+      content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "fleet_health",
+  "Run fleet-wide MCP health checks across registered machines",
+  {
+    machine_ids: z.array(z.string()).optional().describe("Optional machine IDs to check"),
+    packages: z.array(z.string()).optional().describe("Optional @hasna package-name filter"),
+    refresh_catalog: z.boolean().optional().describe("Refresh npm metadata before checking"),
+    timeout_ms: z.number().int().min(1000).optional().describe("Remote timeout in milliseconds"),
+  },
+  async ({ machine_ids, packages, refresh_catalog, timeout_ms }) => {
+    const reports = await runFleetHealthCheck({
+      machineIds: machine_ids,
+      packages,
+      refreshCatalog: refresh_catalog,
+      timeoutMs: timeout_ms,
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(reports, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "fleet_install",
+  "Batch-install missing or outdated @hasna MCP packages across machines",
+  {
+    machine_ids: z.array(z.string()).optional().describe("Optional machine IDs to target"),
+    packages: z.array(z.string()).optional().describe("Optional @hasna package-name filter"),
+    mode: z.enum(["missing", "missing-or-outdated", "all"]).optional().describe("Install selection mode"),
+    installer: z.enum(["auto", "bun", "npm"]).optional().describe("Override installer"),
+    refresh_catalog: z.boolean().optional().describe("Refresh npm metadata before installing"),
+    timeout_ms: z.number().int().min(1000).optional().describe("Remote timeout in milliseconds"),
+  },
+  async ({ machine_ids, packages, mode, installer, refresh_catalog, timeout_ms }) => {
+    const reports = await runFleetInstall({
+      machineIds: machine_ids,
+      packages,
+      mode,
+      installer,
+      refreshCatalog: refresh_catalog,
+      timeoutMs: timeout_ms,
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(reports, null, 2) }],
+    };
   }
 );
 
