@@ -30,6 +30,27 @@ export interface Connector {
   overview?: string | null;
 }
 
+export interface ConnectorOperationsResponse {
+  connector: string;
+  displayName: string;
+  commands: string[];
+  helpText: string;
+}
+
+export interface ConnectorOperationHelpResponse {
+  connector: string;
+  displayName: string;
+  command: string;
+  help: string;
+}
+
+export interface RunOperationResponse {
+  connector: string;
+  displayName: string;
+  success: boolean;
+  output: string;
+}
+
 export interface Profile {
   id: string;
   [key: string]: unknown;
@@ -100,6 +121,11 @@ export interface ListOptions {
   fields?: string;
 }
 
+export interface RunOperationOptions {
+  format?: "json" | "pretty";
+  timeout?: number;
+}
+
 // ── Client ─────────────────────────────────────────────────────────────────
 
 export class ConnectorsClient {
@@ -149,6 +175,48 @@ export class ConnectorsClient {
    */
   async get(name: string): Promise<Connector> {
     return this.request<Connector>(`/api/connectors/${encodeURIComponent(name)}`);
+  }
+
+  /**
+   * List runnable operations for a connector.
+   */
+  async listOperations(name: string): Promise<ConnectorOperationsResponse> {
+    return this.request<ConnectorOperationsResponse>(
+      `/api/connectors/${encodeURIComponent(name)}/operations`
+    );
+  }
+
+  /**
+   * Get help text for a connector command.
+   */
+  async getOperationHelp(
+    name: string,
+    command: string
+  ): Promise<ConnectorOperationHelpResponse> {
+    return this.request<ConnectorOperationHelpResponse>(
+      `/api/connectors/${encodeURIComponent(name)}/operations/${encodeURIComponent(command)}`
+    );
+  }
+
+  /**
+   * Execute a connector command.
+   */
+  async runOperation(
+    name: string,
+    args: string[],
+    options: RunOperationOptions = {}
+  ): Promise<RunOperationResponse> {
+    return this.request<RunOperationResponse>(
+      `/api/connectors/${encodeURIComponent(name)}/operations/run`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          args,
+          ...(options.format ? { format: options.format } : {}),
+          ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+        }),
+      }
+    );
   }
 
   /**

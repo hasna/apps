@@ -22,6 +22,30 @@ import {
   registerFeedbackTools,
 } from "./tools/index.js";
 
+function hasFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
+function printHelp(): void {
+  console.log(`Usage: connectors-mcp [options]
+
+Start the Connectors MCP server over stdio
+
+Options:
+  -V, --version     Output the version number
+  -h, --help        Display help for command`);
+}
+
+if (hasFlag("--help") || hasFlag("-h")) {
+  printHelp();
+  process.exit(0);
+}
+
+if (hasFlag("--version") || hasFlag("-V")) {
+  console.log(pkg.version);
+  process.exit(0);
+}
+
 // Load versions at startup
 loadConnectorVersions();
 

@@ -3,7 +3,12 @@ import chalk from "chalk";
 import { getConnector } from "../../lib/registry.js";
 import { getInstalledConnectors } from "../../lib/installer.js";
 import { getAuthStatus, getAuthType, saveApiKey } from "../../server/auth.js";
-import { getConnectorOperations, runConnectorCommand, getConnectorCommandHelp, getConnectorCliPath } from "../../lib/runner.js";
+import {
+  getConnectorOperations,
+  runConnectorCommand,
+  getConnectorCommandHelp,
+  hasConnectorCommandSurface,
+} from "../../lib/runner.js";
 
 export function registerCommands(program: Command): void {
   // ============================================
@@ -23,8 +28,8 @@ export function registerCommands(program: Command): void {
         process.exit(1);
       }
 
-      if (!getConnectorCliPath(name)) {
-        console.error(chalk.red(`Connector '${name}' does not have a CLI.`));
+      if (!hasConnectorCommandSurface(name)) {
+        console.error(chalk.red(`Connector '${name}' does not expose runnable operations.`));
         console.error(chalk.dim(`Run 'connectors docs ${name}' to see how to use this connector programmatically.`));
         process.exit(1);
       }
@@ -80,8 +85,8 @@ export function registerCommands(program: Command): void {
         process.exit(1);
       }
 
-      if (!getConnectorCliPath(name)) {
-        console.error(chalk.red(`Connector '${name}' does not have a CLI.`));
+      if (!hasConnectorCommandSurface(name)) {
+        console.error(chalk.red(`Connector '${name}' does not expose runnable operations.`));
         console.error(chalk.dim(`Run 'connectors docs ${name}' to see how to use this connector programmatically.`));
         process.exit(1);
       }
@@ -137,11 +142,10 @@ export function registerCommands(program: Command): void {
       const alreadyInstalled = installed.includes(meta.name);
       let installResult: { success: boolean; path?: string; error?: string };
 
-      const { join } = await import("path");
       if (alreadyInstalled && !options.overwrite) {
-        installResult = { success: true, path: join(process.cwd(), ".connectors", `connect-${meta.name}`) };
+        installResult = { success: true, path: ".connectors/manifest.json" };
         if (!options.json) {
-          console.log(`  ${chalk.green("✓")} Already installed`);
+          console.log(`  ${chalk.green("✓")} Already enabled for this project`);
         }
       } else {
         const result = installConnector(name, { overwrite: options.overwrite });

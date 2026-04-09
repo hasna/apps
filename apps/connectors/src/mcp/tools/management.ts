@@ -10,7 +10,7 @@ export function registerManagementTools(server: McpServer, stripped: (text: stri
     "install_connector",
     {
       title: "Install Connector",
-      description: "Install connectors into .connectors/.",
+      description: "Enable connectors for the current project via .connectors/manifest.json.",
       inputSchema: {
         names: z.array(z.string()),
         overwrite: z.boolean().optional(),
@@ -36,12 +36,7 @@ export function registerManagementTools(server: McpServer, stripped: (text: stri
                 results,
                 summary: summary.join("\n"),
                 usage: results.some((r) => r.success)
-                  ? "Import from './.connectors': import { " +
-                    results
-                      .filter((r) => r.success)
-                      .map((r) => r.connector)
-                      .join(", ") +
-                    " } from './.connectors'"
+                  ? "Run `connectors run <connector> --help` or `connectors serve` to use enabled connectors from the one-product runtime."
                   : undefined,
               },
               null,
@@ -79,7 +74,7 @@ export function registerManagementTools(server: McpServer, stripped: (text: stri
     "list_installed",
     {
       title: "List Installed Connectors",
-      description: "List all installed connectors.",
+      description: "List all connectors enabled for the current project.",
       inputSchema: {},
     },
     async () => {
@@ -93,7 +88,7 @@ export function registerManagementTools(server: McpServer, stripped: (text: stri
     "update_connector",
     {
       title: "Update Connector",
-      description: "Re-install a connector to get the latest version.",
+      description: "Refresh connector enablement against the current package version.",
       inputSchema: { name: z.string() },
     },
     async ({ name }) => {
@@ -152,7 +147,7 @@ export function registerManagementTools(server: McpServer, stripped: (text: stri
       let installStatus: { installed: boolean; path?: string; error?: string };
 
       if (alreadyInstalled && !overwrite) {
-        installStatus = { installed: true, path: `.connectors/connect-${meta.name}` };
+        installStatus = { installed: true, path: `.connectors/manifest.json` };
       } else {
         const result = installConnector(name, { overwrite: overwrite ?? false });
         if (!result.success) {

@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 
 const CLI = join(import.meta.dir, "..", "..", "bin", "index.js");
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-cli-tmp");
+const MANIFEST_PATH = join(TEST_DIR, ".connectors", "manifest.json");
 
 function cleanup() {
   if (existsSync(TEST_DIR)) {
@@ -218,8 +219,11 @@ describe("CLI", () => {
       expect(stdout).toContain("anthropic");
       expect(exitCode).toBe(0);
 
-      const dest = join(TEST_DIR, ".connectors", "connect-anthropic");
-      expect(existsSync(dest)).toBe(true);
+      expect(existsSync(MANIFEST_PATH)).toBe(true);
+      const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as {
+        connectors: string[];
+      };
+      expect(manifest.connectors).toContain("anthropic");
     });
 
     test("installs multiple connectors", async () => {
@@ -238,7 +242,7 @@ describe("CLI", () => {
     test("errors when already installed without overwrite", async () => {
       await run("install anthropic");
       const { stdout, exitCode } = await run("install anthropic");
-      expect(stdout).toContain("Already installed");
+      expect(stdout).toContain("Already enabled for this project");
       expect(exitCode).toBe(1);
     });
 
@@ -281,8 +285,10 @@ describe("CLI", () => {
       expect(stdout).toContain("Removed");
       expect(exitCode).toBe(0);
 
-      const dest = join(TEST_DIR, ".connectors", "connect-anthropic");
-      expect(existsSync(dest)).toBe(false);
+      const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as {
+        connectors: string[];
+      };
+      expect(manifest.connectors).not.toContain("anthropic");
     });
 
     test("errors for non-installed connector", async () => {
@@ -379,7 +385,7 @@ describe("CLI", () => {
     test("shows data storage section", async () => {
       const { stdout } = await run("docs gmail");
       expect(stdout).toContain("Data Storage");
-      expect(stdout).toContain(".connectors/connect-gmail");
+      expect(stdout).toContain("~/.hasna/connectors/connect-gmail");
     });
 
     test("shows overview section", async () => {
@@ -497,8 +503,9 @@ describe("CLI", () => {
       const indexPath = join(TEST_DIR, ".connectors", "index.ts");
       const { readFileSync } = await import("fs");
       const content = readFileSync(indexPath, "utf-8");
-      expect(content).toContain("export * as anthropic");
-      expect(content).toContain("export * as stripe");
+      expect(content).toContain("enabledConnectors");
+      expect(content).toContain('"anthropic"');
+      expect(content).toContain('"stripe"');
     });
 
     test("--json with mixed success/failure", async () => {
@@ -861,16 +868,16 @@ describe("CLI", () => {
       expect(data.commands).toContain("models");
     });
 
-    test("lists operations for all 62 connectors", async () => {
+    test("lists operations for the shipped 63 connector command surfaces", async () => {
       const connectors = [
         "anthropic", "aws", "brandsight", "cloudflare", "discord", "docker",
         "e2b", "elevenlabs", "exa", "figma", "firecrawl", "github",
         "gmail", "google", "googlecalendar", "googlecloud", "googlecontacts",
         "googledocs", "googledrive", "googlegemini", "googlemaps", "googlesheets",
-        "googletasks", "hedra", "heygen", "huggingface", "icons8", "maropost",
-        "mercury", "meta", "midjourney", "mistral", "mixpanel", "notion",
-        "openai", "openweathermap", "pandadoc", "quo", "reddit", "reducto",
-        "resend", "revolut", "sedo", "sentry", "shadcn", "shopify",
+        "googletasks", "hedra", "heygen", "huggingface", "icons8", "imessage",
+        "maropost", "mercury", "meta", "midjourney", "mistral", "mixpanel",
+        "notion", "openai", "openweathermap", "pandadoc", "quo", "reddit",
+        "reducto", "resend", "revolut", "sedo", "sentry", "shadcn", "shopify",
         "snap", "stabilityai", "stripe", "stripeatlas", "substack", "tiktok",
         "tinker", "twilio", "uspto", "webflow", "wix", "x", "xads", "xai",
         "youtube", "zoom",
@@ -883,7 +890,9 @@ describe("CLI", () => {
         expect(data.connector).toBe(name);
         expect(data.commands.length).toBeGreaterThan(0);
       }
-    }, 120000);
+    // This sweep spawns the CLI once per connector, so cold Bun startups across
+    // the entire catalog can exceed two minutes on slower machines.
+    }, 240000);
   });
 
   describe("run", () => {
@@ -891,6 +900,19 @@ describe("CLI", () => {
       const { stdout, exitCode } = await run("run anthropic models");
       expect(exitCode).toBe(0);
       expect(stdout).toContain("claude");
+    });
+
+    test("runs internal github command surface", async () => {
+      const { stdout, exitCode } = await run("run github config show --format json");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("\"profile\"");
+    });
+
+    test("runs internal stripe command surface", async () => {
+      const { stdout, exitCode } = await run("run stripe config show --format json");
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("\"profile\"");
+      expect(stdout).toContain("\"configDir\"");
     });
 
     test("errors on unknown connector", async () => {

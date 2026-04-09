@@ -156,7 +156,7 @@ describe("auth", () => {
   });
 
   // ── saveApiKey ──
-  // Uses real ~/.connectors/ with unique test connector names for isolation.
+  // Uses a unique connector home per test run for isolation.
 
   describe("saveApiKey", () => {
     const name1 = `${TEST_ID}save1`;

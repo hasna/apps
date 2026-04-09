@@ -110,10 +110,9 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
-function CopyImportButton({ name }: { name: string }) {
+function CopyCommandButton({ name }: { name: string }) {
   const [copied, setCopied] = React.useState(false);
-  const importName = name.replace(/^connect-/, "").replace(/-/g, "");
-  const statement = `import { ${importName} } from './.connectors'`;
+  const statement = `connectors run ${name} --help`;
 
   function handleCopy(e: React.MouseEvent) {
     e.stopPropagation();
@@ -136,7 +135,7 @@ function CopyImportButton({ name }: { name: string }) {
       ) : (
         <CopyIcon className="size-3.5" />
       )}
-      {copied ? "Copied!" : "Import"}
+      {copied ? "Copied!" : "Command"}
     </Button>
   );
 }
@@ -476,7 +475,7 @@ export function ConnectorsTable({
             if (auth.configured) {
               return (
                 <div className="flex justify-end gap-1" onClick={stop}>
-                  <CopyImportButton name={c.name} />
+                  <CopyCommandButton name={c.name} />
                   <Button
                     variant="ghost"
                     size="sm"
@@ -498,7 +497,7 @@ export function ConnectorsTable({
             }
             return (
               <div className="flex justify-end gap-1" onClick={stop}>
-                <CopyImportButton name={c.name} />
+                <CopyCommandButton name={c.name} />
                 <Button size="sm" onClick={() => onOAuthStart(c.name)}>
                   <ExternalLinkIcon className="size-3.5" />
                   Connect
@@ -509,7 +508,7 @@ export function ConnectorsTable({
 
           return (
             <div className="flex justify-end gap-1" onClick={stop}>
-              <CopyImportButton name={c.name} />
+              <CopyCommandButton name={c.name} />
               <Button
                 variant={auth?.configured ? "ghost" : "default"}
                 size="sm"

@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from "bun:test";
+import { afterEach, describe, test, expect } from "bun:test";
 import { SqliteAdapter as Database } from "@hasna/cloud";
 import { cronMatches, startScheduler, stopScheduler, triggerJob } from "./scheduler.js";
 
@@ -90,6 +90,10 @@ describe("cronMatches", () => {
 });
 
 describe("startScheduler / stopScheduler", () => {
+  afterEach(() => {
+    stopScheduler();
+  });
+
   test("stopScheduler is idempotent when not started", () => {
     expect(() => stopScheduler()).not.toThrow();
     expect(() => stopScheduler()).not.toThrow();
@@ -106,6 +110,27 @@ describe("startScheduler / stopScheduler", () => {
     startScheduler(db);
     startScheduler(db); // second call no-op
     stopScheduler();
+  });
+
+  test("scheduler tick ignores a closed database during teardown", async () => {
+    const db = makeDb();
+    const originalSetInterval = globalThis.setInterval;
+    let tick: (() => void) | null = null;
+
+    globalThis.setInterval = ((handler: TimerHandler) => {
+      tick = typeof handler === "function" ? handler as () => void : null;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+
+    try {
+      startScheduler(db);
+      db.close();
+      expect(tick).not.toBeNull();
+      expect(() => tick?.()).not.toThrow();
+      await Promise.resolve();
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+    }
   });
 });
 

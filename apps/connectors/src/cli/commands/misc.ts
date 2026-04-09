@@ -267,7 +267,7 @@ complete -F _connectors connectors`);
         connectorDetails.push({ name, configured: auth.configured, authType: auth.type, profile, source: "project" });
       }
 
-      // Globally configured connectors from ~/.connectors/connect-*
+      // Globally configured connectors from the shared connector home
       if (existsSync(configDir)) {
         try {
           const globalDirs = readdirSync(configDir).filter((f: string) => {
@@ -294,7 +294,7 @@ complete -F _connectors connectors`);
             connectorDetails.push({ name, configured: true, authType: auth.type, profile, source: "global" });
           }
         } catch {
-          // ignore read errors on ~/.connectors
+          // Ignore read errors in the shared connector home.
         }
       }
 
@@ -331,7 +331,7 @@ complete -F _connectors connectors`);
       }
 
       if (globalConnectors.length > 0) {
-        console.log(chalk.bold("\n  Global Connectors") + chalk.dim(" (~/.connectors)") + chalk.bold(":\n"));
+        console.log(chalk.bold("\n  Global Connectors") + chalk.dim(" (~/.hasna/connectors)") + chalk.bold(":\n"));
         const nameWidth = Math.max(10, ...globalConnectors.map(c => c.name.length)) + 2;
         for (const c of globalConnectors) {
           const status = c.configured ? chalk.green("✓") : chalk.red("✗");

@@ -288,11 +288,11 @@ export function ConnectorDetailDialog({
 }: ConnectorDetailDialogProps) {
   if (!connector && !loading) return null;
 
-  const importSnippet = connector
-    ? `import { ${connector.name} } from './.connectors'`
+  const commandSnippet = connector
+    ? `connectors run ${connector.name} --help`
     : "";
   const storagePath = connector
-    ? `~/.connectors/connect-${connector.name}/`
+    ? `~/.hasna/connectors/connect-${connector.name}/`
     : "";
 
   return (
@@ -400,17 +400,17 @@ export function ConnectorDetailDialog({
               {/* Profiles */}
               <ProfilesSection connectorName={connector.name} />
 
-              {/* Import snippet */}
+              {/* Usage snippet */}
               <div className="space-y-1.5">
                 <h4 className="text-sm font-medium flex items-center gap-1.5">
                   <CodeIcon className="size-3.5" />
-                  Import
+                  Usage
                 </h4>
                 <div className="flex items-center gap-1">
                   <code className="flex-1 rounded border bg-muted px-2 py-1.5 text-xs font-mono text-muted-foreground">
-                    {importSnippet}
+                    {commandSnippet}
                   </code>
-                  <CopyButton text={importSnippet} />
+                  <CopyButton text={commandSnippet} />
                 </div>
               </div>
 

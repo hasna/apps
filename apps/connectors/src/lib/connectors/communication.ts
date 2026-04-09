@@ -59,6 +59,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["chat", "bot", "messaging"],
   },
   {
+    name: "imessage",
+    displayName: "iMessage",
+    description: "Bridge-based access to Apple Messages conversations and send/reply flows",
+    category: "Communication",
+    tags: ["messaging", "apple", "bridge", "sms"],
+  },
+  {
     name: "whatsapp",
     displayName: "WhatsApp",
     description: "Business Cloud API for messages and templates",

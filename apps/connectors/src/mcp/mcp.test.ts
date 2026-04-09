@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 
 const MCP = join(import.meta.dir, "..", "..", "bin", "mcp.js");
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-mcp-tmp");
+const MANIFEST_PATH = join(TEST_DIR, ".connectors", "manifest.json");
 
 function cleanup() {
   if (existsSync(TEST_DIR)) {
@@ -74,6 +75,39 @@ afterEach(() => {
 });
 
 describe("MCP Server", () => {
+  test("prints help and exits", async () => {
+    const proc = Bun.spawn(["bun", MCP, "--help"], {
+      cwd: TEST_DIR,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("Usage: connectors-mcp");
+    expect(stdout).toContain("stdio");
+  });
+
+  test("prints version and exits", async () => {
+    const proc = Bun.spawn(["bun", MCP, "--version"], {
+      cwd: TEST_DIR,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
   test("direct shebang launch responds to initialize", async () => {
     const proc = Bun.spawn([MCP], {
       cwd: TEST_DIR,
@@ -214,12 +248,15 @@ describe("MCP Server", () => {
       expect(data.results).toHaveLength(2);
       expect(data.results[0].success).toBe(true);
       expect(data.results[1].success).toBe(true);
-      expect(data.usage).toContain("anthropic");
-      expect(data.usage).toContain("figma");
+      expect(data.usage).toContain("connectors run <connector> --help");
+      expect(data.usage).toContain("connectors serve");
 
-      // Verify files exist
-      expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic"))).toBe(true);
-      expect(existsSync(join(TEST_DIR, ".connectors", "connect-figma"))).toBe(true);
+      expect(existsSync(MANIFEST_PATH)).toBe(true);
+      const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as {
+        connectors: string[];
+      };
+      expect(manifest.connectors).toContain("anthropic");
+      expect(manifest.connectors).toContain("figma");
     });
 
     test("errors for non-existent connector", async () => {
@@ -304,7 +341,7 @@ describe("MCP Server", () => {
     test("returns data storage for github", async () => {
       const res = await callMcp("connector_docs", { name: "github" });
       const data = parseContent(res);
-      expect(data.dataStorage).toContain(".connectors/connect-github");
+      expect(data.dataStorage).toContain("~/.hasna/connectors/connect-github");
     });
 
     test("returns version and category in docs", async () => {
@@ -507,6 +544,14 @@ describe("MCP Server", () => {
       expect(data.commands).toContain("repo");
       expect(data.commands).toContain("issue");
     });
+
+    test("lists operations for stripe", async () => {
+      const res = await callMcp("list_connector_operations", { name: "stripe" });
+      const data = parseContent(res);
+      expect(data.connector).toBe("stripe");
+      expect(data.commands).toContain("config");
+      expect(data.commands).toContain("products");
+    });
   });
 
   describe("run_connector_operation", () => {
@@ -546,6 +591,30 @@ describe("MCP Server", () => {
       });
       const data = parseContent(res);
       expect(data.success).toBe(true);
+    });
+
+    test("runs internal github command surface", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "github",
+        args: ["config", "show"],
+        format: "json",
+      });
+      const data = parseContent(res);
+      expect(data.connector).toBe("github");
+      expect(data.success).toBe(true);
+      expect(data.output).toContain("\"profile\"");
+    });
+
+    test("runs internal stripe command surface", async () => {
+      const res = await callMcp("run_connector_operation", {
+        name: "stripe",
+        args: ["config", "show"],
+        format: "json",
+      });
+      const data = parseContent(res);
+      expect(data.connector).toBe("stripe");
+      expect(data.success).toBe(true);
+      expect(data.output).toContain("\"profile\"");
     });
   });
 });

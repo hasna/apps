@@ -1,7 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getConnector } from "../../lib/registry.js";
-import { getConnectorOperations, runConnectorCommand, getConnectorCommandHelp, getConnectorCliPath } from "../../lib/runner.js";
+import {
+  getConnectorOperations,
+  runConnectorCommand,
+  getConnectorCommandHelp,
+  hasConnectorCommandSurface,
+} from "../../lib/runner.js";
 
 export function registerOperationsTools(server: McpServer, stripped: (text: string) => Promise<{ content: { type: "text"; text: string }[] }>) {
   // --- Tool: list_connector_operations ---
@@ -28,12 +33,12 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
         };
       }
 
-      if (!getConnectorCliPath(name)) {
+      if (!hasConnectorCommandSurface(name)) {
         return {
           content: [
             {
               type: "text",
-              text: `Connector '${name}' does not have a CLI. It may be API-only. Use connector_docs to see how to use it programmatically.`,
+              text: `Connector '${name}' does not expose runnable operations. Use connector_docs to see how to use it programmatically.`,
             },
           ],
           isError: true,

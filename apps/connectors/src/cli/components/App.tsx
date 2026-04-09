@@ -86,7 +86,7 @@ export function App({ initialConnectors, overwrite = false }: AppProps) {
     <Box flexDirection="column" padding={1}>
       <Header
         title="Connectors"
-        subtitle="Install API connectors for your project"
+        subtitle="Enable API connectors for your project from one shared runtime"
       />
 
       {view === "main" && (
@@ -177,10 +177,12 @@ export function App({ initialConnectors, overwrite = false }: AppProps) {
 
           <Box marginTop={1} flexDirection="column">
             <Text bold>Next steps:</Text>
-            <Text>1. Import from .connectors/</Text>
-            <Text dimColor>   import {"{"} figma {"}"} from './.connectors'</Text>
-            <Text>2. Configure your API keys</Text>
-            <Text>3. Start building!</Text>
+            <Text>1. Review the available commands</Text>
+            <Text dimColor>   connectors run figma --help</Text>
+            <Text>2. Configure credentials</Text>
+            <Text dimColor>   connectors auth figma</Text>
+            <Text>3. Start the shared runtime when needed</Text>
+            <Text dimColor>   connectors serve  or  connectors-mcp</Text>
           </Box>
 
           <Box marginTop={1}>

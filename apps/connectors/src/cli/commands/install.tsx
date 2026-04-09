@@ -101,15 +101,17 @@ export function registerCommands(program: Command): void {
       // Dry-run mode: preview without modifying filesystem
       if (options.dryRun) {
         const installed = getInstalledConnectors();
-        const destDir = join(process.cwd(), ".connectors");
+        const connectorsDir = join(process.cwd(), ".connectors");
+        const manifestPath = join(connectorsDir, "manifest.json");
+        const indexPath = join(connectorsDir, "index.ts");
         const actions: Array<{
           connector: string;
           action: "install" | "overwrite" | "skip" | "error";
           reason?: string;
           sourcePath?: string;
-          destPath?: string;
+          manifestPath?: string;
+          indexPath?: string;
           files?: string[];
-          importLine?: string;
         }> = [];
 
         for (const name of connectors) {
@@ -132,27 +134,26 @@ export function registerCommands(program: Command): void {
 
           const connectorDirName = name.startsWith("connect-") ? name : `connect-${name}`;
           const sourcePath = getConnectorPath(name);
-          const destPath = join(destDir, connectorDirName);
           const alreadyInstalled = installed.includes(name);
           const files = listFilesRecursive(sourcePath);
-          const importLine = `export * as ${name} from './${connectorDirName}/src/index.js';`;
 
           if (alreadyInstalled && !options.overwrite) {
             actions.push({
               connector: name,
               action: "skip",
-              reason: "Already installed. Use --overwrite to replace.",
+              reason: "Already enabled. Use --overwrite to refresh the project manifest.",
               sourcePath,
-              destPath,
+              manifestPath,
+              indexPath,
             });
           } else {
             actions.push({
               connector: name,
               action: alreadyInstalled ? "overwrite" : "install",
               sourcePath,
-              destPath,
+              manifestPath,
+              indexPath,
               files,
-              importLine,
             });
           }
         }
@@ -183,17 +184,14 @@ export function registerCommands(program: Command): void {
             : chalk.green("install");
           console.log(`  ${actionLabel} ${chalk.cyan(a.connector)}`);
           console.log(chalk.dim(`    source: ${a.sourcePath}`));
-          console.log(chalk.dim(`    dest:   ${a.destPath}`));
+          console.log(chalk.dim(`    manifest: ${a.manifestPath}`));
+          console.log(chalk.dim(`    index:    ${a.indexPath}`));
 
           if (a.files && a.files.length > 0) {
-            console.log(chalk.dim(`    files (${a.files.length}):`));
+            console.log(chalk.dim(`    packaged runtime files (${a.files.length}):`));
             for (const f of a.files) {
               console.log(chalk.dim(`      ${f}`));
             }
-          }
-
-          if (a.importLine) {
-            console.log(`    ${chalk.dim("index.ts:")} ${a.importLine}`);
           }
           console.log();
         }
@@ -236,10 +234,9 @@ export function registerCommands(program: Command): void {
 
       if (succeeded.length > 0) {
         console.log(chalk.bold("\nNext steps:"));
-        const importNames = succeeded.join(", ");
-        console.log(chalk.dim(`  1. Import:  `) + `import { ${importNames} } from './.connectors'`);
-        console.log(chalk.dim(`  2. Set key: `) + `connectors docs ${succeeded[0]}` + chalk.dim(` (see env vars)`));
-        console.log(chalk.dim(`  3. Explore: `) + `connectors serve` + chalk.dim(` (dashboard for auth management)`));
+        console.log(chalk.dim(`  1. Run:     `) + `connectors run ${succeeded[0]} --help`);
+        console.log(chalk.dim(`  2. Set key: `) + `connectors docs ${succeeded[0]}` + chalk.dim(` (see env vars and auth flow)`));
+        console.log(chalk.dim(`  3. Explore: `) + `connectors serve` + chalk.dim(` (dashboard for auth and profiles)`));
       }
       process.exit(results.every((r) => r.success) ? 0 : 1);
     });

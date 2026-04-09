@@ -81,23 +81,37 @@ let _interval: ReturnType<typeof setInterval> | null = null;
 // Track last check minute to avoid double-firing within same minute
 let _lastCheckedMinute = -1;
 
+function isClosedDatabaseError(error: unknown): boolean {
+  return error instanceof Error && /closed database/i.test(error.message);
+}
+
 /** Start the scheduler. Checks every 30s, fires jobs when cron matches. */
 export function startScheduler(db: Database): void {
   if (_interval) return; // already running
 
-  _interval = setInterval(async () => {
-    const now = new Date();
-    const currentMinute = now.getMinutes() + now.getHours() * 60;
-    if (currentMinute === _lastCheckedMinute) return; // already fired this minute
-    _lastCheckedMinute = currentMinute;
+  _interval = setInterval(() => {
+    void (async () => {
+      try {
+        const now = new Date();
+        const currentMinute = now.getMinutes() + now.getHours() * 60;
+        if (currentMinute === _lastCheckedMinute) return; // already fired this minute
+        _lastCheckedMinute = currentMinute;
 
-    const jobs = listEnabledJobs(db);
-    for (const job of jobs) {
-      if (cronMatches(job.cron, now)) {
-        // Fire and forget — don't await (jobs run in background)
-        executeJob(job, db).catch(() => {/* errors saved in job run */});
+        const jobs = listEnabledJobs(db);
+        for (const job of jobs) {
+          if (cronMatches(job.cron, now)) {
+            // Fire and forget — don't await (jobs run in background)
+            executeJob(job, db).catch(() => {/* errors saved in job run */});
+          }
+        }
+      } catch (error) {
+        // Tests and shutdown paths may close the DB between scheduler ticks.
+        // Ignore those teardown races and keep the scheduler process alive.
+        if (!isClosedDatabaseError(error)) {
+          console.error("[scheduler] Failed to check scheduled jobs:", error);
+        }
       }
-    }
+    })();
   }, 30_000); // check every 30 seconds
 }
 

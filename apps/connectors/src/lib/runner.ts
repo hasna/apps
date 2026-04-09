@@ -1,16 +1,17 @@
 /**
- * Connector runner - discovers and executes connector CLI operations via subprocess.
- *
- * Design: Each connector has its own Commander.js CLI at src/cli/index.ts.
- * Instead of importing all 62 CLIs (which would bloat the process), we spawn
- * them as subprocesses and capture stdout/stderr. This keeps the main CLI/MCP
- * lightweight while exposing every connector's full API.
+ * Connector runner - executes internal command runtimes first, then falls back
+ * to legacy connector CLIs for unmigrated connectors.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
+import {
+  getInternalConnectorDefinition,
+  listInternalConnectorDefinitions,
+} from "../core/builtins.js";
+import { getConnectorsHome } from "../db/database.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -24,6 +25,27 @@ function resolveConnectorsDir(): string {
 }
 
 const CONNECTORS_DIR = resolveConnectorsDir();
+
+function buildInternalHelpText(
+  name: string,
+  commands: Array<{ name: string; summary: string }>
+): string {
+  const lines = [
+    `Usage: connect-${name} [options] [command]`,
+    "",
+    "Commands:",
+  ];
+
+  for (const command of commands) {
+    lines.push(`  ${command.name.padEnd(24)} ${command.summary}`);
+  }
+
+  return lines.join("\n");
+}
+
+function getInternalCommandRuntime(name: string) {
+  return getInternalConnectorDefinition(name)?.commandRuntime;
+}
 
 /**
  * Derive the expected env var name from a connector name.
@@ -105,6 +127,10 @@ export function getConnectorCliPath(name: string): string | null {
   return null;
 }
 
+export function hasConnectorCommandSurface(name: string): boolean {
+  return Boolean(getInternalCommandRuntime(name)?.commands.length || getConnectorCliPath(name));
+}
+
 export interface RunResult {
   stdout: string;
   stderr: string;
@@ -120,6 +146,39 @@ export interface RunResult {
  * @param timeoutMs - Max execution time (default 30s)
  */
 export function runConnectorCommand(
+  name: string,
+  args: string[],
+  timeoutMs = 30000
+): Promise<RunResult> {
+  // Touch the shared config home before any connector runs so legacy
+  // ~/.connectors or ~/.connect data is migrated into the one-product home.
+  getConnectorsHome();
+
+  const internalRuntime = getInternalCommandRuntime(name);
+  if (internalRuntime?.run) {
+    return Promise.resolve(internalRuntime.run(args)).then((result) => {
+      if (result) {
+        const stdout = result.stdout.trim();
+        const stderr = (result.stderr ?? "").trim();
+        const exitCode =
+          result.exitCode ?? (result.success === false ? 1 : 0);
+
+        return {
+          stdout,
+          stderr,
+          exitCode,
+          success: result.success ?? exitCode === 0,
+        };
+      }
+
+      return runLegacyConnectorCommand(name, args, timeoutMs);
+    });
+  }
+
+  return runLegacyConnectorCommand(name, args, timeoutMs);
+}
+
+function runLegacyConnectorCommand(
   name: string,
   args: string[],
   timeoutMs = 30000
@@ -179,6 +238,17 @@ export function runConnectorCommand(
 export async function getConnectorOperations(
   name: string
 ): Promise<{ commands: string[]; helpText: string; hasCli: boolean }> {
+  const internalRuntime = getInternalCommandRuntime(name);
+  if (internalRuntime?.commands.length) {
+    return {
+      commands: internalRuntime.commands.map((command) => command.name),
+      helpText:
+        internalRuntime.helpText ??
+        buildInternalHelpText(name, internalRuntime.commands),
+      hasCli: true,
+    };
+  }
+
   const cliPath = getConnectorCliPath(name);
   if (!cliPath) {
     return { commands: [], helpText: "", hasCli: false };
@@ -220,6 +290,21 @@ export async function getConnectorCommandHelp(
   name: string,
   command: string
 ): Promise<string> {
+  const internalRuntime = getInternalCommandRuntime(name);
+  if (internalRuntime?.getHelp) {
+    const help = await internalRuntime.getHelp(command);
+    if (help) {
+      return help;
+    }
+  }
+
+  const runtimeCommand = internalRuntime?.commands.find(
+    (runtimeEntry) => runtimeEntry.name === command
+  );
+  if (runtimeCommand?.helpText) {
+    return runtimeCommand.helpText;
+  }
+
   const result = await runConnectorCommand(name, [command, "--help"]);
   return result.stdout || result.stderr;
 }
@@ -228,8 +313,7 @@ export async function getConnectorCommandHelp(
  * Check which connectors have CLI entry points.
  */
 export function getConnectorsWithCli(): string[] {
-  const { readdirSync } = require("fs");
-  const connectors: string[] = [];
+  const connectors = new Set<string>();
 
   try {
     const dirs = readdirSync(CONNECTORS_DIR);
@@ -237,12 +321,18 @@ export function getConnectorsWithCli(): string[] {
       if (!dir.startsWith("connect-")) continue;
       const name = dir.replace("connect-", "");
       if (getConnectorCliPath(name)) {
-        connectors.push(name);
+        connectors.add(name);
       }
     }
   } catch {
     // connectors dir not found
   }
 
-  return connectors;
+  for (const definition of listInternalConnectorDefinitions()) {
+    if (definition.commandRuntime?.commands.length) {
+      connectors.add(definition.meta.name);
+    }
+  }
+
+  return [...connectors].sort();
 }

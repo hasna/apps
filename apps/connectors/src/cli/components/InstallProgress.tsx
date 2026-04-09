@@ -88,7 +88,7 @@ export function InstallProgress({
             )}
           </Text>
           <Text dimColor>
-            Connectors installed to .connectors/
+            Project enablement saved to .connectors/manifest.json
           </Text>
         </Box>
       )}

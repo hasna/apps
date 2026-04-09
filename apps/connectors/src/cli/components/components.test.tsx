@@ -8,6 +8,10 @@ import { SearchView } from "./SearchView.js";
 import { InstallProgress } from "./InstallProgress.js";
 import { ConnectorMeta } from "../../lib/registry.js";
 
+function stripAnsi(value: string | undefined) {
+  return (value ?? "").replace(/\u001B\[[0-9;]*m/g, "");
+}
+
 const mockConnectors: ConnectorMeta[] = [
   {
     name: "stripe",
@@ -433,9 +437,9 @@ describe("SearchView", () => {
         onBack={() => {}}
       />
     );
-    const frame = lastFrame();
+    const frame = stripAnsi(lastFrame());
     expect(frame).toContain("Search:");
-    expect(frame).toContain("Type to search");
+    expect(frame).toContain("Type to search connectors...");
   });
 
   test("shows minimum character hint initially", () => {

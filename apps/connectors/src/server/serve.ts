@@ -23,6 +23,12 @@ import {
 } from "../lib/registry.js";
 import { getInstalledConnectors, getConnectorDocs, installConnector, removeConnector } from "../lib/installer.js";
 import {
+  getConnectorCommandHelp,
+  getConnectorOperations,
+  hasConnectorCommandSurface,
+  runConnectorCommand,
+} from "../lib/runner.js";
+import {
   getAuthStatus,
   saveApiKey,
   getOAuthStartUrl,
@@ -308,6 +314,139 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           auth,
           overview: docs?.overview || null,
         }, 200, port);
+      }
+
+      // GET /api/connectors/:name/operations
+      const operationsMatch = path.match(/^\/api\/connectors\/([^/]+)\/operations$/);
+      if (operationsMatch && method === "GET") {
+        const name = operationsMatch[1];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        const meta = getConnector(name);
+        if (!meta) return json({ error: `Connector '${name}' not found` }, 404, port);
+        if (!hasConnectorCommandSurface(name)) {
+          return json(
+            { error: `Connector '${name}' does not expose runnable operations` },
+            404,
+            port
+          );
+        }
+
+        const ops = await getConnectorOperations(name);
+        return json(
+          {
+            connector: name,
+            displayName: meta.displayName,
+            commands: ops.commands,
+            helpText: ops.helpText,
+          },
+          200,
+          port
+        );
+      }
+
+      // GET /api/connectors/:name/operations/:command
+      const operationHelpMatch = path.match(
+        /^\/api\/connectors\/([^/]+)\/operations\/([^/]+)$/
+      );
+      if (operationHelpMatch && method === "GET") {
+        const name = operationHelpMatch[1];
+        const command = decodeURIComponent(operationHelpMatch[2]);
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        const meta = getConnector(name);
+        if (!meta) return json({ error: `Connector '${name}' not found` }, 404, port);
+        if (!hasConnectorCommandSurface(name)) {
+          return json(
+            { error: `Connector '${name}' does not expose runnable operations` },
+            404,
+            port
+          );
+        }
+
+        const help = await getConnectorCommandHelp(name, command);
+        return json({ connector: name, displayName: meta.displayName, command, help }, 200, port);
+      }
+
+      // POST /api/connectors/:name/operations/run
+      const operationRunMatch = path.match(/^\/api\/connectors\/([^/]+)\/operations\/run$/);
+      if (operationRunMatch && method === "POST") {
+        const name = operationRunMatch[1];
+        if (!isValidConnectorName(name)) return json({ error: "Invalid connector name" }, 400, port);
+        const meta = getConnector(name);
+        if (!meta) return json({ error: `Connector '${name}' not found` }, 404, port);
+        if (!hasConnectorCommandSurface(name)) {
+          return json(
+            { error: `Connector '${name}' does not expose runnable operations` },
+            404,
+            port
+          );
+        }
+
+        try {
+          const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+          if (contentLength > MAX_BODY_SIZE) {
+            return json({ error: "Request body too large" }, 413, port);
+          }
+
+          const body = (await req.json()) as {
+            args?: unknown;
+            format?: "json" | "pretty";
+            timeout?: number;
+          };
+          const args = Array.isArray(body.args)
+            ? body.args.filter((value): value is string => typeof value === "string")
+            : [];
+
+          if (args.length === 0) {
+            return json({ error: "Missing connector command arguments" }, 400, port);
+          }
+
+          const finalArgs = [...args];
+          if (body.format && !args.includes("--format") && !args.includes("-f")) {
+            finalArgs.push("--format", body.format);
+          }
+
+          const result = await runConnectorCommand(name, finalArgs, body.timeout ?? 30000);
+          const combinedOutput = `${result.stdout}\n${result.stderr}`;
+          const looksLikeHelp = /Usage:|Commands:|Options:/i.test(combinedOutput);
+
+          if (!result.success && !looksLikeHelp) {
+            return json(
+              {
+                connector: name,
+                displayName: meta.displayName,
+                success: false,
+                error: result.stderr || result.stdout || "Command failed",
+                exitCode: result.exitCode,
+              },
+              400,
+              port
+            );
+          }
+
+          return json(
+            {
+              connector: name,
+              displayName: meta.displayName,
+              success: true,
+              output: looksLikeHelp
+                ? (result.stdout || result.stderr).trim()
+                : result.stdout,
+            },
+            200,
+            port
+          );
+        } catch (error) {
+          return json(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to execute connector operation",
+            },
+            500,
+            port
+          );
+        }
       }
 
       // POST /api/connectors/:name/key
@@ -754,7 +893,7 @@ export async function startServer(requestedPort: number, options?: { open?: bool
             "warning",
             "OAuth Not Available",
             `No OAuth client credentials found for <span class="connector">${name}</span>.`,
-            `Set up credentials at <code>~/.connectors/connect-${name}/credentials.json</code>`
+            `Run <code>connectors auth ${name}</code> or add credentials at <code>~/.hasna/connectors/connect-${name}/credentials.json</code>`
           ));
         }
 

@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { getInternalConnectorDefinition } from "../core/builtins.js";
 import { bestFuzzyScore } from "./fuzzy.js";
 import { expandQuery } from "./synonyms.js";
 
@@ -284,6 +285,12 @@ export function loadConnectorVersions(): void {
       if (existsSync(pkgPath)) {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         connector.version = pkg.version || "0.0.0";
+        continue;
+      }
+
+      const internalDefinition = getInternalConnectorDefinition(connector.name);
+      if (internalDefinition?.meta.version) {
+        connector.version = internalDefinition.meta.version;
       }
     } catch {
       // skip

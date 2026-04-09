@@ -92,6 +92,67 @@ describe("ConnectorsClient", () => {
     });
   });
 
+  describe("listOperations()", () => {
+    it("calls GET /api/connectors/:name/operations", async () => {
+      const fetchMock = mockFetch(200, {
+        connector: "github",
+        displayName: "GitHub",
+        commands: ["repo", "user"],
+        helpText: "Usage: connect-github ...",
+      });
+      global.fetch = fetchMock;
+      const result = await client.listOperations("github");
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("http://localhost:19426/api/connectors/github/operations");
+      expect(result.commands).toContain("repo");
+    });
+  });
+
+  describe("getOperationHelp()", () => {
+    it("calls GET /api/connectors/:name/operations/:command", async () => {
+      const fetchMock = mockFetch(200, {
+        connector: "github",
+        displayName: "GitHub",
+        command: "user",
+        help: "Usage: connect-github user [options] [command]",
+      });
+      global.fetch = fetchMock;
+      const result = await client.getOperationHelp("github", "user");
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        "http://localhost:19426/api/connectors/github/operations/user"
+      );
+      expect(result.help).toContain("connect-github user");
+    });
+  });
+
+  describe("runOperation()", () => {
+    it("calls POST /api/connectors/:name/operations/run", async () => {
+      const fetchMock = mockFetch(200, {
+        connector: "github",
+        displayName: "GitHub",
+        success: true,
+        output: "{\"profile\":\"default\"}",
+      });
+      global.fetch = fetchMock;
+      const result = await client.runOperation("github", ["config", "show"], {
+        format: "json",
+        timeout: 5000,
+      });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        "http://localhost:19426/api/connectors/github/operations/run"
+      );
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        args: ["config", "show"],
+        format: "json",
+        timeout: 5000,
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe("install()", () => {
     it("calls POST /api/connectors/:name/install", async () => {
       const fetchMock = mockFetch(200, { success: true, name: "github" });

@@ -257,7 +257,7 @@ export function registerCommands(program: Command): void {
         { key: "google", emoji: "📁", label: "Google Workspace", connectors: ["gmail", "googledrive", "googlecalendar", "googledocs", "googlesheets"], description: "Google Workspace suite" },
       ];
 
-      // Auto-detect existing auth — scan ~/.connectors/ for configured connectors
+      // Auto-detect existing auth from the shared connector home.
       const connectorsHome = getConnectorsHome();
       let configuredCount = 0;
       const configuredNames: string[] = [];
@@ -478,7 +478,7 @@ export function registerCommands(program: Command): void {
       }
     });
 
-  // Auth-import command — migrate tokens from ~/.connect/ to ~/.connectors/
+  // Auth-import command — migrate tokens from older connector homes into ~/.hasna/connectors/
   program
     .command("auth-import")
     .option("--json", "Output as JSON", false)

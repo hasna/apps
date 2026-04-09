@@ -82,7 +82,7 @@ export function registerCommands(program: Command): void {
         allStatuses.push(buildStatusEntry(name, "project"));
       }
 
-      // 2. Global connectors from ~/.connectors/connect-*
+      // 2. Globally configured connectors from the shared connector home
       if (existsSync(configDir)) {
         try {
           const globalDirs = readdirSync(configDir).filter((f: string) => {
@@ -97,7 +97,7 @@ export function registerCommands(program: Command): void {
             allStatuses.push(buildStatusEntry(name, "global"));
           }
         } catch {
-          // ignore read errors on ~/.connectors
+          // Ignore read errors in the shared connector home.
         }
       }
 

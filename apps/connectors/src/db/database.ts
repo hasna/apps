@@ -5,37 +5,54 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
 
+function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
+  if (!existsSync(sourceDir)) {
+    return;
+  }
+
+  mkdirSync(targetDir, { recursive: true });
+
+  for (const entry of readdirSync(sourceDir)) {
+    const sourcePath = join(sourceDir, entry);
+    const targetPath = join(targetDir, entry);
+
+    try {
+      const sourceStat = statSync(sourcePath);
+
+      if (sourceStat.isDirectory()) {
+        mergeDirectoryContents(sourcePath, targetPath);
+        continue;
+      }
+
+      if (!existsSync(targetPath)) {
+        copyFileSync(sourcePath, targetPath);
+      }
+    } catch {
+      // Skip entries that can't be copied.
+    }
+  }
+}
+
 /**
  * Get the connectors home directory.
  * New default: ~/.hasna/connectors/
- * Auto-migrates from ~/.connectors/ if the new dir doesn't exist yet.
+ * Auto-migrates from historical ~/.connectors/ and ~/.connect/ trees.
  */
 export function getConnectorsHome(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
   const newDir = join(home, ".hasna", "connectors");
-  const oldDir = join(home, ".connectors");
+  const legacyDirs = [join(home, ".connectors"), join(home, ".connect")];
 
-  // Auto-migrate: if old dir exists and new doesn't, copy top-level files
-  if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+  mkdirSync(newDir, { recursive: true });
+
+  for (const legacyDir of legacyDirs) {
     try {
-      for (const file of readdirSync(oldDir)) {
-        const oldPath = join(oldDir, file);
-        const newPath = join(newDir, file);
-        try {
-          if (statSync(oldPath).isFile()) {
-            copyFileSync(oldPath, newPath);
-          }
-        } catch {
-          // Skip files that can't be copied
-        }
-      }
+      mergeDirectoryContents(legacyDir, newDir);
     } catch {
-      // If we can't read old directory, continue with new
+      // Ignore legacy migration failures and keep using the new directory.
     }
   }
 
-  mkdirSync(newDir, { recursive: true });
   return newDir;
 }
 

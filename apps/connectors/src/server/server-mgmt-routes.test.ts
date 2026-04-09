@@ -31,6 +31,13 @@ function cleanupTestConnectors(...names: string[]) {
   }
 }
 
+function cleanupProjectEnablement() {
+  const connectorsDir = join(process.cwd(), ".connectors");
+  if (existsSync(connectorsDir)) {
+    rmSync(connectorsDir, { recursive: true });
+  }
+}
+
 describe("server management routes", () => {
   let serverPort: number;
   let baseUrl: string;
@@ -43,24 +50,7 @@ describe("server management routes", () => {
 
   describe("POST /api/connectors/:name/install", () => {
     afterEach(() => {
-      // Clean up any installed connector from .connectors/
-      const connectorsDir = join(process.cwd(), ".connectors");
-      const installedDir = join(connectorsDir, "connect-anthropic");
-      if (existsSync(installedDir)) {
-        rmSync(installedDir, { recursive: true });
-      }
-      // Clean up the generated index file if it exists
-      const indexFile = join(connectorsDir, "index.ts");
-      if (existsSync(indexFile)) {
-        rmSync(indexFile);
-      }
-      // Remove .connectors dir if empty
-      if (existsSync(connectorsDir)) {
-        try {
-          const entries = readdirSync(connectorsDir);
-          if (entries.length === 0) rmSync(connectorsDir, { recursive: true });
-        } catch { /* ignore */ }
-      }
+      cleanupProjectEnablement();
     });
 
     test("returns 400 for invalid connector name", async () => {
@@ -116,21 +106,7 @@ describe("server management routes", () => {
 
   describe("POST /api/connectors/:name/uninstall", () => {
     afterEach(() => {
-      const connectorsDir = join(process.cwd(), ".connectors");
-      const installedDir = join(connectorsDir, "connect-anthropic");
-      if (existsSync(installedDir)) {
-        rmSync(installedDir, { recursive: true });
-      }
-      const indexFile = join(connectorsDir, "index.ts");
-      if (existsSync(indexFile)) {
-        rmSync(indexFile);
-      }
-      if (existsSync(connectorsDir)) {
-        try {
-          const entries = readdirSync(connectorsDir);
-          if (entries.length === 0) rmSync(connectorsDir, { recursive: true });
-        } catch { /* ignore */ }
-      }
+      cleanupProjectEnablement();
     });
 
     test("returns 400 for invalid connector name", async () => {
@@ -176,21 +152,7 @@ describe("server management routes", () => {
 
   describe("POST /api/update", () => {
     afterEach(() => {
-      const connectorsDir = join(process.cwd(), ".connectors");
-      const installedDir = join(connectorsDir, "connect-anthropic");
-      if (existsSync(installedDir)) {
-        rmSync(installedDir, { recursive: true });
-      }
-      const indexFile = join(connectorsDir, "index.ts");
-      if (existsSync(indexFile)) {
-        rmSync(indexFile);
-      }
-      if (existsSync(connectorsDir)) {
-        try {
-          const entries = readdirSync(connectorsDir);
-          if (entries.length === 0) rmSync(connectorsDir, { recursive: true });
-        } catch { /* ignore */ }
-      }
+      cleanupProjectEnablement();
     });
 
     test("returns successfully with count field", async () => {
@@ -220,6 +182,117 @@ describe("server management routes", () => {
       expect(data.total).toBeGreaterThanOrEqual(1);
       expect(data.count).toBeGreaterThanOrEqual(1);
       expect(Array.isArray(data.results)).toBe(true);
+    });
+  });
+
+  describe("GET /api/connectors/:name/operations", () => {
+    test("returns internal command surface for github", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/github/operations`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        commands: string[];
+        helpText: string;
+      };
+      expect(data.connector).toBe("github");
+      expect(data.commands).toContain("repo");
+      expect(data.commands).toContain("user");
+      expect(data.helpText).toContain("connect-github");
+    });
+
+    test("returns internal command surface for stripe", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/stripe/operations`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        commands: string[];
+        helpText: string;
+      };
+      expect(data.connector).toBe("stripe");
+      expect(data.commands).toContain("config");
+      expect(data.commands).toContain("products");
+      expect(data.helpText).toContain("connect-stripe");
+    });
+  });
+
+  describe("GET /api/connectors/:name/operations/:command", () => {
+    test("returns help text for github user command", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/github/operations/user`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        command: string;
+        help: string;
+      };
+      expect(data.connector).toBe("github");
+      expect(data.command).toBe("user");
+      expect(data.help).toContain("info [username]");
+    });
+
+    test("returns help text for stripe products command", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/stripe/operations/products`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        command: string;
+        help: string;
+      };
+      expect(data.connector).toBe("stripe");
+      expect(data.command).toBe("products");
+      expect(data.help).toContain("Manage products");
+    });
+  });
+
+  describe("POST /api/connectors/:name/operations/run", () => {
+    test("runs an internal github command", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/github/operations/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ args: ["config", "show"], format: "json" }),
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        success: boolean;
+        output: string;
+      };
+      expect(data.connector).toBe("github");
+      expect(data.success).toBe(true);
+      expect(data.output).toContain("\"profile\"");
+    });
+
+    test("runs an internal stripe command", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/stripe/operations/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ args: ["config", "show"], format: "json" }),
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        success: boolean;
+        output: string;
+      };
+      expect(data.connector).toBe("stripe");
+      expect(data.success).toBe(true);
+      expect(data.output).toContain("\"profile\"");
+    });
+
+    test("runs a legacy CLI-backed connector command", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/anthropic/operations/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ args: ["models"], format: "json" }),
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        success: boolean;
+        output: string;
+      };
+      expect(data.connector).toBe("anthropic");
+      expect(data.success).toBe(true);
+      expect(data.output).toContain("claude");
     });
   });
 

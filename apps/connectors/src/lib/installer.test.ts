@@ -13,11 +13,18 @@ import {
 
 // Use a temp directory for all install/remove tests
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-install-tmp");
+const PROJECT_CONNECTORS_DIR = join(TEST_DIR, ".connectors");
+const MANIFEST_PATH = join(PROJECT_CONNECTORS_DIR, "manifest.json");
+const INDEX_PATH = join(PROJECT_CONNECTORS_DIR, "index.ts");
 
 function cleanup() {
   if (existsSync(TEST_DIR)) {
     rmSync(TEST_DIR, { recursive: true });
   }
+}
+
+function readManifest(): { connectors: string[] } {
+  return JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as { connectors: string[] };
 }
 
 beforeEach(() => {
@@ -55,6 +62,10 @@ describe("installer", () => {
       expect(connectorExists("anthropic")).toBe(true);
     });
 
+    test("returns true for internal-only connector definitions", () => {
+      expect(connectorExists("imessage")).toBe(true);
+    });
+
     test("returns true with prefix", () => {
       expect(connectorExists("connect-anthropic")).toBe(true);
     });
@@ -69,30 +80,34 @@ describe("installer", () => {
       const result = installConnector("anthropic", { targetDir: TEST_DIR });
       expect(result.success).toBe(true);
       expect(result.connector).toBe("anthropic");
-      expect(result.path).toContain("connect-anthropic");
+      expect(result.path).toContain(".connectors/manifest.json");
 
-      // Verify files were copied
-      const destPath = join(TEST_DIR, ".connectors", "connect-anthropic");
-      expect(existsSync(destPath)).toBe(true);
-      expect(existsSync(join(destPath, "package.json"))).toBe(true);
+      expect(existsSync(MANIFEST_PATH)).toBe(true);
+      expect(existsSync(INDEX_PATH)).toBe(true);
+      expect(readManifest().connectors).toEqual(["anthropic"]);
+    });
+
+    test("installs an internal-only connector successfully", () => {
+      const result = installConnector("imessage", { targetDir: TEST_DIR });
+      expect(result.success).toBe(true);
+      expect(result.connector).toBe("imessage");
+      expect(readManifest().connectors).toEqual(["imessage"]);
     });
 
     test("creates .connectors directory if it does not exist", () => {
-      const connectorsDir = join(TEST_DIR, ".connectors");
-      expect(existsSync(connectorsDir)).toBe(false);
+      expect(existsSync(PROJECT_CONNECTORS_DIR)).toBe(false);
 
       installConnector("anthropic", { targetDir: TEST_DIR });
-      expect(existsSync(connectorsDir)).toBe(true);
+      expect(existsSync(PROJECT_CONNECTORS_DIR)).toBe(true);
     });
 
-    test("generates index.ts with exports", () => {
+    test("generates index.ts with enabled connector metadata", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
-      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
-      expect(existsSync(indexPath)).toBe(true);
+      expect(existsSync(INDEX_PATH)).toBe(true);
 
-      const content = readFileSync(indexPath, "utf-8");
-      expect(content).toContain("export * as anthropic");
-      expect(content).toContain("connect-anthropic");
+      const content = readFileSync(INDEX_PATH, "utf-8");
+      expect(content).toContain("enabledConnectors");
+      expect(content).toContain('"anthropic"');
     });
 
     test("returns error for non-existent connector", () => {
@@ -105,7 +120,7 @@ describe("installer", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
       const result = installConnector("anthropic", { targetDir: TEST_DIR });
       expect(result.success).toBe(false);
-      expect(result.error).toContain("Already installed");
+      expect(result.error).toContain("Already enabled");
       expect(result.path).toBeDefined();
     });
 
@@ -121,17 +136,16 @@ describe("installer", () => {
     test("handles connector name with prefix", () => {
       const result = installConnector("connect-figma", { targetDir: TEST_DIR });
       expect(result.success).toBe(true);
-      expect(result.path).toContain("connect-figma");
+      expect(readManifest().connectors).toContain("figma");
     });
 
     test("installs multiple connectors and updates index", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
       installConnector("figma", { targetDir: TEST_DIR });
 
-      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
-      const content = readFileSync(indexPath, "utf-8");
-      expect(content).toContain("export * as anthropic");
-      expect(content).toContain("export * as figma");
+      const content = readFileSync(INDEX_PATH, "utf-8");
+      expect(content).toContain('"anthropic"');
+      expect(content).toContain('"figma"');
     });
   });
 
@@ -167,7 +181,7 @@ describe("installer", () => {
     });
 
     test("returns empty array when .connectors is empty", () => {
-      mkdirSync(join(TEST_DIR, ".connectors"), { recursive: true });
+      mkdirSync(PROJECT_CONNECTORS_DIR, { recursive: true });
       const result = getInstalledConnectors(TEST_DIR);
       expect(result).toEqual([]);
     });
@@ -184,9 +198,15 @@ describe("installer", () => {
     test("ignores non-connector files", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
       // Create a non-connector file
-      writeFileSync(join(TEST_DIR, ".connectors", "something.txt"), "test");
+      writeFileSync(join(PROJECT_CONNECTORS_DIR, "something.txt"), "test");
       const result = getInstalledConnectors(TEST_DIR);
       expect(result).toEqual(["anthropic"]);
+    });
+
+    test("detects legacy copied connector directories during migration", () => {
+      mkdirSync(join(PROJECT_CONNECTORS_DIR, "connect-legacy-demo"), { recursive: true });
+      const result = getInstalledConnectors(TEST_DIR);
+      expect(result).toContain("legacy-demo");
     });
   });
 
@@ -195,9 +215,7 @@ describe("installer", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
       const removed = removeConnector("anthropic", TEST_DIR);
       expect(removed).toBe(true);
-
-      const destPath = join(TEST_DIR, ".connectors", "connect-anthropic");
-      expect(existsSync(destPath)).toBe(false);
+      expect(readManifest().connectors).toEqual([]);
     });
 
     test("returns false for non-installed connector", () => {
@@ -210,10 +228,9 @@ describe("installer", () => {
       installConnector("figma", { targetDir: TEST_DIR });
       removeConnector("anthropic", TEST_DIR);
 
-      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
-      const content = readFileSync(indexPath, "utf-8");
+      const content = readFileSync(INDEX_PATH, "utf-8");
       expect(content).not.toContain("anthropic");
-      expect(content).toContain("figma");
+      expect(content).toContain('"figma"');
     });
 
     test("handles name with prefix", () => {
@@ -229,6 +246,17 @@ describe("installer", () => {
       expect(docs).not.toBeNull();
       expect(docs!.overview).toContain("Stripe");
       expect(docs!.raw).toContain("# CLAUDE.md");
+    });
+
+    test("returns docs for internal-only connector definitions", () => {
+      const docs = getConnectorDocs("imessage");
+      expect(docs).not.toBeNull();
+      expect(docs!.overview).toContain("bridge-first");
+      expect(docs!.auth).toContain("API Key");
+      expect(docs!.envVars.map((entry) => entry.variable)).toContain(
+        "IMESSAGE_BRIDGE_URL"
+      );
+      expect(docs!.cliCommands).toContain("message");
     });
 
     test("returns null for non-existent connector", () => {
@@ -258,7 +286,7 @@ describe("installer", () => {
 
     test("parses data storage section", () => {
       const docs = getConnectorDocs("stripe");
-      expect(docs!.dataStorage).toContain(".connectors/connect-stripe");
+      expect(docs!.dataStorage).toContain("~/.hasna/connectors/connect-stripe");
     });
 
     test("handles connector with no CLI commands section", () => {
@@ -314,32 +342,29 @@ describe("installer", () => {
   });
 
   describe("installConnector edge cases", () => {
-    test("creates proper .connectors directory structure", () => {
+    test("creates manifest-based .connectors directory structure", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
-      // Verify it's .connectors/connect-anthropic (not old path)
-      expect(existsSync(join(TEST_DIR, ".connectors"))).toBe(true);
-      expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic"))).toBe(true);
-      expect(existsSync(join(TEST_DIR, ".connectors", "connect-anthropic", "src"))).toBe(true);
+      expect(existsSync(PROJECT_CONNECTORS_DIR)).toBe(true);
+      expect(existsSync(MANIFEST_PATH)).toBe(true);
+      expect(existsSync(INDEX_PATH)).toBe(true);
+      expect(existsSync(join(PROJECT_CONNECTORS_DIR, "connect-anthropic"))).toBe(false);
       // Verify it's NOT .connect
       expect(existsSync(join(TEST_DIR, ".connect"))).toBe(false);
     });
 
-    test("connector has all expected files after install", () => {
+    test("install writes manifest and generated index after enablement", () => {
       installConnector("stripe", { targetDir: TEST_DIR });
-      const base = join(TEST_DIR, ".connectors", "connect-stripe");
-      expect(existsSync(join(base, "package.json"))).toBe(true);
-      expect(existsSync(join(base, "CLAUDE.md"))).toBe(true);
-      expect(existsSync(join(base, "README.md"))).toBe(true);
-      expect(existsSync(join(base, "src", "index.ts"))).toBe(true);
+      expect(existsSync(MANIFEST_PATH)).toBe(true);
+      expect(existsSync(INDEX_PATH)).toBe(true);
+      expect(readManifest().connectors).toContain("stripe");
     });
 
-    test("index.ts is valid TypeScript export syntax", () => {
+    test("index.ts is valid TypeScript metadata syntax", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
       installConnector("stripe", { targetDir: TEST_DIR });
-      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
-      const content = readFileSync(indexPath, "utf-8");
-      // Check proper export syntax
-      expect(content).toMatch(/export \* as \w+ from '\.\/connect-\w+\/src\/index\.js'/);
+      const content = readFileSync(INDEX_PATH, "utf-8");
+      expect(content).toContain("export const enabledConnectors");
+      expect(content).toContain("export type EnabledConnectorName");
       expect(content).toContain("Auto-generated");
     });
   });
@@ -370,10 +395,10 @@ describe("installer", () => {
       installConnector("anthropic", { targetDir: TEST_DIR });
       removeConnector("anthropic", TEST_DIR);
 
-      const indexPath = join(TEST_DIR, ".connectors", "index.ts");
-      const content = readFileSync(indexPath, "utf-8");
+      const content = readFileSync(INDEX_PATH, "utf-8");
       expect(content).toContain("Auto-generated");
-      expect(content).not.toContain("export * as");
+      expect(content).toContain("enabledConnectors");
+      expect(content).not.toContain('"anthropic"');
     });
 
     test("removes connector with connect- prefix", () => {
@@ -381,7 +406,7 @@ describe("installer", () => {
       const removed = removeConnector("connect-figma", TEST_DIR);
       expect(removed).toBe(true);
 
-      const dest = join(TEST_DIR, ".connectors", "connect-figma");
+      const dest = join(PROJECT_CONNECTORS_DIR, "connect-figma");
       expect(existsSync(dest)).toBe(false);
     });
 

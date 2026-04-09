@@ -3,24 +3,27 @@ import {
   test,
   expect,
   afterEach,
+  afterAll,
   beforeAll,
 } from "bun:test";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   rmSync,
   readFileSync,
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { tmpdir } from "os";
 import { startServer } from "./serve.js";
 
-const HOME = homedir();
 const TEST_ID = `zzztest${process.pid}c`;
+const ORIGINAL_HOME = process.env.HOME;
+const TEST_HOME = mkdtempSync(join(tmpdir(), "open-connectors-server-"));
 
 function testConfigDir(name: string): string {
-  return join(HOME, ".hasna", "connectors", `connect-${name}`);
+  return join(TEST_HOME, ".hasna", "connectors", `connect-${name}`);
 }
 
 function cleanupTestConnectors(...names: string[]) {
@@ -35,9 +38,19 @@ describe("server API routes", () => {
   let baseUrl: string;
 
   beforeAll(async () => {
+    process.env.HOME = TEST_HOME;
     serverPort = 40000 + Math.floor(Math.random() * 10000);
     baseUrl = `http://localhost:${serverPort}`;
     await startServer(serverPort, { open: false });
+  });
+
+  afterAll(() => {
+    if (ORIGINAL_HOME) {
+      process.env.HOME = ORIGINAL_HOME;
+    } else {
+      delete process.env.HOME;
+    }
+    rmSync(TEST_HOME, { recursive: true, force: true });
   });
 
   // ── GET /api/connectors ──
@@ -349,7 +362,7 @@ describe("server API routes", () => {
     });
 
     test("GET /oauth/:name/start redirects when credentials exist", async () => {
-      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
+      const configDir = testConfigDir("gmail");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(
         join(configDir, "credentials.json"),
@@ -394,7 +407,7 @@ describe("server API routes", () => {
 
     test("GET /oauth/:name/callback returns error when no code", async () => {
       // Need a valid state first
-      const configDir = join(homedir(), ".hasna", "connectors", "connect-gmail");
+      const configDir = testConfigDir("gmail");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(
         join(configDir, "credentials.json"),
