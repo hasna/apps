@@ -1,0 +1,70 @@
+{
+  "name": "@hasna/machines",
+  "version": "0.0.1",
+  "description": "Machine fleet management CLI + MCP for developers",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "machines": "dist/cli/index.js",
+    "machines-mcp": "dist/mcp/index.js",
+    "machines-agent": "dist/agent/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:agent": "bun run src/agent/index.ts",
+    "prepublishOnly": "bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/machines 2>/dev/null || true"
+  },
+  "keywords": [
+    "machines",
+    "fleet",
+    "mcp",
+    "cli",
+    "developer-tools",
+    "sync",
+    "provisioning"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/machines.git"
+  },
+  "homepage": "https://github.com/hasna/machines",
+  "bugs": {
+    "url": "https://github.com/hasna/machines/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "dependencies": {
+    "@hasna/cloud": "^0.1.13",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "chalk": "^5.6.2",
+    "commander": "^13.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.7.3"
+  }
+}
