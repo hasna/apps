@@ -10,8 +10,17 @@ process.env["DOMAINS_DIR"] = tempDir;
 import {
   createDomain,
   getDomain,
+  getDomainByIdentifier,
+  getDomainDetails,
   listDomains,
   updateDomain,
+  markDomainPremium,
+  createDomainOffer,
+  listDomainOffers,
+  updateDomainLifecycleStatus,
+  recordDomainPurchase,
+  linkDomainEmail,
+  listDomainEmailLinks,
   deleteDomain,
   countDomains,
   searchDomains,
@@ -112,6 +121,12 @@ describe("Domains", () => {
     expect(result[0]!.name).toBe("another.org");
   });
 
+  test("list premium domains", () => {
+    createDomain({ name: "premium-filter.com", is_premium: true, premium_price: 2500 });
+    const premiumOnly = listDomains({ is_premium: true });
+    expect(premiumOnly.some((domain) => domain.name === "premium-filter.com")).toBe(true);
+  });
+
   test("search domains", () => {
     const results = searchDomains("example");
     expect(results.length).toBe(1);
@@ -152,6 +167,58 @@ describe("Domains", () => {
     expect(result!.id).toBe(domain.id);
   });
 
+  test("domain acquisition workflow tracks premium pricing, offers, purchases, and linked emails", () => {
+    const domain = createDomain({ name: "brokered-domain.com", status: "discovered" });
+
+    const premium = markDomainPremium(domain.id, 5000, 12);
+    expect(premium).not.toBeNull();
+    expect(premium!.is_premium).toBe(true);
+    expect(premium!.premium_price).toBe(5000);
+    expect(premium!.standard_price).toBe(12);
+    expect(premium!.status).toBe("premium_only");
+
+    const offer = createDomainOffer({
+      domain_id: domain.id,
+      our_offer: 2000,
+      their_ask: 5000,
+      status: "countered",
+      notes: "Broker countered at 5k",
+    });
+    expect(offer.status).toBe("countered");
+    expect(listDomainOffers(domain.id)).toHaveLength(1);
+
+    const email = linkDomainEmail({
+      domain_id: domain.id,
+      email_id: "email_123",
+      thread_id: "thread_123",
+      type: "offer",
+    });
+    expect(email.type).toBe("offer");
+    expect(listDomainEmailLinks(domain.id)).toHaveLength(1);
+
+    const purchased = recordDomainPurchase(domain.id, {
+      price: 3200,
+      registrar: "Broker",
+      purchase_date: "2026-04-10T00:00:00Z",
+      expires_at: "2027-04-10T00:00:00Z",
+      auto_renew: false,
+    });
+    expect(purchased).not.toBeNull();
+    expect(purchased!.status).toBe("purchased");
+    expect(purchased!.purchase_price).toBe(3200);
+    expect(purchased!.purchase_date).toBe("2026-04-10T00:00:00Z");
+    expect(purchased!.registrar).toBe("Broker");
+
+    const active = updateDomainLifecycleStatus(domain.id, "active");
+    expect(active).not.toBeNull();
+    expect(active!.status).toBe("active");
+
+    const details = getDomainDetails(domain.id);
+    expect(details).not.toBeNull();
+    expect(details!.offers).toHaveLength(1);
+    expect(details!.emails).toHaveLength(1);
+  });
+
   test("delete domain", () => {
     const domain = createDomain({ name: "deleteme.com" });
     expect(deleteDomain(domain.id)).toBe(true);
@@ -160,6 +227,16 @@ describe("Domains", () => {
 
   test("delete non-existent domain returns false", () => {
     expect(deleteDomain("nonexistent-id")).toBe(false);
+  });
+
+  test("cascade delete removes offer and email links", () => {
+    const domain = createDomain({ name: "cascade-acquisition.com", status: "researching" });
+    createDomainOffer({ domain_id: domain.id, our_offer: 1500 });
+    linkDomainEmail({ domain_id: domain.id, email_id: "email_cascade", type: "inquiry" });
+
+    deleteDomain(domain.id);
+    expect(listDomainOffers(domain.id)).toHaveLength(0);
+    expect(listDomainEmailLinks(domain.id)).toHaveLength(0);
   });
 
   test("count domains", () => {
@@ -552,6 +629,11 @@ describe("Portfolio Export", () => {
     expect(parsed[0]).toHaveProperty("status");
     expect(parsed[0]).toHaveProperty("expires_at");
     expect(parsed[0]).toHaveProperty("auto_renew");
+    expect(parsed[0]).toHaveProperty("is_premium");
+    expect(parsed[0]).toHaveProperty("premium_price");
+    expect(parsed[0]).toHaveProperty("standard_price");
+    expect(parsed[0]).toHaveProperty("purchase_price");
+    expect(parsed[0]).toHaveProperty("purchase_date");
     expect(parsed[0]).toHaveProperty("ssl_expires_at");
     expect(parsed[0]).toHaveProperty("ssl_issuer");
   });
@@ -567,6 +649,11 @@ describe("Portfolio Export", () => {
     expect(header).toContain("status");
     expect(header).toContain("expires_at");
     expect(header).toContain("auto_renew");
+    expect(header).toContain("is_premium");
+    expect(header).toContain("premium_price");
+    expect(header).toContain("standard_price");
+    expect(header).toContain("purchase_price");
+    expect(header).toContain("purchase_date");
     expect(header).toContain("ssl_expires_at");
     expect(header).toContain("ssl_issuer");
 
@@ -594,6 +681,14 @@ describe("getDomainByName", () => {
   test("returns null for unknown name", () => {
     const domain = getDomainByName("nonexistent-domain.xyz");
     expect(domain).toBeNull();
+  });
+
+  test("finds domain by id or name identifier", () => {
+    const byName = getDomainByIdentifier("example.com");
+    expect(byName).not.toBeNull();
+    const byId = getDomainByIdentifier(byName!.id);
+    expect(byId).not.toBeNull();
+    expect(byId!.name).toBe("example.com");
   });
 });
 

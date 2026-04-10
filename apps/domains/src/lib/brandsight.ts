@@ -416,7 +416,12 @@ export function createBrandsightProvider(config?: BrandsightConfig): RegistrarPr
 
     async checkAvailability(domain: string): Promise<ProviderAvailability> {
       const result = await checkAvailability(domain, cfg);
-      return { domain: result.domain, available: result.available };
+      return {
+        domain: result.domain,
+        available: result.available,
+        standard_price: result.price,
+        currency: result.currency,
+      };
     },
 
     async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {

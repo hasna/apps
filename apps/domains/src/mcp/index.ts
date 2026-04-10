@@ -4,10 +4,22 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  DOMAIN_EMAIL_TYPES,
+  DOMAIN_OFFER_STATUSES,
+  DOMAIN_STATUSES,
   createDomain,
   getDomain,
+  getDomainDetails,
+  getDomainByIdentifier,
   listDomains,
   updateDomain,
+  markDomainPremium,
+  createDomainOffer,
+  listDomainOffers,
+  updateDomainLifecycleStatus,
+  recordDomainPurchase,
+  linkDomainEmail,
+  listDomainEmailLinks,
   deleteDomain,
   countDomains,
   searchDomains,
@@ -72,10 +84,15 @@ server.registerTool(
     inputSchema: {
       name: z.string(),
       registrar: z.string().optional(),
-      status: z.enum(["active", "expired", "transferring", "redemption"]).optional(),
+      status: z.enum(DOMAIN_STATUSES).optional(),
       registered_at: z.string().optional(),
       expires_at: z.string().optional(),
       auto_renew: z.boolean().optional(),
+      is_premium: z.boolean().optional(),
+      premium_price: z.number().optional(),
+      standard_price: z.number().optional(),
+      purchase_price: z.number().optional(),
+      purchase_date: z.string().optional(),
       nameservers: z.array(z.string()).optional(),
       ssl_expires_at: z.string().optional(),
       ssl_issuer: z.string().optional(),
@@ -92,15 +109,15 @@ server.registerTool(
   "get_domain",
   {
     title: "Get Domain",
-    description: "Get a domain by ID.",
+    description: "Get a domain by ID or name, including linked offers and emails.",
     inputSchema: { id: z.string() },
   },
   async ({ id }) => {
-    const domain = getDomain(id);
-    if (!domain) {
+    const details = getDomainDetails(id);
+    if (!details) {
       return { content: [{ type: "text", text: `Domain '${id}' not found.` }], isError: true };
     }
-    return { content: [{ type: "text", text: JSON.stringify(domain, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }] };
   }
 );
 
@@ -111,9 +128,11 @@ server.registerTool(
     description: "List domains with optional filters.",
     inputSchema: {
       search: z.string().optional(),
-      status: z.enum(["active", "expired", "transferring", "redemption"]).optional(),
+      status: z.enum(DOMAIN_STATUSES).optional(),
       registrar: z.string().optional(),
+      is_premium: z.boolean().optional(),
       limit: z.number().optional(),
+      offset: z.number().optional(),
     },
   },
   async (params) => {
@@ -135,10 +154,15 @@ server.registerTool(
       id: z.string(),
       name: z.string().optional(),
       registrar: z.string().optional(),
-      status: z.enum(["active", "expired", "transferring", "redemption"]).optional(),
+      status: z.enum(DOMAIN_STATUSES).optional(),
       registered_at: z.string().optional(),
       expires_at: z.string().optional(),
       auto_renew: z.boolean().optional(),
+      is_premium: z.boolean().optional(),
+      premium_price: z.number().nullable().optional(),
+      standard_price: z.number().nullable().optional(),
+      purchase_price: z.number().nullable().optional(),
+      purchase_date: z.string().nullable().optional(),
       nameservers: z.array(z.string()).optional(),
       ssl_expires_at: z.string().optional(),
       ssl_issuer: z.string().optional(),
@@ -151,6 +175,161 @@ server.registerTool(
       return { content: [{ type: "text", text: `Domain '${id}' not found.` }], isError: true };
     }
     return { content: [{ type: "text", text: JSON.stringify(domain, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "mark_domain_premium",
+  {
+    title: "Mark Domain Premium",
+    description: "Mark a tracked domain as premium-priced.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+      price: z.number().describe("Premium asking price"),
+      standard_price: z.number().optional().describe("Optional standard registration price"),
+    },
+  },
+  async ({ domain, price, standard_price }) => {
+    const updated = markDomainPremium(domain, price, standard_price);
+    if (!updated) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "add_domain_offer",
+  {
+    title: "Add Domain Offer",
+    description: "Log a negotiation step for a tracked domain.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+      our_offer: z.number().optional(),
+      their_ask: z.number().optional(),
+      status: z.enum(DOMAIN_OFFER_STATUSES).optional(),
+      notes: z.string().optional(),
+    },
+  },
+  async ({ domain, ...input }) => {
+    const existing = getDomainByIdentifier(domain);
+    if (!existing) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    const offer = createDomainOffer({ domain_id: existing.id, ...input });
+    if (existing.status === "discovered" || existing.status === "researching" || existing.status === "offered") {
+      updateDomainLifecycleStatus(existing.id, input.our_offer !== undefined || input.their_ask !== undefined ? "negotiating" : "offered");
+    }
+    return { content: [{ type: "text", text: JSON.stringify(offer, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "list_domain_offers",
+  {
+    title: "List Domain Offers",
+    description: "Get negotiation history for a tracked domain.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+    },
+  },
+  async ({ domain }) => {
+    const existing = getDomainByIdentifier(domain);
+    if (!existing) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    const offers = listDomainOffers(existing.id);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ domain: existing.name, offers, count: offers.length }, null, 2) }],
+    };
+  }
+);
+
+server.registerTool(
+  "update_domain_status",
+  {
+    title: "Update Domain Status",
+    description: "Move a tracked domain through its acquisition lifecycle.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+      status: z.enum(DOMAIN_STATUSES),
+      notes: z.string().optional(),
+    },
+  },
+  async ({ domain, status, notes }) => {
+    const updated = updateDomainLifecycleStatus(domain, status, notes);
+    if (!updated) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "record_domain_purchase",
+  {
+    title: "Record Domain Purchase",
+    description: "Record a completed domain acquisition without performing the registrar checkout.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+      price: z.number().describe("Purchase price"),
+      registrar: z.string().describe("Registrar or seller"),
+      purchase_date: z.string().optional(),
+      expires_at: z.string().optional(),
+      auto_renew: z.boolean().optional(),
+      notes: z.string().optional(),
+      standard_price: z.number().optional(),
+    },
+  },
+  async ({ domain, ...input }) => {
+    const updated = recordDomainPurchase(domain, input);
+    if (!updated) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "link_domain_email",
+  {
+    title: "Link Domain Email",
+    description: "Link an email or email thread to a tracked domain.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+      email_id: z.string().describe("Email ID from @hasna/emails"),
+      thread_id: z.string().optional().describe("Optional email thread ID"),
+      type: z.enum(DOMAIN_EMAIL_TYPES),
+    },
+  },
+  async ({ domain, email_id, thread_id, type }) => {
+    const existing = getDomainByIdentifier(domain);
+    if (!existing) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    const link = linkDomainEmail({ domain_id: existing.id, email_id, thread_id, type });
+    return { content: [{ type: "text", text: JSON.stringify(link, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "get_domain_emails",
+  {
+    title: "Get Domain Emails",
+    description: "Retrieve all email threads linked to a tracked domain.",
+    inputSchema: {
+      domain: z.string().describe("Domain ID or name"),
+    },
+  },
+  async ({ domain }) => {
+    const existing = getDomainByIdentifier(domain);
+    if (!existing) {
+      return { content: [{ type: "text", text: `Domain '${domain}' not found.` }], isError: true };
+    }
+    const emails = listDomainEmailLinks(existing.id);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ domain: existing.name, emails, count: emails.length }, null, 2) }],
+    };
   }
 );
 

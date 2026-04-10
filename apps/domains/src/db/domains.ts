@@ -7,18 +7,35 @@
 
 export type {
   Domain,
+  DomainStatus,
   CreateDomainInput,
   UpdateDomainInput,
   ListDomainsOptions,
   DomainStats,
+  DomainOffer,
+  CreateDomainOfferInput,
+  DomainOfferStatus,
+  DomainEmailLink,
+  CreateDomainEmailLinkInput,
+  DomainEmailType,
+  DomainDetails,
+  RecordDomainPurchaseInput,
 } from "./domain-records.js";
 
 export {
+  DOMAIN_STATUSES,
+  DOMAIN_OFFER_STATUSES,
+  DOMAIN_EMAIL_TYPES,
   rowToDomain,
   createDomain,
   getDomain,
+  getDomainByIdentifier,
+  getDomainDetails,
   listDomains,
   updateDomain,
+  markDomainPremium,
+  updateDomainLifecycleStatus,
+  recordDomainPurchase,
   deleteDomain,
   countDomains,
   searchDomains,
@@ -27,6 +44,14 @@ export {
   listSslExpiring,
   getDomainStats,
   getDomainByName,
+  rowToDomainOffer,
+  createDomainOffer,
+  getDomainOffer,
+  listDomainOffers,
+  rowToDomainEmailLink,
+  linkDomainEmail,
+  getDomainEmailLink,
+  listDomainEmailLinks,
 } from "./domain-records.js";
 
 export type {

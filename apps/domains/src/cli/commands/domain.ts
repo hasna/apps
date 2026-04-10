@@ -1,13 +1,51 @@
 import type { Command } from "commander";
 import {
-  createDomain, getDomain, getDomainByName, listDomains, updateDomain,
-  deleteDomain, searchDomains, listExpiring, getDomainStats,
+  DOMAIN_EMAIL_TYPES,
+  DOMAIN_OFFER_STATUSES,
+  DOMAIN_STATUSES,
+  createDomain,
+  getDomainDetails,
+  getDomainByName,
+  listDomains,
+  updateDomain,
+  markDomainPremium,
+  createDomainOffer,
+  updateDomainLifecycleStatus,
+  listDomainEmailLinks,
+  linkDomainEmail,
+  recordDomainPurchase,
+  deleteDomain,
+  searchDomains,
+  listExpiring,
+  getDomainStats,
   exportPortfolio, checkAllDomains, whoisLookup,
 } from "../../db/domains.js";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider, autoDetectRegistrar } from "../../lib/registrar.js";
 import { loadConfig, resolveContact } from "../../lib/config.js";
 import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone } from "../../lib/route53.js";
 import { createZone as cfCreateZone } from "../../lib/cloudflare.js";
+
+const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
+const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
+const DOMAIN_EMAIL_TYPE_HELP = DOMAIN_EMAIL_TYPES.join("/");
+
+function parseOptionalNumber(value: string | undefined, flagName: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${flagName} must be a non-negative number`);
+  }
+  return parsed;
+}
+
+function requireDomain(identifier: string) {
+  const details = getDomainDetails(identifier);
+  if (!details) {
+    console.error(`Domain '${identifier}' not found.`);
+    process.exit(1);
+  }
+  return details;
+}
 
 export function registerDomainCommand(program: Command): void {
   const domain = program.command("domain").description("Domain portfolio management");
@@ -17,12 +55,13 @@ export function registerDomainCommand(program: Command): void {
   domain
     .command("list")
     .description("List all domains in the portfolio")
-    .option("--status <status>", "Filter by status (active/expired/transferring/redemption)")
+    .option("--status <status>", `Filter by status (${DOMAIN_STATUS_HELP})`)
     .option("--registrar <name>", "Filter by registrar")
+    .option("--premium", "Only show premium domains")
     .option("--limit <n>", "Limit number of returned domains")
     .option("--offset <n>", "Skip first N domains", "0")
     .option("-j, --json", "Output JSON")
-    .action((opts: { status?: string; registrar?: string; limit?: string; offset?: string; json?: boolean }) => {
+    .action((opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; json?: boolean }) => {
       const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
       const offset = opts.offset ? parseInt(opts.offset, 10) : 0;
 
@@ -36,8 +75,9 @@ export function registerDomainCommand(program: Command): void {
       }
 
       const domains = listDomains({
-        status: opts.status as "active" | undefined,
+        status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
         registrar: opts.registrar,
+        is_premium: opts.premium ? true : undefined,
         limit,
         offset,
       });
@@ -59,18 +99,46 @@ export function registerDomainCommand(program: Command): void {
   // ── get ─────────────────────────────────────────────────────────────────
 
   domain
-    .command("get <id>")
-    .description("Get a domain by ID")
+    .command("get <identifier>")
+    .description("Get a domain by ID or name")
     .option("-j, --json", "Output JSON")
-    .action((id: string, opts: { json?: boolean }) => {
-      const d = getDomain(id);
-      if (!d) { console.error(`Domain '${id}' not found.`); process.exit(1); }
-      if (opts.json) { console.log(JSON.stringify(d, null, 2)); return; }
+    .action((identifier: string, opts: { json?: boolean }) => {
+      const details = getDomainDetails(identifier);
+      if (!details) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { console.log(JSON.stringify(details, null, 2)); return; }
+      const d = details.domain;
       console.log(`\n${d.name} [${d.status}]`);
-      if (d.registrar) console.log(`  Registrar:  ${d.registrar}`);
-      if (d.expires_at) console.log(`  Expires:    ${d.expires_at.split("T")[0]}`);
-      console.log(`  Auto-renew: ${d.auto_renew ? "yes" : "no"}`);
-      if (d.notes) console.log(`  Notes:      ${d.notes}`);
+      if (d.registrar) console.log(`  Registrar:      ${d.registrar}`);
+      if (d.expires_at) console.log(`  Expires:        ${d.expires_at.split("T")[0]}`);
+      if (d.purchase_date) console.log(`  Purchased:      ${d.purchase_date.split("T")[0]}`);
+      if (d.purchase_price !== null) console.log(`  Purchase price: ${d.purchase_price}`);
+      console.log(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"}`);
+      if (d.is_premium) {
+        console.log(`  Premium:        yes`);
+        if (d.premium_price !== null) console.log(`  Premium ask:    ${d.premium_price}`);
+      }
+      if (d.standard_price !== null) console.log(`  Standard price: ${d.standard_price}`);
+      if (d.notes) console.log(`  Notes:          ${d.notes}`);
+      if (details.offers.length > 0) {
+        console.log("\nOffers:");
+        for (const offer of details.offers) {
+          const parts = [
+            offer.created_at.split(" ")[0],
+            offer.status,
+            offer.our_offer !== null ? `our=${offer.our_offer}` : null,
+            offer.their_ask !== null ? `their=${offer.their_ask}` : null,
+            offer.notes,
+          ].filter(Boolean);
+          console.log(`  - ${parts.join(" | ")}`);
+        }
+      }
+      if (details.emails.length > 0) {
+        console.log("\nEmails:");
+        for (const email of details.emails) {
+          const threadPart = email.thread_id ? ` thread=${email.thread_id}` : "";
+          console.log(`  - ${email.type}: ${email.email_id}${threadPart}`);
+        }
+      }
       console.log();
     });
 
@@ -81,14 +149,41 @@ export function registerDomainCommand(program: Command): void {
     .description("Add a domain to the portfolio")
     .requiredOption("--name <name>", "Domain name")
     .option("--registrar <name>", "Registrar name")
-    .option("--status <s>", "Status (active/expired/transferring/redemption)", "active")
+    .option("--status <s>", `Status (${DOMAIN_STATUS_HELP})`, "active")
     .option("--expires <date>", "Expiry date (YYYY-MM-DD)")
+    .option("--premium", "Mark the domain as premium")
+    .option("--premium-price <price>", "Premium asking price")
+    .option("--standard-price <price>", "Standard registration price")
+    .option("--purchase-price <price>", "Acquisition price paid")
+    .option("--purchase-date <date>", "Purchase date (ISO or YYYY-MM-DD)")
     .option("--notes <text>", "Notes")
     .option("-j, --json", "Output JSON")
-    .action((opts: { name: string; registrar?: string; status: string; expires?: string; notes?: string; json?: boolean }) => {
+    .action((opts: {
+      name: string;
+      registrar?: string;
+      status: string;
+      expires?: string;
+      premium?: boolean;
+      premiumPrice?: string;
+      standardPrice?: string;
+      purchasePrice?: string;
+      purchaseDate?: string;
+      notes?: string;
+      json?: boolean;
+    }) => {
+      const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
+      const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
+      const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
       const d = createDomain({
         name: opts.name, registrar: opts.registrar,
-        status: opts.status as "active", expires_at: opts.expires, notes: opts.notes,
+        status: opts.status as (typeof DOMAIN_STATUSES)[number],
+        expires_at: opts.expires,
+        is_premium: opts.premium || premiumPrice !== undefined,
+        premium_price: premiumPrice,
+        standard_price: standardPrice,
+        purchase_price: purchasePrice,
+        purchase_date: opts.purchaseDate,
+        notes: opts.notes,
       });
       if (opts.json) { console.log(JSON.stringify(d, null, 2)); return; }
       console.log(`Created domain: ${d.name} (${d.id})`);
@@ -100,14 +195,40 @@ export function registerDomainCommand(program: Command): void {
     .command("update <id>")
     .description("Update a domain")
     .option("--registrar <name>", "Registrar")
-    .option("--status <s>", "Status")
+    .option("--status <s>", `Status (${DOMAIN_STATUS_HELP})`)
     .option("--expires <date>", "Expiry date")
+    .option("--premium <bool>", "Premium flag (true/false)")
+    .option("--premium-price <price>", "Premium asking price")
+    .option("--standard-price <price>", "Standard registration price")
+    .option("--purchase-price <price>", "Purchase price paid")
+    .option("--purchase-date <date>", "Purchase date")
     .option("--notes <text>", "Notes")
     .option("-j, --json", "Output JSON")
-    .action((id: string, opts: { registrar?: string; status?: string; expires?: string; notes?: string; json?: boolean }) => {
+    .action((id: string, opts: {
+      registrar?: string;
+      status?: string;
+      expires?: string;
+      premium?: string;
+      premiumPrice?: string;
+      standardPrice?: string;
+      purchasePrice?: string;
+      purchaseDate?: string;
+      notes?: string;
+      json?: boolean;
+    }) => {
+      const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
+      const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
+      const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
       const d = updateDomain(id, {
-        registrar: opts.registrar, status: opts.status as "active" | undefined,
-        expires_at: opts.expires, notes: opts.notes,
+        registrar: opts.registrar,
+        status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
+        expires_at: opts.expires,
+        is_premium: opts.premium !== undefined ? opts.premium === "true" : undefined,
+        premium_price: premiumPrice,
+        standard_price: standardPrice,
+        purchase_price: purchasePrice,
+        purchase_date: opts.purchaseDate,
+        notes: opts.notes,
       });
       if (!d) { console.error(`Domain '${id}' not found.`); process.exit(1); }
       if (opts.json) { console.log(JSON.stringify(d, null, 2)); return; }
@@ -241,7 +362,15 @@ export function registerDomainCommand(program: Command): void {
       );
 
       let anyError = false;
-      const output: Array<{ domain: string; available?: boolean; error?: string }> = [];
+      const output: Array<{
+        domain: string;
+        available?: boolean;
+        is_premium?: boolean;
+        premium_price?: number;
+        standard_price?: number;
+        currency?: string;
+        error?: string;
+      }> = [];
 
       for (let i = 0; i < domains.length; i++) {
         const r = results[i]!;
@@ -275,6 +404,28 @@ export function registerDomainCommand(program: Command): void {
             2
           )
         );
+      } else {
+        for (const result of output) {
+          if (result.available !== undefined && "is_premium" in result && result.is_premium) {
+            console.log(`  Premium ask: ${result.premium_price ?? "unknown"}`);
+          }
+          if ("standard_price" in result && result.standard_price !== undefined) {
+            const currency = "currency" in result && result.currency ? ` ${result.currency}` : "";
+            console.log(`  Standard price: ${result.standard_price}${currency}`);
+          }
+        }
+      }
+
+      for (const result of output) {
+        if (result.error) continue;
+        const existing = getDomainByName(result.domain);
+        if (!existing) continue;
+        updateDomain(existing.id, {
+          is_premium: "is_premium" in result ? Boolean(result.is_premium) : existing.is_premium,
+          premium_price: "premium_price" in result ? result.premium_price ?? existing.premium_price : existing.premium_price,
+          standard_price: "standard_price" in result ? result.standard_price ?? existing.standard_price : existing.standard_price,
+          status: result.available ? existing.status : ("is_premium" in result && result.is_premium ? "premium_only" : "not_available"),
+        });
       }
 
       if (anyError) process.exit(1);
@@ -305,6 +456,96 @@ export function registerDomainCommand(program: Command): void {
   // ── renew ───────────────────────────────────────────────────────────────
 
   domain
+    .command("premium <identifier>")
+    .description("Mark a tracked domain as premium-priced")
+    .requiredOption("--ask <price>", "Premium asking price")
+    .option("--standard <price>", "Standard registration price")
+    .option("-j, --json", "Output JSON")
+    .action((identifier: string, opts: { ask: string; standard?: string; json?: boolean }) => {
+      const premiumPrice = parseOptionalNumber(opts.ask, "--ask");
+      const standardPrice = parseOptionalNumber(opts.standard, "--standard");
+      const updated = markDomainPremium(identifier, premiumPrice!, standardPrice);
+      if (!updated) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
+      console.log(`Marked ${updated.name} as premium at ${premiumPrice}`);
+    });
+
+  domain
+    .command("offer <identifier>")
+    .description("Record a negotiation step for a domain")
+    .option("--our <price>", "Our offer")
+    .option("--their <price>", "Their asking price")
+    .option("--status <status>", `Offer status (${DOMAIN_OFFER_STATUS_HELP})`, "pending")
+    .option("--notes <text>", "Negotiation notes")
+    .option("-j, --json", "Output JSON")
+    .action((identifier: string, opts: { our?: string; their?: string; status: string; notes?: string; json?: boolean }) => {
+      const details = requireDomain(identifier);
+      const offer = createDomainOffer({
+        domain_id: details.domain.id,
+        our_offer: parseOptionalNumber(opts.our, "--our"),
+        their_ask: parseOptionalNumber(opts.their, "--their"),
+        status: opts.status as (typeof DOMAIN_OFFER_STATUSES)[number],
+        notes: opts.notes,
+      });
+      if (details.domain.status === "discovered" || details.domain.status === "researching" || details.domain.status === "offered") {
+        updateDomainLifecycleStatus(details.domain.id, opts.their || opts.our ? "negotiating" : "offered");
+      }
+      if (opts.json) { console.log(JSON.stringify(offer, null, 2)); return; }
+      console.log(`Logged offer for ${details.domain.name}: ${offer.status}`);
+    });
+
+  domain
+    .command("status <identifier> <status>")
+    .description("Update the lifecycle status of a domain")
+    .option("--notes <text>", "Optional note to store with the status change")
+    .option("-j, --json", "Output JSON")
+    .action((identifier: string, status: string, opts: { notes?: string; json?: boolean }) => {
+      const updated = updateDomainLifecycleStatus(identifier, status as (typeof DOMAIN_STATUSES)[number], opts.notes);
+      if (!updated) { console.error(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { console.log(JSON.stringify(updated, null, 2)); return; }
+      console.log(`Updated ${updated.name} to ${updated.status}`);
+    });
+
+  domain
+    .command("emails <identifier>")
+    .description("Show email threads linked to a domain")
+    .option("-j, --json", "Output JSON")
+    .action((identifier: string, opts: { json?: boolean }) => {
+      const details = requireDomain(identifier);
+      const emails = listDomainEmailLinks(details.domain.id);
+      if (opts.json) {
+        console.log(JSON.stringify({ domain: details.domain.name, emails, count: emails.length }, null, 2));
+        return;
+      }
+      if (emails.length === 0) {
+        console.log(`No linked emails for ${details.domain.name}.`);
+        return;
+      }
+      for (const email of emails) {
+        const threadPart = email.thread_id ? ` (${email.thread_id})` : "";
+        console.log(`  ${email.type}: ${email.email_id}${threadPart}`);
+      }
+    });
+
+  domain
+    .command("link-email <identifier> <emailId>")
+    .description("Link an email or email thread to a domain")
+    .requiredOption("--type <type>", `Link type (${DOMAIN_EMAIL_TYPE_HELP})`)
+    .option("--thread-id <threadId>", "Email thread ID")
+    .option("-j, --json", "Output JSON")
+    .action((identifier: string, emailId: string, opts: { type: string; threadId?: string; json?: boolean }) => {
+      const details = requireDomain(identifier);
+      const link = linkDomainEmail({
+        domain_id: details.domain.id,
+        email_id: emailId,
+        thread_id: opts.threadId,
+        type: opts.type as (typeof DOMAIN_EMAIL_TYPES)[number],
+      });
+      if (opts.json) { console.log(JSON.stringify(link, null, 2)); return; }
+      console.log(`Linked ${emailId} to ${details.domain.name}`);
+    });
+
+  domain
     .command("renew <name>")
     .description("Renew a domain via its registrar provider")
     .option("--provider <name>", "Override provider")
@@ -328,6 +569,7 @@ export function registerDomainCommand(program: Command): void {
     .command("buy <name>")
     .description("Purchase a domain via Route 53 (contact defaults from: domains config set contact.*)")
     .option("--provider <name>", "Registrar provider (default: config default-registrar or route53)")
+    .option("--registrar <name>", "Registrar/seller for recorded purchases (alias of --provider)")
     .option("--email <email>", "Registrant email")
     .option("--first-name <n>", "First name")
     .option("--last-name <n>", "Last name")
@@ -338,15 +580,37 @@ export function registerDomainCommand(program: Command): void {
     .option("--country <c>", "Country code")
     .option("--zip <z>", "ZIP code")
     .option("--org <o>", "Organization")
+    .option("--price <amount>", "Record a completed purchase instead of registering via Route 53")
+    .option("--expires <date>", "Expiry date for recorded purchases")
+    .option("--auto-renew <bool>", "Auto-renew for recorded purchases (true/false)")
     .option("--years <n>", "Years", "1")
     .option("--wait", "Poll until registration completes")
     .action(async (name: string, opts: {
-      provider?: string; email?: string; firstName?: string; lastName?: string;
+      provider?: string; registrar?: string; email?: string; firstName?: string; lastName?: string;
       phone?: string; address?: string; city?: string; state?: string;
-      country?: string; zip?: string; org?: string; years: string; wait?: boolean;
+      country?: string; zip?: string; org?: string; price?: string; expires?: string; autoRenew?: string; years: string; wait?: boolean;
     }) => {
+      const recordedPrice = parseOptionalNumber(opts.price, "--price");
+      if (recordedPrice !== undefined) {
+        const registrarName = opts.registrar ?? opts.provider ?? "manual";
+        const existing = getDomainByName(name);
+        const domainRecord = existing ?? createDomain({ name, status: "discovered" });
+        const purchased = recordDomainPurchase(domainRecord.id, {
+          price: recordedPrice,
+          registrar: registrarName,
+          expires_at: opts.expires,
+          auto_renew: opts.autoRenew ? opts.autoRenew === "true" : domainRecord.auto_renew,
+        });
+        if (!purchased) { console.error(`Domain '${name}' not found.`); process.exit(1); }
+        if (opts.wait) {
+          updateDomainLifecycleStatus(purchased.id, "active");
+        }
+        console.log(`Recorded purchase for ${purchased.name} at ${recordedPrice}`);
+        return;
+      }
+
       const cfg = loadConfig();
-      const providerName = opts.provider ?? cfg.default_registrar ?? "route53";
+      const providerName = opts.registrar ?? opts.provider ?? cfg.default_registrar ?? "route53";
 
       // Only Route 53 supports direct purchase via this tool
       if (providerName !== "route53") {
@@ -380,7 +644,27 @@ export function registerDomainCommand(program: Command): void {
           console.log(`✓ Registration complete`);
         }
 
-        createDomain({ name, registrar: "AWS Route 53", status: "active", auto_renew: true });
+        const existing = getDomainByName(name);
+        if (existing) {
+          updateDomain(existing.id, {
+            registrar: "AWS Route 53",
+            status: "active",
+            auto_renew: true,
+            purchase_price: avail.price ? Number(avail.price) : existing.purchase_price,
+            purchase_date: new Date().toISOString(),
+            standard_price: avail.price ? Number(avail.price) : existing.standard_price,
+          });
+        } else {
+          createDomain({
+            name,
+            registrar: "AWS Route 53",
+            status: "active",
+            auto_renew: true,
+            purchase_price: avail.price ? Number(avail.price) : undefined,
+            purchase_date: new Date().toISOString(),
+            standard_price: avail.price ? Number(avail.price) : undefined,
+          });
+        }
         console.log(`✓ Added to portfolio`);
         if (!opts.wait) console.log(`  Check: domains r53 status ${reg.operationId}`);
       } catch (e) {

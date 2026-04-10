@@ -50,6 +50,10 @@ export interface ProviderSyncResult {
 export interface ProviderAvailability {
   domain: string;
   available: boolean;
+  is_premium?: boolean;
+  premium_price?: number;
+  standard_price?: number;
+  currency?: string;
 }
 
 export type DbFunctions = {
@@ -167,7 +171,12 @@ function createNamecheapProvider(): FullProvider {
     async checkAvailability(domain: string): Promise<ProviderAvailability> {
       const config = namecheap.getConfig();
       const result = await namecheap.checkAvailability(domain, config);
-      return { domain: result.domain, available: result.available };
+      return {
+        domain: result.domain,
+        available: result.available,
+        is_premium: result.premium,
+        premium_price: result.price,
+      };
     },
 
     async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {
@@ -251,7 +260,12 @@ function createGoDaddyProvider(): FullProvider {
 
     async checkAvailability(domain: string): Promise<ProviderAvailability> {
       const result = await godaddy.checkAvailability(domain);
-      return { domain: result.domain, available: result.available };
+      return {
+        domain: result.domain,
+        available: result.available,
+        standard_price: result.price,
+        currency: result.currency,
+      };
     },
 
     async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {
