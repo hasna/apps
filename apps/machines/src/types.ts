@@ -132,4 +132,84 @@ export interface NotificationTestResult {
   mode: "plan" | "apply";
   delivered: boolean;
   preview: string;
+  detail: string;
+}
+
+export interface InstalledAppStatus {
+  name: string;
+  packageName: string;
+  manager: "brew" | "cask" | "apt" | "winget" | "custom";
+  installed: boolean;
+  version?: string;
+}
+
+export interface AppsStatusResult {
+  machineId: string;
+  source: "local" | "lan" | "tailscale";
+  apps: InstalledAppStatus[];
+}
+
+export interface AppsDiffResult extends AppsStatusResult {
+  missing: string[];
+  installed: string[];
+}
+
+export interface CliToolStatus {
+  tool: "claude" | "codex" | "gemini";
+  packageName: string;
+  installed: boolean;
+  version?: string;
+}
+
+export interface ClaudeCliStatusResult {
+  machineId: string;
+  source: "local" | "lan" | "tailscale";
+  tools: CliToolStatus[];
+}
+
+export interface ClaudeCliDiffResult extends ClaudeCliStatusResult {
+  missing: string[];
+  installed: string[];
+}
+
+export interface NotificationDispatchResult {
+  channelId: string;
+  event: string;
+  delivered: boolean;
+  transport: NotificationChannelType;
+  detail: string;
+}
+
+export interface NotificationDispatchSummary {
+  event: string;
+  message: string;
+  deliveries: NotificationDispatchResult[];
+}
+
+export interface DoctorCheck {
+  id: string;
+  status: "ok" | "warn" | "fail";
+  summary: string;
+  detail: string;
+}
+
+export interface DoctorReport {
+  machineId: string;
+  source: "local" | "lan" | "tailscale";
+  manifestPath?: string;
+  dbPath?: string;
+  notificationsPath?: string;
+  checks: DoctorCheck[];
+}
+
+export interface SelfTestCheck {
+  id: string;
+  status: "ok" | "warn" | "fail";
+  summary: string;
+  detail: string;
+}
+
+export interface SelfTestResult {
+  machineId: string;
+  checks: SelfTestCheck[];
 }

@@ -1,20 +1,23 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildBackupPlan, runBackup } from "../commands/backup.js";
-import { buildAppsPlan, listApps, runAppsInstall } from "../commands/apps.js";
+import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall } from "../commands/apps.js";
 import { buildCertPlan, runCertPlan } from "../commands/cert.js";
 import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../commands/dns.js";
 import { diffMachines } from "../commands/diff.js";
-import { buildClaudeInstallPlan, runClaudeInstall } from "../commands/install-claude.js";
+import { runDoctor } from "../commands/doctor.js";
+import { buildClaudeInstallPlan, diffClaudeCli, getClaudeCliStatus, runClaudeInstall } from "../commands/install-claude.js";
 import { buildTailscaleInstallPlan, runTailscaleInstall } from "../commands/install-tailscale.js";
 import {
   addNotificationChannel,
+  dispatchNotificationEvent,
   listNotificationChannels,
   removeNotificationChannel,
   testNotificationChannel,
 } from "../commands/notifications.js";
 import { listPorts } from "../commands/ports.js";
 import { getServeInfo, renderDashboardHtml } from "../commands/serve.js";
+import { runSelfTest } from "../commands/self-test.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { getStatus } from "../commands/status.js";
 import { manifestBootstrapCurrentMachine, manifestGet, manifestList, manifestRemove, manifestValidate } from "../commands/manifest.js";
@@ -24,7 +27,11 @@ import { getAgentStatus } from "../agent/runtime.js";
 
 export const MACHINE_MCP_TOOL_NAMES = [
   "machines_status",
+  "machines_doctor",
+  "machines_self_test",
   "machines_apps_list",
+  "machines_apps_status",
+  "machines_apps_diff",
   "machines_apps_plan",
   "machines_apps_apply",
   "machines_manifest",
@@ -40,6 +47,8 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_diff",
   "machines_install_tailscale_preview",
   "machines_install_tailscale_apply",
+  "machines_install_claude_status",
+  "machines_install_claude_diff",
   "machines_install_claude_preview",
   "machines_install_claude_apply",
   "machines_ssh_resolve",
@@ -54,79 +63,85 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_notifications_add",
   "machines_notifications_list",
   "machines_notifications_test",
+  "machines_notifications_dispatch",
   "machines_notifications_remove",
   "machines_serve_info",
   "machines_serve_dashboard",
 ] as const;
 
 export function createMcpServer(version: string): McpServer {
-  const server = new McpServer({
-    name: "machines",
-    version,
-  });
+  const server = new McpServer({ name: "machines", version });
 
   server.tool("machines_status", "Return local machine fleet status paths and machine identity.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(getStatus(), null, 2) }],
   }));
 
   server.tool(
+    "machines_doctor",
+    "Run machine preflight checks.",
+    { machine_id: z.string().optional().describe("Machine identifier") },
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(runDoctor(machine_id), null, 2) }] })
+  );
+
+  server.tool("machines_self_test", "Run local package smoke checks.", {}, async () => ({
+    content: [{ type: "text", text: JSON.stringify(runSelfTest(), null, 2) }],
+  }));
+
+  server.tool(
     "machines_apps_list",
     "List manifest-managed apps for a machine.",
     { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(listApps(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(listApps(machine_id), null, 2) }] })
+  );
+
+  server.tool(
+    "machines_apps_status",
+    "Check installed state for manifest-managed apps.",
+    { machine_id: z.string().optional().describe("Machine identifier") },
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(getAppsStatus(machine_id), null, 2) }] })
+  );
+
+  server.tool(
+    "machines_apps_diff",
+    "Show missing and installed manifest-managed apps.",
+    { machine_id: z.string().optional().describe("Machine identifier") },
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(diffApps(machine_id), null, 2) }] })
   );
 
   server.tool(
     "machines_apps_plan",
     "Preview app install steps for a machine.",
     { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildAppsPlan(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildAppsPlan(machine_id), null, 2) }] })
   );
 
   server.tool(
     "machines_apps_apply",
     "Install manifest-managed apps for a machine.",
-    {
-      machine_id: z.string().optional().describe("Machine identifier"),
-      yes: z.boolean().describe("Confirmation flag for execution"),
-    },
-    async ({ machine_id, yes }) => ({
-      content: [{ type: "text", text: JSON.stringify(runAppsInstall(machine_id, { apply: true, yes }), null, 2) }],
-    })
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution") },
+    async ({ machine_id, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runAppsInstall(machine_id, { apply: true, yes }), null, 2) }] })
   );
 
   server.tool("machines_manifest", "Read the current fleet manifest.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(manifestList(), null, 2) }],
   }));
-
   server.tool("machines_manifest_validate", "Validate the current fleet manifest.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(manifestValidate(), null, 2) }],
   }));
-
   server.tool("machines_manifest_bootstrap", "Detect and upsert the current machine into the fleet manifest.", {}, async () => ({
     content: [{ type: "text", text: JSON.stringify(manifestBootstrapCurrentMachine(), null, 2) }],
   }));
-
   server.tool(
     "machines_manifest_get",
     "Read a single machine from the fleet manifest.",
     { machine_id: z.string().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(manifestGet(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestGet(machine_id), null, 2) }] })
   );
-
   server.tool(
     "machines_manifest_remove",
     "Remove a single machine from the fleet manifest.",
     { machine_id: z.string().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(manifestRemove(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestRemove(machine_id), null, 2) }] })
   );
 
   server.tool("machines_agent_status", "List current machine agent heartbeats.", {}, async () => ({
@@ -137,42 +152,28 @@ export function createMcpServer(version: string): McpServer {
     "machines_setup_preview",
     "Preview setup actions for a machine.",
     { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildSetupPlan(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildSetupPlan(machine_id), null, 2) }] })
   );
 
   server.tool(
     "machines_setup_apply",
     "Execute setup actions for a machine.",
-    {
-      machine_id: z.string().optional().describe("Machine identifier"),
-      yes: z.boolean().describe("Confirmation flag for execution"),
-    },
-    async ({ machine_id, yes }) => ({
-      content: [{ type: "text", text: JSON.stringify(runSetup(machine_id, { apply: true, yes }), null, 2) }],
-    })
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution") },
+    async ({ machine_id, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runSetup(machine_id, { apply: true, yes }), null, 2) }] })
   );
 
   server.tool(
     "machines_sync_preview",
     "Preview sync actions for a machine.",
     { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildSyncPlan(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildSyncPlan(machine_id), null, 2) }] })
   );
 
   server.tool(
     "machines_sync_apply",
     "Execute sync actions for a machine.",
-    {
-      machine_id: z.string().optional().describe("Machine identifier"),
-      yes: z.boolean().describe("Confirmation flag for execution"),
-    },
-    async ({ machine_id, yes }) => ({
-      content: [{ type: "text", text: JSON.stringify(runSync(machine_id, { apply: true, yes }), null, 2) }],
-    })
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution") },
+    async ({ machine_id, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runSync(machine_id, { apply: true, yes }), null, 2) }] })
   );
 
   server.tool(
@@ -188,15 +189,33 @@ export function createMcpServer(version: string): McpServer {
   );
 
   server.tool(
+    "machines_install_claude_status",
+    "Check installed state for Claude, Codex, and Gemini CLIs.",
+    {
+      machine_id: z.string().optional().describe("Machine identifier"),
+      tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to inspect"),
+    },
+    async ({ machine_id, tools }) => ({ content: [{ type: "text", text: JSON.stringify(getClaudeCliStatus(machine_id, tools), null, 2) }] })
+  );
+
+  server.tool(
+    "machines_install_claude_diff",
+    "Show missing and installed Claude, Codex, and Gemini CLIs.",
+    {
+      machine_id: z.string().optional().describe("Machine identifier"),
+      tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to inspect"),
+    },
+    async ({ machine_id, tools }) => ({ content: [{ type: "text", text: JSON.stringify(diffClaudeCli(machine_id, tools), null, 2) }] })
+  );
+
+  server.tool(
     "machines_install_claude_preview",
     "Preview Claude, Codex, and Gemini CLI install steps for a machine.",
     {
       machine_id: z.string().optional().describe("Machine identifier"),
       tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to install"),
     },
-    async ({ machine_id, tools }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildClaudeInstallPlan(machine_id, tools), null, 2) }],
-    })
+    async ({ machine_id, tools }) => ({ content: [{ type: "text", text: JSON.stringify(buildClaudeInstallPlan(machine_id, tools), null, 2) }] })
   );
 
   server.tool(
@@ -216,132 +235,69 @@ export function createMcpServer(version: string): McpServer {
     "machines_install_tailscale_preview",
     "Preview Tailscale install steps for a machine.",
     { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildTailscaleInstallPlan(machine_id), null, 2) }],
-    })
+    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildTailscaleInstallPlan(machine_id), null, 2) }] })
   );
 
   server.tool(
     "machines_install_tailscale_apply",
     "Execute Tailscale install steps for a machine.",
-    {
-      machine_id: z.string().optional().describe("Machine identifier"),
-      yes: z.boolean().describe("Confirmation flag for execution"),
-    },
-    async ({ machine_id, yes }) => ({
-      content: [{ type: "text", text: JSON.stringify(runTailscaleInstall(machine_id, { apply: true, yes }), null, 2) }],
-    })
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution") },
+    async ({ machine_id, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runTailscaleInstall(machine_id, { apply: true, yes }), null, 2) }] })
   );
 
   server.tool(
     "machines_ssh_resolve",
     "Resolve the best SSH route for a machine.",
-    {
-      machine_id: z.string().describe("Machine identifier"),
-      remote_command: z.string().optional().describe("Optional remote command"),
-    },
+    { machine_id: z.string().describe("Machine identifier"), remote_command: z.string().optional().describe("Optional remote command") },
     async ({ machine_id, remote_command }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              resolved: resolveSshTarget(machine_id),
-              command: buildSshCommand(machine_id, remote_command),
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify({ resolved: resolveSshTarget(machine_id), command: buildSshCommand(machine_id, remote_command) }, null, 2) }],
     })
   );
 
-  server.tool(
-    "machines_ports",
-    "List listening ports on a machine.",
-    {
-      machine_id: z.string().optional().describe("Machine identifier"),
-    },
-    async ({ machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(listPorts(machine_id), null, 2) }],
-    })
-  );
+  server.tool("machines_ports", "List listening ports on a machine.", { machine_id: z.string().optional().describe("Machine identifier") }, async ({ machine_id }) => ({
+    content: [{ type: "text", text: JSON.stringify(listPorts(machine_id), null, 2) }],
+  }));
 
   server.tool(
     "machines_backup_preview",
     "Preview backup steps for the current machine.",
-    {
-      bucket: z.string().describe("S3 bucket name"),
-      prefix: z.string().optional().describe("S3 key prefix"),
-    },
-    async ({ bucket, prefix }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildBackupPlan(bucket, prefix), null, 2) }],
-    })
+    { bucket: z.string().describe("S3 bucket name"), prefix: z.string().optional().describe("S3 key prefix") },
+    async ({ bucket, prefix }) => ({ content: [{ type: "text", text: JSON.stringify(buildBackupPlan(bucket, prefix), null, 2) }] })
   );
 
   server.tool(
     "machines_backup_apply",
     "Execute backup steps for the current machine.",
-    {
-      bucket: z.string().describe("S3 bucket name"),
-      prefix: z.string().optional().describe("S3 key prefix"),
-      yes: z.boolean().describe("Confirmation flag for execution"),
-    },
-    async ({ bucket, prefix, yes }) => ({
-      content: [{ type: "text", text: JSON.stringify(runBackup(bucket, prefix, { apply: true, yes }), null, 2) }],
-    })
+    { bucket: z.string().describe("S3 bucket name"), prefix: z.string().optional().describe("S3 key prefix"), yes: z.boolean().describe("Confirmation flag for execution") },
+    async ({ bucket, prefix, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runBackup(bucket, prefix, { apply: true, yes }), null, 2) }] })
   );
 
   server.tool(
     "machines_cert_preview",
     "Preview mkcert steps for one or more domains.",
-    {
-      domains: z.array(z.string()).describe("Domains to issue certificates for"),
-    },
-    async ({ domains }) => ({
-      content: [{ type: "text", text: JSON.stringify(buildCertPlan(domains), null, 2) }],
-    })
+    { domains: z.array(z.string()).describe("Domains to issue certificates for") },
+    async ({ domains }) => ({ content: [{ type: "text", text: JSON.stringify(buildCertPlan(domains), null, 2) }] })
   );
 
   server.tool(
     "machines_cert_apply",
     "Execute mkcert steps for one or more domains.",
-    {
-      domains: z.array(z.string()).describe("Domains to issue certificates for"),
-      yes: z.boolean().describe("Confirmation flag for execution"),
-    },
-    async ({ domains, yes }) => ({
-      content: [{ type: "text", text: JSON.stringify(runCertPlan(domains, { apply: true, yes }), null, 2) }],
-    })
+    { domains: z.array(z.string()).describe("Domains to issue certificates for"), yes: z.boolean().describe("Confirmation flag for execution") },
+    async ({ domains, yes }) => ({ content: [{ type: "text", text: JSON.stringify(runCertPlan(domains, { apply: true, yes }), null, 2) }] })
   );
 
   server.tool(
     "machines_dns_add",
     "Add or replace a local domain mapping.",
-    {
-      domain: z.string().describe("Domain name"),
-      port: z.number().describe("Target port"),
-      target_host: z.string().optional().describe("Target host"),
-    },
-    async ({ domain, port, target_host }) => ({
-      content: [{ type: "text", text: JSON.stringify(addDomainMapping(domain, port, target_host), null, 2) }],
-    })
+    { domain: z.string().describe("Domain name"), port: z.number().describe("Target port"), target_host: z.string().optional().describe("Target host") },
+    async ({ domain, port, target_host }) => ({ content: [{ type: "text", text: JSON.stringify(addDomainMapping(domain, port, target_host), null, 2) }] })
   );
-
-  server.tool("machines_dns_list", "List local domain mappings.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(listDomainMappings(), null, 2) }],
-  }));
-
+  server.tool("machines_dns_list", "List local domain mappings.", {}, async () => ({ content: [{ type: "text", text: JSON.stringify(listDomainMappings(), null, 2) }] }));
   server.tool(
     "machines_dns_render",
     "Render hosts/proxy configuration for a domain.",
-    {
-      domain: z.string().describe("Domain name"),
-    },
-    async ({ domain }) => ({
-      content: [{ type: "text", text: JSON.stringify(renderDomainMapping(domain), null, 2) }],
-    })
+    { domain: z.string().describe("Domain name") },
+    async ({ domain }) => ({ content: [{ type: "text", text: JSON.stringify(renderDomainMapping(domain), null, 2) }] })
   );
 
   server.tool(
@@ -355,22 +311,7 @@ export function createMcpServer(version: string): McpServer {
       enabled: z.boolean().optional().describe("Whether the channel is enabled"),
     },
     async ({ channel_id, type, target, events, enabled }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            addNotificationChannel({
-              id: channel_id,
-              type,
-              target,
-              events,
-              enabled: enabled ?? true,
-            }),
-            null,
-            2
-          ),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify(addNotificationChannel({ id: channel_id, type, target, events, enabled: enabled ?? true }), null, 2) }],
     })
   );
 
@@ -381,47 +322,31 @@ export function createMcpServer(version: string): McpServer {
   server.tool(
     "machines_notifications_test",
     "Preview or execute a notification test.",
-    {
-      channel_id: z.string().describe("Channel identifier"),
-      event: z.string().optional().describe("Event name"),
-      message: z.string().optional().describe("Message body"),
-      yes: z.boolean().optional().describe("Execute the test when true"),
-    },
+    { channel_id: z.string().describe("Channel identifier"), event: z.string().optional().describe("Event name"), message: z.string().optional().describe("Message body"), yes: z.boolean().optional().describe("Execute the test when true") },
     async ({ channel_id, event, message, yes }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            testNotificationChannel(channel_id, event, message, { apply: Boolean(yes), yes }),
-            null,
-            2
-          ),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify(await testNotificationChannel(channel_id, event, message, { apply: Boolean(yes), yes }), null, 2) }],
     })
+  );
+
+  server.tool(
+    "machines_notifications_dispatch",
+    "Dispatch an event to matching notification channels.",
+    { event: z.string().describe("Event name"), message: z.string().describe("Message body"), channel_id: z.string().optional().describe("Limit delivery to one channel") },
+    async ({ event, message, channel_id }) => ({ content: [{ type: "text", text: JSON.stringify(await dispatchNotificationEvent(event, message, { channelId: channel_id }), null, 2) }] })
   );
 
   server.tool(
     "machines_notifications_remove",
     "Remove a notification channel.",
-    {
-      channel_id: z.string().describe("Channel identifier"),
-    },
-    async ({ channel_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(removeNotificationChannel(channel_id), null, 2) }],
-    })
+    { channel_id: z.string().describe("Channel identifier") },
+    async ({ channel_id }) => ({ content: [{ type: "text", text: JSON.stringify(removeNotificationChannel(channel_id), null, 2) }] })
   );
 
   server.tool(
     "machines_serve_info",
     "Preview the dashboard server bind address and routes.",
-    {
-      host: z.string().optional().describe("Host interface"),
-      port: z.number().optional().describe("Port number"),
-    },
-    async ({ host, port }) => ({
-      content: [{ type: "text", text: JSON.stringify(getServeInfo({ host, port }), null, 2) }],
-    })
+    { host: z.string().optional().describe("Host interface"), port: z.number().optional().describe("Port number") },
+    async ({ host, port }) => ({ content: [{ type: "text", text: JSON.stringify(getServeInfo({ host, port }), null, 2) }] })
   );
 
   server.tool("machines_serve_dashboard", "Render the current dashboard HTML.", {}, async () => ({

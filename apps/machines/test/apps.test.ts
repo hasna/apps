@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
-import { buildAppsPlan, listApps } from "../src/commands/apps.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { buildAppsPlan, diffApps, getAppsStatus, listApps } from "../src/commands/apps.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 
 describe("apps", () => {
@@ -43,5 +43,28 @@ describe("apps", () => {
     const plan = buildAppsPlan("apple03");
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0]?.command).toContain("brew install --cask ghostty");
+  });
+
+  test("computes app status and diff", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-status-"));
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "spark01";
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    manifestInit();
+    manifestAdd({
+      id: "spark01",
+      platform: "linux",
+      workspacePath: "/home/hasna/workspace",
+      apps: [
+        { name: "shell", manager: "custom", packageName: "sh" },
+        { name: "missing", manager: "custom", packageName: "__missing_app__" },
+      ],
+    });
+
+    const status = getAppsStatus("spark01");
+    expect(status.apps).toHaveLength(2);
+    expect(status.apps.some((app) => app.name === "shell" && app.installed)).toBe(true);
+    const diff = diffApps("spark01");
+    expect(diff.installed).toContain("shell");
+    expect(diff.missing).toContain("missing");
   });
 });
