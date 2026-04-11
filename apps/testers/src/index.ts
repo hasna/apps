@@ -283,3 +283,29 @@ export type { CaptureResult } from "./lib/screenshotter.js";
 export { resolveCredential, isCredentialReference } from "./lib/secrets-resolver.js";
 export { ensurePersonaAuthenticated, loginWithAuthConfig } from "./lib/persona-auth.js";
 export type { LoginResult } from "./lib/persona-auth.js";
+
+export {
+  discoverRepo,
+  clearDiscoveryCache,
+  getDiscoveryCacheInfo,
+} from "./lib/repo-discovery.js";
+export type {
+  RepoSpec,
+  PackageManagers,
+  DevScripts,
+  ReadinessCheck,
+  RepoPrep,
+  RepoDiscoverySnapshot,
+  DiscoveryOptions,
+} from "./lib/repo-discovery.js";
+
+export {
+  runRepoTests,
+  runPrep,
+} from "./lib/repo-executor.js";
+export type {
+  RepoRunSpecResult,
+  RepoRunOptions,
+  RepoRunResult,
+  PrepResult,
+} from "./lib/repo-executor.js";

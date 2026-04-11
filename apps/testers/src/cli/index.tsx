@@ -38,6 +38,8 @@ import type { ScenarioPriority } from "../types/index.js";
 import { parseAssertionString } from "../lib/assertions.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { getTestersDir } from "../lib/paths.js";
+import { discoverRepo, clearDiscoveryCache, getDiscoveryCacheInfo } from "../lib/repo-discovery.js";
+import { runRepoTests, runPrep } from "../lib/repo-executor.js";
 
 // ─── Interactive Add Prompt (Ink) ────────────────────────────────────────────
 
@@ -1553,6 +1555,311 @@ projectCmd
       }
 
       log(chalk.green(`Active project set to ${chalk.bold(project.name)} (${project.id})`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers repo ─────────────────────────────────────────────────────────
+
+const repoCmd = program.command("repo").description("Discover and run repo-native Playwright tests");
+
+repoCmd
+  .command("discover [path]")
+  .alias("scan")
+  .description("Discover Playwright tests in a repo")
+  .option("--refresh", "Force a fresh scan, ignoring cache", false)
+  .option("--json", "Output as JSON", false)
+  .option("--base-url <url>", "Override the suggested base URL")
+  .action((path: string | undefined, opts) => {
+    try {
+      const repoPath = resolve(path ?? process.cwd());
+      const snapshot = discoverRepo({
+        repoPath,
+        refresh: opts.refresh,
+        baseUrl: opts.baseUrl,
+      });
+
+      if (opts.json) {
+        log(JSON.stringify(snapshot, null, 2));
+        return;
+      }
+
+      log("");
+      log(chalk.bold("  Repo Discovery"));
+      log("");
+      log(`  Path:       ${chalk.cyan(snapshot.repoPath)}`);
+      log(`  Config:     ${snapshot.configPath ? chalk.green(snapshot.configPath) : chalk.red("not found")}`);
+      log(`  Specs:      ${chalk.cyan(snapshot.specs.length.toString())} files`);
+      log(`  Tests:      ~${chalk.cyan(snapshot.totalTests.toString())} tests detected`);
+      log(`  Package Mgr: ${chalk.yellow(snapshot.packageManager.preferred)}`);
+      if (snapshot.suggestedUrl) {
+        log(`  Base URL:   ${snapshot.suggestedUrl}`);
+      }
+      log("");
+
+      // Readiness
+      if (snapshot.readiness.ready) {
+        log(chalk.green("  Ready to run"));
+      } else {
+        log(chalk.red("  Not ready:"));
+        for (const issue of snapshot.readiness.issues) {
+          log(chalk.red(`    - ${issue}`));
+        }
+      }
+      log("");
+
+      // Prep suggestions
+      const hasPrep = snapshot.prep.installCmd || snapshot.prep.installBrowsersCmd;
+      if (hasPrep) {
+        log(chalk.dim("  Prerequisites:"));
+        if (snapshot.prep.installCmd) {
+          log(chalk.dim(`    Install deps:     ${snapshot.prep.installCmd}`));
+        }
+        if (snapshot.prep.installBrowsersCmd) {
+          log(chalk.dim(`    Install browsers: ${snapshot.prep.installBrowsersCmd}`));
+        }
+        log("");
+      }
+
+      // List specs (abbreviated if many)
+      if (snapshot.specs.length > 0) {
+        log(chalk.bold("  Spec Files"));
+        log(chalk.dim(`  ${"File".padEnd(50)} ${"Tests"}`));
+        log(chalk.dim(`  ${"─".repeat(50)} ${"─".repeat(10)}`));
+        const maxShow = 20;
+        const shown = snapshot.specs.slice(0, maxShow);
+        for (const spec of shown) {
+          log(`  ${spec.file.padEnd(50)} ${spec.testCount.toString()}`);
+        }
+        if (snapshot.specs.length > maxShow) {
+          log(chalk.dim(`  ... and ${snapshot.specs.length - maxShow} more`));
+        }
+        log("");
+      } else {
+        log(chalk.yellow("  No spec files found. Make sure Playwright is configured."));
+        log("");
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+repoCmd
+  .command("prepare [path]")
+  .alias("prep")
+  .description("Install dependencies and browsers for repo tests")
+  .option("--all", "Run all prep steps (install, browsers, build, seed)", false)
+  .option("--install", "Install dependencies", false)
+  .option("--browsers", "Install Playwright browsers", false)
+  .option("--build", "Build the app", false)
+  .option("--seed", "Seed the database", false)
+  .option("--refresh", "Force fresh discovery scan", false)
+  .option("--json", "Output as JSON", false)
+  .action((path: string | undefined, opts) => {
+    try {
+      const repoPath = resolve(path ?? process.cwd());
+      const snapshot = discoverRepo({ repoPath, refresh: opts.refresh });
+
+      // Determine which steps to run
+      const steps: ("install" | "browsers" | "dev" | "build" | "seed")[] = [];
+      if (opts.all) {
+        if (snapshot.prep.installCmd) steps.push("install");
+        if (snapshot.prep.installBrowsersCmd) steps.push("browsers");
+        if (snapshot.prep.buildCmd) steps.push("build");
+        if (snapshot.prep.seedCmd) steps.push("seed");
+      } else {
+        if (opts.install) steps.push("install");
+        if (opts.browsers) steps.push("browsers");
+        if (opts.build) steps.push("build");
+        if (opts.seed) steps.push("seed");
+      }
+
+      if (steps.length === 0) {
+        // Default: if nothing specified, check readiness and suggest
+        if (snapshot.readiness.ready) {
+          log(chalk.green("All prerequisites are already satisfied."));
+          return;
+        }
+        log(chalk.red("Not ready. Run with flags:"));
+        if (!snapshot.readiness.playwrightInstalled) log(chalk.red("  --install  (install dependencies)"));
+        if (!snapshot.readiness.browsersInstalled) log(chalk.red("  --browsers (install Playwright browsers)"));
+        return;
+      }
+
+      log("");
+      log(chalk.bold("  Preparing Repo"));
+      log("");
+
+      const prepResult = runPrep(snapshot, steps);
+
+      for (const step of prepResult.steps) {
+        if (step.success) {
+          log(chalk.green(`  ✓ ${step.cmd}`));
+          if (step.durationMs > 0) {
+            log(chalk.dim(`    (${(step.durationMs / 1000).toFixed(1)}s)`));
+          }
+        } else {
+          log(chalk.red(`  ✗ ${step.cmd}`));
+          if (step.output) {
+            const lines = step.output.split("\n").slice(-3).filter(Boolean);
+            for (const line of lines) {
+              log(chalk.dim(`    ${line}`));
+            }
+          }
+        }
+      }
+      log("");
+
+      if (prepResult.allSucceeded) {
+        log(chalk.green("  All prerequisites installed successfully."));
+      } else {
+        log(chalk.red("  Some steps failed. Fix the issues above and retry."));
+      }
+      log("");
+
+      if (opts.json) {
+        log(JSON.stringify(prepResult, null, 2));
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+repoCmd
+  .command("run [path]")
+  .description("Run discovered Playwright tests natively")
+  .option("--refresh", "Force fresh discovery scan", false)
+  .option("--spec <file>", "Run specific spec file(s) (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--extra <arg>", "Extra args to pass to Playwright (repeatable)", (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .option("--timeout <ms>", "Timeout per spec file", "300000")
+  .option("--url <url>", "Dev server URL")
+  .option("--project <id>", "Project ID for result storage")
+  .option("--label <text>", "Run label")
+  .option("--json", "Output as JSON", false)
+  .action(async (path: string | undefined, opts) => {
+    try {
+      const repoPath = resolve(path ?? process.cwd());
+      const snapshot = discoverRepo({
+        repoPath,
+        refresh: opts.refresh,
+        baseUrl: opts.url,
+      });
+
+      if (snapshot.specs.length === 0) {
+        logError(chalk.red("No spec files found. Run 'testers repo discover' first."));
+        process.exit(1);
+      }
+
+      const specFiles = opts.spec.length > 0 ? opts.spec : snapshot.specs.map((s) => s.file);
+
+      if (!opts.json) {
+        log("");
+        log(chalk.bold("  Running Repo Tests"));
+        log("");
+        log(`  Repo:  ${chalk.cyan(snapshot.repoPath)}`);
+        log(`  Specs: ${chalk.cyan(specFiles.length.toString())} files`);
+        if (opts.url) log(`  URL:   ${opts.url}`);
+        log("");
+      }
+
+      const result = await runRepoTests({
+        snapshot,
+        specFiles,
+        extraArgs: opts.extra,
+        timeout: parseInt(opts.timeout, 10),
+        projectId: opts.project,
+        url: opts.url,
+        label: opts.label,
+      });
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      log(chalk.bold("  Results"));
+      log("");
+      log(`  Total:   ${result.total}`);
+      log(`  Passed:  ${chalk.green(result.passed.toString())}`);
+      log(`  Failed:  ${result.failed > 0 ? chalk.red(result.failed.toString()) : "0"}`);
+      log(`  Skipped: ${result.skipped > 0 ? chalk.yellow(result.skipped.toString()) : "0"}`);
+      log(`  Errors:  ${result.errored > 0 ? chalk.red(result.errored.toString()) : "0"}`);
+      log(`  Time:    ${(result.durationMs / 1000).toFixed(1)}s`);
+      log("");
+
+      // Per-spec detail
+      for (const sr of result.specResults) {
+        const statusIcon = sr.status === "passed" ? chalk.green("✓") : sr.status === "failed" ? chalk.red("✗") : chalk.yellow("⚠");
+        log(`  ${statusIcon} ${sr.specFile}`);
+        if (sr.exitCode !== 0 && sr.exitCode !== null) {
+          log(chalk.dim(`    exit code: ${sr.exitCode}`));
+        }
+        if (sr.testResults.length > 0) {
+          const names = sr.testResults.slice(0, 3).map((t) => t.name).join(", ");
+          log(chalk.dim(`    ${names}${sr.testResults.length > 3 ? ` (+${sr.testResults.length - 3} more)` : ""}`));
+        }
+      }
+      log("");
+
+      if (result.status === "failed") {
+        process.exit(1);
+      }
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+repoCmd
+  .command("cache [path]")
+  .description("Manage discovery cache")
+  .option("--clear", "Clear discovery cache", false)
+  .option("--status", "Show cache status", false)
+  .action((path: string | undefined, opts) => {
+    try {
+      if (opts.clear) {
+        const repoPath = path ? resolve(path) : undefined;
+        clearDiscoveryCache(repoPath);
+        if (repoPath) {
+          log(chalk.green("Discovery cache cleared for this repo."));
+        } else {
+          log(chalk.green("All discovery cache cleared."));
+        }
+        return;
+      }
+
+      if (opts.status) {
+        const repoPath = resolve(path ?? process.cwd());
+        const info = getDiscoveryCacheInfo(repoPath);
+        if (!info) {
+          log(chalk.dim("No discovery cache for this repo."));
+          return;
+        }
+        log("");
+        log(chalk.bold("  Discovery Cache"));
+        log(`  Path:     ${info.path}`);
+        log(`  Cached:   ${chalk.green("yes")}`);
+        log(`  Stale:    ${info.stale ? chalk.yellow("yes") : chalk.green("no")}`);
+        log("");
+        return;
+      }
+
+      // Default: show both
+      const repoPath = resolve(path ?? process.cwd());
+      const info = getDiscoveryCacheInfo(repoPath);
+      if (!info) {
+        log(chalk.dim("No discovery cache. Run 'testers repo discover' to create one."));
+        return;
+      }
+      log(chalk.bold("  Discovery Cache"));
+      log(`  Path:  ${info.path}`);
+      log(`  Stale: ${info.stale ? chalk.yellow("yes") : chalk.green("no")}`);
+      log(chalk.dim("  Run with --clear to clear, --refresh on discover to rebuild."));
+      log("");
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
