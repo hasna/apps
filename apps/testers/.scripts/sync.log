@@ -73,3 +73,12 @@ Committed local changes
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
 === 2026-04-12 00:05:01 ===
+[main 676ead0] chore: auto-commit uncommitted changes before sync
+ 6 files changed, 1347 insertions(+)
+ create mode 100644 src/lib/repo-discovery.ts
+ create mode 100644 src/lib/repo-executor.ts
+ create mode 100644 test-results/.last-run.json
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-13 00:05:01 ===
