@@ -4,7 +4,7 @@
  * Exposes tools for sending, reading, and managing messages, spaces, and projects between agents.
  *
  * Usage:
- *   conversations mcp          # Start MCP server on stdio (22 tools)
+ *   conversations mcp          # Start MCP server on stdio (40+ tools)
  *   conversations-mcp          # Direct binary
  */
 
@@ -21,6 +21,8 @@ import { registerCloudSyncTools } from "./tools/cloud.js";
 import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
+import { registerTaskTools } from "./tools/tasks.js";
+import { registerWebhookTools } from "./tools/webhooks.js";
 
 import pkg from "../../package.json";
 
@@ -52,6 +54,7 @@ registerSpaceTools(server);
 registerProjectTools(server);
 registerAgentTools(server, agentFocus, getAgentFocus);
 registerAdvancedTools(server, pkg.version);
+registerTaskTools(server);
 registerTmuxTools(server);
 
 // ---- Channel bridges ----
