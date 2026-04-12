@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { Message } from "../types.js";
 import { getDataDir } from "./db.js";
@@ -7,7 +7,7 @@ import net from "net";
 
 export interface WebhookConfig {
   url: string;
-  events: ("dm" | "blocker" | "space" | "mention")[];
+  events: ("dm" | "blocker" | "space" | "mention" | "task")[];
   agent?: string;
 }
 
@@ -18,6 +18,12 @@ interface ConversationsConfig {
 let cachedConfig: ConversationsConfig | null = null;
 let configLoadedAt = 0;
 const CONFIG_CACHE_MS = 10000;
+
+/** @internal — exposed only for testing. Resets the config cache. */
+export function _resetConfigCache(): void {
+  cachedConfig = null;
+  configLoadedAt = 0;
+}
 
 function getConfigPath(): string {
   return process.env.CONVERSATIONS_CONFIG_PATH || join(getDataDir(), "config.json");
@@ -127,4 +133,159 @@ export function fireWebhooks(msg: Message): void {
       });
     });
   }
+}
+
+export interface TaskEvent {
+  task_id: number;
+  task_uuid: string;
+  subject: string;
+  action: string;
+  old_status?: string;
+  new_status?: string;
+  agent: string;
+  detail?: string;
+  priority: string;
+  assignee: string | null;
+  project_id: string | null;
+  created_at: string;
+}
+
+/**
+ * Fire webhooks for task state transitions.
+ * Runs async, never blocks the task operation.
+ */
+export function fireTaskWebhooks(event: TaskEvent): void {
+  const config = loadConfig();
+  if (!config.webhooks || config.webhooks.length === 0) return;
+
+  const taskWebhooks = config.webhooks.filter(w => w.events.includes("task"));
+  if (taskWebhooks.length === 0) return;
+
+  for (const webhook of taskWebhooks) {
+    if (webhook.agent && event.agent !== webhook.agent) continue;
+
+    void validateWebhookUrl(webhook.url).then((valid) => {
+      if (!valid) return;
+      fetch(webhook.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      }).catch(() => {
+        // Silently ignore webhook failures
+      });
+    });
+  }
+}
+
+// ── Webhook configuration management ─────────────────────────────────────────
+
+export interface AddWebhookResult {
+  success: boolean;
+  error?: string;
+  webhook?: WebhookConfig;
+  index?: number;
+}
+
+export interface RemoveWebhookResult {
+  success: boolean;
+  error?: string;
+  removed?: WebhookConfig;
+}
+
+/**
+ * List all configured webhooks.
+ */
+export function listWebhooks(): WebhookConfig[] {
+  const config = loadConfig();
+  return config.webhooks || [];
+}
+
+/**
+ * Add a webhook to the config.
+ * Validates the URL before saving.
+ */
+export async function addWebhook(url: string, events: string[], agent?: string): Promise<AddWebhookResult> {
+  // Validate inputs
+  if (!url || !events || events.length === 0) {
+    return { success: false, error: "url and events are required" };
+  }
+
+  const validEvents = ["dm", "blocker", "space", "mention", "task"];
+  for (const event of events) {
+    if (!validEvents.includes(event)) {
+      return { success: false, error: `Invalid event "${event}". Valid events: ${validEvents.join(", ")}` };
+    }
+  }
+
+  // Validate URL
+  try {
+    new URL(url);
+  } catch {
+    return { success: false, error: `Invalid URL: ${url}` };
+  }
+
+  const webhook: WebhookConfig = { url, events: events as WebhookConfig["events"], ...(agent ? { agent } : {}) };
+
+  const configPath = getConfigPath();
+
+  // Ensure directory exists
+  const configDir = configPath.substring(0, configPath.lastIndexOf("/"));
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
+  }
+
+  // Read current config (bypassing cache for write)
+  let config: ConversationsConfig = {};
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    config = JSON.parse(raw);
+  } catch {
+    // File doesn't exist yet, start fresh
+  }
+
+  if (!config.webhooks) config.webhooks = [];
+
+  // Prevent duplicates
+  if (config.webhooks.some(w => w.url === url && w.agent === agent && JSON.stringify(w.events.sort()) === JSON.stringify(events.sort()))) {
+    return { success: false, error: "Webhook already exists" };
+  }
+
+  config.webhooks.push(webhook);
+  writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+
+  // Reset cache so next fireWebhooks picks up new config
+  _resetConfigCache();
+
+  return { success: true, webhook, index: config.webhooks.length - 1 };
+}
+
+/**
+ * Remove a webhook by index.
+ */
+export function removeWebhook(index: number): RemoveWebhookResult {
+  const configPath = getConfigPath();
+
+  let config: ConversationsConfig = {};
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    config = JSON.parse(raw);
+  } catch {
+    return { success: false, error: "No config file found" };
+  }
+
+  if (!config.webhooks || config.webhooks.length === 0) {
+    return { success: false, error: "No webhooks configured" };
+  }
+
+  if (index < 0 || index >= config.webhooks.length) {
+    return { success: false, error: `Invalid index: ${index}. Valid range: 0-${config.webhooks.length - 1}` };
+  }
+
+  const removed = config.webhooks.splice(index, 1)[0];
+  writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+
+  // Reset cache
+  _resetConfigCache();
+
+  return { success: true, removed };
 }

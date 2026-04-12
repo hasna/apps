@@ -190,3 +190,118 @@ export interface RegisterAgentResult {
   created: boolean;
   took_over: boolean;
 }
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled" | "blocked";
+export type TaskPriority = "low" | "medium" | "high" | "critical";
+
+export interface Task {
+  id: number;
+  uuid: string;
+  subject: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignee: string | null;
+  reporter: string;
+  project_id: string | null;
+  space: string | null;
+  parent_id: number | null;
+  depends_on: string[] | null;
+  tags: string[] | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  due_at: string | null;
+}
+
+export interface TaskInfo extends Task {
+  subtask_count: number;
+  comment_count: number;
+  dependency_count: number;
+  blocker_info: { task_id: number; subject: string; status: TaskStatus }[];
+}
+
+export interface CreateTaskOptions {
+  subject: string;
+  description?: string;
+  reporter: string;
+  assignee?: string;
+  priority?: TaskPriority;
+  project_id?: string;
+  space?: string;
+  parent_id?: number;
+  depends_on?: number[];
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  due_at?: string;
+}
+
+export interface ListTasksOptions {
+  status?: TaskStatus;
+  assignee?: string;
+  reporter?: string;
+  project_id?: string;
+  space?: string;
+  parent_id?: number | null;
+  priority?: TaskPriority;
+  tag?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  limit?: number;
+  offset?: number;
+  include_archived?: boolean;
+}
+
+export interface SearchTasksOptions {
+  query: string;
+  status?: TaskStatus;
+  assignee?: string;
+  project_id?: string;
+  space?: string;
+  priority?: TaskPriority;
+  limit?: number;
+  sort?: "relevance" | "recent";
+  include_archived?: boolean;
+}
+
+export interface SearchResultTask extends TaskInfo {
+  snippet: string | null;
+  relevance_score: number;
+}
+
+// ── Task Comments ─────────────────────────────────────────────────────────────
+
+export interface TaskComment {
+  id: number;
+  task_id: number;
+  agent: string;
+  content: string;
+  created_at: string;
+}
+
+// ── Task Activity ─────────────────────────────────────────────────────────────
+
+export interface TaskActivity {
+  id: number;
+  task_id: number;
+  agent: string;
+  action: string;
+  detail: string | null;
+  created_at: string;
+}
+
+export type TaskTransition =
+  | { action: "created" }
+  | { action: "started" }
+  | { action: "completed"; evidence?: string }
+  | { action: "cancelled"; reason?: string }
+  | { action: "blocked"; reason?: string }
+  | { action: "unblocked" }
+  | { action: "reopened" }
+  | { action: "assigned"; assignee: string }
+  | { action: "priority_changed"; from: TaskPriority; to: TaskPriority }
+  | { action: "comment"; content: string };

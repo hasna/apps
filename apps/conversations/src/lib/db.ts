@@ -570,6 +570,114 @@ export function getDb(): Database {
     )
   `);
 
+  // Tasks table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uuid TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+      subject TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      assignee TEXT,
+      reporter TEXT NOT NULL,
+      project_id TEXT,
+      space TEXT,
+      parent_id INTEGER REFERENCES tasks(id),
+      depends_on TEXT,
+      tags TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      started_at TEXT,
+      completed_at TEXT,
+      cancelled_at TEXT,
+      due_at TEXT
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_uuid ON tasks(uuid)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_reporter ON tasks(reporter)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_space ON tasks(space)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)");
+
+  // Task comments table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      agent TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id)");
+
+  // Task activity log
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      agent TEXT NOT NULL,
+      action TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_activity_task ON task_activity(task_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_activity_agent ON task_activity(agent)");
+
+  // Task dependencies table (many-to-many)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      depends_on_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      PRIMARY KEY (task_id, depends_on_id)
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_id)");
+
+  // FTS5 virtual table for full-text task search
+  const hasTasksFts = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks_fts'"
+  ).get();
+  if (!hasTasksFts) {
+    db.exec(`
+      CREATE VIRTUAL TABLE tasks_fts USING fts5(
+        subject, description, tags
+      )
+    `);
+    // Populate from existing data — strip JSON brackets/quotes from tags
+    db.exec(`
+      INSERT INTO tasks_fts(rowid, subject, description, tags)
+      SELECT id, COALESCE(subject, ''), COALESCE(description, ''),
+             COALESCE(REPLACE(REPLACE(REPLACE(tags, '[', ''), ']', ''), '"', ''), '')
+      FROM tasks
+    `);
+    // Triggers to keep FTS in sync using rowid = task.id
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS tasks_fts_insert AFTER INSERT ON tasks BEGIN
+        INSERT INTO tasks_fts(rowid, subject, description, tags)
+        VALUES (new.id, COALESCE(new.subject, ''), COALESCE(new.description, ''),
+                COALESCE(REPLACE(REPLACE(REPLACE(new.tags, '[', ''), ']', ''), '"', ''), ''));
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS tasks_fts_delete AFTER DELETE ON tasks BEGIN
+        DELETE FROM tasks_fts WHERE rowid = old.id;
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS tasks_fts_update AFTER UPDATE ON tasks BEGIN
+        INSERT OR REPLACE INTO tasks_fts(rowid, subject, description, tags)
+        VALUES (new.id, COALESCE(new.subject, ''), COALESCE(new.description, ''),
+                COALESCE(REPLACE(REPLACE(REPLACE(new.tags, '[', ''), ']', ''), '"', ''), ''));
+      END
+    `);
+  }
+
   return db;
 }
 

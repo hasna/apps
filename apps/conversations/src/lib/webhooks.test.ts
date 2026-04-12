@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { fireWebhooks } from "./webhooks";
+import { fireWebhooks, fireTaskWebhooks, _resetConfigCache } from "./webhooks";
 import { writeFileSync, mkdirSync, unlinkSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -36,10 +36,12 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 beforeEach(() => {
   mkdirSync(TEST_CONFIG_DIR, { recursive: true });
   process.env.CONVERSATIONS_CONFIG_PATH = TEST_CONFIG_PATH;
+  _resetConfigCache();
 });
 
 afterEach(() => {
   delete process.env.CONVERSATIONS_CONFIG_PATH;
+  _resetConfigCache();
   try { rmSync(TEST_CONFIG_DIR, { recursive: true }); } catch {}
 });
 
@@ -135,6 +137,317 @@ describe("fireWebhooks", () => {
     }));
     // Should not throw even though fetch fails
     fireWebhooks(makeMessage());
+    globalThis.fetch = originalFetch;
+  });
+});
+
+describe("fireTaskWebhooks", () => {
+  function makeTaskEvent(overrides: Partial<Parameters<typeof fireTaskWebhooks>[0]> = {}): Parameters<typeof fireTaskWebhooks>[0] {
+    return {
+      task_id: 1,
+      task_uuid: "abc123",
+      subject: "Fix login bug",
+      action: "created",
+      old_status: undefined,
+      new_status: "pending",
+      agent: "alice",
+      detail: undefined,
+      priority: "medium",
+      assignee: null,
+      project_id: "proj-1",
+      created_at: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  test("does nothing when no config file exists", () => {
+    fireTaskWebhooks(makeTaskEvent());
+  });
+
+  test("does nothing when config has no webhooks", () => {
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({}));
+    fireTaskWebhooks(makeTaskEvent());
+  });
+
+  test("does nothing when no webhooks have task events", () => {
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/hook", events: ["dm", "space"] }],
+    }));
+    fireTaskWebhooks(makeTaskEvent());
+  });
+
+  test("fires webhook for task creation event", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({ action: "created", new_status: "pending" }));
+
+    // Wait for async fetch
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody).toEqual({
+      task_id: 1,
+      task_uuid: "abc123",
+      subject: "Fix login bug",
+      action: "created",
+      old_status: undefined,
+      new_status: "pending",
+      agent: "alice",
+      detail: undefined,
+      priority: "medium",
+      assignee: null,
+      project_id: "proj-1",
+      created_at: "2026-01-01T00:00:00.000Z",
+    });
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires webhook for task started transition", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({ action: "started", old_status: "pending", new_status: "in_progress" }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody.action).toBe("started");
+    expect(capturedBody.old_status).toBe("pending");
+    expect(capturedBody.new_status).toBe("in_progress");
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires webhook for task completed transition with evidence", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({
+      action: "completed",
+      old_status: "in_progress",
+      new_status: "completed",
+      detail: "Fixed the null pointer in auth handler",
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody.action).toBe("completed");
+    expect(capturedBody.detail).toBe("Fixed the null pointer in auth handler");
+    expect(capturedBody.old_status).toBe("in_progress");
+    expect(capturedBody.new_status).toBe("completed");
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires webhook for task cancelled transition with reason", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({
+      action: "cancelled",
+      old_status: "in_progress",
+      new_status: "cancelled",
+      detail: "No longer needed after refactor",
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody.action).toBe("cancelled");
+    expect(capturedBody.detail).toBe("No longer needed after refactor");
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires webhook for task blocked transition", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({
+      action: "blocked",
+      old_status: "pending",
+      new_status: "blocked",
+      detail: "Waiting for API access token",
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody.action).toBe("blocked");
+    expect(capturedBody.new_status).toBe("blocked");
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires webhook for auto_unblocked event", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({
+      action: "auto_unblocked",
+      old_status: "blocked",
+      new_status: "pending",
+      agent: "system",
+      detail: "dependency #1 completed",
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody.action).toBe("auto_unblocked");
+    expect(capturedBody.agent).toBe("system");
+    expect(capturedBody.detail).toBe("dependency #1 completed");
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("respects agent scoping — fires only for matching agent", async () => {
+    let callCount = 0;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => { callCount++; return new Response("ok"); };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"], agent: "bob" }],
+    }));
+
+    // Event from alice — should NOT fire
+    fireTaskWebhooks(makeTaskEvent({ agent: "alice" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(callCount).toBe(0);
+
+    // Event from bob — SHOULD fire
+    fireTaskWebhooks(makeTaskEvent({ agent: "bob" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(callCount).toBe(1);
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("handles fetch failure silently", async () => {
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => { throw new Error("network error"); };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    // Should not throw
+    expect(() => fireTaskWebhooks(makeTaskEvent())).not.toThrow();
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires multiple task webhooks", async () => {
+    const urls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (url: string) => {
+      urls.push(url);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [
+        { url: "https://example.com/tasks1", events: ["task"] },
+        { url: "https://example.com/tasks2", events: ["task"] },
+      ],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent());
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(urls).toContain("https://example.com/tasks1");
+    expect(urls).toContain("https://example.com/tasks2");
+    expect(urls).toHaveLength(2);
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("does not fire task webhook when URL is private IP", async () => {
+    let callCount = 0;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => { callCount++; return new Response("ok"); };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://192.168.1.100/hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent());
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Should not fire — private IP blocked by SSRF protection
+    expect(callCount).toBe(0);
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fires webhook for priority_changed action", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = JSON.parse(opts.body);
+      return new Response("ok");
+    };
+
+    writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
+      webhooks: [{ url: "https://example.com/task-hook", events: ["task"] }],
+    }));
+
+    fireTaskWebhooks(makeTaskEvent({
+      action: "priority_changed",
+      detail: "medium -> critical",
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedBody.action).toBe("priority_changed");
+    expect(capturedBody.detail).toBe("medium -> critical");
+    expect(capturedBody.priority).toBe("medium");
+
     globalThis.fetch = originalFetch;
   });
 });

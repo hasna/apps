@@ -63,6 +63,12 @@ export {
 } from "./lib/space-notifications.js";
 
 export {
+  listWebhooks,
+  addWebhook,
+  removeWebhook,
+} from "./lib/webhooks.js";
+
+export {
   createProject,
   listProjects,
   getProject,
@@ -99,7 +105,10 @@ export type { ReactionSummary } from "./lib/reactions.js";
 
 export {
   fireWebhooks,
+  fireTaskWebhooks,
 } from "./lib/webhooks.js";
+
+export type { WebhookConfig, TaskEvent } from "./lib/webhooks.js";
 
 export {
   heartbeat,
@@ -161,6 +170,35 @@ export {
   clearActiveModel,
 } from "./lib/model-config.js";
 
+export {
+  createTask,
+  getTask,
+  listTasks,
+  startTask,
+  completeTask,
+  cancelTask,
+  blockTask,
+  unblockTask,
+  reopenTask,
+  assignTask,
+  setTaskPriority,
+  addComment,
+  getComments,
+  getSubtasks,
+  getTaskTree,
+  addDependency,
+  removeDependency,
+  getDependencies,
+  getDependents,
+  getTaskActivity,
+  deleteTask,
+  getDueTasks,
+  getTaskSummary,
+  searchTasks,
+} from "./lib/tasks.js";
+
+export type { DueTaskReminder, TaskSummary } from "./lib/tasks.js";
+
 export type {
   Message,
   Session,
@@ -179,4 +217,15 @@ export type {
   RegisterAgentResult,
   Reaction,
   Attachment,
+  Task,
+  TaskInfo,
+  TaskComment,
+  TaskActivity,
+  TaskStatus,
+  TaskPriority,
+  CreateTaskOptions,
+  ListTasksOptions,
+  TaskTransition,
+  SearchResultTask,
+  SearchTasksOptions,
 } from "./types.js";

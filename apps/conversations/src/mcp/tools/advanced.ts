@@ -428,6 +428,12 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       "set_focus", "get_focus", "unfocus",
       "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
       "search_tools", "describe_tools",
+      // Task tools
+      "create_task", "get_task", "list_tasks", "start_task", "complete_task", "cancel_task", "block_task", "unblock_task", "reopen_task", "assign_task", "set_task_priority", "delete_task",
+      "add_comment", "get_comments",
+      "get_subtasks", "get_task_tree",
+      "add_dependency", "remove_dependency", "get_dependencies", "get_dependents",
+      "get_task_activity",
     ];
     const q = query?.toLowerCase();
     const matches = q ? all.filter(n => n.includes(q)) : all;
@@ -525,6 +531,28 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       // Meta tools
       search_tools: "Search tool names by keyword. Optional: query?",
       describe_tools: "Get full descriptions for tools. Required: names(array of tool names)",
+      // Task tools
+      create_task: "Create a new task. Required: subject, reporter. Optional: description?, assignee?, priority?(low|medium|high|critical), project_id?, space?, parent_id?(subtask), depends_on?(array of task ids), tags?(array), metadata?(JSON), due_at?(ISO date)",
+      get_task: "Get a task by id or uuid. Returns enriched TaskInfo with subtask_count, comment_count, dependency_count, blocker_info. Required: id? or uuid?",
+      list_tasks: "List tasks with filters. Optional: status?(pending|in_progress|completed|cancelled|blocked), assignee?, reporter?, project_id?, space?, parent_id?(null for top-level), priority?, tag?, limit?(default 50), offset?, include_archived?",
+      start_task: "Mark task in_progress. Fails if any dependency not completed. Required: id. Optional: agent?",
+      complete_task: "Mark task completed. Auto-unblocks dependent tasks with all deps met. Required: id. Optional: agent?, evidence?",
+      cancel_task: "Cancel a task with optional reason. Required: id. Optional: agent?, reason?",
+      block_task: "Manually block a task. Required: id. Optional: agent?, reason?",
+      unblock_task: "Unblock a task to pending if all deps completed, stays blocked otherwise. Required: id. Optional: agent?",
+      reopen_task: "Reopen completed/cancelled task back to pending. Re-checks dependencies. Required: id. Optional: agent?",
+      assign_task: "Assign a task to an agent. Required: id, assignee. Optional: agent?",
+      set_task_priority: "Change task priority. Required: id, priority(low|medium|high|critical). Optional: agent?",
+      delete_task: "Delete a task. Fails if subtasks exist. Required: id. Optional: agent?",
+      add_comment: "Add a comment to a task. Required: task_id, content. Optional: agent?",
+      get_comments: "Get all comments on a task ordered by creation time. Required: task_id",
+      get_subtasks: "Get direct children (subtasks) of a parent task. Required: parent_id",
+      get_task_tree: "Get task with full subtask tree (recursive, max depth 5). Required: parent_id. Optional: max_depth?",
+      add_dependency: "Add dependency: task_id depends on depends_on_id. Prevents circular deps. Auto-blocks if dep not completed. Required: task_id, depends_on_id",
+      remove_dependency: "Remove a dependency. Required: task_id, depends_on_id",
+      get_dependencies: "Get tasks this task depends on (must complete first). Required: task_id",
+      get_dependents: "Get tasks that depend on this task (blocked by this). Required: task_id",
+      get_task_activity: "Get activity log: status changes, comments, dep changes. Required: task_id. Optional: limit?(default 50)",
     };
     const result = names.map(n => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
     return { content: [{ type: "text" as const, text: result }] };

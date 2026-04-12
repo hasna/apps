@@ -607,6 +607,363 @@ describe("rename_agent", () => {
   });
 });
 
+// ---- task tools ----
+
+describe("task tools", () => {
+  test("create_task creates a task and returns it", async () => {
+    const result = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "MCP test task", description: "created via MCP", reporter: "mcp-tester", priority: "high" },
+    }) as any) as any;
+    expect(result.subject).toBe("MCP test task");
+    expect(result.priority).toBe("high");
+    expect(result.status).toBe("pending");
+    expect(result.reporter).toBe("mcp-tester");
+  });
+
+  test("get_task retrieves by id", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Get test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "get_task",
+      arguments: { id: created.id },
+    }) as any) as any;
+    expect(result.subject).toBe("Get test");
+    expect(result.id).toBe(created.id);
+  });
+
+  test("get_task retrieves by uuid", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "UUID get test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "get_task",
+      arguments: { uuid: created.uuid },
+    }) as any) as any;
+    expect(result.subject).toBe("UUID get test");
+  });
+
+  test("get_task returns error for nonexistent id", async () => {
+    const result = await client.callTool({
+      name: "get_task",
+      arguments: { id: 999999 },
+    });
+    expect((result as any).isError).toBe(true);
+  });
+
+  test("list_tasks returns all tasks", async () => {
+    await client.callTool({
+      name: "create_task",
+      arguments: { subject: "List A", reporter: "mcp-tester" },
+    });
+    await client.callTool({
+      name: "create_task",
+      arguments: { subject: "List B", reporter: "mcp-tester" },
+    });
+    const result = parseResult(await client.callTool({
+      name: "list_tasks",
+      arguments: {},
+    }) as any) as any;
+    expect(result.count).toBeGreaterThanOrEqual(2);
+    expect(result.tasks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("list_tasks filters by status", async () => {
+    const result = parseResult(await client.callTool({
+      name: "list_tasks",
+      arguments: { status: "completed" },
+    }) as any) as any;
+    expect(result.tasks.every((t: any) => t.status === "completed")).toBe(true);
+  });
+
+  test("start_task marks task in_progress", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Start test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "start_task",
+      arguments: { id: created.id, agent: "mcp-tester" },
+    }) as any) as any;
+    expect(result.status).toBe("in_progress");
+    expect(result.started_at).not.toBeNull();
+  });
+
+  test("complete_task marks task completed", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Complete test", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({
+      name: "start_task",
+      arguments: { id: created.id, agent: "mcp-tester" },
+    });
+    const result = parseResult(await client.callTool({
+      name: "complete_task",
+      arguments: { id: created.id, agent: "mcp-tester", evidence: "done via MCP" },
+    }) as any) as any;
+    expect(result.status).toBe("completed");
+    expect(result.completed_at).not.toBeNull();
+  });
+
+  test("cancel_task cancels a task", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Cancel test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "cancel_task",
+      arguments: { id: created.id, agent: "mcp-tester", reason: "not needed" },
+    }) as any) as any;
+    expect(result.status).toBe("cancelled");
+  });
+
+  test("block_task and unblock_task", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Block test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const blocked = parseResult(await client.callTool({
+      name: "block_task",
+      arguments: { id: created.id, agent: "mcp-tester", reason: "blocked by tester" },
+    }) as any) as any;
+    expect(blocked.status).toBe("blocked");
+
+    const unblocked = parseResult(await client.callTool({
+      name: "unblock_task",
+      arguments: { id: created.id, agent: "mcp-tester" },
+    }) as any) as any;
+    expect(unblocked.status).toBe("pending");
+  });
+
+  test("reopen_task reopens a completed task", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Reopen test", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({ name: "start_task", arguments: { id: created.id, agent: "mcp-tester" } });
+    await client.callTool({ name: "complete_task", arguments: { id: created.id, agent: "mcp-tester" } });
+    const result = parseResult(await client.callTool({
+      name: "reopen_task",
+      arguments: { id: created.id, agent: "mcp-tester" },
+    }) as any) as any;
+    expect(result.status).toBe("pending");
+    expect(result.completed_at).toBeNull();
+  });
+
+  test("assign_task assigns an agent", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Assign test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "assign_task",
+      arguments: { id: created.id, assignee: "assigned-agent", agent: "mcp-tester" },
+    }) as any) as any;
+    expect(result.assignee).toBe("assigned-agent");
+  });
+
+  test("set_task_priority changes priority", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Priority test", reporter: "mcp-tester" },
+    }) as any) as any;
+    expect(created.priority).toBe("medium");
+    const result = parseResult(await client.callTool({
+      name: "set_task_priority",
+      arguments: { id: created.id, priority: "critical", agent: "mcp-tester" },
+    }) as any) as any;
+    expect(result.priority).toBe("critical");
+  });
+
+  test("add_comment and get_comments", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Comment test", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({
+      name: "add_comment",
+      arguments: { task_id: created.id, content: "MCP comment", agent: "mcp-tester" },
+    });
+    const result = parseResult(await client.callTool({
+      name: "get_comments",
+      arguments: { task_id: created.id },
+    }) as any) as any;
+    expect(result.count).toBeGreaterThanOrEqual(1);
+    expect(result.comments.some((c: any) => c.content === "MCP comment")).toBe(true);
+  });
+
+  test("subtask creation and get_subtasks", async () => {
+    const parent = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Parent task", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Child A", reporter: "mcp-tester", parent_id: parent.id },
+    });
+    await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Child B", reporter: "mcp-tester", parent_id: parent.id },
+    });
+    const result = parseResult(await client.callTool({
+      name: "get_subtasks",
+      arguments: { parent_id: parent.id },
+    }) as any) as any;
+    expect(result.count).toBe(2);
+  });
+
+  test("add_dependency and get_dependencies", async () => {
+    const dep = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Dependency", reporter: "mcp-tester" },
+    }) as any) as any;
+    const task = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Dependent task", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({
+      name: "add_dependency",
+      arguments: { task_id: task.id, depends_on_id: dep.id },
+    });
+    const deps = parseResult(await client.callTool({
+      name: "get_dependencies",
+      arguments: { task_id: task.id },
+    }) as any) as any;
+    expect(deps.count).toBe(1);
+    expect(deps.dependencies[0].id).toBe(dep.id);
+  });
+
+  test("get_dependents returns tasks depending on a task", async () => {
+    const dep = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Dep for dependents", reporter: "mcp-tester" },
+    }) as any) as any;
+    const a = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Dependent A", reporter: "mcp-tester" },
+    }) as any) as any;
+    const b = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Dependent B", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({ name: "add_dependency", arguments: { task_id: a.id, depends_on_id: dep.id } });
+    await client.callTool({ name: "add_dependency", arguments: { task_id: b.id, depends_on_id: dep.id } });
+    const result = parseResult(await client.callTool({
+      name: "get_dependents",
+      arguments: { task_id: dep.id },
+    }) as any) as any;
+    expect(result.count).toBe(2);
+  });
+
+  test("remove_dependency", async () => {
+    const dep = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Temp dep", reporter: "mcp-tester" },
+    }) as any) as any;
+    const task = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Task to unblock", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({ name: "add_dependency", arguments: { task_id: task.id, depends_on_id: dep.id } });
+    await client.callTool({
+      name: "remove_dependency",
+      arguments: { task_id: task.id, depends_on_id: dep.id },
+    });
+    const deps = parseResult(await client.callTool({
+      name: "get_dependencies",
+      arguments: { task_id: task.id },
+    }) as any) as any;
+    expect(deps.count).toBe(0);
+  });
+
+  test("auto-unblock via MCP: completing dep unblocks dependent", async () => {
+    const dep = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Auto-unblock dep", reporter: "mcp-tester" },
+    }) as any) as any;
+    const task = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Auto-unblock task", reporter: "mcp-tester" },
+    }) as any) as any;
+    await client.callTool({ name: "add_dependency", arguments: { task_id: task.id, depends_on_id: dep.id } });
+
+    // Task should be blocked
+    let info = parseResult(await client.callTool({
+      name: "get_task",
+      arguments: { id: task.id },
+    }) as any) as any;
+    expect(info.status).toBe("blocked");
+
+    // Complete the dependency
+    await client.callTool({ name: "start_task", arguments: { id: dep.id, agent: "mcp-tester" } });
+    await client.callTool({ name: "complete_task", arguments: { id: dep.id, agent: "mcp-tester" } });
+
+    // Dependent should now be pending
+    info = parseResult(await client.callTool({
+      name: "get_task",
+      arguments: { id: task.id },
+    }) as any) as any;
+    expect(info.status).toBe("pending");
+  });
+
+  test("get_task_activity returns activity log", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Activity test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "get_task_activity",
+      arguments: { task_id: created.id },
+    }) as any) as any;
+    expect(result.count).toBeGreaterThanOrEqual(1);
+    expect(result.activity[0].action).toBe("created");
+  });
+
+  test("get_task_tree returns nested structure", async () => {
+    const root = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Tree root", reporter: "mcp-tester" },
+    }) as any) as any;
+    const child = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Tree child", reporter: "mcp-tester", parent_id: root.id },
+    }) as any) as any;
+    await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Tree grandchild", reporter: "mcp-tester", parent_id: child.id },
+    });
+    const result = parseResult(await client.callTool({
+      name: "get_task_tree",
+      arguments: { parent_id: root.id },
+    }) as any) as any;
+    expect(result.subject).toBe("Tree root");
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].children).toHaveLength(1);
+  });
+
+  test("delete_task removes a task", async () => {
+    const created = parseResult(await client.callTool({
+      name: "create_task",
+      arguments: { subject: "Delete test", reporter: "mcp-tester" },
+    }) as any) as any;
+    const result = parseResult(await client.callTool({
+      name: "delete_task",
+      arguments: { id: created.id, agent: "mcp-tester" },
+    }) as any) as any;
+    expect(result.deleted).toBe(true);
+
+    const lookup = await client.callTool({
+      name: "get_task",
+      arguments: { id: created.id },
+    });
+    expect((lookup as any).isError).toBe(true);
+  });
+});
+
 // ---- acquire_lock auto-DM ----
 
 describe("acquire_lock auto-DM", () => {
