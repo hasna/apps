@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Testers Session Recorder",
+  "version": "0.1.0",
+  "description": "Records console output, errors, and navigation for AI-powered QA testing",
+  "permissions": [
+    "tabs",
+    "webNavigation",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "dist/background/session.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content/capture.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html"
+  }
+}

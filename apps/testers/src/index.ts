@@ -309,3 +309,14 @@ export type {
   RepoRunResult,
   PrepResult,
 } from "./lib/repo-executor.js";
+
+// ─── Sessions (Chrome extension import) ──────────────────────────────────────
+export {
+  createSession,
+  getSession,
+  listSessions,
+  deleteSession,
+  searchSessions,
+  countSessions,
+} from "./db/sessions.js";
+export type { Session, SessionInput } from "./db/sessions.js";

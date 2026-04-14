@@ -30,6 +30,7 @@
     "build:lib": "bun build src/index.ts --outdir dist --target bun --external playwright --external @anthropic-ai/sdk --external @modelcontextprotocol/sdk --external @hasna/browser",
     "build:types": "NODE_OPTIONS='--max-old-space-size=8192' tsc --emitDeclarationOnly --outDir dist --skipLibCheck",
     "build:dashboard": "cd dashboard && bun run build",
+    "build:ext": "cd extension && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
@@ -53,6 +54,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/chrome": "^0.0.268",
     "@types/react": "^18.3.18",
     "typescript": "^5.7.3"
   },

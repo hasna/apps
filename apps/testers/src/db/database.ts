@@ -455,6 +455,29 @@ ALTER TABLE scenarios ADD COLUMN required_role TEXT;
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+
+  // Migration 27: Sessions table for Chrome extension recording data
+  `
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    tab_id INTEGER NOT NULL,
+    url TEXT,
+    title TEXT,
+    entries TEXT NOT NULL DEFAULT '[]',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    console_count INTEGER NOT NULL DEFAULT 0,
+    nav_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'exported' CHECK(status IN ('live','saved','exported')),
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_tab ON sessions(tab_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+  CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+  `,
 ];
 
 function applyMigrations(database: Database): void {
@@ -527,6 +550,7 @@ export function resetDatabase(): void {
   database.exec("DELETE FROM agents");
   database.exec("DELETE FROM scan_issues");
   database.exec("DELETE FROM projects");
+  database.exec("DELETE FROM sessions");
 }
 
 export function resolvePartialId(

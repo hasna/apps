@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 320px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+    }
+    h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #4CAF50;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    h1::before {
+      content: "●";
+      color: #4CAF50;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .status {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+    .status span {
+      color: #4CAF50;
+      font-weight: 600;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .stat {
+      background: #16213e;
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .stat-label {
+      font-size: 10px;
+      color: #666;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    button {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:active { transform: scale(0.98); }
+    .btn-export {
+      background: #4CAF50;
+      color: white;
+    }
+    .btn-export:hover { background: #43A047; }
+    .btn-clear {
+      background: #333;
+      color: #aaa;
+    }
+    .btn-clear:hover { background: #444; }
+    .btn-copy {
+      background: #1565C0;
+      color: white;
+    }
+    .btn-copy:hover { background: #0D47A1; }
+    .error-summary {
+      margin-top: 12px;
+      padding: 8px;
+      background: #2a1a1a;
+      border-radius: 6px;
+      border-left: 3px solid #f44336;
+    }
+    .error-summary h3 {
+      font-size: 11px;
+      color: #f44336;
+      margin-bottom: 4px;
+    }
+    .error-summary p {
+      font-size: 11px;
+      color: #ccc;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    .empty {
+      text-align: center;
+      color: #555;
+      font-size: 12px;
+      padding: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Testers Recorder</h1>
+  <div class="status">Status: <span id="status">Recording</span></div>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value" id="navCount">0</div>
+      <div class="stat-label">Pages</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="consoleCount">0</div>
+      <div class="stat-label">Console</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="errorCount">0</div>
+      <div class="stat-label">Errors</div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn-export" id="exportBtn">Export JSON</button>
+    <button class="btn-copy" id="copyBtn">Copy</button>
+    <button class="btn-clear" id="clearBtn">Clear</button>
+  </div>
+  <div id="errorSummary" class="error-summary" style="display: none;">
+    <h3>Recent Errors</h3>
+    <p id="errorText"></p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

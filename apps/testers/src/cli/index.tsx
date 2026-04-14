@@ -38,6 +38,7 @@ import type { ScenarioPriority } from "../types/index.js";
 import { parseAssertionString } from "../lib/assertions.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { getTestersDir } from "../lib/paths.js";
+import { listSessions, getSession, deleteSession, countSessions, searchSessions } from "../db/sessions.js";
 import { discoverRepo, clearDiscoveryCache, getDiscoveryCacheInfo } from "../lib/repo-discovery.js";
 import { runRepoTests, runPrep } from "../lib/repo-executor.js";
 
@@ -1860,6 +1861,166 @@ repoCmd
       log(`  Stale: ${info.stale ? chalk.yellow("yes") : chalk.green("no")}`);
       log(chalk.dim("  Run with --clear to clear, --refresh on discover to rebuild."));
       log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+// ─── testers sessions ─────────────────────────────────────────────────────
+
+const sessionCmd = program.command("sessions").description("Manage recorded browser sessions from the Chrome extension");
+
+sessionCmd
+  .command("list")
+  .description("List recorded sessions")
+  .option("--limit <n>", "Max sessions to show", "20")
+  .option("--search <query>", "Search by URL or title")
+  .option("--json", "Output as JSON", false)
+  .action((opts) => {
+    try {
+      const limit = parseInt(opts.limit, 10);
+      const sessions = opts.search
+        ? searchSessions(opts.search, limit)
+        : listSessions(limit);
+
+      if (opts.json) {
+        log(JSON.stringify(sessions, null, 2));
+        return;
+      }
+
+      const total = countSessions();
+      if (sessions.length === 0) {
+        log(chalk.dim("No recorded sessions. Export from the Chrome extension or import a JSON file."));
+        return;
+      }
+
+      log("");
+      log(chalk.bold("  Recorded Sessions"));
+      log(chalk.dim(`  Total: ${total} | Showing: ${sessions.length}`));
+      log("");
+
+      for (const s of sessions) {
+        const statusColor = s.status === "live" ? chalk.green : s.status === "saved" ? chalk.yellow : chalk.dim;
+        const url = s.url ? (s.url.length > 60 ? s.url.slice(0, 57) + "..." : s.url) : "about:blank";
+        log(chalk.bold(`  ${s.id.slice(0, 8)}`) + `  ${statusColor(s.status)}  ${url}`);
+        log(chalk.dim(`         ${s.title ?? "Untitled"} | ${s.entryCount} entries | ${s.errorCount} errors | ${s.startTime}`));
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+sessionCmd
+  .command("show <id>")
+  .description("Show details of a recorded session")
+  .option("--json", "Output as JSON", false)
+  .action((id: string, opts) => {
+    try {
+      const session = getSession(id);
+      if (!session) {
+        logError(chalk.red("Session not found."));
+        process.exit(1);
+      }
+
+      if (opts.json) {
+        log(JSON.stringify(session, null, 2));
+        return;
+      }
+
+      log("");
+      log(chalk.bold("  Session Details"));
+      log(`  ID:       ${session.id}`);
+      log(`  Tab:      ${session.tabId}`);
+      log(`  URL:      ${session.url ?? "about:blank"}`);
+      log(`  Title:    ${session.title ?? "Untitled"}`);
+      log(`  Status:   ${session.status}`);
+      log(`  Entries:  ${session.entryCount}`);
+      log(`  Errors:   ${session.errorCount}`);
+      log(`  Console:  ${session.consoleCount}`);
+      log(`  Navs:     ${session.navCount}`);
+      log(`  Start:    ${session.startTime}`);
+      log(`  End:      ${session.endTime ?? "(ongoing)"}`);
+      log(`  Created:  ${session.createdAt}`);
+      log("");
+
+      // Show error entries if any
+      const errors = session.entries.filter((e: any) => e && e.type === "error");
+      if (errors.length > 0) {
+        log(chalk.bold.red("  Errors:"));
+        for (const err of errors.slice(0, 10)) {
+          log(chalk.red(`  - [${err.timestamp ?? "?"}] ${err.message ?? err.text ?? JSON.stringify(err).slice(0, 100)}`));
+        }
+        if (errors.length > 10) log(chalk.dim(`  ... and ${errors.length - 10} more`));
+      }
+      log("");
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+sessionCmd
+  .command("import <file>")
+  .description("Import a session JSON file exported from the Chrome extension")
+  .action(async (file: string) => {
+    try {
+      const { readFileSync } = await import("node:fs");
+      const raw = readFileSync(file, "utf-8");
+      const data = JSON.parse(raw);
+
+      // Accept either a single session object or an array of sessions
+      const items = Array.isArray(data) ? data : [data];
+
+      const { createSession } = await import("../db/sessions.js");
+
+      let imported = 0;
+      for (const item of items) {
+        const sessionId = item.sessionId ?? item.id ?? crypto.randomUUID();
+        const entries = item.entries ?? item.sessionEntries ?? [];
+        const entryCount = entries.length;
+        const errorCount = entries.filter((e: any) => e && (e.type === "error" || e.type === "console" && e.level === "error")).length;
+        const consoleCount = entries.filter((e: any) => e && e.type === "console").length;
+        const navCount = entries.filter((e: any) => e && e.type === "navigation").length;
+
+        createSession({
+          sessionId,
+          tabId: item.tabId ?? 0,
+          url: item.url ?? item.lastUrl ?? null,
+          title: item.title ?? item.lastTitle ?? null,
+          entries: JSON.stringify(entries),
+          entryCount,
+          errorCount,
+          consoleCount,
+          navCount,
+          status: "exported",
+          startTime: item.startTime ?? item.recordingStarted ?? new Date().toISOString(),
+          endTime: item.endTime ?? item.recordingEnded ?? null,
+        });
+        imported++;
+      }
+
+      log(chalk.green(`Imported ${imported} session(s) from ${file}.`));
+    } catch (error) {
+      logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+      process.exit(1);
+    }
+  });
+
+sessionCmd
+  .command("delete <id>")
+  .description("Delete a recorded session")
+  .action((id: string) => {
+    try {
+      const ok = deleteSession(id);
+      if (ok) {
+        log(chalk.green("Session deleted."));
+      } else {
+        logError(chalk.red("Session not found."));
+        process.exit(1);
+      }
     } catch (error) {
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
