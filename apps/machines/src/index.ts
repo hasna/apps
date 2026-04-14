@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./cross-project-types.js";
 export * from "./paths.js";
 export * from "./db.js";
 export * from "./manifests.js";
