@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { getClipboardKeyPath, getDataDir } from "../paths.js";
 import { readClipboardConfig } from "./clipboard.js";
-import { startClipboardServer } from "./clipboard-server.js";
+import { startClipboardServer, getCurrentContentHash, setCurrentContentHash } from "./clipboard-server.js";
 
 const DAEMON_PID_PATH = join(getDataDir(), "clipboard-daemon.pid");
 
@@ -50,6 +50,41 @@ function writeLocalClipboardSync(content: string): boolean {
 function hasCommand(binary: string): boolean {
   const result = Bun.spawnSync(["bash", "-lc", `command -v ${binary} >/dev/null 2>&1`], { stdout: "ignore", stderr: "ignore", env: process.env });
   return result.exitCode === 0;
+}
+
+function hasDisplayServer(): boolean {
+  const display = process.env["DISPLAY"] || "";
+  const wayland = process.env["WAYLAND_DISPLAY"] || "";
+  if (display || wayland) return true;
+  // Check for a running GUI compositor/session
+  if (process.platform === "darwin") return true; // macOS always has a GUI session
+  if (process.platform === "linux") {
+    // Check for running wayland/X11 session via loginctl
+    try {
+      const result = Bun.spawnSync(["loginctl", "list-sessions", "--no-legend"], { stdout: "pipe", stderr: "pipe", env: process.env, timeout: 2000 });
+      if (result.exitCode === 0) {
+        const sessions = result.stdout.toString("utf8").trim();
+        if (sessions) {
+          for (const line of sessions.split("\n")) {
+            const sessionId = line.trim().split(/\s+/)[0];
+            if (sessionId) {
+              const typeResult = Bun.spawnSync(["loginctl", "show-session", sessionId, "-p", "Type", "--value"], { stdout: "pipe", stderr: "pipe", env: process.env, timeout: 2000 });
+              if (typeResult.exitCode === 0) {
+                const sessionType = typeResult.stdout.toString("utf8").trim();
+                if (sessionType === "wayland" || sessionType === "x11") {
+                  return true;
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // loginctl not available
+    }
+    return false;
+  }
+  return false;
 }
 
 function computeHash(content: string): string {
@@ -107,18 +142,26 @@ export function startClipboardDaemon(port?: number): void {
   });
 
   // Poll local clipboard and push to peers every 500ms
-  let lastHash = "";
   const secret = loadSharedSecret();
   const machineId = process.env["HASNA_MACHINES_MACHINE_ID"] || "unknown";
+  const hasDisplay = hasDisplayServer();
+
+  if (!hasDisplay) {
+    console.log("clipboard daemon running in receive-only mode (no display server)");
+  }
 
   setInterval(async () => {
+    // Skip polling on headless machines — only receive from peers
+    if (!hasDisplay) return;
+
     const content = readLocalClipboardSync();
     if (!content) return;
 
     const hash = computeHash(content);
-    if (hash === lastHash) return;
+    const currentContentHash = getCurrentContentHash();
+    if (hash === currentContentHash) return;
 
-    lastHash = hash;
+    setCurrentContentHash(hash);
 
     // Push to all other known machines
     const peers = await discoverPeers();

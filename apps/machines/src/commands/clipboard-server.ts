@@ -103,6 +103,9 @@ export interface ClipboardServerHandle {
 
 let currentContentHash: string | null = null;
 
+export function getCurrentContentHash(): string | null { return currentContentHash; }
+export function setCurrentContentHash(hash: string): void { currentContentHash = hash; }
+
 export function startClipboardServer(options: ClipboardServerOptions = {}): ClipboardServerHandle {
   const config = options.config || readClipboardConfig();
   const port = options.port || config.port;
