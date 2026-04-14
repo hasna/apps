@@ -39,6 +39,7 @@ import { runDoctor } from "../commands/doctor.js";
 import { runSelfTest } from "../commands/self-test.js";
 import { getServeInfo, startDashboardServer } from "../commands/serve.js";
 import { clearClipboardHistory, getDefaultClipboardConfig, getOrCreateClipboardKey, getClipboardStatus, readClipboardConfig, readClipboardHistory, writeClipboardConfig, getConfigPath } from "../commands/clipboard.js";
+import { startClipboardDaemon, stopClipboardDaemon } from "../commands/clipboard-daemon.js";
 import { getManifestPath, getClipboardKeyPath } from "../paths.js";
 import { parseIntegerOption, renderKeyValueTable, renderList } from "../cli-utils.js";
 import { rmSync } from "node:fs";
@@ -591,6 +592,23 @@ clipboardCommand
     }
     const key = getOrCreateClipboardKey();
     printJsonOrText({ key }, key, options.json);
+  });
+
+clipboardCommand
+  .command("start")
+  .description("Start clipboard sync daemon")
+  .option("--port <port>", "Port to listen on")
+  .action((options: { port?: string }) => {
+    const port = options.port ? Number(options.port) : undefined;
+    startClipboardDaemon(port);
+  });
+
+clipboardCommand
+  .command("stop")
+  .description("Stop clipboard sync daemon")
+  .action(() => {
+    const result = stopClipboardDaemon();
+    console.log(result.stopped ? `daemon stopped (pid ${result.pid})` : "daemon not running");
   });
 
 installClaudeCommand
