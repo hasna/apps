@@ -661,4 +661,44 @@ export const PG_MIGRATIONS: string[] = [
   ALTER TABLE task_dependencies ADD COLUMN external_task_id TEXT;
   INSERT INTO _migrations (id) VALUES (43) ON CONFLICT DO NOTHING;
   `,
+  // Migration 44: Task runner checkpoints and heartbeats
+  `
+  CREATE TABLE IF NOT EXISTS task_checkpoints (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    step TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+    data TEXT DEFAULT '{}',
+    error TEXT,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    max_attempts INTEGER NOT NULL DEFAULT 1,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_checkpoints_task ON task_checkpoints(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_checkpoints_status ON task_checkpoints(status);
+
+  CREATE TABLE IF NOT EXISTS task_heartbeats (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id TEXT,
+    step TEXT,
+    message TEXT,
+    progress REAL CHECK(progress >= 0 AND progress <= 1),
+    meta TEXT DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_heartbeats_task ON task_heartbeats(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_heartbeats_agent ON task_heartbeats(agent_id);
+
+  ALTER TABLE tasks ADD COLUMN runner_id TEXT;
+  ALTER TABLE tasks ADD COLUMN runner_started_at TIMESTAMPTZ;
+  ALTER TABLE tasks ADD COLUMN runner_completed_at TIMESTAMPTZ;
+  ALTER TABLE tasks ADD COLUMN current_step TEXT;
+  ALTER TABLE tasks ADD COLUMN total_steps INTEGER;
+  INSERT INTO _migrations (id) VALUES (44) ON CONFLICT DO NOTHING;
+  `,
 ];

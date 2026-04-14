@@ -251,6 +251,11 @@ describe("CLI integration", () => {
   });
 
   it("should create and list handoffs", async () => {
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync("/tmp/test-cli-handoff.db"); } catch {}
+    try { unlinkSync("/tmp/test-cli-handoff.db-shm"); } catch {}
+    try { unlinkSync("/tmp/test-cli-handoff.db-wal"); } catch {}
+
     const createProc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "handoff", "--create", "--agent", "test", "--summary", "Test handoff", "--json"],
       {
@@ -280,8 +285,9 @@ describe("CLI integration", () => {
     const handoffs = JSON.parse(listOut);
     expect(handoffs.length).toBe(1);
 
-    const { unlinkSync } = await import("node:fs");
     try { unlinkSync("/tmp/test-cli-handoff.db"); } catch {}
+    try { unlinkSync("/tmp/test-cli-handoff.db-shm"); } catch {}
+    try { unlinkSync("/tmp/test-cli-handoff.db-wal"); } catch {}
   });
 
   it("should run overdue command", async () => {

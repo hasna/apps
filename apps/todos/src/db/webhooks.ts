@@ -8,13 +8,16 @@ const RETRY_BASE_DELAY_MS = 1000; // 1s, 2s, 4s exponential backoff
 /** Check if an IP address is in a private/reserved range (SSRF prevention) */
 function isPrivateOrInternal(ip: string): boolean {
   const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return true;
-  if (parts[0] === 10) return true;
-  if (parts[0] === 127) return true;
-  if (parts[0] === 169 && parts[1] === 254) return true;
-  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-  if (parts[0] === 192 && parts[1] === 168) return true;
-  if (parts[0] === 0) return true;
+  if (parts.length !== 4) return true;
+  const a = parts[0]!;
+  const b = parts[1]!;
+  if (parts.some(p => isNaN(p) || p < 0 || p > 255)) return true;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 0) return true;
   return false;
 }
 
@@ -76,11 +79,13 @@ async function resolveAndCheckIp(hostname: string): Promise<{ allowed: false; er
     if (!resolved) return { allowed: false, error: `Could not resolve hostname: ${hostname}` };
     const addresses = Array.isArray(resolved) ? resolved : [resolved];
     for (const addr of addresses) {
-      if (isPrivateOrInternal(addr)) {
-        return { allowed: false, error: `Hostname ${hostname} resolves to blocked address ${addr}` };
+      const ip = typeof addr === "string" ? addr : addr.address;
+      if (isPrivateOrInternal(ip)) {
+        return { allowed: false, error: `Hostname ${hostname} resolves to blocked address ${ip}` };
       }
     }
-    return { allowed: true, ip: addresses[0]! };
+    const first = addresses[0] as string | { address: string } | undefined;
+    return { allowed: true, ip: typeof first === "string" ? first : (first?.address ?? "") };
   } catch {
     return { allowed: true, ip: "" };
   }

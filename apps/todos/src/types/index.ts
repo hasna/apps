@@ -301,6 +301,11 @@ export interface Task {
   max_retries: number;
   retry_after: string | null;
   sla_minutes: number | null;
+  runner_id: string | null;
+  runner_started_at: string | null;
+  runner_completed_at: string | null;
+  current_step: string | null;
+  total_steps: number | null;
 }
 
 // Checklist item — ordered sub-steps within a task
@@ -533,6 +538,11 @@ export interface TaskRow {
   retry_after: string | null;
   sla_minutes: number | null;
   actual_minutes: number | null;
+  runner_id: string | null;
+  runner_started_at: string | null;
+  runner_completed_at: string | null;
+  current_step: string | null;
+  total_steps: number | null;
 }
 
 export interface SessionRow {
@@ -850,4 +860,75 @@ export class DispatchNotFoundError extends Error {
     super(`Dispatch not found: ${dispatchId}`);
     this.name = "DispatchNotFoundError";
   }
+}
+
+// ── SDK types (formerly in src/sdk.ts) ──────────────────────────────────────
+
+/** Compact task representation returned by list endpoints */
+export interface TaskSummary {
+  id: string;
+  short_id: string | null;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  project_id: string | null;
+  plan_id: string | null;
+  task_list_id: string | null;
+  agent_id: string | null;
+  assigned_to: string | null;
+  locked_by: string | null;
+  tags: string[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  due_at: string | null;
+  recurrence_rule: string | null;
+}
+
+/** Progress log entry for a task */
+export interface ProgressEntry {
+  id: string;
+  task_id: string;
+  content: string;
+  type: "comment" | "progress" | "note";
+  progress_pct: number | null;
+  agent_id: string | null;
+  created_at: string;
+}
+
+/** Dashboard statistics */
+export interface DashboardStats {
+  total_tasks: number;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  projects: number;
+  agents: number;
+  stale_count?: number;
+  overdue_recurring?: number;
+  recurring_tasks?: number;
+}
+
+/** Task status summary response */
+export interface StatusSummaryResponse {
+  pending: number;
+  in_progress: number;
+  completed: number;
+  total: number;
+  active_work: {
+    id: string;
+    short_id: string | null;
+    title: string;
+    priority: string;
+    assigned_to: string | null;
+    locked_by: string | null;
+    updated_at: string;
+  }[];
+  next_task: TaskSummary | null;
+  stale_count: number;
+  overdue_recurring: number;
 }

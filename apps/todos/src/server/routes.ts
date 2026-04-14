@@ -374,7 +374,7 @@ export async function handlePatchTask(id: string, req: Request, _ctx: RouteConte
     const body = await req.json() as Record<string, unknown>;
     const task = getTask(id);
     if (!task) return json({ error: "Task not found" }, 404);
-    const ALLOWED = new Set(["title", "description", "priority", "assigned_to", "plan_id", "task_list_id", "tags", "metadata", "due_at", "estimated_minutes", "task_type"]);
+    const ALLOWED = new Set(["title", "description", "status", "priority", "assigned_to", "plan_id", "task_list_id", "tags", "metadata", "due_at", "estimated_minutes", "task_type"]);
     const safeBody: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(body)) {
       if (ALLOWED.has(key)) safeBody[key] = value;

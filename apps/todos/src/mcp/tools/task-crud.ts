@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { createTask, listTasks, getTask, updateTask, deleteTask } from "../../db/tasks.js";
-import { NotFoundError, ValidationError } from "../../db/errors.js";
+import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskCrudContext {
   shouldRegisterTool: (name: string) => boolean;

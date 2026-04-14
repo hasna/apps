@@ -9,15 +9,21 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import {
   getTask, updateTask, createTask, listTasks,
-  addTaskDependency, removeTaskDependency,
+  addDependency, removeDependency, getTaskDependencies,
+} from "../../db/tasks.js";
+import {
   createProject, listProjects, getProject, updateProject, deleteProject,
+} from "../../db/projects.js";
+import {
   createTaskList, listTaskLists, getTaskList, updateTaskList, deleteTaskList,
+} from "../../db/task-lists.js";
+import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
-  createTag, listTags, getTag, updateTag, deleteTag,
-  createLabel, listLabels, getLabel, updateLabel, deleteLabel,
-  createComment, listComments, updateComment, deleteComment,
-} from "../../tasks.js";
-import { NotFoundError } from "../../errors.js";
+} from "../../db/plans.js";
+import {
+  addComment, listComments, deleteComment,
+} from "../../db/comments.js";
+import { TaskNotFoundError } from "../../types/index.js";
 
 interface TaskProjectContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -173,7 +179,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(task_id);
           const resolvedDep = resolveId(depends_on);
-          addTaskDependency(resolvedId, resolvedDep);
+          addDependency(resolvedId, resolvedDep);
           return { content: [{ type: "text" as const, text: `${resolvedId.slice(0,8)} now depends on ${resolvedDep.slice(0,8)}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -192,7 +198,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, depends_on }) => {
         try {
-          removeTaskDependency(resolveId(task_id), resolveId(depends_on));
+          removeDependency(resolveId(task_id), resolveId(depends_on));
           return { content: [{ type: "text" as const, text: "Dependency removed." }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -211,7 +217,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, direction }) => {
         try {
-          const { getTaskDependencies } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { getTaskDependencies } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const deps = getTaskDependencies(resolveId(task_id), direction);
           if (deps.length === 0) return { content: [{ type: "text" as const, text: "No dependencies." }] };
           const lines = deps.map((d: any) => `[${d.direction}] ${d.task_id.slice(0,8)} (${d.status})`);
@@ -366,7 +372,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(project_id, "projects");
           const project = getProject(resolvedId);
-          if (!project) throw new NotFoundError(`Project not found: ${project_id}`);
+          if (!project) throw new TaskNotFoundError(`Project not found: ${project_id}`);
           const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
           const tasks = listTasks({ project_id: resolvedId, limit: 100 }, undefined) as Task[];
           const lines = [
@@ -491,7 +497,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(task_list_id, "task_lists");
           const list = getTaskList(resolvedId);
-          if (!list) throw new NotFoundError(`Task list not found: ${task_list_id}`);
+          if (!list) throw new TaskNotFoundError(`Task list not found: ${task_list_id}`);
           let tasks: Task[] = [];
           if (include_tasks) {
             const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
@@ -616,7 +622,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(plan_id, "plans");
           const plan = getPlan(resolvedId);
-          if (!plan) throw new NotFoundError(`Plan not found: ${plan_id}`);
+          if (!plan) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
           let tasks: Task[] = [];
           if (include_tasks) {
             const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
@@ -733,7 +739,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ tag_id }) => {
         try {
           const tag = getTag(tag_id);
-          if (!tag) throw new NotFoundError(`Tag not found: ${tag_id}`);
+          if (!tag) throw new TaskNotFoundError(`Tag not found: ${tag_id}`);
           const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
           const tasks = listTasks({ tags: [tag.name], limit: 100 }, undefined) as Task[];
           const lines = [
@@ -839,7 +845,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ label_id }) => {
         try {
           const label = getLabel(label_id);
-          if (!label) throw new NotFoundError(`Label not found: ${label_id}`);
+          if (!label) throw new TaskNotFoundError(`Label not found: ${label_id}`);
           const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
           const tasks = listTasks({ tags: [label.name], limit: 100 }, undefined) as Task[];
           const lines = [
@@ -910,7 +916,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(task_id);
           const resolvedAuthor = author ? resolveId(author, "agents") : undefined;
-          const comment = createComment({ task_id: resolvedId, body, author: resolvedAuthor });
+          const comment = addComment({ task_id: resolvedId, body, author: resolvedAuthor });
           return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}: ${body.slice(0, 50)}${body.length > 50 ? "..." : ""}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

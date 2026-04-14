@@ -6,7 +6,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { listTasks, listProjects, listAgents, getTask, linkTaskToCommit, getTaskCommits, findTaskByCommit } from "../../tasks.js";
+import { listTasks, getTask } from "../../db/tasks.js";
+import { listProjects } from "../../db/projects.js";
+import { listAgents } from "../../db/agents.js";
+import { linkTaskToCommit, getTaskCommits, findTaskByCommit } from "../../db/task-commits.js";
 
 interface TaskResourcesContext {
   shouldRegisterTool: (name: string) => boolean;

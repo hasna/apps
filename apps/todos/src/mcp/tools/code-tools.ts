@@ -82,7 +82,7 @@ export function registerCodeTools(server: McpServer, ctx: CodeToolsContext) {
             connStr = getConnectionString("todos");
           }
 
-          const { applyPgMigrations } = await import("../db/pg-migrate.js");
+          const { applyPgMigrations } = await import("../../db/pg-migrate.js");
           const result = await applyPgMigrations(connStr);
 
           const lines: string[] = [];

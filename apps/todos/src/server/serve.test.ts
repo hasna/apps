@@ -260,6 +260,19 @@ describe("PATCH /api/tasks/:id", () => {
     expect(data.status).toBe("cancelled");
   });
 
+  it("should update task assigned_to", async () => {
+    const created = await createTaskViaApi({ title: "Assignee update test" });
+    const id = created.id as string;
+
+    const res = await api("PATCH", `/api/tasks/${id}`, {
+      assigned_to: "seneca",
+    });
+    expect(res.status).toBe(200);
+
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.assigned_to).toBe("seneca");
+  });
+
   it("should return 404 for non-existent task", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000000";
     const res = await api("PATCH", `/api/tasks/${fakeId}`, {
@@ -384,7 +397,10 @@ describe("GET /api/agents", () => {
 
 describe("OPTIONS (CORS)", () => {
   it("should return CORS headers on OPTIONS request", async () => {
-    const res = await fetch(url("/api/tasks"), { method: "OPTIONS" });
+    const res = await fetch(url("/api/tasks"), {
+      method: "OPTIONS",
+      headers: { Origin: `http://localhost:${port}` },
+    });
     expect(res.status).toBe(200);
 
     const headers = res.headers;
@@ -527,8 +543,10 @@ describe("Response headers", () => {
     expect(res.headers.get("Content-Type")).toBe("application/json");
   });
 
-  it("should include CORS Allow-Origin header on API responses", async () => {
-    const res = await api("GET", "/api/tasks");
+  it("should include CORS Allow-Origin header on API responses when origin is allowed", async () => {
+    const res = await fetch(url("/api/tasks"), {
+      headers: { Origin: `http://localhost:${port}` },
+    });
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(`http://localhost:${port}`);
   });
 });

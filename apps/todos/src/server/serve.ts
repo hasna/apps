@@ -92,12 +92,13 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
   return { allowed: true };
 }
 
-export function json(data: unknown, status = 200): Response {
+export function json(data: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json",
       ...SECURITY_HEADERS,
+      ...(headers || {}),
     },
   });
 }
@@ -205,18 +206,22 @@ export async function startServer(port: number, options?: { open?: boolean; host
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
-
-      // ── CORS ──
-      if (method === "OPTIONS") {
-        const reqOrigin = req.headers.get("origin") || undefined;
-        const allowed = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0");
-        return new Response(null, {
-          headers: allowed ? {
+      const reqOrigin = req.headers.get("origin") || undefined;
+      const corsHeaders = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0")
+        ? {
             "Access-Control-Allow-Origin": reqOrigin,
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, X-API-Key, Authorization",
             "Vary": "Origin",
-          } : {
+          }
+        : undefined;
+
+      const jsonWithCors = (data: unknown, status = 200) => json(data, status, corsHeaders);
+
+      // ── CORS ──
+      if (method === "OPTIONS") {
+        return new Response(null, {
+          headers: corsHeaders || {
             "Vary": "Origin",
           },
         });
@@ -264,17 +269,17 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: List tasks ──
       if (path === "/api/tasks" && method === "GET") {
-        return handlers.handleListTasks(req, url, ctx, json, taskToSummary);
+        return handlers.handleListTasks(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Create task ──
       if (path === "/api/tasks" && method === "POST") {
-        return handlers.handleCreateTask(req, ctx, json, taskToSummary);
+        return handlers.handleCreateTask(req, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Export tasks ──
       if (path === "/api/tasks/export" && method === "GET") {
-        return handlers.handleTasksExport(req, url, ctx, json, taskToSummary);
+        return handlers.handleTasksExport(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Bulk operations ──
@@ -289,7 +294,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: Next task ──
       if (path === "/api/tasks/next" && method === "GET") {
-        return handlers.handleTasksNext(req, url, ctx, json, taskToSummary);
+        return handlers.handleTasksNext(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Active work ──
@@ -299,17 +304,17 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: Stale tasks ──
       if (path === "/api/tasks/stale" && method === "GET") {
-        return handlers.handleTasksStale(req, url, ctx, json, taskToSummary);
+        return handlers.handleTasksStale(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Changed tasks ──
       if (path === "/api/tasks/changed" && method === "GET") {
-        return handlers.handleTasksChanged(req, url, ctx, json, taskToSummary);
+        return handlers.handleTasksChanged(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Task Context (for agent prompt injection) ──
       if (path === "/api/tasks/context" && method === "GET") {
-        return handlers.handleTasksContext(req, url, ctx, json, taskToSummary);
+        return handlers.handleTasksContext(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Task attachments ──
@@ -332,12 +337,12 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
         // GET /api/tasks/:id
         if (method === "GET") {
-          return handlers.handleGetTask(id, ctx, json, taskToSummary);
+          return handlers.handleGetTask(id, ctx, jsonWithCors, taskToSummary);
         }
 
         // PATCH /api/tasks/:id
         if (method === "PATCH") {
-          return handlers.handlePatchTask(id, req, ctx, json, taskToSummary);
+          return handlers.handlePatchTask(id, req, ctx, jsonWithCors, taskToSummary);
         }
 
         // DELETE /api/tasks/:id
@@ -349,19 +354,19 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // ── API: Start task ──
       const startMatch = path.match(/^\/api\/tasks\/([^/]+)\/start$/);
       if (startMatch && method === "POST") {
-        return handlers.handleStartTask(startMatch[1]!, ctx, json, taskToSummary);
+        return handlers.handleStartTask(startMatch[1]!, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Fail task ──
       const failMatch = path.match(/^\/api\/tasks\/([^/]+)\/fail$/);
       if (failMatch && method === "POST") {
-        return handlers.handleFailTask(failMatch[1]!, req, ctx, json, taskToSummary);
+        return handlers.handleFailTask(failMatch[1]!, req, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Complete task ──
       const completeMatch = path.match(/^\/api\/tasks\/([^/]+)\/complete$/);
       if (completeMatch && method === "POST") {
-        return handlers.handleCompleteTask(completeMatch[1]!, ctx, json, taskToSummary);
+        return handlers.handleCompleteTask(completeMatch[1]!, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Projects ──
@@ -371,18 +376,18 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       // ── API: Agent discovery ──
       if (path === "/api/agents/me" && method === "GET") {
-        return handlers.handleAgentMe(req, url, ctx, json, taskToSummary);
+        return handlers.handleAgentMe(req, url, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Agent task queue ──
       const queueMatch = path.match(/^\/api\/agents\/([^/]+)\/queue$/);
       if (queueMatch && method === "GET") {
-        return handlers.handleAgentQueue(decodeURIComponent(queueMatch[1]!), ctx, json, taskToSummary);
+        return handlers.handleAgentQueue(decodeURIComponent(queueMatch[1]!), ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Claim next task ──
       if (path === "/api/tasks/claim" && method === "POST") {
-        return handlers.handleClaimTask(req, ctx, json, taskToSummary);
+        return handlers.handleClaimTask(req, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Orgs ──
@@ -516,7 +521,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
         const id = planMatch[1]!;
 
         if (method === "GET") {
-          return handlers.handleGetPlan(id, ctx, json, taskToSummary);
+          return handlers.handleGetPlan(id, ctx, jsonWithCors, taskToSummary);
         }
 
         if (method === "PATCH") {
@@ -529,7 +534,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── Static Files (Vite dashboard) ──
-      const staticRes = handlers.handleStaticFiles(path, method, ctx, json, serveStaticFile);
+      const staticRes = handlers.handleStaticFiles(path, method, ctx, jsonWithCors, serveStaticFile);
       if (staticRes) return staticRes;
 
       return json({ error: "Not found" }, 404);

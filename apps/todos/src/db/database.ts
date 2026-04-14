@@ -135,7 +135,12 @@ export function clearExpiredLocks(db: Database): void {
   db.run("UPDATE tasks SET locked_by = NULL, locked_at = NULL WHERE locked_at IS NOT NULL AND locked_at < ?", [cutoff]);
 }
 
+const ALLOWED_TABLES = new Set(["tasks", "projects", "agents", "plans", "task_lists", "task_templates"]);
+
 export function resolvePartialId(db: Database, table: string, partialId: string): string | null {
+  if (!ALLOWED_TABLES.has(table)) {
+    throw new Error(`Invalid table name: ${table}`);
+  }
   if (partialId.length >= 36) {
     // Full UUID
     const row = db.query(`SELECT id FROM ${table} WHERE id = ?`).get(partialId) as { id: string } | null;
