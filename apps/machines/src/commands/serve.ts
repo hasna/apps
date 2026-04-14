@@ -80,11 +80,13 @@ export function renderDashboardHtml(): string {
       .unknown, .warn { background: #2f2b16; color: #ffd76a; }
       ul { margin: 8px 0 0; padding-left: 18px; }
       .muted { color: #9fb0d9; }
+      .refresh { font-size: 12px; color: #6b7fa3; margin-left: auto; }
+      .updated { transition: opacity 0.3s; }
     </style>
   </head>
   <body>
     <main>
-      <h1>Machines Dashboard</h1>
+      <h1>Machines Dashboard <span class="refresh" id="last-updated"></span></h1>
       <div class="grid">
         <section class="card"><div>Manifest machines</div><div class="stat">${status.manifestMachineCount}</div></section>
         <section class="card"><div>Heartbeats</div><div class="stat">${status.heartbeatCount}</div></section>
@@ -115,7 +117,7 @@ export function renderDashboardHtml(): string {
         <h2>Doctor</h2>
         <table>
           <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
-          <tbody>
+          <tbody id="doctor-tbody">
             ${doctor.checks
               .map(
                 (entry) => `<tr>
@@ -130,15 +132,82 @@ export function renderDashboardHtml(): string {
       </section>
 
       <section class="card" style="margin-top:16px">
+        <h2>Apps</h2>
+        <p class="muted">Use <code>/api/apps/status</code> for the full app inventory payload.</p>
+      </section>
+
+      <section class="card" style="margin-top:16px">
+        <h2>AI CLIs</h2>
+        <p class="muted">Use <code>/api/install-claude/status</code> for the full CLI inventory payload.</p>
+      </section>
+
+      <section class="card" style="margin-top:16px">
         <h2>Self Test</h2>
         <p class="muted">Use <code>/api/self-test</code> for the full smoke-check payload.</p>
       </section>
 
       <section class="card" style="margin-top:16px">
         <h2>Manifest</h2>
-        <pre>${escapeHtml(JSON.stringify(manifest, null, 2))}</pre>
+        <pre id="manifest-json">${escapeHtml(JSON.stringify(manifest, null, 2))}</pre>
       </section>
     </main>
+    <script>
+      // Auto-refresh dashboard data every 15s
+      const REFRESH_INTERVAL = 15000;
+      async function refreshData() {
+        try {
+          const [statusRes, doctorRes] = await Promise.all([
+            fetch("/api/status"),
+            fetch("/api/doctor"),
+          ]);
+          const status = await statusRes.json();
+          const doctor = await doctorRes.json();
+
+          // Update stat cards
+          const stats = document.querySelectorAll(".stat");
+          if (stats[0]) stats[0].textContent = status.manifestMachineCount;
+          if (stats[1]) stats[1].textContent = status.heartbeatCount;
+
+          // Update machine table
+          const tbody = document.querySelector("tbody");
+          if (tbody && status.machines) {
+            tbody.innerHTML = status.machines
+              .map((m) =>
+                "<tr>" +
+                "<td><code>" + m.machineId + "</code></td>" +
+                "<td>" + (m.platform || "unknown") + "</td>" +
+                '<td><span class="badge ' + m.heartbeatStatus + '">' + m.heartbeatStatus + '</span></td>' +
+                "<td>" + (m.lastHeartbeatAt || "\\u2014") + "</td>" +
+                "</tr>"
+              )
+              .join("");
+          }
+
+          // Update doctor table
+          const doctorTbody = document.getElementById("doctor-tbody");
+          if (doctorTbody && doctor.checks) {
+            doctorTbody.innerHTML = doctor.checks
+              .map((c) =>
+                "<tr>" +
+                "<td>" + c.summary + "</td>" +
+                '<td><span class="badge ' + c.status + '">' + c.status + '</span></td>' +
+                '<td class="muted">' + c.detail + "</td>" +
+                "</tr>"
+              )
+              .join("");
+          }
+
+          // Update timestamp
+          document.getElementById("last-updated").textContent =
+            "updated " + new Date().toLocaleTimeString();
+        } catch (e) {
+          // Silently ignore fetch errors during page unload
+        }
+      }
+      document.getElementById("last-updated").textContent =
+        "updated " + new Date().toLocaleTimeString();
+      setInterval(refreshData, REFRESH_INTERVAL);
+    </script>
   </body>
 </html>`;
 }

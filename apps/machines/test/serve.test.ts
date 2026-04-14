@@ -25,9 +25,11 @@ describe("serve", () => {
   test("renders dashboard html", () => {
     const html = renderDashboardHtml();
     expect(html).toContain("<title>Machines Dashboard</title>");
-    expect(html).toContain("<h1>Machines Dashboard</h1>");
+    expect(html).toContain("Machines Dashboard");
     expect(html).toContain("Doctor");
     expect(html).toContain("Self Test");
+    expect(html).toContain("Apps");
+    expect(html).toContain("AI CLIs");
   });
 
   test("serves new JSON endpoints", async () => {
