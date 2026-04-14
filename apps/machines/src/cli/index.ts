@@ -38,8 +38,11 @@ import { getStatus } from "../commands/status.js";
 import { runDoctor } from "../commands/doctor.js";
 import { runSelfTest } from "../commands/self-test.js";
 import { getServeInfo, startDashboardServer } from "../commands/serve.js";
-import { getManifestPath } from "../paths.js";
+import { clearClipboardHistory, getDefaultClipboardConfig, getOrCreateClipboardKey, getClipboardStatus, readClipboardConfig, readClipboardHistory, writeClipboardConfig, getConfigPath } from "../commands/clipboard.js";
+import { getManifestPath, getClipboardKeyPath } from "../paths.js";
 import { parseIntegerOption, renderKeyValueTable, renderList } from "../cli-utils.js";
+import { rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type {
   AppsDiffResult,
   AppsStatusResult,
@@ -52,12 +55,13 @@ import type {
   NotificationDispatchSummary,
   NotificationTestResult,
   SelfTestResult,
+  ClipboardConfig,
 } from "../types.js";
 
 const program = new Command();
 
 function printJsonOrText(data: unknown, text: string, json = false): void {
-  if (json) {
+  if (json || program.opts().quiet) {
     console.log(JSON.stringify(data, null, 2));
     return;
   }
@@ -173,11 +177,13 @@ function renderFleetStatus(status: FleetStatus): string {
 program
   .name("machines")
   .description("Machine fleet management CLI + MCP for developers")
-  .version(getPackageVersion());
+  .version(getPackageVersion())
+  .option("-q, --quiet", "Suppress non-essential output");
 
 const manifestCommand = program.command("manifest").description("Manage the fleet manifest");
 const appsCommand = program.command("apps").description("Manage installed applications per machine");
 const notificationsCommand = program.command("notifications").description("Manage fleet alert delivery channels");
+const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 
 manifestCommand.command("init").description("Create an empty fleet manifest").action(() => {
@@ -225,9 +231,9 @@ manifestCommand
 manifestCommand
   .command("add")
   .description("Add or replace a machine in the fleet manifest")
-  .requiredOption("--id <id>", "Machine identifier")
-  .requiredOption("--platform <platform>", "linux | macos | windows")
-  .requiredOption("--workspace-path <path>", "Primary workspace path")
+  .option("--id <id>", "Machine identifier")
+  .option("--platform <platform>", "linux | macos | windows")
+  .option("--workspace-path <path>", "Primary workspace path")
   .option("--hostname <hostname>", "Machine hostname")
   .option("--ssh-address <sshAddress>", "Machine SSH address")
   .option("--tailscale-name <tailscaleName>", "Machine Tailscale DNS name")
@@ -237,7 +243,20 @@ manifestCommand
   .option("--package <name...>", "Desired packages")
   .option("--app <spec...>", "Desired apps as name[:manager[:packageName]]")
   .option("--file <spec...>", "File sync spec source:target[:copy|symlink]")
-  .action((options: Record<string, string | string[] | undefined>) => {
+  .option("--metadata <json>", "Machine metadata as JSON")
+  .option("--from-stdin", "Read the full MachineManifest JSON from stdin")
+  .action((options: Record<string, string | string[] | boolean | undefined>) => {
+    if (options["from-stdin"]) {
+      if (process.stdin.isTTY) {
+        console.error("error: --from-stdin requires piped input");
+        process.exit(1);
+      }
+      const input = readFileSync(0, "utf8");
+      const machine = JSON.parse(input) as MachineManifest;
+      console.log(JSON.stringify(manifestAdd(machine), null, 2));
+      return;
+    }
+
     const packages = Array.isArray(options["package"])
       ? options["package"].map((name) => ({ name: String(name) }))
       : undefined;
@@ -259,6 +278,7 @@ manifestCommand
           };
         })
       : undefined;
+    const metadata = typeof options["metadata"] === "string" ? JSON.parse(options["metadata"]) : undefined;
     const machine: MachineManifest = {
       id: String(options["id"]),
       hostname: options["hostname"] ? String(options["hostname"]) : undefined,
@@ -269,6 +289,7 @@ manifestCommand
       workspacePath: String(options["workspacePath"]),
       bunPath: options["bunPath"] ? String(options["bunPath"]) : undefined,
       tags: Array.isArray(options["tag"]) ? options["tag"].map(String) : undefined,
+      metadata,
       packages,
       apps,
       files,
@@ -310,10 +331,9 @@ appsCommand
   .command("plan")
   .description("Preview app install steps for a machine")
   .option("--machine <id>", "Machine identifier")
-  .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; json?: boolean }) => {
+  .action((options: { machine?: string }) => {
     const result = buildAppsPlan(options.machine);
-    console.log(options.json ? JSON.stringify(result, null, 2) : JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(result, null, 2));
   });
 
 appsCommand
@@ -321,10 +341,9 @@ appsCommand
   .description("Install manifest-managed apps for a machine")
   .option("--machine <id>", "Machine identifier")
   .option("--yes", "Confirm execution", false)
-  .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; yes?: boolean; json?: boolean }) => {
+  .action((options: { machine?: string; yes?: boolean }) => {
     const result = runAppsInstall(options.machine, { apply: true, yes: options.yes });
-    console.log(options.json ? JSON.stringify(result, null, 2) : JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(result, null, 2));
   });
 
 program
@@ -482,6 +501,98 @@ notificationsCommand
     printJsonOrText(result, renderNotificationConfigResult(result), options.json);
   });
 
+clipboardCommand
+  .command("init")
+  .description("Initialize clipboard sync (generate shared secret)")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }) => {
+    const key = getOrCreateClipboardKey();
+    const config = getDefaultClipboardConfig();
+    writeClipboardConfig(config);
+    const result = { keyPath: getClipboardKeyPath(), key, configPath: getConfigPath(), config };
+    printJsonOrText(result, `clipboard initialized\nkey: ${key}\nport: ${config.port}`, options.json);
+  });
+
+clipboardCommand
+  .command("status")
+  .description("Check clipboard sync status")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }) => {
+    const status = getClipboardStatus();
+    const config = readClipboardConfig();
+    const result = { ...status, enabled: config.enabled };
+    printJsonOrText(result, `clipboard sync ${config.enabled ? chalk.green("enabled") : chalk.yellow("disabled")} (port ${status.port}, ${status.historyCount} entries)`, options.json);
+  });
+
+clipboardCommand
+  .command("config")
+  .description("View or set clipboard sync config")
+  .option("--set <json>", "Set config values as JSON")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { set?: string; json?: boolean }) => {
+    if (options.set) {
+      const partial = JSON.parse(options.set) as Partial<ClipboardConfig>;
+      const config = { ...readClipboardConfig(), ...partial };
+      writeClipboardConfig(config);
+    }
+    const config = readClipboardConfig();
+    printJsonOrText(config, renderKeyValueTable([
+      ["enabled", String(config.enabled)],
+      ["port", String(config.port)],
+      ["maxHistory", String(config.maxHistory)],
+      ["maxSizeBytes", `${config.maxSizeBytes} bytes`],
+      ["skipPatterns", config.skipPatterns.join(", ")],
+    ]), options.json);
+  });
+
+clipboardCommand
+  .command("history")
+  .description("Show clipboard sync history")
+  .option("-j, --json", "Print JSON output", false)
+  .option("--limit <n>", "Show only the last N entries", "20")
+  .action((options: { json?: boolean; limit: string }) => {
+    const limit = parseIntegerOption(options.limit, "limit", { min: 1, max: 100 });
+    const entries = readClipboardHistory().slice(0, limit);
+    if (options.json) {
+      console.log(JSON.stringify(entries, null, 2));
+      return;
+    }
+    if (entries.length === 0) {
+      console.log("clipboard history: empty");
+      return;
+    }
+    for (const entry of entries) {
+      const preview = entry.content.length > 80 ? `${entry.content.slice(0, 80)}...` : entry.content;
+      console.log(`${chalk.dim(entry.timestamp)} ${entry.sourceMachine.padEnd(12)} ${entry.contentType.padEnd(5)} ${preview.replace(/\n/g, " ")}`);
+    }
+  });
+
+clipboardCommand
+  .command("clear-history")
+  .description("Clear clipboard sync history")
+  .option("--yes", "Confirm without prompt", false)
+  .action((options: { yes?: boolean }) => {
+    if (!options.yes) {
+      console.error("error: this command requires --yes");
+      process.exit(1);
+    }
+    clearClipboardHistory();
+    console.log("clipboard history cleared");
+  });
+
+clipboardCommand
+  .command("key")
+  .description("Show or rotate the shared secret key")
+  .option("--rotate", "Generate a new key", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { rotate?: boolean; json?: boolean }) => {
+    if (options.rotate) {
+      rmSync(getClipboardKeyPath(), { force: true });
+    }
+    const key = getOrCreateClipboardKey();
+    printJsonOrText({ key }, key, options.json);
+  });
+
 installClaudeCommand
   .command("status")
   .description("Check installed state for Claude, Codex, and Gemini CLIs")
@@ -524,19 +635,6 @@ installClaudeCommand
   .option("-j, --json", "Print JSON output", false)
   .action((options: { machine?: string; tool?: string[]; yes?: boolean; json?: boolean }) => {
     const result = runClaudeInstall(options.machine, options.tool, { apply: true, yes: options.yes });
-    console.log(JSON.stringify(result, null, 2));
-  });
-
-installClaudeCommand
-  .option("--machine <id>", "Machine identifier")
-  .option("--tool <name...>", "CLI tools to install (claude, codex, gemini)")
-  .option("--apply", "Execute installation commands instead of previewing the plan", false)
-  .option("--yes", "Confirm execution when using --apply", false)
-  .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; tool?: string[]; apply?: boolean; yes?: boolean; json?: boolean }) => {
-    const result = options.apply
-      ? runClaudeInstall(options.machine, options.tool, { apply: true, yes: options.yes })
-      : buildClaudeInstallPlan(options.machine, options.tool);
     console.log(JSON.stringify(result, null, 2));
   });
 

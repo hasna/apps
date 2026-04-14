@@ -21,6 +21,14 @@ export function getNotificationsPath(): string {
   return process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] || join(getDataDir(), "notifications.json");
 }
 
+export function getClipboardKeyPath(): string {
+  return process.env["HASNA_MACHINES_CLIPBOARD_KEY_PATH"] || join(getDataDir(), "clipboard.key");
+}
+
+export function getClipboardHistoryPath(): string {
+  return process.env["HASNA_MACHINES_CLIPBOARD_HISTORY_PATH"] || join(getDataDir(), "clipboard-history.json");
+}
+
 export function ensureParentDir(filePath: string): void {
   if (filePath === ":memory:") return;
   const dir = dirname(resolve(filePath));

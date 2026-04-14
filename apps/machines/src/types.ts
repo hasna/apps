@@ -29,6 +29,7 @@ export interface MachineManifest {
   workspacePath: string;
   bunPath?: string;
   tags?: string[];
+  metadata?: Record<string, unknown>;
   packages?: ManifestPackageSpec[];
   apps?: ManifestAppSpec[];
   files?: ManifestFileSyncSpec[];
@@ -212,4 +213,37 @@ export interface SelfTestCheck {
 export interface SelfTestResult {
   machineId: string;
   checks: SelfTestCheck[];
+}
+
+export interface ClipboardEntry {
+  hash: string;
+  content: string;
+  contentType: "text" | "rich" | "url";
+  sourceMachine: string;
+  timestamp: string;
+}
+
+export interface ClipboardConfig {
+  version: 1;
+  enabled: boolean;
+  port: number;
+  maxHistory: number;
+  maxSizeBytes: number;
+  skipPatterns: string[];
+}
+
+export interface ClipboardStatus {
+  running: boolean;
+  pid?: number;
+  port: number;
+  lastSync?: string;
+  historyCount: number;
+}
+
+export interface ClipboardSyncEvent {
+  hash: string;
+  content: string;
+  contentType: "text" | "rich" | "url";
+  sourceMachine: string;
+  timestamp: string;
 }

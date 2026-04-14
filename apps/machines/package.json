@@ -1,6 +1,6 @@
 {
   "name": "@hasna/machines",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Machine fleet management CLI + MCP for developers",
   "type": "module",
   "license": "Apache-2.0",
