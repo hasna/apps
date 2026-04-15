@@ -94,3 +94,19 @@ Committed local changes
 error: cannot pull with rebase: You have unstaged changes.
 error: Please commit or stash them.
 === 2026-04-15 00:05:01 ===
+[main 937af34] chore: auto-commit uncommitted changes before sync
+ 15 files changed, 1092 insertions(+)
+ create mode 100644 extension/build.ts
+ create mode 100644 extension/manifest.json
+ create mode 100644 extension/package.json
+ create mode 100644 extension/src/background/session.ts
+ create mode 100644 extension/src/content/capture.ts
+ create mode 100644 extension/src/popup/popup.html
+ create mode 100644 extension/src/popup/popup.ts
+ create mode 100644 extension/tsconfig.json
+ create mode 100644 extension/types/index.ts
+ create mode 100644 src/db/sessions.ts
+Committed local changes
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+=== 2026-04-16 00:05:01 ===
