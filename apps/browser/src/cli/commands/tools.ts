@@ -12,6 +12,7 @@ import { startRecording, stopRecording, replayRecording } from "../../lib/record
 import { listRecordings } from "../../db/recordings.js";
 import { isLightpandaAvailable } from "../../engines/lightpanda.js";
 import type { BrowserEngine } from "../../types/index.js";
+import { UseCase } from "../../types/index.js";
 
 export function register(program: Command) {
 
@@ -158,13 +159,17 @@ program
   .command("login <url>")
   .description("Login to a site: detect form, fill credentials from secrets, save auth state")
   .option("--email <email>", "Email to login with")
+  .option("--password <password>", "Password to login with")
   .option("--save-as <name>", "Name to save storage state as")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { email?: string; saveAs?: string; engine: string; headed?: boolean; json?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+  .action(async (url: string, opts: { email?: string; password?: string; saveAs?: string; engine: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, useCase: UseCase.AUTH_FLOW, headless: !opts.headed });
     await navigate(page, url);
+
+    // Settle delay for SPA hydration before form detection
+    await new Promise(r => setTimeout(r, 2000));
 
     // Detect login form
     const formInfo = await page.evaluate(() => {
@@ -189,18 +194,18 @@ program
       console.log(chalk.gray(`  Submit button: ${formInfo.hasSubmitButton ? '✓' : '✗'}`));
     }
 
-    // Try to get credentials from secrets
+    // Resolve credentials from CLI flags or secrets vault
     let email = opts.email;
-    let password: string | undefined;
+    let password = opts.password;
 
-    if (!email) {
+    if (!email || !password) {
       try {
         const { getCredentials } = await import("../../lib/auth.js");
         const hostname = new URL(url).hostname;
         const creds = await getCredentials(hostname);
         if (creds) {
-          email = creds.email ?? creds.username;
-          password = creds.password;
+          email = email ?? creds.email ?? creds.username;
+          password = password ?? creds.password;
           if (!opts.json) console.log(chalk.blue(`  Credentials found for ${hostname}`));
         }
       } catch {}
