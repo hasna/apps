@@ -61,12 +61,8 @@ struct SparklineView: View {
   }
 
   private func fmtCost(_ usd: Double) -> String {
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .currency
-    formatter.currencySymbol = "$"
-    formatter.maximumFractionDigits = 2
-    formatter.minimumFractionDigits = 2
-    return formatter.string(from: NSNumber(value: usd)) ?? String(format: "$%.2f", usd)
+    if usd >= 1000 { return String(format: "$%.0f", usd) }
+    return String(format: "$%.2f", usd)
   }
 
   private func formatDate(_ d: String) -> String {

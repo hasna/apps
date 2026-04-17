@@ -16,6 +16,12 @@ struct EconomyBarApp: App {
         monthCost: appState.month.total_usd,
         isOffline: appState.isOffline
       )
+      .task {
+        // Start polling when the menubar label first mounts (app launch),
+        // not when the user opens the menu. Ensures the label shows real
+        // data immediately instead of $0.
+        appState.startPolling()
+      }
     }
     .menuBarExtraStyle(.window)
   }

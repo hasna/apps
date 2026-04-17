@@ -10,7 +10,7 @@ struct SessionRowView: View {
           Text(session.agent.uppercased())
             .font(.caption2)
             .fontWeight(.bold)
-            .foregroundStyle(agentColor)
+            .foregroundStyle(.secondary)
 
           Text(session.shortId)
             .font(.caption2)
@@ -41,29 +41,9 @@ struct SessionRowView: View {
     }
   }
 
-  private var agentColor: Color {
-    switch session.agent {
-    case "claude":
-      return .blue
-    case "codex":
-      return .orange
-    case "gemini":
-      return .green
-    default:
-      return .secondary
-    }
-  }
-
   private func fmtCost(_ usd: Double) -> String {
-    if usd >= 0.01 {
-      let formatter = NumberFormatter()
-      formatter.numberStyle = .currency
-      formatter.currencySymbol = "$"
-      formatter.minimumFractionDigits = 2
-      formatter.maximumFractionDigits = 2
-      return formatter.string(from: NSNumber(value: usd)) ?? String(format: "$%.2f", usd)
-    }
-    if usd > 0 { return String(format: "%.1f¢", usd * 100) }
+    if usd >= 0.01 { return String(format: "$%.2f", usd) }
+    if usd > 0 { return String(format: "$%.1f¢", usd * 100) }
     return "$0.00"
   }
 }

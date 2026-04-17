@@ -68,11 +68,8 @@ struct GoalRowView: View {
   }
 
   private func fmtCost(_ usd: Double) -> String {
-    let f = NumberFormatter()
-    f.numberStyle = .currency
-    f.currencySymbol = "$"
-    f.maximumFractionDigits = 2
-    f.minimumFractionDigits = 0
-    return f.string(from: NSNumber(value: usd)) ?? "$\(usd)"
+    if usd >= 1000 { return String(format: "$%.0f", usd) }
+    if usd == floor(usd) { return String(format: "$%.0f", usd) }
+    return String(format: "$%.2f", usd)
   }
 }

@@ -148,8 +148,5 @@ struct ContentView: View {
       .padding(.vertical, 12)
     }
     .frame(width: 360)
-    .onAppear {
-      appState.startPolling()
-    }
   }
 }
