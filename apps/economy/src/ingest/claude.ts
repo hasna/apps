@@ -4,7 +4,7 @@ import { join, basename } from 'path'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import {
   upsertRequest, upsertSession, rollupSession,
-  getIngestState, setIngestState,
+  getIngestState, setIngestState, getMachineId,
 } from '../db/database.js'
 
 function autoDetectProject(cwd: string, projects: Array<{path: string, name: string}>): { path: string; name: string } | undefined {
@@ -70,6 +70,7 @@ export async function ingestClaude(
     return { files: 0, requests: 0, sessions: 0 }
   }
 
+  const machineId = getMachineId()
   let totalFiles = 0
   let totalRequests = 0
   const touchedSessions = new Set<string>()
@@ -148,6 +149,7 @@ export async function ingestClaude(
           duration_ms: 0,
           timestamp,
           source_request_id: reqId,
+          machine_id: machineId,
         })
 
         // Ensure session exists
@@ -167,6 +169,7 @@ export async function ingestClaude(
               total_cost_usd: 0,
               total_tokens: 0,
               request_count: 0,
+              machine_id: machineId,
             }
             upsertSession(db, session)
           }

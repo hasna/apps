@@ -6,6 +6,7 @@ import {
   listProjects, upsertProject, deleteProject,
   listModelPricing, upsertModelPricing, deleteModelPricing,
   upsertGoal, deleteGoal, getGoalStatuses,
+  listMachines, getMachineId,
   openDatabase,
 } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
@@ -71,7 +72,13 @@ export function createHandler(db: Database) {
     // Summary
     if (path === '/api/summary' && method === 'GET') {
       const period = (url.searchParams.get('period') ?? 'today') as Period
-      return ok(querySummary(db, period))
+      const machine = url.searchParams.get('machine') ?? undefined
+      return ok(querySummary(db, period, machine))
+    }
+
+    // Machines
+    if (path === '/api/machines' && method === 'GET') {
+      return ok(listMachines(db), { current_machine: getMachineId() })
     }
 
     // Daily breakdown for charts
@@ -85,6 +92,7 @@ export function createHandler(db: Database) {
       const agent = url.searchParams.get('agent') as Agent | null
       const project = url.searchParams.get('project') ?? undefined
       const search = url.searchParams.get('search') ?? undefined
+      const machine = url.searchParams.get('machine') ?? undefined
       const limit = Number(url.searchParams.get('limit') ?? 50)
       const offset = Number(url.searchParams.get('offset') ?? 0)
       const since = url.searchParams.get('since') ?? undefined
@@ -94,6 +102,7 @@ export function createHandler(db: Database) {
         agent: agent ?? undefined,
         project,
         search,
+        machine,
         limit,
         offset,
         since,

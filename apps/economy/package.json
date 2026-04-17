@@ -1,6 +1,6 @@
 {
   "name": "@hasna/economy",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, and Gemini",
   "type": "module",
   "main": "dist/index.js",

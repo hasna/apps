@@ -4,7 +4,7 @@ import { join, basename } from 'path'
 import { Database as BunDatabase } from 'bun:sqlite'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import {
-  upsertSession, getIngestState, setIngestState,
+  upsertSession, getIngestState, setIngestState, getMachineId,
 } from '../db/database.js'
 
 const CODEX_DB_PATH = join(homedir(), '.codex', 'state_5.sqlite')
@@ -37,6 +37,7 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
     return { sessions: 0 }
   }
 
+  const machineId = getMachineId()
   let codexDb: BunDatabase | null = null
   let ingested = 0
 
@@ -77,6 +78,7 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
         total_cost_usd: costUsd,
         total_tokens: thread.tokens_used,
         request_count: 1,
+        machine_id: machineId,
       })
 
       setIngestState(db, 'codex', stateKey, 'done')

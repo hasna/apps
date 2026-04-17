@@ -15,6 +15,7 @@ export interface EconomyRequest {
   duration_ms: number
   timestamp: string
   source_request_id: string
+  machine_id?: string
 }
 
 export interface EconomySession {
@@ -27,6 +28,7 @@ export interface EconomySession {
   total_cost_usd: number
   total_tokens: number
   request_count: number
+  machine_id?: string
 }
 
 export interface EconomyProject {
@@ -110,4 +112,5 @@ export interface SessionFilter {
   offset?: number
   since?: string
   search?: string
+  machine?: string
 }

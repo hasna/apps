@@ -7,7 +7,7 @@ import {
   upsertProject, getProject, listProjects, deleteProject,
   upsertBudget, listBudgets, deleteBudget, getBudgetStatuses,
   upsertModelPricing, getModelPricing, listModelPricing, deleteModelPricing,
-  seedModelPricing,
+  seedModelPricing, listMachines, getMachineId,
 } from './database.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
@@ -32,6 +32,7 @@ function sampleRequest(overrides: Partial<EconomyRequest> = {}): EconomyRequest 
     duration_ms: 1500,
     timestamp: NOW,
     source_request_id: 'src-req-1',
+    machine_id: '',
     ...overrides,
   }
 }
@@ -47,6 +48,7 @@ function sampleSession(overrides: Partial<EconomySession> = {}): EconomySession 
     total_cost_usd: 0.05,
     total_tokens: 1800,
     request_count: 1,
+    machine_id: '',
     ...overrides,
   }
 }
@@ -317,5 +319,78 @@ describe('model_pricing', () => {
     seedModelPricing(db, defaults)
     seedModelPricing(db, defaults)
     expect(listModelPricing(db).length).toBe(1)
+  })
+})
+
+describe('machine_id support', () => {
+  it('getMachineId returns a non-empty string', () => {
+    expect(getMachineId().length).toBeGreaterThan(0)
+  })
+
+  it('respects ECONOMY_MACHINE_ID env var', () => {
+    const orig = process.env['ECONOMY_MACHINE_ID']
+    process.env['ECONOMY_MACHINE_ID'] = 'test-machine'
+    expect(getMachineId()).toBe('test-machine')
+    if (orig) process.env['ECONOMY_MACHINE_ID'] = orig
+    else delete process.env['ECONOMY_MACHINE_ID']
+  })
+
+  it('stores and retrieves machine_id on requests', () => {
+    const db = makeDb()
+    upsertRequest(db, sampleRequest({ machine_id: 'spark01' }))
+    const row = db.prepare('SELECT machine_id FROM requests WHERE id = ?').get('req-1') as { machine_id: string }
+    expect(row.machine_id).toBe('spark01')
+  })
+
+  it('stores and retrieves machine_id on sessions', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({ machine_id: 'apple01' }))
+    const row = db.prepare('SELECT machine_id FROM sessions WHERE id = ?').get('sess-1') as { machine_id: string }
+    expect(row.machine_id).toBe('apple01')
+  })
+
+  it('querySessions filters by machine', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({ id: 's1', machine_id: 'spark01' }))
+    upsertSession(db, sampleSession({ id: 's2', machine_id: 'apple01' }))
+    upsertSession(db, sampleSession({ id: 's3', machine_id: 'spark01' }))
+    const sparkSessions = querySessions(db, { machine: 'spark01' })
+    expect(sparkSessions.length).toBe(2)
+    expect(sparkSessions.every(s => (s as unknown as Record<string, unknown>)['machine_id'] === 'spark01')).toBe(true)
+  })
+
+  it('querySummary filters by machine', () => {
+    const db = makeDb()
+    upsertRequest(db, sampleRequest({ id: 'r1', session_id: 's1', cost_usd: 1.00, machine_id: 'spark01' }))
+    upsertRequest(db, sampleRequest({ id: 'r2', session_id: 's2', cost_usd: 2.00, machine_id: 'apple01' }))
+    upsertSession(db, sampleSession({ id: 's1', machine_id: 'spark01', total_cost_usd: 1.00 }))
+    upsertSession(db, sampleSession({ id: 's2', machine_id: 'apple01', total_cost_usd: 2.00 }))
+    const all = querySummary(db, 'all')
+    expect(all.total_usd).toBeCloseTo(3.00)
+    const sparkOnly = querySummary(db, 'all', 'spark01')
+    expect(sparkOnly.total_usd).toBeCloseTo(1.00)
+  })
+
+  it('listMachines returns grouped machine data', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({ id: 's1', machine_id: 'spark01', total_cost_usd: 5.00 }))
+    upsertSession(db, sampleSession({ id: 's2', machine_id: 'spark01', total_cost_usd: 3.00 }))
+    upsertSession(db, sampleSession({ id: 's3', machine_id: 'apple01', total_cost_usd: 10.00 }))
+    const machines = listMachines(db)
+    expect(machines.length).toBe(2)
+    const apple = machines.find(m => m.machine_id === 'apple01')
+    expect(apple?.sessions).toBe(1)
+    expect(apple?.total_cost_usd).toBeCloseTo(10.00)
+    const spark = machines.find(m => m.machine_id === 'spark01')
+    expect(spark?.sessions).toBe(2)
+  })
+
+  it('listMachines excludes empty machine_id', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({ id: 's1', machine_id: '' }))
+    upsertSession(db, sampleSession({ id: 's2', machine_id: 'spark01' }))
+    const machines = listMachines(db)
+    expect(machines.length).toBe(1)
+    expect(machines[0]!.machine_id).toBe('spark01')
   })
 })

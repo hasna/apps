@@ -2,7 +2,7 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import { registerBrainsCommand } from './brains.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
@@ -167,7 +167,8 @@ program
   .option('--gemini', 'Only ingest Gemini CLI sessions')
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
-  .action(async (opts: { claude?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean }) => {
+  .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
+  .action(async (opts: { claude?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
     if (opts.force) {
@@ -193,6 +194,13 @@ program
       const r = await ingestGemini(db, opts.verbose)
       console.log(chalk.green(`✓ ${r.sessions} sessions`))
     }
+    // Backfill empty machine_id records
+    if (opts.backfillMachine) {
+      const machine = getMachineId()
+      const reqCount = db.prepare(`UPDATE requests SET machine_id = ? WHERE machine_id = '' OR machine_id IS NULL`).run(machine)
+      const sessCount = db.prepare(`UPDATE sessions SET machine_id = ? WHERE machine_id = '' OR machine_id IS NULL`).run(machine)
+      console.log(chalk.cyan(`→ Backfilled machine_id='${machine}': ${reqCount.changes} requests, ${sessCount.changes} sessions`))
+    }
     // Fire webhooks after sync
     try {
       const { checkAndFireWebhooks } = await import('../lib/webhooks.js')
@@ -214,17 +222,19 @@ program
   .description('List coding sessions with costs')
   .option('--agent <agent>', 'Filter by agent (claude|codex)')
   .option('--project <path>', 'Filter by project path')
+  .option('--machine <id>', 'Filter by machine hostname (e.g. spark01, apple01)')
   .option('--limit <n>', 'Number of sessions', '20')
   .option('--format <fmt>', 'Output format: table|compact|csv|json', 'table')
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .option('--search <query>', 'Search by project name, session id prefix, or agent')
-  .action(async (opts: { agent?: string; project?: string; limit?: string; format?: string; since?: string; search?: string }) => {
+  .action(async (opts: { agent?: string; project?: string; machine?: string; limit?: string; format?: string; since?: string; search?: string }) => {
     await autoSync()
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
     let sessions = querySessions(db, {
       agent: opts.agent as Agent | undefined,
       project: opts.project,
+      machine: opts.machine,
       limit: Number(opts.limit ?? 20),
       since: sinceDate,
       search: opts.search,
@@ -802,6 +812,37 @@ program
       )
       if (requests.length > 50) console.log(chalk.dim(`  ... and ${requests.length - 50} more requests`))
     }
+    console.log()
+  })
+
+// ── machines ─────────────────────────────────────────────────────────────────
+
+program
+  .command('machines')
+  .description('List all machines that have synced data')
+  .action(async () => {
+    await autoSync()
+    const db = openDatabase()
+    const machines = listMachines(db)
+    const current = getMachineId()
+    if (machines.length === 0) {
+      console.log(chalk.yellow(`No machine data yet. Current machine: ${current}`))
+      return
+    }
+    console.log()
+    console.log(chalk.bold.cyan('  Machines'))
+    console.log()
+    printTable(
+      ['Machine', 'Sessions', 'Requests', 'Cost', 'Last Active'],
+      machines.map(m => [
+        m.machine_id === current ? chalk.green(`${m.machine_id} (this)`) : chalk.white(m.machine_id),
+        fmtCount(m.sessions),
+        fmtCount(m.requests),
+        fmt(m.total_cost_usd),
+        chalk.dim(m.last_active?.substring(0, 16) ?? '—'),
+      ]),
+    )
+    console.log(`\n  ${chalk.dim('Current machine:')} ${chalk.bold(current)}`)
     console.log()
   })
 

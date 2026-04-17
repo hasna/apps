@@ -18,7 +18,8 @@ export const PG_MIGRATIONS: string[] = [
     cost_usd REAL NOT NULL DEFAULT 0,
     duration_ms INTEGER DEFAULT 0,
     timestamp TEXT NOT NULL,
-    source_request_id TEXT
+    source_request_id TEXT,
+    machine_id TEXT DEFAULT ''
   )`,
 
   // Sessions table — aggregated session-level data
@@ -31,7 +32,8 @@ export const PG_MIGRATIONS: string[] = [
     ended_at TEXT,
     total_cost_usd REAL DEFAULT 0,
     total_tokens INTEGER DEFAULT 0,
-    request_count INTEGER DEFAULT 0
+    request_count INTEGER DEFAULT 0,
+    machine_id TEXT DEFAULT ''
   )`,
 
   // Projects table
@@ -79,9 +81,11 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_requests_agent ON requests(agent)`,
+  `CREATE INDEX IF NOT EXISTS idx_requests_machine ON requests(machine_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id)`,
 
   // Model pricing table
   `CREATE TABLE IF NOT EXISTS model_pricing (

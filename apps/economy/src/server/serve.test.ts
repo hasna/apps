@@ -168,4 +168,35 @@ describe('REST API server', () => {
     const res = await handler(r)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
   })
+
+  it('GET /api/machines returns machine list', async () => {
+    const { status, data } = await req(handler, '/api/machines')
+    expect(status).toBe(200)
+    expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
+  })
+
+  it('GET /api/summary?machine= filters by machine', async () => {
+    upsertRequest(db, {
+      id: 'req-m1', agent: 'claude', session_id: 'sess-m1', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 0.5, duration_ms: 100, timestamp: NOW, source_request_id: 'src-m1', machine_id: 'apple01',
+    })
+    upsertSession(db, {
+      id: 'sess-m1', agent: 'claude', project_path: '/proj/m', project_name: 'proj-m',
+      started_at: NOW, ended_at: null, total_cost_usd: 0.5, total_tokens: 150, request_count: 1, machine_id: 'apple01',
+    })
+    const { data } = await req(handler, '/api/summary?period=all&machine=apple01')
+    const d = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(d['total_usd']).toBeCloseTo(0.5)
+  })
+
+  it('GET /api/sessions?machine= filters by machine', async () => {
+    upsertSession(db, {
+      id: 'sess-m2', agent: 'claude', project_path: '/proj/m2', project_name: 'proj-m2',
+      started_at: NOW, ended_at: null, total_cost_usd: 0.5, total_tokens: 150, request_count: 1, machine_id: 'apple03',
+    })
+    const { data } = await req(handler, '/api/sessions?machine=apple03')
+    const sessions = (data as Record<string, unknown>)['data'] as unknown[]
+    expect(sessions.length).toBe(1)
+  })
 })

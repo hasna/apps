@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
 import { ingestClaude } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
@@ -61,6 +61,7 @@ const TOOL_NAMES = [
   'get_goals',
   'set_goal',
   'remove_goal',
+  'list_machines',
   'register_agent',
   'heartbeat',
   'set_focus',
@@ -69,9 +70,10 @@ const TOOL_NAMES = [
 ] as const
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
-  get_cost_summary: 'period(today|week|month|year|all) -> {total_usd, sessions, requests, tokens, summary}',
-  get_sessions: 'agent(claude|codex|gemini), project(partial), limit(20) -> compact session table',
+  get_cost_summary: 'period(today|week|month|year|all), machine?(hostname) -> {total_usd, sessions, requests, tokens, summary}',
+  get_sessions: 'agent(claude|codex|gemini), project(partial), machine?(hostname), limit(20) -> compact session table',
   get_top_sessions: 'n(10), agent(claude|codex|gemini) -> top sessions by cost',
+  list_machines: 'no params -> machine_id, sessions, requests, cost, last_active',
   get_model_breakdown: 'no params -> model, requests, tokens, cost',
   get_project_breakdown: 'no params -> project_name, sessions, cost',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
@@ -133,34 +135,37 @@ server.tool(
 
 server.tool(
   'get_cost_summary',
-  'Cost summary (total_usd, sessions, requests, tokens, human summary). period: today|week|month|year|all',
-  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional() },
-  async ({ period }: { period?: Exclude<Period, 'yesterday'> }) => {
+  'Cost summary (total_usd, sessions, requests, tokens, human summary). period: today|week|month|year|all. machine: filter by hostname.',
+  { period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(), machine: z.string().optional() },
+  async ({ period, machine }: { period?: Exclude<Period, 'yesterday'>; machine?: string }) => {
     const resolved = (period ?? 'today') as Exclude<Period, 'yesterday'>
-    const s = querySummary(db, resolved)
+    const s = querySummary(db, resolved, machine)
+    const machineLabel = machine ? ` on ${machine}` : ''
     return text([
-      `period: ${resolved}`,
+      `period: ${resolved}${machineLabel}`,
       `cost: ${fmtUsd(s.total_usd)}`,
       `sessions: ${s.sessions}`,
       `requests: ${s.requests.toLocaleString()}`,
       `tokens: ${fmtTok(s.tokens)}`,
-      `summary: You've spent ${fmtUsd(s.total_usd)} ${resolved === 'all' ? 'total' : resolved} across ${s.sessions} sessions (${s.requests.toLocaleString()} requests, ${fmtTok(s.tokens)} tokens)`,
+      `summary: You've spent ${fmtUsd(s.total_usd)} ${resolved === 'all' ? 'total' : resolved}${machineLabel} across ${s.sessions} sessions (${s.requests.toLocaleString()} requests, ${fmtTok(s.tokens)} tokens)`,
     ].join('\n'))
   },
 )
 
 server.tool(
   'get_sessions',
-  'List sessions. Returns compact table. Params: agent, project, limit(20)',
+  'List sessions. Returns compact table. Params: agent, project, machine, limit(20)',
   {
     agent: z.enum(['claude', 'codex', 'gemini']).optional(),
     project: z.string().optional(),
+    machine: z.string().optional(),
     limit: z.number().int().positive().max(100).optional(),
   },
-  async ({ agent, project, limit }: { agent?: Agent; project?: string; limit?: number }) => {
+  async ({ agent, project, machine, limit }: { agent?: Agent; project?: string; machine?: string; limit?: number }) => {
     const sessions = querySessions(db, {
       agent,
       project,
+      machine,
       limit: limit ?? 20,
     }) as unknown as Array<Record<string, unknown>>
     const lines = ['id       agent  cost       tokens   project']
@@ -357,6 +362,22 @@ server.tool(
   async ({ id }: { id: string }) => {
     deleteGoal(db, id)
     return text('Goal removed.')
+  },
+)
+
+server.tool(
+  'list_machines',
+  'List all machines that have synced data. No params.',
+  {},
+  async () => {
+    const machines = listMachines(db)
+    if (machines.length === 0) return text(`No machine data yet. Current machine: ${getMachineId()}`)
+    const lines = ['machine          sessions  requests  cost        last_active']
+    for (const m of machines) {
+      lines.push(`${m.machine_id.padEnd(17)}${String(m.sessions).padEnd(10)}${String(m.requests).padEnd(10)}${fmtUsd(m.total_cost_usd).padEnd(12)}${m.last_active?.substring(0, 16) ?? '—'}`)
+    }
+    lines.push(`\ncurrent machine: ${getMachineId()}`)
+    return text(lines.join('\n'))
   },
 )
 

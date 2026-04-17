@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
-import { upsertSession, rollupSession, getIngestState, setIngestState } from '../db/database.js'
+import { upsertSession, rollupSession, getIngestState, setIngestState, getMachineId } from '../db/database.js'
 import type { EconomySession } from '../types/index.js'
 
 const GEMINI_TMP_DIR = join(homedir(), '.gemini', 'tmp')
@@ -33,6 +33,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
     return { sessions: 0 }
   }
 
+  const machineId = getMachineId()
   let totalSessions = 0
   const touchedSessions = new Set<string>()
 
@@ -86,6 +87,7 @@ export async function ingestGemini(db: Database, verbose?: boolean): Promise<{ s
           total_cost_usd: 0,
           total_tokens: 0,
           request_count: 0,
+          machine_id: machineId,
         }
         upsertSession(db, session)
         touchedSessions.add(sessionId)

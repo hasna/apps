@@ -1,5 +1,6 @@
 import { SqliteAdapter as Database } from '@hasna/cloud'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
+import { hostname } from 'os'
 import { homedir } from 'os'
 import { join } from 'path'
 import type {
@@ -14,6 +15,13 @@ import type {
   Period,
   SessionFilter,
 } from '../types/index.js'
+
+export function getMachineId(): string {
+  if (process.env['ECONOMY_MACHINE_ID']) return process.env['ECONOMY_MACHINE_ID']
+  const h = hostname().toLowerCase()
+  if (h.startsWith('spark') || h.startsWith('apple')) return h.split('.')[0]!
+  return h.split('.')[0]!
+}
 
 export function getDataDir(): string {
   const home = process.env['HOME'] || process.env['USERPROFILE'] || homedir()
@@ -49,6 +57,7 @@ export function openDatabase(dbPath?: string, skipSeed = false): Database {
   }
   const db = new Database(path)
   db.exec('PRAGMA journal_mode = WAL')
+  db.exec('PRAGMA busy_timeout = 5000')
   db.exec('PRAGMA foreign_keys = ON')
   initSchema(db)
   if (!skipSeed) {
@@ -72,7 +81,8 @@ function initSchema(db: Database): void {
       cost_usd REAL NOT NULL DEFAULT 0,
       duration_ms INTEGER DEFAULT 0,
       timestamp TEXT NOT NULL,
-      source_request_id TEXT
+      source_request_id TEXT,
+      machine_id TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -84,7 +94,8 @@ function initSchema(db: Database): void {
       ended_at TEXT,
       total_cost_usd REAL DEFAULT 0,
       total_tokens INTEGER DEFAULT 0,
-      request_count INTEGER DEFAULT 0
+      request_count INTEGER DEFAULT 0,
+      machine_id TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS projects (
@@ -150,6 +161,19 @@ function initSchema(db: Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+
+  // Migrate existing DBs: add machine_id if missing (must run before index creation)
+  const cols = db.prepare(`PRAGMA table_info(requests)`).all() as Array<{ name: string }>
+  if (!cols.some(c => c.name === 'machine_id')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN machine_id TEXT DEFAULT ''`)
+    db.exec(`ALTER TABLE sessions ADD COLUMN machine_id TEXT DEFAULT ''`)
+  }
+
+  // Create indexes that depend on machine_id (after migration)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_requests_machine ON requests(machine_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id);
+  `)
 }
 
 function periodWhere(period: Period): string {
@@ -181,13 +205,13 @@ export function upsertRequest(db: Database, req: EconomyRequest): void {
     INSERT OR REPLACE INTO requests
       (id, agent, session_id, model, input_tokens, output_tokens,
        cache_read_tokens, cache_create_tokens, cost_usd, duration_ms,
-       timestamp, source_request_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       timestamp, source_request_id, machine_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.id, req.agent, req.session_id, req.model,
     req.input_tokens, req.output_tokens, req.cache_read_tokens,
     req.cache_create_tokens, req.cost_usd, req.duration_ms,
-    req.timestamp, req.source_request_id,
+    req.timestamp, req.source_request_id, req.machine_id ?? '',
   )
 }
 
@@ -197,12 +221,13 @@ export function upsertSession(db: Database, session: EconomySession): void {
   db.prepare(`
     INSERT OR REPLACE INTO sessions
       (id, agent, project_path, project_name, started_at, ended_at,
-       total_cost_usd, total_tokens, request_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       total_cost_usd, total_tokens, request_count, machine_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id, session.agent, session.project_path, session.project_name,
     session.started_at, session.ended_at ?? null,
     session.total_cost_usd, session.total_tokens, session.request_count,
+    session.machine_id ?? '',
   )
 }
 
@@ -226,6 +251,7 @@ export function querySessions(db: Database, filter: SessionFilter = {}): Economy
   if (filter.agent) { conditions.push('agent = ?'); params.push(filter.agent) }
   if (filter.project) { conditions.push('project_path LIKE ?'); params.push(`%${filter.project}%`) }
   if (filter.since) { conditions.push('started_at >= ?'); params.push(filter.since) }
+  if (filter.machine) { conditions.push('machine_id = ?'); params.push(filter.machine) }
   if (filter.search) {
     const q = `%${filter.search}%`
     conditions.push('(project_name LIKE ? OR agent LIKE ? OR id LIKE ?)')
@@ -248,29 +274,28 @@ export function queryTopSessions(db: Database, n = 10, agent?: string): EconomyS
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
-export function querySummary(db: Database, period: Period): CostSummary {
+export function querySummary(db: Database, period: Period, machine?: string): CostSummary {
   const rWhere = periodWhere(period)
   const sWhere = sessionPeriodWhere(period)
+  const machineClause = machine ? ` AND machine_id = '${machine.replace(/'/g, "''")}'` : ''
 
-  // Cost + tokens from individual requests (Claude Code)
   const r = db.prepare(`
     SELECT COALESCE(SUM(cost_usd), 0) as total_usd,
            COUNT(*) as requests,
            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as tokens
-    FROM requests WHERE ${rWhere}
+    FROM requests WHERE ${rWhere}${machineClause}
   `).get() as { total_usd: number; requests: number; tokens: number }
 
-  // Sessions with no request-level tracking (e.g. Codex) — add their cost separately
   const codexTotals = db.prepare(`
     SELECT COALESCE(SUM(total_cost_usd), 0) as cost_usd,
            COALESCE(SUM(total_tokens), 0) as tokens,
            COUNT(*) as sessions
     FROM sessions
-    WHERE ${sWhere}
+    WHERE ${sWhere}${machineClause}
     AND id NOT IN (SELECT DISTINCT session_id FROM requests)
   `).get() as { cost_usd: number; tokens: number; sessions: number }
 
-  const sessionCount = db.prepare(`SELECT COUNT(*) as sessions FROM sessions WHERE ${sWhere}`).get() as { sessions: number }
+  const sessionCount = db.prepare(`SELECT COUNT(*) as sessions FROM sessions WHERE ${sWhere}${machineClause}`).get() as { sessions: number }
 
   return {
     total_usd: r.total_usd + codexTotals.cost_usd,
@@ -482,6 +507,31 @@ export function setIngestState(db: Database, source: string, key: string, value:
 
 export function queryRequestsSince(db: Database, since: string): EconomyRequest[] {
   return db.prepare(`SELECT * FROM requests WHERE timestamp > ? ORDER BY timestamp ASC`).all(since) as EconomyRequest[]
+}
+
+// ── Machines ─────────────────────────────────────────────────────────────────
+
+export interface MachineInfo {
+  machine_id: string
+  sessions: number
+  requests: number
+  total_cost_usd: number
+  last_active: string
+}
+
+export function listMachines(db: Database): MachineInfo[] {
+  return db.prepare(`
+    SELECT
+      s.machine_id,
+      COUNT(DISTINCT s.id) as sessions,
+      COALESCE((SELECT COUNT(*) FROM requests r WHERE r.machine_id = s.machine_id), 0) as requests,
+      COALESCE(SUM(s.total_cost_usd), 0) as total_cost_usd,
+      MAX(s.started_at) as last_active
+    FROM sessions s
+    WHERE s.machine_id != ''
+    GROUP BY s.machine_id
+    ORDER BY total_cost_usd DESC
+  `).all() as MachineInfo[]
 }
 
 // ── Model pricing ─────────────────────────────────────────────────────────────

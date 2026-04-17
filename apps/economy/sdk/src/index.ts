@@ -11,6 +11,7 @@ export type {
   ProjectBreakdown,
   DailyPoint,
   ModelPricing,
+  MachineInfo,
   SyncResult,
   SessionFilter,
 } from './types.js'

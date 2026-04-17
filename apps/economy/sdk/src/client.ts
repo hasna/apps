@@ -8,6 +8,7 @@ import type {
   BudgetStatus,
   DailyPoint,
   ModelPricing,
+  MachineInfo,
   SyncResult,
   SessionFilter,
 } from './types.js'
@@ -79,9 +80,10 @@ export class EconomyClient {
     throw lastError ?? new Error(`Request failed: ${url}`)
   }
 
-  async getSummary(period?: Period): Promise<CostSummary> {
+  async getSummary(period?: Period, machine?: string): Promise<CostSummary> {
     const params = new URLSearchParams()
     if (period) params.set('period', period)
+    if (machine) params.set('machine', machine)
     const qs = params.toString() ? `?${params.toString()}` : ''
     return this.request<CostSummary>(`/api/summary${qs}`)
   }
@@ -90,11 +92,16 @@ export class EconomyClient {
     const params = new URLSearchParams()
     if (filter?.agent) params.set('agent', filter.agent)
     if (filter?.project) params.set('project', filter.project)
+    if (filter?.machine) params.set('machine', filter.machine)
     if (filter?.limit != null) params.set('limit', String(filter.limit))
     if (filter?.offset != null) params.set('offset', String(filter.offset))
     if (filter?.since) params.set('since', filter.since)
     const qs = params.toString() ? `?${params.toString()}` : ''
     return this.request<Session[]>(`/api/sessions${qs}`)
+  }
+
+  async getMachines(): Promise<MachineInfo[]> {
+    return this.request<MachineInfo[]>('/api/machines')
   }
 
   async getTopSessions(n?: number, agent?: Agent | string): Promise<Session[]> {
