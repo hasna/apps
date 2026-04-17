@@ -14,8 +14,8 @@ struct MenuBarLabel: View {
 
   private var periodHint: String {
     if todayCost > 0 { return "" }
-    if weekCost > 0 { return "w" }
-    if monthCost > 0 { return "m" }
+    if weekCost > 0 { return "/w" }
+    if monthCost > 0 { return "/m" }
     return ""
   }
 
@@ -36,14 +36,9 @@ struct MenuBarLabel: View {
     } else if usd >= 1_000 {
       return String(format: "$%.1fk", usd / 1_000)
     } else if usd >= 0.01 {
-      let formatter = NumberFormatter()
-      formatter.numberStyle = .currency
-      formatter.currencySymbol = "$"
-      formatter.minimumFractionDigits = 2
-      formatter.maximumFractionDigits = 2
-      return formatter.string(from: NSNumber(value: usd)) ?? String(format: "$%.2f", usd)
+      return String(format: "$%.2f", usd)
     } else if usd > 0 {
-      return String(format: "%.1f¢", usd * 100)
+      return String(format: "$%.1f¢", usd * 100)
     } else {
       return "$0"
     }

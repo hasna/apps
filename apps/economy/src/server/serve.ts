@@ -9,7 +9,7 @@ import {
   listMachines, getMachineId,
   openDatabase,
 } from '../db/database.js'
-import { ingestClaude } from '../ingest/claude.js'
+import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
@@ -210,6 +210,7 @@ export function createHandler(db: Database) {
       const sources = (body['sources'] as string | null) ?? 'all'
       const results: Record<string, unknown> = {}
       if (sources === 'all' || sources === 'claude') results['claude'] = await ingestClaude(db)
+      if (sources === 'all' || sources === 'takumi') results['takumi'] = await ingestTakumi(db)
       if (sources === 'all' || sources === 'codex') results['codex'] = await ingestCodex(db)
       if (sources === 'all' || sources === 'gemini') results['gemini'] = await ingestGemini(db)
       return ok(results)

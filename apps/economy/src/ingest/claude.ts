@@ -13,7 +13,8 @@ function autoDetectProject(cwd: string, projects: Array<{path: string, name: str
 import { computeCostFromDb } from '../lib/pricing.js'
 import type { EconomySession } from '../types/index.js'
 
-const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
+const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
+const TAKUMI_PROJECTS_DIR = join(homedir(), '.takumi', 'projects')
 
 interface MessageUsage {
   input_tokens?: number
@@ -63,10 +64,26 @@ function collectJsonlFiles(projectDir: string): string[] {
 export async function ingestClaude(
   db: Database,
   verbose = false,
-  _telemetryDir?: string, // kept for test compat, unused
+  _telemetryDir?: string,
 ): Promise<{ files: number; requests: number; sessions: number }> {
-  if (!existsSync(PROJECTS_DIR)) {
-    if (verbose) console.log('Claude projects dir not found:', PROJECTS_DIR)
+  return ingestJsonlProjects(db, CLAUDE_PROJECTS_DIR, 'claude', verbose)
+}
+
+export async function ingestTakumi(
+  db: Database,
+  verbose = false,
+): Promise<{ files: number; requests: number; sessions: number }> {
+  return ingestJsonlProjects(db, TAKUMI_PROJECTS_DIR, 'takumi', verbose)
+}
+
+async function ingestJsonlProjects(
+  db: Database,
+  projectsDir: string,
+  agentName: string,
+  verbose = false,
+): Promise<{ files: number; requests: number; sessions: number }> {
+  if (!existsSync(projectsDir)) {
+    if (verbose) console.log(`${agentName} projects dir not found:`, projectsDir)
     return { files: 0, requests: 0, sessions: 0 }
   }
 
@@ -78,23 +95,22 @@ export async function ingestClaude(
   // Load registered projects once for auto-detection (longest path first for best match)
   const registeredProjects = db.prepare(`SELECT path, name FROM projects ORDER BY LENGTH(path) DESC`).all() as Array<{path: string, name: string}>
 
-  const projectDirs = readdirSync(PROJECTS_DIR, { withFileTypes: true })
+  const projectDirs = readdirSync(projectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
 
   for (const projectDirEntry of projectDirs) {
-    const projectDirPath = join(PROJECTS_DIR, projectDirEntry.name)
+    const projectDirPath = join(projectsDir, projectDirEntry.name)
     const projectPath = dirNameToPath(projectDirEntry.name)
 
     const jsonlFiles = collectJsonlFiles(projectDirPath)
 
     for (const filePath of jsonlFiles) {
-      // Use file path as state key, also check mtime to reprocess updated files
-      const stateKey = filePath.replace(PROJECTS_DIR, '')
+      const stateKey = filePath.replace(projectsDir, '')
       let fileMtime = '0'
       try { fileMtime = statSync(filePath).mtimeMs.toString() } catch { continue }
 
-      const processed = getIngestState(db, 'claude', stateKey)
-      if (processed === fileMtime) continue // already processed at this mtime
+      const processed = getIngestState(db, agentName, stateKey)
+      if (processed === fileMtime) continue
 
       let lines: string[]
       try {
@@ -134,11 +150,11 @@ export async function ingestClaude(
         if (inputTokens + outputTokens + cacheWriteTokens === 0) continue
 
         const costUsd = computeCostFromDb(db, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)
-        const reqId = `claude-${sessionId}-${timestamp}`
+        const reqId = `${agentName}-${sessionId}-${timestamp}`
 
         upsertRequest(db, {
           id: reqId,
-          agent: 'claude',
+          agent: agentName,
           session_id: sessionId,
           model,
           input_tokens: inputTokens,
@@ -161,7 +177,7 @@ export async function ingestClaude(
             const detectedProject = autoDetectProject(effectiveCwd, registeredProjects)
             const session: EconomySession = {
               id: sessionId,
-              agent: 'claude',
+              agent: agentName,
               project_path: detectedProject ? detectedProject.path : effectiveCwd,
               project_name: detectedProject ? detectedProject.name : '',
               started_at: timestamp,
@@ -179,7 +195,7 @@ export async function ingestClaude(
         totalRequests++
       }
 
-      setIngestState(db, 'claude', stateKey, fileMtime)
+      setIngestState(db, agentName, stateKey, fileMtime)
       totalFiles++
     }
   }

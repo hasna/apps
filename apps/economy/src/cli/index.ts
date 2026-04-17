@@ -2,8 +2,8 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import { registerBrainsCommand } from './brains.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
-import { ingestClaude } from '../ingest/claude.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
+import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
 import { packageMetadata } from '../lib/package-metadata.js'
@@ -25,6 +25,7 @@ async function autoSync(): Promise<void> {
   const db = openDatabase()
   ensurePricingSeeded(db)
   await ingestClaude(db)
+  await ingestTakumi(db)
   await ingestCodex(db)
   await ingestGemini(db)
 }
@@ -163,25 +164,32 @@ program
   .command('sync')
   .description('Ingest cost data from Claude Code, Codex, and Gemini')
   .option('--claude', 'Only ingest Claude Code telemetry')
+  .option('--takumi', 'Only ingest Takumi sessions')
   .option('--codex', 'Only ingest Codex sessions')
   .option('--gemini', 'Only ingest Gemini CLI sessions')
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
-  .action(async (opts: { claude?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean }) => {
+  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
     if (opts.force) {
       db.exec(`DELETE FROM ingest_state WHERE source = 'claude'`)
       if (opts.verbose) console.log(chalk.dim('Cleared ingest cache'))
     }
-    const anySpecific = opts.claude || opts.codex || opts.gemini
+    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini
     const doClaude = opts.claude || !anySpecific
+    const doTakumi = opts.takumi || !anySpecific
     const doCodex = opts.codex || !anySpecific
     const doGemini = opts.gemini || !anySpecific
     if (doClaude) {
       process.stdout.write(chalk.cyan('→ Ingesting Claude Code telemetry... '))
       const r = await ingestClaude(db, opts.verbose)
+      console.log(chalk.green(`✓ ${r.files} files, ${r.requests} requests, ${r.sessions} sessions`))
+    }
+    if (doTakumi) {
+      process.stdout.write(chalk.cyan('→ Ingesting Takumi sessions... '))
+      const r = await ingestTakumi(db, opts.verbose)
       console.log(chalk.green(`✓ ${r.files} files, ${r.requests} requests, ${r.sessions} sessions`))
     }
     if (doCodex) {
@@ -1198,6 +1206,166 @@ program
       console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`))
       process.exit(1)
     }
+  })
+
+// ── cloud ────────────────────────────────────────────────────────────────────
+
+const cloudCmd = program.command('cloud').description('Cross-machine sync via cloud PostgreSQL')
+
+cloudCmd
+  .command('push')
+  .description('Push local economy data to cloud PostgreSQL')
+  .option('--tables <tables>', 'Comma-separated table names (default: all)')
+  .action(async (opts: { tables?: string }) => {
+    const { syncPush, PgAdapterAsync, getCloudConfig, SqliteAdapter } = await import('@hasna/cloud')
+    const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
+    const config = getCloudConfig()
+    if (!config.rds?.host) { console.error(chalk.red('Cloud not configured. Set RDS host in ~/.hasna/cloud.json')); process.exit(1) }
+
+    const connStr = `postgresql://${config.rds.username}:${process.env[config.rds.password_env] ?? ''}@${config.rds.host}:${config.rds.port ?? 5432}/economy?sslmode=require`
+    const local = new SqliteAdapter(getDbPath())
+    const cloud = new PgAdapterAsync(connStr)
+
+    process.stdout.write(chalk.cyan('→ Running PG migrations... '))
+    for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
+    console.log(chalk.green('✓'))
+
+    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
+    process.stdout.write(chalk.cyan(`→ Pushing ${tableList.join(', ')}... `))
+    const results = await syncPush(local, cloud, { tables: tableList }) as Array<{ rowsWritten: number }>
+    const totalRows = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)
+    console.log(chalk.green(`✓ ${totalRows} rows across ${tableList.length} tables`))
+
+    local.close()
+    await cloud.close()
+    console.log(chalk.bold.green(`\n✓ Push complete from ${getMachineId()}`))
+  })
+
+cloudCmd
+  .command('pull')
+  .description('Pull cloud PostgreSQL data to local')
+  .option('--tables <tables>', 'Comma-separated table names (default: all)')
+  .action(async (opts: { tables?: string }) => {
+    const { syncPull, PgAdapterAsync, getCloudConfig, SqliteAdapter } = await import('@hasna/cloud')
+    const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
+    const config = getCloudConfig()
+    if (!config.rds?.host) { console.error(chalk.red('Cloud not configured. Set RDS host in ~/.hasna/cloud.json')); process.exit(1) }
+
+    const connStr = `postgresql://${config.rds.username}:${process.env[config.rds.password_env] ?? ''}@${config.rds.host}:${config.rds.port ?? 5432}/economy?sslmode=require`
+    const local = new SqliteAdapter(getDbPath())
+    const cloud = new PgAdapterAsync(connStr)
+
+    process.stdout.write(chalk.cyan('→ Running PG migrations... '))
+    for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
+    console.log(chalk.green('✓'))
+
+    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
+    process.stdout.write(chalk.cyan(`→ Pulling ${tableList.join(', ')}... `))
+    const results = await syncPull(cloud, local, { tables: tableList }) as Array<{ rowsWritten: number }>
+    const totalRows = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)
+    console.log(chalk.green(`✓ ${totalRows} rows across ${tableList.length} tables`))
+
+    local.close()
+    await cloud.close()
+    console.log(chalk.bold.green(`\n✓ Pull complete to ${getMachineId()}`))
+  })
+
+cloudCmd
+  .command('sync')
+  .description('Full sync: ingest local, then merge data from all reachable machines via SSH')
+  .option('--machines <list>', 'Comma-separated machine hostnames (default: spark01,apple01,apple03)')
+  .action(async (opts: { machines?: string }) => {
+    const thisMachine = getMachineId()
+    console.log(chalk.bold.cyan(`  Cloud Sync — ${thisMachine}\n`))
+
+    process.stdout.write(chalk.cyan('→ Ingesting local data... '))
+    await autoSync()
+    console.log(chalk.green('✓'))
+
+    const allMachines = (opts.machines ?? 'spark01,apple01,apple03').split(',').map(m => m.trim())
+    const remoteMachines = allMachines.filter(m => m !== thisMachine)
+
+    const db = openDatabase()
+    const { existsSync, mkdirSync, unlinkSync } = await import('fs')
+    const { join } = await import('path')
+    const { execSync: exec } = await import('child_process')
+    const tmpDir = join(process.env['TMPDIR'] ?? '/tmp', 'economy-sync')
+    mkdirSync(tmpDir, { recursive: true })
+
+    const isLinux = process.platform === 'linux'
+    const remoteDbPath = isLinux ? '.hasna/economy/economy.db' : '.hasna/economy/economy.db'
+
+    for (const machine of remoteMachines) {
+      const localCopy = join(tmpDir, `${machine}.db`)
+      process.stdout.write(chalk.cyan(`→ Fetching from ${machine}... `))
+      try {
+        exec(`scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${machine}:~/${remoteDbPath} "${localCopy}" 2>/dev/null`, { timeout: 30000 })
+        if (!existsSync(localCopy)) { console.log(chalk.yellow('skipped (no file)')); continue }
+
+        const { SqliteAdapter } = await import('@hasna/cloud')
+        const remoteDb = new SqliteAdapter(localCopy)
+        remoteDb.exec('PRAGMA busy_timeout = 5000')
+
+        const sessions = remoteDb.prepare('SELECT * FROM sessions').all() as Array<Record<string, unknown>>
+        let sCount = 0
+        for (const s of sessions) {
+          const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(s['id'] as string)
+          if (!existing) {
+            db.prepare(`INSERT OR IGNORE INTO sessions (id, agent, project_path, project_name, started_at, ended_at, total_cost_usd, total_tokens, request_count, machine_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(s['id'], s['agent'], s['project_path'], s['project_name'], s['started_at'], s['ended_at'], s['total_cost_usd'], s['total_tokens'], s['request_count'], s['machine_id'] || machine)
+            sCount++
+          }
+        }
+
+        let rCount = 0
+        try {
+          const cols = remoteDb.prepare('PRAGMA table_info(requests)').all() as Array<{ name: string }>
+          const hasMachineCol = cols.some(c => c.name === 'machine_id')
+          const requests = remoteDb.prepare('SELECT * FROM requests').all() as Array<Record<string, unknown>>
+          for (const r of requests) {
+            const existing = db.prepare('SELECT id FROM requests WHERE id = ?').get(r['id'] as string)
+            if (!existing) {
+              db.prepare(`INSERT OR IGNORE INTO requests (id, agent, session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, cost_usd, duration_ms, timestamp, source_request_id, machine_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(r['id'], r['agent'], r['session_id'], r['model'], r['input_tokens'], r['output_tokens'], r['cache_read_tokens'], r['cache_create_tokens'], r['cost_usd'], r['duration_ms'], r['timestamp'], r['source_request_id'], hasMachineCol ? (r['machine_id'] || machine) : machine)
+              rCount++
+            }
+          }
+        } catch { /* requests table may differ */ }
+
+        remoteDb.close()
+        try { unlinkSync(localCopy) } catch {}
+        console.log(chalk.green(`✓ ${sCount} sessions, ${rCount} requests`))
+      } catch (e) {
+        console.log(chalk.yellow(`skipped (${e instanceof Error ? e.message.split('\n')[0] : 'unreachable'})`))
+        try { unlinkSync(localCopy) } catch {}
+      }
+    }
+
+    console.log(chalk.bold.green('\n✓ Cloud sync complete'))
+  })
+
+cloudCmd
+  .command('status')
+  .description('Check cloud connection status')
+  .action(async () => {
+    const { PgAdapterAsync, getCloudConfig } = await import('@hasna/cloud')
+    const config = getCloudConfig()
+    console.log()
+    console.log(`  Mode: ${chalk.white(config.mode)}`)
+    console.log(`  Machine: ${chalk.white(getMachineId())}`)
+    console.log(`  RDS Host: ${chalk.white(config.rds?.host || '(not configured)')}`)
+    if (config.rds?.host && config.rds?.username) {
+      try {
+        const connStr = `postgresql://${config.rds.username}:${process.env[config.rds.password_env] ?? ''}@${config.rds.host}:${config.rds.port ?? 5432}/economy?sslmode=require`
+        const pg = new PgAdapterAsync(connStr)
+        await pg.get('SELECT 1 as ok')
+        console.log(`  PostgreSQL: ${chalk.green('connected')}`)
+        await pg.close()
+      } catch (err: unknown) {
+        console.log(`  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
+      }
+    }
+    console.log()
   })
 
 // ── brains ─────────────────────────────────────────────────────────────────────

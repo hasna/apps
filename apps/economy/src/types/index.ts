@@ -1,4 +1,4 @@
-export type Agent = 'claude' | 'codex' | 'gemini'
+export type Agent = 'claude' | 'codex' | 'gemini' | 'takumi'
 
 export type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'
 

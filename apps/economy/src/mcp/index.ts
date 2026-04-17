@@ -4,8 +4,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
-import { ingestClaude } from '../ingest/claude.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
+import { PG_MIGRATIONS } from '../db/pg-migrations.js'
+import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
 import { packageMetadata } from '../lib/package-metadata.js'
@@ -156,7 +157,7 @@ server.tool(
   'get_sessions',
   'List sessions. Returns compact table. Params: agent, project, machine, limit(20)',
   {
-    agent: z.enum(['claude', 'codex', 'gemini']).optional(),
+    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
     project: z.string().optional(),
     machine: z.string().optional(),
     limit: z.number().int().positive().max(100).optional(),
@@ -179,7 +180,7 @@ server.tool(
   'Top sessions by cost. Params: n(10), agent',
   {
     n: z.number().int().positive().max(100).optional(),
-    agent: z.enum(['claude', 'codex', 'gemini']).optional(),
+    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
   },
   async ({ n, agent }: { n?: number; agent?: Agent }) => {
     const sessions = queryTopSessions(db, n ?? 10, agent) as unknown as Array<Record<string, unknown>>
@@ -289,15 +290,19 @@ server.tool(
 
 server.tool(
   'sync',
-  'Ingest new cost data. sources: all|claude|codex|gemini',
-  { sources: z.enum(['all', 'claude', 'codex', 'gemini']).optional() },
-  async ({ sources }: { sources?: 'all' | 'claude' | 'codex' | 'gemini' }) => {
+  'Ingest new cost data. sources: all|claude|takumi|codex|gemini',
+  { sources: z.enum(['all', 'claude', 'takumi', 'codex', 'gemini']).optional() },
+  async ({ sources }: { sources?: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini' }) => {
     const selected = sources ?? 'all'
     const parts: string[] = []
 
     if (selected === 'all' || selected === 'claude') {
       const result = await ingestClaude(db) as Record<string, number>
       parts.push(`claude: ${result['files']} files, ${result['requests']} requests, ${result['sessions']} sessions`)
+    }
+    if (selected === 'all' || selected === 'takumi') {
+      const result = await ingestTakumi(db) as Record<string, number>
+      parts.push(`takumi: ${result['files']} files, ${result['requests']} requests, ${result['sessions']} sessions`)
     }
     if (selected === 'all' || selected === 'codex') {
       const result = await ingestCodex(db) as Record<string, number>
@@ -454,5 +459,8 @@ server.tool(
 )
 
 const transport = new StdioServerTransport()
-registerCloudTools(server, 'economy')
+registerCloudTools(server, 'economy', {
+  dbPath: getDbPath(),
+  migrations: PG_MIGRATIONS,
+})
 await server.connect(transport)
