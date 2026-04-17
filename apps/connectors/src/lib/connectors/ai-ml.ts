@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "grok"],
   },
   {
+    name: "minimax",
+    displayName: "Minimax",
+    description: "Video, music, image, TTS, and sound effects generation",
+    category: "AI & ML",
+    tags: ["ai", "video", "music", "tts", "image", "sound-effects"],
+  },
+  {
     name: "mistral",
     displayName: "Mistral",
     description: "Mistral AI models",

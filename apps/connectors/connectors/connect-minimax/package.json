@@ -1,0 +1,41 @@
+{
+  "name": "@hasna/connect-minimax",
+  "version": "0.1.0",
+  "description": "Minimax API connector - Video, music, image, TTS, and sound effects generation",
+  "type": "module",
+  "bin": {
+    "connect-minimax": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "src",
+    "dist",
+    "bin",
+    "tsconfig.json"
+  ],
+  "license": "Apache-2.0"
+}
