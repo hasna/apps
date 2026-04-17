@@ -170,7 +170,8 @@ program
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
-  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean }) => {
+  .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
+  .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
     if (opts.force) {
@@ -208,6 +209,28 @@ program
       const reqCount = db.prepare(`UPDATE requests SET machine_id = ? WHERE machine_id = '' OR machine_id IS NULL`).run(machine)
       const sessCount = db.prepare(`UPDATE sessions SET machine_id = ? WHERE machine_id = '' OR machine_id IS NULL`).run(machine)
       console.log(chalk.cyan(`→ Backfilled machine_id='${machine}': ${reqCount.changes} requests, ${sessCount.changes} sessions`))
+    }
+    // Recalculate zero-cost requests
+    if (opts.recalculate) {
+      const { computeCostFromDb } = await import('../lib/pricing.js')
+      const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number }>
+      let fixed = 0
+      for (const r of zeroRows) {
+        const cost = computeCostFromDb(db, r.model, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_create_tokens)
+        if (cost > 0) {
+          db.prepare(`UPDATE requests SET cost_usd = ? WHERE id = ?`).run(cost, r.id)
+          fixed++
+        }
+      }
+      if (fixed > 0) {
+        const touchedSessions = new Set(zeroRows.map(r => {
+          const row = db.prepare(`SELECT session_id FROM requests WHERE id = ?`).get(r.id) as { session_id: string } | null
+          return row?.session_id
+        }).filter(Boolean) as string[])
+        const { rollupSession } = await import('../db/database.js')
+        for (const sid of touchedSessions) { rollupSession(db, sid) }
+      }
+      console.log(chalk.cyan(`→ Recalculated: ${fixed}/${zeroRows.length} zero-cost requests now have pricing`))
     }
     // Fire webhooks after sync
     try {

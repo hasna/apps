@@ -566,10 +566,12 @@ export function deleteModelPricing(db: Database, model: string): void {
 }
 
 export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number }>): void {
-  const existing = db.prepare(`SELECT COUNT(*) as count FROM model_pricing`).get() as { count: number }
-  if (existing.count > 0) return // already seeded
+  const existing = new Set(
+    (db.prepare(`SELECT model FROM model_pricing`).all() as Array<{ model: string }>).map(r => r.model)
+  )
   const now = new Date().toISOString()
   for (const [model, p] of Object.entries(defaults)) {
+    if (existing.has(model)) continue
     upsertModelPricing(db, {
       model,
       input_per_1m: p.inputPer1M,

@@ -5,7 +5,8 @@ import { getModelPricing, seedModelPricing } from '../db/database.js'
 // Default pricing seed data (USD per 1M tokens).
 // These are written to SQLite on first run and can be edited via `economy pricing set`.
 export const DEFAULT_PRICING: Record<string, ModelPricing> = {
-  // Claude 4.x — March 2026 pricing (verified from Anthropic docs)
+  // Claude 4.x
+  'claude-opus-4-7':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25  },
   'claude-opus-4-6':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25  },
   'claude-opus-4-5':    { inputPer1M: 5.00,  outputPer1M: 25.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 6.25  },
   'claude-sonnet-4-6':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
@@ -18,14 +19,22 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'claude-3-sonnet':    { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75  },
   'claude-3-haiku':     { inputPer1M: 0.25,  outputPer1M: 1.25,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0.30  },
   // Gemini
-  'gemini-2.0-flash':  { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'gemini-2.5-pro':    { inputPer1M: 1.25,   outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'gemini-1.5-pro':    { inputPer1M: 1.25,   outputPer1M: 5.00,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'gemini-1.5-flash':  { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  // OpenAI / Codex — subscription-based but API pricing for reference
+  'gemini-3.1-pro':     { inputPer1M: 1.25,   outputPer1M: 10.00, cacheReadPer1M: 0.31, cacheWritePer1M: 0 },
+  'gemini-2.5-pro':     { inputPer1M: 1.25,   outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-2.5-flash':   { inputPer1M: 0.15,   outputPer1M: 0.60,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-2.0-flash':   { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-1.5-pro':     { inputPer1M: 1.25,   outputPer1M: 5.00,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gemini-1.5-flash':   { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  // OpenAI
+  'gpt-5.4':            { inputPer1M: 2.50,  outputPer1M: 10.00, cacheReadPer1M: 0.625, cacheWritePer1M: 0 },
+  'gpt-5.4-pro':        { inputPer1M: 5.00,  outputPer1M: 20.00, cacheReadPer1M: 1.25,  cacheWritePer1M: 0 },
+  'gpt-5.4-mini':       { inputPer1M: 0.30,  outputPer1M: 1.20,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'gpt-5.3-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
+  'gpt-5.3-chat':       { inputPer1M: 2.00,  outputPer1M: 8.00,  cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
   'gpt-5.2-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-5-codex':        { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
+  'gpt-5-mini':         { inputPer1M: 0.30,  outputPer1M: 1.20,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
+  'gpt-5.2':            { inputPer1M: 2.00,  outputPer1M: 8.00,  cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
   'gpt-4o':             { inputPer1M: 2.50,  outputPer1M: 10.00, cacheReadPer1M: 1.25,  cacheWritePer1M: 0 },
   'gpt-4o-mini':        { inputPer1M: 0.15,  outputPer1M: 0.60,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'o1':                 { inputPer1M: 15.00, outputPer1M: 60.00, cacheReadPer1M: 7.50,  cacheWritePer1M: 0 },
@@ -33,6 +42,21 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'o3':                 { inputPer1M: 10.00, outputPer1M: 40.00, cacheReadPer1M: 2.50,  cacheWritePer1M: 0 },
   'o3-mini':            { inputPer1M: 1.10,  outputPer1M: 4.40,  cacheReadPer1M: 0.55,  cacheWritePer1M: 0 },
   'o4-mini':            { inputPer1M: 1.10,  outputPer1M: 4.40,  cacheReadPer1M: 0.275, cacheWritePer1M: 0 },
+  // Alibaba Qwen
+  'qwen3.6-plus':       { inputPer1M: 0.80,  outputPer1M: 2.00,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'qwen3.6':            { inputPer1M: 0.30,  outputPer1M: 0.60,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  // MiniMax
+  'minimax-m2.7':           { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'minimax-m2.7-highspeed': { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'minimax-m1':             { inputPer1M: 0.20,  outputPer1M: 1.10,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  // xAI Grok
+  'grok-3':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  // Zhipu GLM
+  'glm-5.1':            { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'glm-5':              { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  // Moonshot Kimi
+  'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 0.60,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
 }
 
 // Normalize raw model names: strip date suffixes like -20251101
