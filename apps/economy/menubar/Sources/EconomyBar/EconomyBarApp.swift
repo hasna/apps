@@ -10,7 +10,12 @@ struct EconomyBarApp: App {
         .environmentObject(appState)
         .background(.clear)
     } label: {
-      MenuBarLabel(cost: appState.today.total_usd, isOffline: appState.isOffline)
+      MenuBarLabel(
+        todayCost: appState.today.total_usd,
+        weekCost: appState.week.total_usd,
+        monthCost: appState.month.total_usd,
+        isOffline: appState.isOffline
+      )
     }
     .menuBarExtraStyle(.window)
   }

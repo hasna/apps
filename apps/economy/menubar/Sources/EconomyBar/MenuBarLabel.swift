@@ -1,8 +1,23 @@
 import SwiftUI
 
 struct MenuBarLabel: View {
-  let cost: Double
+  let todayCost: Double
+  let weekCost: Double
+  let monthCost: Double
   let isOffline: Bool
+
+  private var displayCost: Double {
+    if todayCost > 0 { return todayCost }
+    if weekCost > 0 { return weekCost }
+    return monthCost
+  }
+
+  private var periodHint: String {
+    if todayCost > 0 { return "" }
+    if weekCost > 0 { return "w" }
+    if monthCost > 0 { return "m" }
+    return ""
+  }
 
   var body: some View {
     if isOffline {
@@ -10,7 +25,7 @@ struct MenuBarLabel: View {
         .font(.system(size: 12, weight: .medium).monospacedDigit())
         .opacity(0.5)
     } else {
-      Text(fmtCost(cost))
+      Text(fmtCost(displayCost) + periodHint)
         .font(.system(size: 12, weight: .medium).monospacedDigit())
     }
   }
@@ -30,7 +45,7 @@ struct MenuBarLabel: View {
     } else if usd > 0 {
       return String(format: "%.1f¢", usd * 100)
     } else {
-      return "$0.00"
+      return "$0"
     }
   }
 }

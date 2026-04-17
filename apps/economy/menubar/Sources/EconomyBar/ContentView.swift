@@ -15,7 +15,7 @@ struct ContentView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .firstTextBaseline) {
-        Text("Economy")
+        Text("Hasna Economy")
           .font(.headline)
 
         Text(appState.apiBaseURL.replacingOccurrences(of: "http://", with: "").replacingOccurrences(of: "https://", with: ""))
