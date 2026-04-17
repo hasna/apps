@@ -1210,6 +1210,27 @@ program
 
 // ── cloud ────────────────────────────────────────────────────────────────────
 
+const CLOUD_RDS_HOST = 'hasnaxyz-prod-opensource.c4limg0qgqvk.us-east-1.rds.amazonaws.com'
+const CLOUD_RDS_USER = 'hasna_admin'
+const CLOUD_RDS_DB = 'economy'
+const CLOUD_TABLES = ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
+
+async function getCloudPassword(): Promise<string> {
+  if (process.env['ECONOMY_PG_PASSWORD']) return process.env['ECONOMY_PG_PASSWORD']
+  const { execSync: exec } = await import('child_process')
+  const secretJson = exec(
+    `aws --profile hasna-xyz-hq secretsmanager get-secret-value --secret-id 'rds!db-7a451ce6-83a9-40fa-b24a-81e5d5943511' --query SecretString --output text`,
+    { timeout: 10000, encoding: 'utf-8' },
+  )
+  return JSON.parse(secretJson).password
+}
+
+async function getCloudPg() {
+  const { PgAdapterAsync } = await import('@hasna/cloud')
+  const pw = encodeURIComponent(await getCloudPassword())
+  return new PgAdapterAsync(`postgresql://${CLOUD_RDS_USER}:${pw}@${CLOUD_RDS_HOST}:5432/${CLOUD_RDS_DB}?sslmode=require`)
+}
+
 const cloudCmd = program.command('cloud').description('Cross-machine sync via cloud PostgreSQL')
 
 cloudCmd
@@ -1217,20 +1238,16 @@ cloudCmd
   .description('Push local economy data to cloud PostgreSQL')
   .option('--tables <tables>', 'Comma-separated table names (default: all)')
   .action(async (opts: { tables?: string }) => {
-    const { syncPush, PgAdapterAsync, getCloudConfig, SqliteAdapter } = await import('@hasna/cloud')
+    const { syncPush, SqliteAdapter } = await import('@hasna/cloud')
     const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
-    const config = getCloudConfig()
-    if (!config.rds?.host) { console.error(chalk.red('Cloud not configured. Set RDS host in ~/.hasna/cloud.json')); process.exit(1) }
-
-    const connStr = `postgresql://${config.rds.username}:${process.env[config.rds.password_env] ?? ''}@${config.rds.host}:${config.rds.port ?? 5432}/economy?sslmode=require`
+    const cloud = await getCloudPg()
     const local = new SqliteAdapter(getDbPath())
-    const cloud = new PgAdapterAsync(connStr)
 
     process.stdout.write(chalk.cyan('→ Running PG migrations... '))
     for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
     console.log(chalk.green('✓'))
 
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
+    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : CLOUD_TABLES
     process.stdout.write(chalk.cyan(`→ Pushing ${tableList.join(', ')}... `))
     const results = await syncPush(local, cloud, { tables: tableList }) as Array<{ rowsWritten: number }>
     const totalRows = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)
@@ -1246,20 +1263,16 @@ cloudCmd
   .description('Pull cloud PostgreSQL data to local')
   .option('--tables <tables>', 'Comma-separated table names (default: all)')
   .action(async (opts: { tables?: string }) => {
-    const { syncPull, PgAdapterAsync, getCloudConfig, SqliteAdapter } = await import('@hasna/cloud')
+    const { syncPull, SqliteAdapter } = await import('@hasna/cloud')
     const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
-    const config = getCloudConfig()
-    if (!config.rds?.host) { console.error(chalk.red('Cloud not configured. Set RDS host in ~/.hasna/cloud.json')); process.exit(1) }
-
-    const connStr = `postgresql://${config.rds.username}:${process.env[config.rds.password_env] ?? ''}@${config.rds.host}:${config.rds.port ?? 5432}/economy?sslmode=require`
+    const cloud = await getCloudPg()
     const local = new SqliteAdapter(getDbPath())
-    const cloud = new PgAdapterAsync(connStr)
 
     process.stdout.write(chalk.cyan('→ Running PG migrations... '))
     for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
     console.log(chalk.green('✓'))
 
-    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
+    const tableList = opts.tables ? opts.tables.split(',').map(t => t.trim()) : CLOUD_TABLES
     process.stdout.write(chalk.cyan(`→ Pulling ${tableList.join(', ')}... `))
     const results = await syncPull(cloud, local, { tables: tableList }) as Array<{ rowsWritten: number }>
     const totalRows = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)
@@ -1272,75 +1285,31 @@ cloudCmd
 
 cloudCmd
   .command('sync')
-  .description('Full sync: ingest local, then merge data from all reachable machines via SSH')
-  .option('--machines <list>', 'Comma-separated machine hostnames (default: spark01,apple01,apple03)')
-  .action(async (opts: { machines?: string }) => {
-    const thisMachine = getMachineId()
-    console.log(chalk.bold.cyan(`  Cloud Sync — ${thisMachine}\n`))
+  .description('Full sync: ingest local → push to cloud → pull from cloud')
+  .action(async () => {
+    console.log(chalk.bold.cyan(`  Cloud Sync — ${getMachineId()}\n`))
 
     process.stdout.write(chalk.cyan('→ Ingesting local data... '))
     await autoSync()
     console.log(chalk.green('✓'))
 
-    const allMachines = (opts.machines ?? 'spark01,apple01,apple03').split(',').map(m => m.trim())
-    const remoteMachines = allMachines.filter(m => m !== thisMachine)
+    const { syncPush, syncPull, SqliteAdapter } = await import('@hasna/cloud')
+    const { PG_MIGRATIONS } = await import('../db/pg-migrations.js')
+    const cloud = await getCloudPg()
+    const local = new SqliteAdapter(getDbPath())
 
-    const db = openDatabase()
-    const { existsSync, mkdirSync, unlinkSync } = await import('fs')
-    const { join } = await import('path')
-    const { execSync: exec } = await import('child_process')
-    const tmpDir = join(process.env['TMPDIR'] ?? '/tmp', 'economy-sync')
-    mkdirSync(tmpDir, { recursive: true })
+    for (const sql of PG_MIGRATIONS) { await cloud.run(sql) }
 
-    const isLinux = process.platform === 'linux'
-    const remoteDbPath = isLinux ? '.hasna/economy/economy.db' : '.hasna/economy/economy.db'
+    process.stdout.write(chalk.cyan('→ Pushing local → cloud... '))
+    const pushResults = await syncPush(local, cloud, { tables: CLOUD_TABLES }) as Array<{ rowsWritten: number }>
+    console.log(chalk.green(`✓ ${pushResults.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)} rows`))
 
-    for (const machine of remoteMachines) {
-      const localCopy = join(tmpDir, `${machine}.db`)
-      process.stdout.write(chalk.cyan(`→ Fetching from ${machine}... `))
-      try {
-        exec(`scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${machine}:~/${remoteDbPath} "${localCopy}" 2>/dev/null`, { timeout: 30000 })
-        if (!existsSync(localCopy)) { console.log(chalk.yellow('skipped (no file)')); continue }
+    process.stdout.write(chalk.cyan('→ Pulling cloud → local... '))
+    const pullResults = await syncPull(cloud, local, { tables: CLOUD_TABLES }) as Array<{ rowsWritten: number }>
+    console.log(chalk.green(`✓ ${pullResults.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0)} rows`))
 
-        const { SqliteAdapter } = await import('@hasna/cloud')
-        const remoteDb = new SqliteAdapter(localCopy)
-        remoteDb.exec('PRAGMA busy_timeout = 5000')
-
-        const sessions = remoteDb.prepare('SELECT * FROM sessions').all() as Array<Record<string, unknown>>
-        let sCount = 0
-        for (const s of sessions) {
-          const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(s['id'] as string)
-          if (!existing) {
-            db.prepare(`INSERT OR IGNORE INTO sessions (id, agent, project_path, project_name, started_at, ended_at, total_cost_usd, total_tokens, request_count, machine_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-              .run(s['id'], s['agent'], s['project_path'], s['project_name'], s['started_at'], s['ended_at'], s['total_cost_usd'], s['total_tokens'], s['request_count'], s['machine_id'] || machine)
-            sCount++
-          }
-        }
-
-        let rCount = 0
-        try {
-          const cols = remoteDb.prepare('PRAGMA table_info(requests)').all() as Array<{ name: string }>
-          const hasMachineCol = cols.some(c => c.name === 'machine_id')
-          const requests = remoteDb.prepare('SELECT * FROM requests').all() as Array<Record<string, unknown>>
-          for (const r of requests) {
-            const existing = db.prepare('SELECT id FROM requests WHERE id = ?').get(r['id'] as string)
-            if (!existing) {
-              db.prepare(`INSERT OR IGNORE INTO requests (id, agent, session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, cost_usd, duration_ms, timestamp, source_request_id, machine_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-                .run(r['id'], r['agent'], r['session_id'], r['model'], r['input_tokens'], r['output_tokens'], r['cache_read_tokens'], r['cache_create_tokens'], r['cost_usd'], r['duration_ms'], r['timestamp'], r['source_request_id'], hasMachineCol ? (r['machine_id'] || machine) : machine)
-              rCount++
-            }
-          }
-        } catch { /* requests table may differ */ }
-
-        remoteDb.close()
-        try { unlinkSync(localCopy) } catch {}
-        console.log(chalk.green(`✓ ${sCount} sessions, ${rCount} requests`))
-      } catch (e) {
-        console.log(chalk.yellow(`skipped (${e instanceof Error ? e.message.split('\n')[0] : 'unreachable'})`))
-        try { unlinkSync(localCopy) } catch {}
-      }
-    }
-
+    local.close()
+    await cloud.close()
     console.log(chalk.bold.green('\n✓ Cloud sync complete'))
   })
 
@@ -1348,22 +1317,19 @@ cloudCmd
   .command('status')
   .description('Check cloud connection status')
   .action(async () => {
-    const { PgAdapterAsync, getCloudConfig } = await import('@hasna/cloud')
-    const config = getCloudConfig()
     console.log()
-    console.log(`  Mode: ${chalk.white(config.mode)}`)
     console.log(`  Machine: ${chalk.white(getMachineId())}`)
-    console.log(`  RDS Host: ${chalk.white(config.rds?.host || '(not configured)')}`)
-    if (config.rds?.host && config.rds?.username) {
-      try {
-        const connStr = `postgresql://${config.rds.username}:${process.env[config.rds.password_env] ?? ''}@${config.rds.host}:${config.rds.port ?? 5432}/economy?sslmode=require`
-        const pg = new PgAdapterAsync(connStr)
-        await pg.get('SELECT 1 as ok')
-        console.log(`  PostgreSQL: ${chalk.green('connected')}`)
-        await pg.close()
-      } catch (err: unknown) {
-        console.log(`  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
-      }
+    console.log(`  RDS Host: ${chalk.white(CLOUD_RDS_HOST)}`)
+    console.log(`  Database: ${chalk.white(CLOUD_RDS_DB)}`)
+    try {
+      const cloud = await getCloudPg()
+      await cloud.get('SELECT 1 as ok')
+      const tables = await cloud.all("SELECT tablename FROM pg_tables WHERE schemaname = 'public'") as Array<{ tablename: string }>
+      console.log(`  PostgreSQL: ${chalk.green('connected')}`)
+      console.log(`  Tables: ${chalk.white(tables.map(t => t.tablename).join(', ') || '(none)')}`)
+      await cloud.close()
+    } catch (err: unknown) {
+      console.log(`  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
     }
     console.log()
   })

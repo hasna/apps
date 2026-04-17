@@ -11,7 +11,7 @@ function autoDetectProject(cwd: string, projects: Array<{path: string, name: str
   return projects.find(p => cwd === p.path || cwd.startsWith(p.path + '/'))
 }
 import { computeCostFromDb } from '../lib/pricing.js'
-import type { EconomySession } from '../types/index.js'
+import type { EconomySession, Agent } from '../types/index.js'
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 const TAKUMI_PROJECTS_DIR = join(homedir(), '.takumi', 'projects')
@@ -79,7 +79,7 @@ export async function ingestTakumi(
 async function ingestJsonlProjects(
   db: Database,
   projectsDir: string,
-  agentName: string,
+  agentName: Agent,
   verbose = false,
 ): Promise<{ files: number; requests: number; sessions: number }> {
   if (!existsSync(projectsDir)) {
