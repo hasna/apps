@@ -3,7 +3,6 @@ import SwiftUI
 struct ContentView: View {
   @EnvironmentObject var appState: AppState
   @Environment(\.openURL) private var openURL
-  @State private var draftBaseURL: String = APIClient.storedBaseURL()
 
   private var lastUpdatedText: String {
     guard let date = appState.lastUpdated else { return "Never" }
@@ -18,19 +17,7 @@ struct ContentView: View {
         Text("Hasna Economy")
           .font(.headline)
 
-        Text(appState.apiBaseURL.replacingOccurrences(of: "http://", with: "").replacingOccurrences(of: "https://", with: ""))
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-
         Spacer()
-
-        Button(action: {
-          draftBaseURL = appState.apiBaseURL
-          appState.toggleServerEditor()
-        }) {
-          Image(systemName: "slider.horizontal.3")
-        }
-        .buttonStyle(.plain)
 
         Text(lastUpdatedText)
           .font(.caption)
@@ -39,35 +26,6 @@ struct ContentView: View {
       .padding(.horizontal, 16)
       .padding(.top, 14)
       .padding(.bottom, 12)
-
-      if appState.isEditingServer {
-        Divider()
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Server URL")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-          TextField("http://127.0.0.1:3456", text: $draftBaseURL)
-            .textFieldStyle(.roundedBorder)
-
-          HStack(spacing: 8) {
-            Button("Save") {
-              appState.saveAPIBaseURL(draftBaseURL)
-            }
-            .buttonStyle(.glass)
-
-            Button("Cancel") {
-              draftBaseURL = appState.apiBaseURL
-              appState.cancelServerEditing()
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-          }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-      }
 
       Divider()
 
@@ -191,7 +149,6 @@ struct ContentView: View {
     }
     .frame(width: 360)
     .onAppear {
-      draftBaseURL = appState.apiBaseURL
       appState.startPolling()
     }
   }

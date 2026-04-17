@@ -6,6 +6,8 @@ import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions,
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
+import { syncAnthropicBilling, syncOpenAIBilling } from '../ingest/billing.js'
+import { queryBillingSummary } from '../db/database.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
@@ -1354,6 +1356,65 @@ cloudCmd
     } catch (err: unknown) {
       console.log(`  PostgreSQL: ${chalk.red(`failed — ${err instanceof Error ? err.message : String(err)}`)}`)
     }
+    console.log()
+  })
+
+// ── billing ──────────────────────────────────────────────────────────────────
+
+const billingCmd = program.command('billing').description('Pull actual billing from provider admin APIs (ground truth)')
+
+billingCmd
+  .command('sync')
+  .description('Sync actual billing from Anthropic and OpenAI admin APIs')
+  .option('--days <n>', 'Days of history to fetch', '31')
+  .option('--anthropic', 'Only sync Anthropic')
+  .option('--openai', 'Only sync OpenAI')
+  .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean }) => {
+    const db = openDatabase()
+    const days = Number(opts.days ?? 31)
+    const doBoth = !opts.anthropic && !opts.openai
+
+    if (opts.anthropic || doBoth) {
+      process.stdout.write(chalk.cyan('→ Syncing Anthropic billing... '))
+      try {
+        const r = await syncAnthropicBilling(db, { days })
+        console.log(chalk.green(`✓ ${r.days} days, $${r.totalUsd.toFixed(2)}`))
+      } catch (e) {
+        console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
+    if (opts.openai || doBoth) {
+      process.stdout.write(chalk.cyan('→ Syncing OpenAI billing... '))
+      try {
+        const r = await syncOpenAIBilling(db, { days })
+        console.log(chalk.green(`✓ ${r.days} days, $${r.totalUsd.toFixed(2)}`))
+      } catch (e) {
+        console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
+  })
+
+billingCmd
+  .command('show')
+  .description('Show actual billing totals vs our estimated costs')
+  .option('--period <p>', 'Period: today|yesterday|week|month|year|all', 'month')
+  .action((opts: { period?: string }) => {
+    const db = openDatabase()
+    const period = (opts.period ?? 'month') as Period
+    const actual = queryBillingSummary(db, period)
+    const estimated = querySummary(db, period)
+    console.log()
+    console.log(chalk.bold.cyan(`  Billing ${period} (actual from admin APIs)\n`))
+    printTable(
+      ['Provider', 'Actual (billed)'],
+      Object.entries(actual.by_provider).map(([p, c]) => [chalk.white(p), fmt(c)]),
+    )
+    console.log()
+    console.log(`  ${chalk.bold('Actual total:')}    ${fmt(actual.total_usd)}`)
+    console.log(`  ${chalk.dim('Our estimate:')}    ${fmt(estimated.total_usd)}`)
+    const diff = estimated.total_usd - actual.total_usd
+    const pct = actual.total_usd > 0 ? (diff / actual.total_usd) * 100 : 0
+    console.log(`  ${chalk.dim('Difference:')}      ${fmt(Math.abs(diff))} (${diff >= 0 ? '+' : ''}${pct.toFixed(1)}%)`)
     console.log()
   })
 

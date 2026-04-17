@@ -160,6 +160,18 @@ function initSchema(db: Database): void {
       machine_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS billing_daily (
+      date TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      cost_usd REAL NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (date, provider, description)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_billing_date ON billing_daily(date);
+    CREATE INDEX IF NOT EXISTS idx_billing_provider ON billing_daily(provider);
   `)
 
   // Migrate existing DBs: add machine_id if missing (must run before index creation)
@@ -180,9 +192,9 @@ function periodWhere(period: Period): string {
   switch (period) {
     case 'today': return `DATE(timestamp) = DATE('now')`
     case 'yesterday': return `DATE(timestamp) = DATE('now', '-1 day')`
-    case 'week': return `timestamp >= DATE('now', '-7 days')`
-    case 'month': return `timestamp >= DATE('now', '-30 days')`
-    case 'year': return `timestamp >= DATE('now', '-365 days')`
+    case 'week': return `timestamp >= DATE('now', 'weekday 0', '-7 days')`
+    case 'month': return `timestamp >= DATE('now', 'start of month')`
+    case 'year': return `timestamp >= DATE('now', 'start of year')`
     case 'all': return '1=1'
   }
 }
@@ -191,9 +203,9 @@ function sessionPeriodWhere(period: Period): string {
   switch (period) {
     case 'today': return `DATE(started_at) = DATE('now')`
     case 'yesterday': return `DATE(started_at) = DATE('now', '-1 day')`
-    case 'week': return `started_at >= DATE('now', '-7 days')`
-    case 'month': return `started_at >= DATE('now', '-30 days')`
-    case 'year': return `started_at >= DATE('now', '-365 days')`
+    case 'week': return `started_at >= DATE('now', 'weekday 0', '-7 days')`
+    case 'month': return `started_at >= DATE('now', 'start of month')`
+    case 'year': return `started_at >= DATE('now', 'start of year')`
     case 'all': return '1=1'
   }
 }
@@ -319,20 +331,42 @@ export function queryModelBreakdown(db: Database): ModelBreakdown[] {
 }
 
 export function queryProjectBreakdown(db: Database): ProjectBreakdown[] {
+  // Group by the LAST path segment (basename) so the same project on different
+  // machines (/home/... vs /Users/...) collapses into a single row.
   return db.prepare(`
+    WITH labeled AS (
+      SELECT
+        s.id,
+        s.project_path,
+        s.total_cost_usd,
+        s.started_at,
+        COALESCE(
+          NULLIF(s.project_name, ''),
+          CASE
+            WHEN s.project_path LIKE '%/%'
+              THEN substr(s.project_path, length(rtrim(s.project_path, replace(s.project_path, '/', ''))) + 1)
+            ELSE s.project_path
+          END
+        ) as label
+      FROM sessions s
+      WHERE s.project_path != '' OR s.project_name != ''
+    )
     SELECT
-      s.project_path,
-      COALESCE(p.name, s.project_name) as project_name,
-      COUNT(DISTINCT s.id) as sessions,
-      COUNT(r.id) as requests,
-      COALESCE(SUM(r.cost_usd), COALESCE(SUM(s.total_cost_usd), 0)) as cost_usd,
-      COALESCE(SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens), 0) as total_tokens,
-      MAX(s.started_at) as last_active
-    FROM sessions s
-    LEFT JOIN projects p ON p.path = s.project_path OR p.name = s.project_name
-    LEFT JOIN requests r ON r.session_id = s.id
-    WHERE s.project_path != '' OR s.project_name != ''
-    GROUP BY s.project_path
+      MIN(l.project_path) as project_path,
+      l.label as project_name,
+      COUNT(DISTINCT l.id) as sessions,
+      COALESCE((SELECT COUNT(*) FROM requests r WHERE r.session_id IN (SELECT id FROM labeled WHERE label = l.label)), 0) as requests,
+      COALESCE(
+        (SELECT SUM(r.cost_usd) FROM requests r WHERE r.session_id IN (SELECT id FROM labeled WHERE label = l.label)),
+        SUM(l.total_cost_usd)
+      ) as cost_usd,
+      COALESCE(
+        (SELECT SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens) FROM requests r WHERE r.session_id IN (SELECT id FROM labeled WHERE label = l.label)),
+        0
+      ) as total_tokens,
+      MAX(l.started_at) as last_active
+    FROM labeled l
+    GROUP BY l.label
     ORDER BY cost_usd DESC
   `).all() as ProjectBreakdown[]
 }
@@ -507,6 +541,41 @@ export function setIngestState(db: Database, source: string, key: string, value:
 
 export function queryRequestsSince(db: Database, since: string): EconomyRequest[] {
   return db.prepare(`SELECT * FROM requests WHERE timestamp > ? ORDER BY timestamp ASC`).all(since) as EconomyRequest[]
+}
+
+// ── Billing (actual from provider admin APIs) ─────────────────────────────────
+
+export interface BillingDaily {
+  date: string
+  provider: 'anthropic' | 'openai' | string
+  description: string
+  cost_usd: number
+  updated_at: string
+}
+
+export function upsertBillingDaily(db: Database, row: BillingDaily): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO billing_daily (date, provider, description, cost_usd, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(row.date, row.provider, row.description, row.cost_usd, row.updated_at)
+}
+
+export function clearBillingRange(db: Database, provider: string, fromDate: string, toDate: string): void {
+  db.prepare(`DELETE FROM billing_daily WHERE provider = ? AND date >= ? AND date <= ?`).run(provider, fromDate, toDate)
+}
+
+export function queryBillingSummary(db: Database, period: Period): { total_usd: number; by_provider: Record<string, number> } {
+  const where = period === 'today' ? `date = DATE('now')`
+    : period === 'yesterday' ? `date = DATE('now', '-1 day')`
+    : period === 'week' ? `date >= DATE('now', 'weekday 0', '-7 days')`
+    : period === 'month' ? `date >= DATE('now', 'start of month')`
+    : period === 'year' ? `date >= DATE('now', 'start of year')`
+    : '1=1'
+  const rows = db.prepare(`SELECT provider, SUM(cost_usd) as cost FROM billing_daily WHERE ${where} GROUP BY provider`).all() as Array<{ provider: string; cost: number }>
+  const by_provider: Record<string, number> = {}
+  let total = 0
+  for (const r of rows) { by_provider[r.provider] = r.cost; total += r.cost }
+  return { total_usd: total, by_provider }
 }
 
 // ── Machines ─────────────────────────────────────────────────────────────────

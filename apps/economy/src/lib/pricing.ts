@@ -26,9 +26,9 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gemini-1.5-pro':     { inputPer1M: 1.25,   outputPer1M: 5.00,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'gemini-1.5-flash':   { inputPer1M: 0.075,  outputPer1M: 0.30,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   // OpenAI
-  'gpt-5.4':            { inputPer1M: 2.50,  outputPer1M: 10.00, cacheReadPer1M: 0.625, cacheWritePer1M: 0 },
-  'gpt-5.4-pro':        { inputPer1M: 5.00,  outputPer1M: 20.00, cacheReadPer1M: 1.25,  cacheWritePer1M: 0 },
-  'gpt-5.4-mini':       { inputPer1M: 0.30,  outputPer1M: 1.20,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
+  'gpt-5.4':            { inputPer1M: 2.50,  outputPer1M: 15.00, cacheReadPer1M: 0.25,  cacheWritePer1M: 0 },
+  'gpt-5.4-pro':        { inputPer1M: 30.00, outputPer1M: 180.00, cacheReadPer1M: 0,    cacheWritePer1M: 0 },
+  'gpt-5.4-mini':       { inputPer1M: 0.75,  outputPer1M: 4.50,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'gpt-5.3-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-5.3-chat':       { inputPer1M: 2.00,  outputPer1M: 8.00,  cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
   'gpt-5.2-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
