@@ -330,45 +330,77 @@ export function queryModelBreakdown(db: Database): ModelBreakdown[] {
   `).all() as ModelBreakdown[]
 }
 
+/**
+ * Pick the project label from a path. Walk segments and return the first
+ * one that looks like a project folder (contains a hyphen or matches known
+ * project prefixes), so nested paths like `platform-alumia/packages/web`
+ * get labeled `platform-alumia`, not `web`.
+ */
+function labelForPath(projectPath: string, projectName: string): string {
+  if (projectName && projectName.trim() !== '') return projectName
+  if (!projectPath) return ''
+  const segments = projectPath.split('/').filter(Boolean)
+  // Known project-folder prefixes — matches hasnaxyz conventions (open-*, skill-*,
+  // hook-*, service-*, connect-*, platform-*, agent-*, tool-*, iapp-*, project-*, scaffold-*)
+  const projectPrefix = /^(open|skill|hook|service|connect|platform|agent|tool|iapp|project|scaffold|capp)-/
+  for (const seg of segments) {
+    if (projectPrefix.test(seg)) return seg
+  }
+  // Fallback: last non-generic segment (skip common subfolder names)
+  const generic = new Set(['web', 'app', 'apps', 'packages', 'src', 'lib', 'server', 'client', 'api', 'frontend', 'backend'])
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (!generic.has(segments[i]!.toLowerCase())) return segments[i]!
+  }
+  return segments[segments.length - 1] ?? projectPath
+}
+
 export function queryProjectBreakdown(db: Database): ProjectBreakdown[] {
-  // Group by the LAST path segment (basename) so the same project on different
-  // machines (/home/... vs /Users/...) collapses into a single row.
-  return db.prepare(`
-    WITH labeled AS (
-      SELECT
-        s.id,
-        s.project_path,
-        s.total_cost_usd,
-        s.started_at,
-        COALESCE(
-          NULLIF(s.project_name, ''),
-          CASE
-            WHEN s.project_path LIKE '%/%'
-              THEN substr(s.project_path, length(rtrim(s.project_path, replace(s.project_path, '/', ''))) + 1)
-            ELSE s.project_path
-          END
-        ) as label
-      FROM sessions s
-      WHERE s.project_path != '' OR s.project_name != ''
-    )
-    SELECT
-      MIN(l.project_path) as project_path,
-      l.label as project_name,
-      COUNT(DISTINCT l.id) as sessions,
-      COALESCE((SELECT COUNT(*) FROM requests r WHERE r.session_id IN (SELECT id FROM labeled WHERE label = l.label)), 0) as requests,
-      COALESCE(
-        (SELECT SUM(r.cost_usd) FROM requests r WHERE r.session_id IN (SELECT id FROM labeled WHERE label = l.label)),
-        SUM(l.total_cost_usd)
-      ) as cost_usd,
-      COALESCE(
-        (SELECT SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_create_tokens) FROM requests r WHERE r.session_id IN (SELECT id FROM labeled WHERE label = l.label)),
-        0
-      ) as total_tokens,
-      MAX(l.started_at) as last_active
-    FROM labeled l
-    GROUP BY l.label
-    ORDER BY cost_usd DESC
-  `).all() as ProjectBreakdown[]
+  const sessions = db.prepare(`
+    SELECT id, project_path, project_name, total_cost_usd, started_at
+    FROM sessions
+    WHERE project_path != '' OR project_name != ''
+  `).all() as Array<{ id: string; project_path: string; project_name: string; total_cost_usd: number; started_at: string }>
+
+  // Group sessions by derived label
+  const groups = new Map<string, { sessionIds: string[]; samplePath: string; totalCost: number; lastActive: string }>()
+  for (const s of sessions) {
+    const label = labelForPath(s.project_path, s.project_name)
+    if (!label) continue
+    const g = groups.get(label) ?? { sessionIds: [], samplePath: s.project_path, totalCost: 0, lastActive: '' }
+    g.sessionIds.push(s.id)
+    g.totalCost += s.total_cost_usd || 0
+    if (!g.lastActive || s.started_at > g.lastActive) g.lastActive = s.started_at
+    if (!g.samplePath) g.samplePath = s.project_path
+    groups.set(label, g)
+  }
+
+  const result: ProjectBreakdown[] = []
+  for (const [label, g] of groups.entries()) {
+    // Sum requests-based cost if available, else fall back to session totals
+    const placeholders = g.sessionIds.map(() => '?').join(',')
+    const reqStats = placeholders.length
+      ? db.prepare(`
+          SELECT
+            COUNT(*) as requests,
+            COALESCE(SUM(cost_usd), 0) as cost_usd,
+            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens
+          FROM requests WHERE session_id IN (${placeholders})
+        `).get(...g.sessionIds) as { requests: number; cost_usd: number; total_tokens: number }
+      : { requests: 0, cost_usd: 0, total_tokens: 0 }
+
+    result.push({
+      project_path: g.samplePath,
+      project_name: label,
+      sessions: g.sessionIds.length,
+      requests: reqStats.requests,
+      total_tokens: reqStats.total_tokens,
+      cost_usd: reqStats.cost_usd > 0 ? reqStats.cost_usd : g.totalCost,
+      last_active: g.lastActive,
+    })
+  }
+
+  result.sort((a, b) => b.cost_usd - a.cost_usd)
+  return result
 }
 
 export function queryDailyBreakdown(db: Database, days = 30): Array<{ date: string; cost_usd: number; agent: string }> {
