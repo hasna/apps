@@ -6,6 +6,7 @@ import { TeamsApi } from './teams';
 import { UsersApi } from './users';
 import { CommentsApi } from './comments';
 import { StatesApi } from './states';
+import { BulkApi } from './bulk';
 
 export { LinearClient } from './client';
 export { IssuesApi } from './issues';
@@ -14,6 +15,7 @@ export { TeamsApi } from './teams';
 export { UsersApi } from './users';
 export { CommentsApi } from './comments';
 export { StatesApi } from './states';
+export { BulkApi } from './bulk';
 
 /**
  * Main Linear API class
@@ -27,6 +29,7 @@ export class Linear {
   public readonly users: UsersApi;
   public readonly comments: CommentsApi;
   public readonly states: StatesApi;
+  public readonly bulk: BulkApi;
 
   constructor(config: LinearConfig) {
     this.client = new LinearClient(config);
@@ -36,6 +39,7 @@ export class Linear {
     this.users = new UsersApi(this.client);
     this.comments = new CommentsApi(this.client);
     this.states = new StatesApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**

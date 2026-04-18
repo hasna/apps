@@ -623,5 +623,156 @@ accountCmd
     }
   });
 
+// ============================================
+// Bulk Commands
+// ============================================
+
+const bulkCmd = program.command('bulk').description('Bulk operations on files and folders');
+
+bulkCmd
+  .command('delete')
+  .description('Bulk delete files and folders')
+  .requiredOption('--paths <paths>', 'Comma-separated list of paths')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    const paths = opts.paths.split(',').map((p: string) => p.trim()).filter(Boolean);
+    const concurrency = parseInt(opts.concurrency, 10);
+
+    if (paths.length === 0) {
+      console.error(chalk.red('Error: No paths provided'));
+      process.exit(1);
+    }
+
+    const client = getClient();
+    console.log(chalk.blue(`Deleting ${paths.length} path(s) (concurrency: ${concurrency})...`));
+    if (opts.dryRun) console.log(chalk.yellow('(dry run)'));
+
+    const result = await client.bulk.delete({
+      paths,
+      concurrency,
+      dryRun: opts.dryRun,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, path) => {
+        console.error(`\n  Failed: ${path} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    console.log(chalk.green(`Done: ${result.success} deleted, ${result.failed} failed`));
+    if (result.errors.length > 0) {
+      console.log(chalk.yellow('Errors:'));
+      for (const e of result.errors) {
+        console.log(`  - ${e.path}: ${e.error}`);
+      }
+    }
+  });
+
+bulkCmd
+  .command('copy')
+  .description('Bulk copy files and folders')
+  .requiredOption('--entries <entries>', 'JSON array of {fromPath, toPath}')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .option('--autorename', 'Autorename if destination exists')
+  .option('--allow-shared-folder', 'Allow shared folders')
+  .action(async (opts) => {
+    let entries: Array<{ fromPath: string; toPath: string }>;
+    try {
+      entries = JSON.parse(opts.entries) as Array<{ fromPath: string; toPath: string }>;
+    } catch {
+      console.error(chalk.red('Error: Invalid JSON for --entries'));
+      process.exit(1);
+    }
+
+    if (entries.length === 0) {
+      console.error(chalk.red('Error: No entries provided'));
+      process.exit(1);
+    }
+
+    const client = getClient();
+    const concurrency = parseInt(opts.concurrency, 10);
+    console.log(chalk.blue(`Copying ${entries.length} item(s)...`));
+    if (opts.dryRun) console.log(chalk.yellow('(dry run)'));
+
+    const result = await client.bulk.copy({
+      entries,
+      concurrency,
+      dryRun: opts.dryRun,
+      autorename: opts.autorename,
+      allowSharedFolder: opts.allowSharedFolder,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, entry) => {
+        const e = entry as { fromPath: string };
+        console.error(`\n  Failed: ${e.fromPath} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    console.log(chalk.green(`Done: ${result.success} copied, ${result.failed} failed`));
+    if (result.errors.length > 0) {
+      console.log(chalk.yellow('Errors:'));
+      for (const e of result.errors) {
+        console.log(`  - ${e.fromPath} -> ${e.toPath}: ${e.error}`);
+      }
+    }
+  });
+
+bulkCmd
+  .command('move')
+  .description('Bulk move files and folders')
+  .requiredOption('--entries <entries>', 'JSON array of {fromPath, toPath}')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .option('--autorename', 'Autorename if destination exists')
+  .option('--allow-shared-folder', 'Allow shared folders')
+  .action(async (opts) => {
+    let entries: Array<{ fromPath: string; toPath: string }>;
+    try {
+      entries = JSON.parse(opts.entries) as Array<{ fromPath: string; toPath: string }>;
+    } catch {
+      console.error(chalk.red('Error: Invalid JSON for --entries'));
+      process.exit(1);
+    }
+
+    if (entries.length === 0) {
+      console.error(chalk.red('Error: No entries provided'));
+      process.exit(1);
+    }
+
+    const client = getClient();
+    const concurrency = parseInt(opts.concurrency, 10);
+    console.log(chalk.blue(`Moving ${entries.length} item(s)...`));
+    if (opts.dryRun) console.log(chalk.yellow('(dry run)'));
+
+    const result = await client.bulk.move({
+      entries,
+      concurrency,
+      dryRun: opts.dryRun,
+      autorename: opts.autorename,
+      allowSharedFolder: opts.allowSharedFolder,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, entry) => {
+        const e = entry as { fromPath: string };
+        console.error(`\n  Failed: ${e.fromPath} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    console.log(chalk.green(`Done: ${result.success} moved, ${result.failed} failed`));
+    if (result.errors.length > 0) {
+      console.log(chalk.yellow('Errors:'));
+      for (const e of result.errors) {
+        console.log(`  - ${e.fromPath} -> ${e.toPath}: ${e.error}`);
+      }
+    }
+  });
+
 // Parse and execute
 program.parse();

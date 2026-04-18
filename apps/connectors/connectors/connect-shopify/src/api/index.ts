@@ -6,6 +6,7 @@ import { CustomersApi } from './customers';
 import { InventoryApi } from './inventory';
 import { CollectionsApi } from './collections';
 import { ShopApi } from './shop';
+import { BulkApi } from './bulk';
 
 /**
  * Main Shopify Connector class
@@ -21,6 +22,7 @@ export class Shopify {
   public readonly inventory: InventoryApi;
   public readonly collections: CollectionsApi;
   public readonly shop: ShopApi;
+  public readonly bulk: BulkApi;
 
   constructor(config: ShopifyConfig) {
     this.client = new ShopifyClient(config);
@@ -30,6 +32,7 @@ export class Shopify {
     this.inventory = new InventoryApi(this.client);
     this.collections = new CollectionsApi(this.client);
     this.shop = new ShopApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**
@@ -87,3 +90,4 @@ export { CustomersApi } from './customers';
 export { InventoryApi } from './inventory';
 export { CollectionsApi } from './collections';
 export { ShopApi } from './shop';
+export { BulkApi } from './bulk';

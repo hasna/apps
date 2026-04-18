@@ -3,6 +3,7 @@ import { GoogleDocsClient } from './client';
 import { DocumentsApi } from './documents';
 import { ContentApi } from './content';
 import { StylesApi } from './styles';
+import { BulkApi } from './bulk';
 
 /**
  * Google Docs API client
@@ -15,12 +16,14 @@ export class GoogleDocs {
   public readonly documents: DocumentsApi;
   public readonly content: ContentApi;
   public readonly styles: StylesApi;
+  public readonly bulk: BulkApi;
 
   constructor(config: GoogleDocsConfig) {
     this.client = new GoogleDocsClient(config);
     this.documents = new DocumentsApi(this.client);
     this.content = new ContentApi(this.client);
     this.styles = new StylesApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**
@@ -63,3 +66,4 @@ export { GoogleDocsClient } from './client';
 export { DocumentsApi } from './documents';
 export { ContentApi } from './content';
 export { StylesApi } from './styles';
+export { BulkApi } from './bulk';

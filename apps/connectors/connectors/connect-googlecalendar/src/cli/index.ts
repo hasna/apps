@@ -816,5 +816,326 @@ eventCmd
     }
   });
 
+// ============================================
+// Bulk Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations on events');
+
+bulkCmd
+  .command('preview')
+  .description('Preview events matching a query')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-q, --query <text>', 'Search query')
+  .option('--time-min <date>', 'Start date (RFC3339)')
+  .option('--time-max <date>', 'End date (RFC3339)')
+  .option('-n, --max <number>', 'Maximum events to preview', '20')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const label = opts.query ? `matching: ${opts.query}` : `on calendar: ${opts.calendar}`;
+      info(`Previewing events ${label}`);
+
+      const result = await client.bulk.preview(opts.calendar, {
+        query: opts.query,
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        maxResults: parseInt(opts.max),
+      });
+
+      if (result.events.length === 0) {
+        info('No events found');
+        return;
+      }
+
+      success(`Found ${result.total} event(s):`);
+      const output = result.events.map(e => ({
+        id: e.id,
+        summary: e.summary,
+        start: e.start,
+        end: e.end,
+        status: e.status,
+        location: e.location || '-',
+      }));
+      print(output, getFormat(bulkCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('delete')
+  .description('Delete events matching a query (DANGER!)')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-q, --query <text>', 'Search query')
+  .option('--time-min <date>', 'Start date (RFC3339)')
+  .option('--time-max <date>', 'End date (RFC3339)')
+  .option('-n, --max <number>', 'Maximum events to process', '100')
+  .option('-k, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('--confirm', 'Confirm permanent deletion')
+  .action(async (opts) => {
+    try {
+      if (!opts.dryRun && !opts.confirm) {
+        error('Permanent deletion requires --confirm flag');
+        info('Use --dry-run to preview what would be deleted');
+        process.exit(1);
+      }
+
+      const client = await getClient();
+      warn(`${opts.dryRun ? '[DRY RUN] ' : ''}PERMANENTLY DELETING events on ${opts.calendar}`);
+      if (opts.query) info(`  Query: ${opts.query}`);
+      if (opts.timeMin) info(`  From: ${opts.timeMin}`);
+      if (opts.timeMax) info(`  To: ${opts.timeMax}`);
+
+      const result = await client.bulk.delete({
+        calendarId: opts.calendar,
+        query: opts.query,
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk delete complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('create')
+  .description('Create multiple events from a JSON file')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-f, --file <path>', 'Path to JSON file with events array')
+  .option('-k, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview without creating')
+  .option('--notify', 'Send notifications to attendees')
+  .action(async (opts) => {
+    try {
+      const { readFileSync } = await import('fs');
+
+      if (!opts.file) {
+        error('--file is required');
+        process.exit(1);
+      }
+
+      const events = JSON.parse(readFileSync(opts.file, 'utf-8'));
+      if (!Array.isArray(events)) {
+        error('JSON file must contain an array of events');
+        process.exit(1);
+      }
+
+      const client = await getClient();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Creating ${events.length} event(s) on ${opts.calendar}`);
+
+      const result = await client.bulk.create({
+        calendarId: opts.calendar,
+        events,
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        sendNotifications: opts.notify === true,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk create complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('update')
+  .description('Update events matching a query with partial data')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-q, --query <text>', 'Search query')
+  .option('--time-min <date>', 'Start date (RFC3339)')
+  .option('--time-max <date>', 'End date (RFC3339)')
+  .option('-n, --max <number>', 'Maximum events to process', '100')
+  .option('-k, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('--updates <json>', 'JSON object with fields to update (e.g. \'{"location":"Remote"}\')')
+  .action(async (opts) => {
+    try {
+      if (!opts.updates) {
+        error('--updates is required (JSON object)');
+        process.exit(1);
+      }
+
+      const updates = JSON.parse(opts.updates);
+      const client = await getClient();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Updating events on ${opts.calendar}`);
+      if (opts.query) info(`  Query: ${opts.query}`);
+      info(`  Updates: ${JSON.stringify(updates)}`);
+
+      const result = await client.bulk.update({
+        calendarId: opts.calendar,
+        query: opts.query,
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        updates,
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk update complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('accept')
+  .description('Accept event invitations matching a query')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-q, --query <text>', 'Search query')
+  .option('--time-min <date>', 'Start date (RFC3339)')
+  .option('--time-max <date>', 'End date (RFC3339)')
+  .option('-n, --max <number>', 'Maximum events to process', '100')
+  .option('-k, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('--comment <text>', 'Optional comment')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Accepting events on ${opts.calendar}`);
+      if (opts.query) info(`  Query: ${opts.query}`);
+
+      const result = await client.bulk.accept({
+        calendarId: opts.calendar,
+        query: opts.query,
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        comment: opts.comment,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk accept complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('decline')
+  .description('Decline event invitations matching a query')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-q, --query <text>', 'Search query')
+  .option('--time-min <date>', 'Start date (RFC3339)')
+  .option('--time-max <date>', 'End date (RFC3339)')
+  .option('-n, --max <number>', 'Maximum events to process', '100')
+  .option('-k, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('--comment <text>', 'Optional comment')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Declining events on ${opts.calendar}`);
+      if (opts.query) info(`  Query: ${opts.query}`);
+
+      const result = await client.bulk.decline({
+        calendarId: opts.calendar,
+        query: opts.query,
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        comment: opts.comment,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk decline complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('tentative')
+  .description('Mark events as tentative matching a query')
+  .option('-c, --calendar <id>', 'Calendar ID', 'primary')
+  .option('-q, --query <text>', 'Search query')
+  .option('--time-min <date>', 'Start date (RFC3339)')
+  .option('--time-max <date>', 'End date (RFC3339)')
+  .option('-n, --max <number>', 'Maximum events to process', '100')
+  .option('-k, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('--comment <text>', 'Optional comment')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Marking events as tentative on ${opts.calendar}`);
+      if (opts.query) info(`  Query: ${opts.query}`);
+
+      const result = await client.bulk.tentative({
+        calendarId: opts.calendar,
+        query: opts.query,
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        comment: opts.comment,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk tentative complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

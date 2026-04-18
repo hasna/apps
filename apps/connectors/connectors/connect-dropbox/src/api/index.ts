@@ -15,15 +15,18 @@ import type {
   DeleteResult,
 } from '../types';
 import { DropboxClient } from './client';
+import { BulkApi } from './bulk';
 
 /**
  * Dropbox API wrapper
  */
 export class Dropbox {
   private readonly client: DropboxClient;
+  public readonly bulk: BulkApi;
 
   constructor(config: DropboxConfig) {
     this.client = new DropboxClient(config);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**
@@ -393,3 +396,4 @@ export class Dropbox {
 }
 
 export { DropboxClient } from './client';
+export { BulkApi } from './bulk';

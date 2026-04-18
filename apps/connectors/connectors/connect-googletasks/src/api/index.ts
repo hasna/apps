@@ -318,4 +318,5 @@ export class GoogleTasksClient {
   }
 }
 
+export { BulkApi } from './bulk';
 export { getClientId, getClientSecret, getAccessToken, getRefreshToken };

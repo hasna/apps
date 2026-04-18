@@ -1303,5 +1303,454 @@ drivesCmd
     }
   });
 
+// ============================================
+// Bulk Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations on files (using Drive search queries)');
+
+bulkCmd
+  .command('preview <query>')
+  .description('Preview files matching a Drive search query')
+  .option('-n, --max <number>', 'Maximum files to preview', '20')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`Searching for files matching: ${query}`);
+
+      const result = await drive.bulk.preview(query, parseInt(opts.max));
+
+      if (result.files.length === 0) {
+        info('No files found matching the query');
+        return;
+      }
+
+      success(`Found ${result.total} file(s):`);
+      const output = result.files.map(f => ({
+        id: f.id,
+        name: f.name,
+        mimeType: f.mimeType,
+        size: f.size ? formatBytes(parseInt(f.size)) : '-',
+      }));
+      print(output, getFormat(bulkCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('trash <query>')
+  .description('Move files matching a query to trash')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Moving to trash files matching: ${query}`);
+
+      const result = await drive.bulk.trash({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk trash complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('delete <query>')
+  .description('Permanently delete files matching a query (DANGER!)')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('--trash', 'Move to trash instead of permanent delete')
+  .option('--confirm', 'Confirm permanent deletion')
+  .action(async (query: string, opts) => {
+    try {
+      if (!opts.dryRun && !opts.confirm && !opts.trash) {
+        error('Permanent deletion requires --confirm flag');
+        info('Use --dry-run to preview or --trash to move to trash instead');
+        process.exit(1);
+      }
+
+      const drive = requireAuth();
+      if (!opts.trash) {
+        warn(`${opts.dryRun ? '[DRY RUN] ' : ''}PERMANENTLY DELETING files matching: ${query}`);
+      } else {
+        info(`${opts.dryRun ? '[DRY RUN] ' : ''}Moving to trash files matching: ${query}`);
+      }
+
+      const result = await drive.bulk.delete({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        trash: opts.trash,
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk delete complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('untrash <query>')
+  .description('Restore files matching a query from trash')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Restoring from trash files matching: ${query}`);
+
+      const result = await drive.bulk.untrash({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk untrash complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('move <query> <destinationFolderId>')
+  .description('Move files matching a query to a different folder')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, destinationFolderId: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Moving files matching: ${query}`);
+      info(`  Destination folder: ${destinationFolderId}`);
+
+      const result = await drive.bulk.move({
+        query,
+        destinationFolderId,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk move complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('rename <query>')
+  .description('Rename files matching a query')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('-m, --mode <mode>', 'Rename mode: prefix, suffix, replace, lowercase, uppercase', 'prefix')
+  .option('--prefix <text>', 'Prefix to add (for mode=prefix)')
+  .option('--suffix <text>', 'Suffix to add before extension (for mode=suffix)')
+  .option('--find <text>', 'Text to find (for mode=replace)')
+  .option('--replace <text>', 'Replacement text (for mode=replace)')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const mode = opts.mode as 'prefix' | 'suffix' | 'replace' | 'lowercase' | 'uppercase';
+
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Renaming files matching: ${query}`);
+      info(`  Mode: ${mode}`);
+      if (opts.prefix) info(`  Prefix: ${opts.prefix}`);
+      if (opts.suffix) info(`  Suffix: ${opts.suffix}`);
+      if (opts.find) info(`  Find: ${opts.find}`);
+      if (opts.replace) info(`  Replace: ${opts.replace}`);
+
+      const result = await drive.bulk.rename({
+        query,
+        mode,
+        prefix: opts.prefix,
+        suffix: opts.suffix,
+        find: opts.find,
+        replace: opts.replace,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk rename complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('share <query>')
+  .description('Share files matching a query with a user')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .option('-e, --email <email>', 'Email address to share with (required)', '')
+  .option('-r, --role <role>', 'Permission role: reader, writer, commenter', 'reader')
+  .option('--no-notification', 'Do not send notification email')
+  .action(async (query: string, opts) => {
+    try {
+      if (!opts.email) {
+        error('--email is required');
+        process.exit(1);
+      }
+
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Sharing files matching: ${query}`);
+      info(`  With: ${opts.email} (${opts.role})`);
+
+      const result = await drive.bulk.share({
+        query,
+        email: opts.email,
+        role: opts.role as 'reader' | 'writer' | 'commenter',
+        sendNotification: opts.notification !== false,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk share complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('make-public <query>')
+  .description('Make files matching a query publicly accessible')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      warn(`${opts.dryRun ? '[DRY RUN] ' : ''}MAKING PUBLICLY ACCESSIBLE files matching: ${query}`);
+
+      const result = await drive.bulk.makePublic({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk make-public complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('remove-public <query>')
+  .description('Remove public access from files matching a query')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Removing public access from files matching: ${query}`);
+
+      const result = await drive.bulk.removePublicAccess({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk remove-public complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('star <query>')
+  .description('Star files matching a query')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Starring files matching: ${query}`);
+
+      const result = await drive.bulk.star({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk star complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('unstar <query>')
+  .description('Remove stars from files matching a query')
+  .option('-n, --max <number>', 'Maximum files to process', '100')
+  .option('-c, --concurrency <number>', 'Maximum concurrent API calls', '10')
+  .option('--dry-run', 'Preview changes without applying them')
+  .action(async (query: string, opts) => {
+    try {
+      const drive = requireAuth();
+      info(`${opts.dryRun ? '[DRY RUN] ' : ''}Removing stars from files matching: ${query}`);
+
+      const result = await drive.bulk.unstar({
+        query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\r  Progress: ${current}/${total}`);
+        },
+      });
+      console.log();
+
+      success(`${opts.dryRun ? '[DRY RUN] ' : ''}Bulk unstar complete:`);
+      info(`  Total: ${result.total}`);
+      info(`  Success: ${result.success}`);
+      if (result.failed > 0) warn(`  Failed: ${result.failed}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('help-query')
+  .description('Show Drive search query syntax examples')
+  .action(() => {
+    info(chalk.bold('\nDrive Search Query Syntax:\n'));
+
+    info(chalk.cyan('Basic filters:'));
+    info('  name = "report"              - Files named "report"');
+    info('  name contains "report"       - Files with "report" in the name');
+    info('  fullName contains "/Docs/"   - Files in a path containing "Docs"\n');
+
+    info(chalk.cyan('Type filters:'));
+    info('  mimeType = "application/pdf" - PDF files only');
+    info('  mimeType = "application/vnd.google-apps.document" - Google Docs');
+    info('  mimeType = "application/vnd.google-apps.folder"   - Folders');
+    info('  mimeType contains "image/"    - Any image file\n');
+
+    info(chalk.cyan('Status filters:'));
+    info('  trashed = false              - Not in trash');
+    info('  trashed = true               - In trash');
+    info('  starred = true               - Starred files');
+    info('  viewedByMe = true            - Files you have viewed\n');
+
+    info(chalk.cyan('Ownership filters:'));
+    info('  "me" in owners               - Files you own');
+    info('  sharedWithMe                 - Files shared with you');
+    info('  "user@example.com" in owners - Files owned by specific user\n');
+
+    info(chalk.cyan('Folder filters:'));
+    info('  "<folderId>" in parents      - Direct children of a folder\n');
+
+    info(chalk.cyan('Date filters:'));
+    info('  modifiedTime > "2024-01-01T00:00:00"  - Modified after date');
+    info('  modifiedTime < "2024-12-31T23:59:59"  - Modified before date');
+    info('  createdTime > "2024-06-01T00:00:00"   - Created after date\n');
+
+    info(chalk.cyan('Combining filters:'));
+    info('  mimeType = "application/pdf" and trashed = false');
+    info('  name contains "report" and "me" in owners');
+    info('  mimeType contains "image/" and modifiedTime > "2024-01-01T00:00:00"\n');
+
+    info(chalk.cyan('Examples:'));
+    info('  bulk preview "mimeType=\'application/pdf\'"');
+    info('  bulk trash "name contains \'temp\' and trashed = false" --dry-run');
+    info('  bulk rename "mimeType contains \'image\'" --mode suffix --suffix _v2');
+    info('  bulk star "sharedWithMe" -n 50');
+  });
+
 // Parse and execute
 program.parse();

@@ -830,5 +830,150 @@ userCmd
     }
   });
 
+// ============================================
+// Bulk Operations Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations');
+
+bulkCmd
+  .command('issues')
+  .description('Bulk issue operations')
+  .requiredOption('--owner <owner>', 'Repository owner')
+  .requiredOption('--repo <repo>', 'Repository name')
+  .requiredOption('--numbers <numbers>', 'Comma-separated issue numbers')
+  .requiredOption('--action <action>', 'Action: close, reopen, lock, unlock')
+  .option('--lock-reason <reason>', 'Lock reason: off-topic, too_heated, resolved, spam')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.issues({
+        owner: opts.owner,
+        repo: opts.repo,
+        issueNumbers: opts.numbers.split(',').map((n: string) => parseInt(n.trim())),
+        action: opts.action as 'close' | 'reopen' | 'lock' | 'unlock',
+        lockReason: opts.lockReason,
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  #${e.issueNumber}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('labels')
+  .description('Bulk label operations')
+  .requiredOption('--owner <owner>', 'Repository owner')
+  .requiredOption('--repo <repo>', 'Repository name')
+  .requiredOption('--issue-number <number>', 'Issue number')
+  .requiredOption('--labels <labels>', 'Comma-separated label names')
+  .requiredOption('--action <action>', 'Action: add, remove')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.labels({
+        owner: opts.owner,
+        repo: opts.repo,
+        issueNumber: parseInt(opts.issueNumber),
+        labels: opts.labels.split(',').map((l: string) => l.trim()),
+        action: opts.action as 'add' | 'remove',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.label}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('pull-requests')
+  .description('Bulk pull request operations')
+  .requiredOption('--owner <owner>', 'Repository owner')
+  .requiredOption('--repo <repo>', 'Repository name')
+  .requiredOption('--numbers <numbers>', 'Comma-separated PR numbers')
+  .requiredOption('--action <action>', 'Action: merge, close, update_branch')
+  .option('--merge-method <method>', 'Merge method: merge, squash, rebase', 'merge')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.pullRequests({
+        owner: opts.owner,
+        repo: opts.repo,
+        pullNumbers: opts.numbers.split(',').map((n: string) => parseInt(n.trim())),
+        action: opts.action as 'merge' | 'close' | 'update_branch',
+        mergeMethod: opts.mergeMethod as 'merge' | 'squash' | 'rebase',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  #${e.pullNumber}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('comments')
+  .description('Bulk comment operations')
+  .requiredOption('--owner <owner>', 'Repository owner')
+  .requiredOption('--repo <repo>', 'Repository name')
+  .requiredOption('--ids <ids>', 'Comma-separated comment IDs')
+  .requiredOption('--action <action>', 'Action: delete')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.comments({
+        owner: opts.owner,
+        repo: opts.repo,
+        commentIds: opts.ids.split(',').map((n: string) => parseInt(n.trim())),
+        action: opts.action as 'delete',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  comment ${e.commentId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

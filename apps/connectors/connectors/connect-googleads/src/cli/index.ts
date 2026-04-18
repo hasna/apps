@@ -1253,6 +1253,198 @@ reports
   });
 
 // ============================================
+// Bulk Commands
+// ============================================
+
+const bulk = program.command('bulk').description('Bulk operations');
+
+bulk
+  .command('campaigns')
+  .description('Bulk update campaign status')
+  .requiredOption('--ids <ids>', 'Comma-separated campaign IDs')
+  .requiredOption('--status <status>', 'Target status (ENABLED, PAUSED, REMOVED)')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    const campaignIds = opts.ids.split(',').map((id: string) => id.trim()).filter(Boolean);
+    const concurrency = parseInt(opts.concurrency, 10);
+
+    if (campaignIds.length === 0) {
+      error('No campaign IDs provided');
+      process.exit(1);
+    }
+
+    const client = await getClient(program.opts().customer);
+    info(`Updating ${campaignIds.length} campaign(s) to ${opts.status}...`);
+    if (opts.dryRun) info('(dry run)');
+
+    const result = await client.bulk.campaigns({
+      campaignIds,
+      status: opts.status,
+      concurrency,
+      dryRun: opts.dryRun,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, id) => {
+        console.error(`\n  Failed: ${id} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    success(`Done: ${result.success} updated, ${result.failed} failed`);
+    if (result.errors.length > 0) {
+      warn('Errors:');
+      for (const e of result.errors) {
+        console.log(`  - ${e.campaignId}: ${e.error}`);
+      }
+    }
+  });
+
+bulk
+  .command('adgroups')
+  .description('Bulk update ad group status')
+  .requiredOption('--ids <ids>', 'Comma-separated ad group IDs')
+  .requiredOption('--status <status>', 'Target status (ENABLED, PAUSED)')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    const adGroupIds = opts.ids.split(',').map((id: string) => id.trim()).filter(Boolean);
+    const concurrency = parseInt(opts.concurrency, 10);
+
+    if (adGroupIds.length === 0) {
+      error('No ad group IDs provided');
+      process.exit(1);
+    }
+
+    const client = await getClient(program.opts().customer);
+    info(`Updating ${adGroupIds.length} ad group(s) to ${opts.status}...`);
+    if (opts.dryRun) info('(dry run)');
+
+    const result = await client.bulk.adGroups({
+      adGroupIds,
+      status: opts.status,
+      concurrency,
+      dryRun: opts.dryRun,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, id) => {
+        console.error(`\n  Failed: ${id} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    success(`Done: ${result.success} updated, ${result.failed} failed`);
+    if (result.errors.length > 0) {
+      warn('Errors:');
+      for (const e of result.errors) {
+        console.log(`  - ${e.adGroupId}: ${e.error}`);
+      }
+    }
+  });
+
+bulk
+  .command('ads')
+  .description('Bulk update ad status')
+  .requiredOption('--entries <entries>', 'JSON array of {adGroupId, adId}')
+  .requiredOption('--status <status>', 'Target status (ENABLED, PAUSED, REMOVED)')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    let entries: Array<{ adGroupId: string; adId: string }>;
+    try {
+      entries = JSON.parse(opts.entries) as Array<{ adGroupId: string; adId: string }>;
+    } catch {
+      error('Invalid JSON for --entries');
+      process.exit(1);
+    }
+
+    if (entries.length === 0) {
+      error('No entries provided');
+      process.exit(1);
+    }
+
+    const client = await getClient(program.opts().customer);
+    const concurrency = parseInt(opts.concurrency, 10);
+    info(`Updating ${entries.length} ad(s)...`);
+    if (opts.dryRun) info('(dry run)');
+
+    const result = await client.bulk.ads({
+      entries,
+      status: opts.status,
+      concurrency,
+      dryRun: opts.dryRun,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, entry) => {
+        const e = entry as { adGroupId: string; adId: string };
+        console.error(`\n  Failed: ${e.adGroupId}/${e.adId} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    success(`Done: ${result.success} updated, ${result.failed} failed`);
+    if (result.errors.length > 0) {
+      warn('Errors:');
+      for (const e of result.errors) {
+        console.log(`  - ${e.adGroupId}/${e.adId}: ${e.error}`);
+      }
+    }
+  });
+
+bulk
+  .command('keywords')
+  .description('Bulk update keyword status')
+  .requiredOption('--entries <entries>', 'JSON array of {adGroupId, criterionId}')
+  .requiredOption('--status <status>', 'Target status (ENABLED, PAUSED, REMOVED)')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    let entries: Array<{ adGroupId: string; criterionId: string }>;
+    try {
+      entries = JSON.parse(opts.entries) as Array<{ adGroupId: string; criterionId: string }>;
+    } catch {
+      error('Invalid JSON for --entries');
+      process.exit(1);
+    }
+
+    if (entries.length === 0) {
+      error('No entries provided');
+      process.exit(1);
+    }
+
+    const client = await getClient(program.opts().customer);
+    const concurrency = parseInt(opts.concurrency, 10);
+    info(`Updating ${entries.length} keyword(s)...`);
+    if (opts.dryRun) info('(dry run)');
+
+    const result = await client.bulk.keywords({
+      entries,
+      status: opts.status,
+      concurrency,
+      dryRun: opts.dryRun,
+      onProgress: (current, total) => {
+        process.stdout.write(`\rProgress: ${current}/${total}`);
+      },
+      onError: (err, entry) => {
+        const e = entry as { adGroupId: string; criterionId: string };
+        console.error(`\n  Failed: ${e.adGroupId}/${e.criterionId} - ${err.message}`);
+      },
+    });
+
+    console.log();
+    success(`Done: ${result.success} updated, ${result.failed} failed`);
+    if (result.errors.length > 0) {
+      warn('Errors:');
+      for (const e of result.errors) {
+        console.log(`  - ${e.adGroupId}/${e.criterionId}: ${e.error}`);
+      }
+    }
+  });
+
+// ============================================
 // Parse and Execute
 // ============================================
 

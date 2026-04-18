@@ -866,5 +866,113 @@ collectionsCmd
     }
   });
 
+// ============================================
+// Bulk Operations Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations');
+
+bulkCmd
+  .command('products')
+  .description('Bulk product operations')
+  .requiredOption('--ids <ids>', 'Comma-separated product IDs')
+  .requiredOption('--action <action>', 'Action: delete, activate, archive')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.products({
+        productIds: opts.ids.split(',').map((id: string) => parseInt(id.trim())),
+        action: opts.action as 'delete' | 'activate' | 'archive',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.productId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('orders')
+  .description('Bulk order operations')
+  .requiredOption('--ids <ids>', 'Comma-separated order IDs')
+  .requiredOption('--action <action>', 'Action: close, open, cancel')
+  .option('--cancel-reason <reason>', 'Cancel reason: customer, inventory, fraud, declined, other')
+  .option('--email', 'Send cancel email')
+  .option('--restock', 'Restock on cancel')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.orders({
+        orderIds: opts.ids.split(',').map((id: string) => parseInt(id.trim())),
+        action: opts.action as 'close' | 'open' | 'cancel',
+        cancelReason: opts.cancelReason,
+        cancelEmail: opts.email,
+        cancelRestock: opts.restock,
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.orderId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('inventory')
+  .description('Bulk inventory operations')
+  .requiredOption('--items <items>', 'Items as "itemId:locationId:qty" pairs, comma-separated')
+  .requiredOption('--action <action>', 'Action: set, adjust')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const items = opts.items.split(',').map((pair: string) => {
+        const [inventoryItemId, locationId, available] = pair.trim().split(':');
+        return {
+          inventoryItemId: parseInt(inventoryItemId),
+          locationId: parseInt(locationId),
+          available: parseInt(available),
+        };
+      });
+      const result = await client.bulk.inventory({
+        items,
+        action: opts.action as 'set' | 'adjust',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  item ${e.inventoryItemId} @ location ${e.locationId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

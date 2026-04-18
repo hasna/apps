@@ -1991,5 +1991,211 @@ billingPortalCmd
     }
   });
 
+// ============================================
+// Bulk Operations Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations');
+
+bulkCmd
+  .command('products')
+  .description('Bulk product operations')
+  .requiredOption('--ids <ids>', 'Comma-separated product IDs')
+  .requiredOption('--action <action>', 'Action: delete, activate, deactivate')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.products({
+        productIds: opts.ids.split(',').map((id: string) => id.trim()),
+        action: opts.action as 'delete' | 'activate' | 'deactivate',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.productId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('prices')
+  .description('Bulk price operations')
+  .requiredOption('--ids <ids>', 'Comma-separated price IDs')
+  .requiredOption('--action <action>', 'Action: activate, deactivate')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.prices({
+        priceIds: opts.ids.split(',').map((id: string) => id.trim()),
+        action: opts.action as 'activate' | 'deactivate',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.priceId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('customers')
+  .description('Bulk delete customers')
+  .requiredOption('--ids <ids>', 'Comma-separated customer IDs')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.customers({
+        customerIds: opts.ids.split(',').map((id: string) => id.trim()),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.customerId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('subscriptions')
+  .description('Bulk subscription operations')
+  .requiredOption('--ids <ids>', 'Comma-separated subscription IDs')
+  .requiredOption('--action <action>', 'Action: cancel, resume')
+  .option('--cancel-immediately', 'Cancel immediately instead of at period end')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.subscriptions({
+        subscriptionIds: opts.ids.split(',').map((id: string) => id.trim()),
+        action: opts.action as 'cancel' | 'resume',
+        cancelImmediately: opts.cancelImmediately,
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.subscriptionId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('coupons')
+  .description('Bulk delete coupons')
+  .requiredOption('--ids <ids>', 'Comma-separated coupon IDs')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.coupons({
+        couponIds: opts.ids.split(',').map((id: string) => id.trim()),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.couponId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('invoices')
+  .description('Bulk invoice operations')
+  .requiredOption('--ids <ids>', 'Comma-separated invoice IDs')
+  .requiredOption('--action <action>', 'Action: delete, void, finalize')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.invoices({
+        invoiceIds: opts.ids.split(',').map((id: string) => id.trim()),
+        action: opts.action as 'delete' | 'void' | 'finalize',
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.invoiceId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('webhooks')
+  .description('Bulk delete webhooks')
+  .requiredOption('--ids <ids>', 'Comma-separated webhook IDs')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async function(this: Command, opts) {
+    try {
+      const client = getClient();
+      const result = await client.bulk.webhooks({
+        webhookIds: opts.ids.split(',').map((id: string) => id.trim()),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => info(`Progress: ${current}/${total}`),
+      });
+      print(result, getFormat(this));
+      info(`Success: ${result.success}, Failed: ${result.failed}, Total: ${result.total}`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        result.errors.forEach(e => error(`  ${e.webhookId}: ${e.error}`));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

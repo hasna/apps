@@ -4,6 +4,7 @@ import { AdGroupsApi } from './adGroups';
 import { AdsApi } from './ads';
 import { KeywordsApi } from './keywords';
 import { ReportsApi } from './reports';
+import { BulkApi } from './bulk';
 import type { GoogleAdsConfig, SearchResponse } from '../types';
 
 export class GoogleAds {
@@ -14,6 +15,7 @@ export class GoogleAds {
   public ads: AdsApi;
   public keywords: KeywordsApi;
   public reports: ReportsApi;
+  public bulk: BulkApi;
 
   constructor(config: GoogleAdsConfig) {
     this.client = new GoogleAdsClient(config);
@@ -23,6 +25,7 @@ export class GoogleAds {
     this.ads = new AdsApi(this.client);
     this.keywords = new KeywordsApi(this.client);
     this.reports = new ReportsApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**
@@ -74,3 +77,4 @@ export { AdGroupsApi } from './adGroups';
 export { AdsApi } from './ads';
 export { KeywordsApi } from './keywords';
 export { ReportsApi } from './reports';
+export { BulkApi } from './bulk';

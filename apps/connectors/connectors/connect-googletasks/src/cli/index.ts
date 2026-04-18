@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import { GoogleTasksClient } from '../api';
+import { BulkApi } from '../api/bulk';
 import {
   setProfileOverride,
   getCurrentProfile,
@@ -552,6 +553,183 @@ tasksCmd
       const client = await getClient();
       await client.clearCompleted(listId);
       success('Completed tasks cleared');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Bulk Operations
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations on tasks');
+
+bulkCmd
+  .command('preview <listId>')
+  .description('Preview tasks in a list')
+  .option('-q, --query <text>', 'Filter by search query')
+  .option('--show-completed', 'Include completed tasks')
+  .option('-n, --max <number>', 'Maximum tasks to preview', '50')
+  .action(async function(this: Command, listId: string, opts) {
+    try {
+      const api = new BulkApi();
+      const result = await api.preview(listId, {
+        query: opts.query,
+        showCompleted: opts.showCompleted,
+        maxResults: parseInt(opts.max),
+      });
+      success(`Found ${result.total} task(s) in list ${listId}`);
+      print(result.tasks, getFormat(this));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('complete <listId>')
+  .description('Bulk mark tasks as completed')
+  .option('-q, --query <text>', 'Filter by search query')
+  .option('--show-completed', 'Include completed in search')
+  .option('-n, --max <number>', 'Maximum tasks to process', '100')
+  .option('-c, --concurrency <number>', 'Max concurrent API calls', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async function(this: Command, listId: string, opts) {
+    try {
+      const api = new BulkApi();
+      let current = 0;
+      const result = await api.complete({
+        taskListId: listId,
+        query: opts.query,
+        showCompleted: opts.showCompleted,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        onProgress: (cur, total) => {
+          current = cur;
+          process.stdout.write(`\r  Progress: ${cur}/${total}`);
+        },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`[Dry run] Would mark ${result.success} task(s) as completed`);
+      } else {
+        success(`${result.success} task(s) marked as completed, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        warn(`Errors: ${JSON.stringify(result.errors)}`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('uncomplete <listId>')
+  .description('Bulk mark completed tasks back to pending')
+  .option('-n, --max <number>', 'Maximum tasks to process', '100')
+  .option('-c, --concurrency <number>', 'Max concurrent API calls', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async function(this: Command, listId: string, opts) {
+    try {
+      const api = new BulkApi();
+      const result = await api.uncomplete({
+        taskListId: listId,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+      });
+      if (opts.dryRun) {
+        info(`[Dry run] Would uncomplete ${result.success} task(s)`);
+      } else {
+        success(`${result.success} task(s) uncompleted, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        warn(`Errors: ${JSON.stringify(result.errors)}`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('delete <listId>')
+  .description('Bulk delete tasks')
+  .option('-q, --query <text>', 'Filter by search query')
+  .option('--show-completed', 'Include completed tasks')
+  .option('-n, --max <number>', 'Maximum tasks to process', '100')
+  .option('-c, --concurrency <number>', 'Max concurrent API calls', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .option('--confirm', 'Confirm deletion (required)')
+  .action(async function(this: Command, listId: string, opts) {
+    if (!opts.confirm) {
+      error('Use --confirm to confirm deletion');
+      process.exit(1);
+    }
+    try {
+      const api = new BulkApi();
+      const result = await api.delete({
+        taskListId: listId,
+        query: opts.query,
+        showCompleted: opts.showCompleted,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+      });
+      if (opts.dryRun) {
+        info(`[Dry run] Would delete ${result.success} task(s)`);
+      } else {
+        success(`${result.success} task(s) deleted, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        warn(`Errors: ${JSON.stringify(result.errors)}`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('update <listId>')
+  .description('Bulk update due dates or notes on tasks')
+  .option('-q, --query <text>', 'Filter by search query')
+  .option('--show-completed', 'Include completed tasks')
+  .option('-n, --max <number>', 'Maximum tasks to process', '100')
+  .option('-c, --concurrency <number>', 'Max concurrent API calls', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .option('--due <date>', 'Set due date (YYYY-MM-DD)')
+  .option('--notes <text>', 'Set notes')
+  .action(async function(this: Command, listId: string, opts) {
+    if (!opts.due && !opts.notes) {
+      error('Specify at least --due or --notes');
+      process.exit(1);
+    }
+    try {
+      const api = new BulkApi();
+      const result = await api.update(listId, {
+        query: opts.query,
+        showCompleted: opts.showCompleted,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun,
+        updates: {
+          due: opts.due ? new Date(opts.due).toISOString() : undefined,
+          notes: opts.notes,
+        },
+      });
+      if (opts.dryRun) {
+        info(`[Dry run] Would update ${result.success} task(s)`);
+      } else {
+        success(`${result.success} task(s) updated, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        warn(`Errors: ${JSON.stringify(result.errors)}`);
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);

@@ -2,11 +2,13 @@ import { PhotosClient } from './client';
 import { AlbumsApi } from './albums';
 import { MediaApi } from './media';
 import { UploadApi } from './upload';
+import { BulkApi } from './bulk';
 
 export { PhotosClient } from './client';
 export { AlbumsApi } from './albums';
 export { MediaApi } from './media';
 export { UploadApi } from './upload';
+export { BulkApi } from './bulk';
 
 /**
  * Main Google Photos API client
@@ -30,11 +32,17 @@ export class GooglePhotos {
    */
   public readonly upload: UploadApi;
 
+  /**
+   * Bulk API - batch operations on media items and albums
+   */
+  public readonly bulk: BulkApi;
+
   constructor() {
     this.client = new PhotosClient();
     this.albums = new AlbumsApi(this.client);
     this.media = new MediaApi(this.client);
     this.upload = new UploadApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**

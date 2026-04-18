@@ -5,6 +5,7 @@ import open from 'open';
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
 import { GooglePhotos } from '../api';
+import { BulkApi } from '../api/bulk';
 import {
   getClientId,
   getClientSecret,
@@ -748,6 +749,190 @@ uploadCmd
     const extensions = photos.upload.getSupportedExtensions();
     info('Supported file types:');
     info(extensions.join(', '));
+  });
+
+// ============================================
+// Bulk Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations on media items and albums');
+
+function makeProgress(total: number) {
+  let last = 0;
+  return (current: number) => {
+    if (current !== last) {
+      process.stdout.write(`\r  Progress: ${current}/${total}`);
+      last = current;
+    }
+  };
+}
+
+bulkCmd
+  .command('preview')
+  .description('Preview media items matching filters')
+  .option('--album-id <albumId>', 'Filter by album')
+  .option('--type <type>', 'Filter by media type (PHOTO, VIDEO)')
+  .option('--favorites', 'Only show favorites')
+  .option('-n, --max <number>', 'Maximum results', '50')
+  .action(async (opts) => {
+    try {
+      const photos = requireAuth();
+      const bulk = new BulkApi(photos.getClient());
+      const result = await bulk.preview({
+        albumId: opts.albumId,
+        mediaType: opts.type,
+        favoritesOnly: opts.favorites,
+        maxResults: parseInt(opts.max),
+      });
+      success(`Found ${result.total} item(s):`);
+      print(result.items, getFormat(bulkCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('add-to-album <albumId>')
+  .description('Bulk add media items to an album')
+  .option('--query-album-id <albumId>', 'Filter by album to discover items')
+  .option('--type <type>', 'Filter by media type')
+  .option('--favorites', 'Only favorites')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without adding')
+  .action(async (albumId: string, opts) => {
+    try {
+      const photos = requireAuth();
+      const bulk = new BulkApi(photos.getClient());
+      const result = await bulk.addToAlbum({
+        targetAlbumId: albumId,
+        albumId: opts.queryAlbumId,
+        mediaType: opts.type,
+        favoritesOnly: opts.favorites,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        onProgress: (cur, total) => { process.stdout.write(`\r  Progress: ${cur}/${total}`); },
+        onError: (err, item) => { warn(`Failed: ${item.filename} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would add ${result.success} item(s) to album`);
+      } else {
+        success(`Added ${result.success} item(s) to album, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('remove-from-album <albumId>')
+  .description('Bulk remove media items from an album')
+  .option('--media-ids <ids>', 'Comma-separated media item IDs')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without removing')
+  .action(async (albumId: string, opts) => {
+    try {
+      const photos = requireAuth();
+      const bulk = new BulkApi(photos.getClient());
+      const mediaItemIds = opts.mediaIds ? opts.mediaIds.split(',') : undefined;
+      const result = await bulk.removeFromAlbum({
+        albumId,
+        mediaItemIds,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        onProgress: (cur, total) => { process.stdout.write(`\r  Progress: ${cur}/${total}`); },
+        onError: (err, item) => { warn(`Failed: ${item.filename} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would remove ${result.success} item(s) from album`);
+      } else {
+        success(`Removed ${result.success} item(s) from album, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('create-albums')
+  .description('Bulk create albums from titles')
+  .option('--titles <titles>', 'Comma-separated album titles')
+  .option('--titles-file <path>', 'File with one title per line')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without creating')
+  .action(async (opts) => {
+    let titles: string[] = [];
+    if (opts.titles) {
+      titles = opts.titles.split(',').map((t: string) => t.trim()).filter(Boolean);
+    } else if (opts.titlesFile) {
+      if (!existsSync(opts.titlesFile)) {
+        error(`File not found: ${opts.titlesFile}`);
+        process.exit(1);
+      }
+      titles = require('fs').readFileSync(opts.titlesFile, 'utf-8')
+        .split('\n')
+        .map((t: string) => t.trim())
+        .filter(Boolean);
+    }
+    if (titles.length === 0) {
+      error('Provide --titles or --titles-file');
+      process.exit(1);
+    }
+    try {
+      const photos = requireAuth();
+      const bulk = new BulkApi(photos.getClient());
+      const result = await bulk.createAlbums({
+        titles,
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        onProgress: (cur, total) => { process.stdout.write(`\r  Progress: ${cur}/${total}`); },
+        onError: (err, title) => { warn(`Failed: ${title} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would create ${result.success} album(s)`);
+      } else {
+        success(`Created ${result.success} album(s), ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('favorites')
+  .description('List favorite media items')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .action(async (opts) => {
+    try {
+      const photos = requireAuth();
+      const bulk = new BulkApi(photos.getClient());
+      const result = await bulk.listFavorites({ maxResults: parseInt(opts.max) });
+      success(`Found ${result.total} favorite(s):`);
+      print(result.items, getFormat(bulkCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
   });
 
 // Parse and run

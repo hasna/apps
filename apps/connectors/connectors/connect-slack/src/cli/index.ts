@@ -491,4 +491,161 @@ program
     }
   });
 
+// ============================================
+// Bulk Operations
+// ============================================
+
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations');
+
+bulkCmd
+  .command('channels')
+  .description('Bulk archive/unarchive channels')
+  .option('--ids <ids>', 'Comma-separated channel IDs')
+  .option('--action <action>', 'Action: archive or unarchive', 'archive')
+  .option('--concurrency <n>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async (opts) => {
+    try {
+      const client = getClient();
+      const format = program.opts().format as OutputFormat;
+
+      if (!opts.ids) {
+        error('--ids is required (comma-separated channel IDs)');
+        process.exit(1);
+      }
+
+      const channelIds = opts.ids.split(',').map((id: string) => id.trim()).filter(Boolean);
+
+      info(`Bulk ${opts.action} ${channelIds.length} channels (concurrency: ${opts.concurrency}, dry-run: ${!!opts.dryRun})`);
+
+      const result = await client.bulk.channels({
+        channelIds,
+        action: opts.action as 'archive' | 'unarchive',
+        concurrency: parseInt(opts.concurrency, 10),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+      });
+
+      console.log();
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        info(`Done: ${result.success} succeeded, ${result.failed} failed out of ${result.total}`);
+        if (result.errors.length > 0) {
+          error('Failures:');
+          result.errors.forEach((e: { channelId: string; error: string }) => {
+            console.error(`  - ${e.channelId}: ${e.error}`);
+          });
+        }
+      }
+    } catch (e) {
+      error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('messages')
+  .description('Bulk delete messages')
+  .option('--messages <msgs>', 'Messages as "channel:ts" pairs, comma-separated')
+  .option('--concurrency <n>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async (opts) => {
+    try {
+      const client = getClient();
+      const format = program.opts().format as OutputFormat;
+
+      if (!opts.messages) {
+        error('--messages is required (comma-separated "channel:ts" pairs)');
+        process.exit(1);
+      }
+
+      const messages = opts.messages.split(',').map((pair: string) => {
+        const [channel, ts] = pair.trim().split(':');
+        return { channel, ts };
+      });
+
+      info(`Bulk delete ${messages.length} messages (concurrency: ${opts.concurrency}, dry-run: ${!!opts.dryRun})`);
+
+      const result = await client.bulk.messages({
+        messages,
+        concurrency: parseInt(opts.concurrency, 10),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+      });
+
+      console.log();
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        info(`Done: ${result.success} succeeded, ${result.failed} failed out of ${result.total}`);
+        if (result.errors.length > 0) {
+          error('Failures:');
+          result.errors.forEach((e: { channel: string; ts: string; error: string }) => {
+            console.error(`  - ${e.channel}@${e.ts}: ${e.error}`);
+          });
+        }
+      }
+    } catch (e) {
+      error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('users')
+  .description('Bulk set user presence')
+  .option('--ids <ids>', 'Comma-separated user IDs')
+  .option('--presence <value>', 'Presence: auto or away', 'auto')
+  .option('--concurrency <n>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async (opts) => {
+    try {
+      const client = getClient();
+      const format = program.opts().format as OutputFormat;
+
+      if (!opts.ids) {
+        error('--ids is required (comma-separated user IDs)');
+        process.exit(1);
+      }
+
+      const userIds = opts.ids.split(',').map((id: string) => id.trim()).filter(Boolean);
+
+      info(`Bulk set presence for ${userIds.length} users (concurrency: ${opts.concurrency}, dry-run: ${!!opts.dryRun})`);
+
+      const result = await client.bulk.users({
+        userIds,
+        action: 'set_presence',
+        presence: opts.presence as 'auto' | 'away',
+        concurrency: parseInt(opts.concurrency, 10),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+      });
+
+      console.log();
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        info(`Done: ${result.success} succeeded, ${result.failed} failed out of ${result.total}`);
+        if (result.errors.length > 0) {
+          error('Failures:');
+          result.errors.forEach((e: { userId: string; error: string }) => {
+            console.error(`  - ${e.userId}: ${e.error}`);
+          });
+        }
+      }
+    } catch (e) {
+      error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
 program.parse();

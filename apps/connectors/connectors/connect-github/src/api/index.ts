@@ -4,6 +4,7 @@ import { ReposApi } from './repos';
 import { IssuesApi } from './issues';
 import { PullsApi } from './pulls';
 import { UsersApi } from './users';
+import { BulkApi } from './bulk';
 
 /**
  * Main GitHub connector class
@@ -16,6 +17,7 @@ export class GitHub {
   public readonly issues: IssuesApi;
   public readonly pulls: PullsApi;
   public readonly users: UsersApi;
+  public readonly bulk: BulkApi;
 
   constructor(config: GitHubConfig) {
     this.client = new GitHubClient(config);
@@ -23,6 +25,7 @@ export class GitHub {
     this.issues = new IssuesApi(this.client);
     this.pulls = new PullsApi(this.client);
     this.users = new UsersApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**
@@ -60,3 +63,4 @@ export { ReposApi } from './repos';
 export { IssuesApi } from './issues';
 export { PullsApi } from './pulls';
 export { UsersApi } from './users';
+export { BulkApi } from './bulk';

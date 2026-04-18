@@ -4,6 +4,8 @@ import chalk from 'chalk';
 import { createServer } from 'http';
 import { GoogleContacts } from '../api';
 import { ContactsApi } from '../api/contacts';
+import { BulkApi } from '../api/bulk';
+import type { ContactSummary } from '../api/bulk';
 import {
   getClientId,
   setClientId,
@@ -669,6 +671,205 @@ contactsCmd
       const client = await getClient();
       const result = await client.contacts.listGroups(parseInt(opts.max));
       print(result, getFormat(contactsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Bulk Commands
+// ============================================
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations on contacts');
+
+function makeProgress(total: number) {
+  let last = 0;
+  return (current: number) => {
+    if (current !== last) {
+      process.stdout.write(`\r  Progress: ${current}/${total}`);
+      last = current;
+    }
+  };
+}
+
+bulkCmd
+  .command('preview')
+  .description('Preview contacts matching a query')
+  .option('-q, --query <query>', 'Search query')
+  .option('-n, --max <number>', 'Maximum results', '50')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const bulk = new BulkApi(client.getClient());
+      const result = await bulk.preview({ query: opts.query, maxResults: parseInt(opts.max) });
+      success(`Found ${result.total} contact(s):`);
+      print(result.contacts, getFormat(bulkCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('delete')
+  .description('Bulk delete contacts matching a query')
+  .option('-q, --query <query>', 'Search query')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without deleting')
+  .option('--confirm', 'Confirm deletion')
+  .action(async (opts) => {
+    if (!opts.confirm && !opts.dryRun) {
+      warn('This will delete contacts. Use --dry-run to preview or --confirm to proceed.');
+      process.exit(1);
+    }
+    try {
+      const client = await getClient();
+      const bulk = new BulkApi(client.getClient());
+      const progress = makeProgress(0);
+      const result = await bulk.delete({
+        query: opts.query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        onProgress: (cur, total) => { progress(total); progress(cur); },
+        onError: (err, contact) => { warn(`Failed: ${contact.displayName} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would delete ${result.success} contact(s)`);
+      } else {
+        success(`Deleted ${result.success} contact(s), ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('update')
+  .description('Bulk update contacts matching a query')
+  .option('-q, --query <query>', 'Search query')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without updating')
+  .option('--given-name <name>', 'New given name')
+  .option('--family-name <name>', 'New family name')
+  .option('--organization <org>', 'New organization')
+  .option('--title <title>', 'New job title')
+  .action(async (opts) => {
+    if (!opts.givenName && !opts.familyName && !opts.organization && !opts.title) {
+      error('At least one update field is required (--given-name, --family-name, --organization, --title)');
+      process.exit(1);
+    }
+    try {
+      const client = await getClient();
+      const bulk = new BulkApi(client.getClient());
+      const result = await bulk.update({
+        query: opts.query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        updates: {
+          givenName: opts.givenName,
+          familyName: opts.familyName,
+          organization: opts.organization || opts.title ? {
+            name: opts.organization,
+            title: opts.title,
+          } : undefined,
+        },
+        onProgress: (cur, total) => { process.stdout.write(`\r  Progress: ${cur}/${total}`); },
+        onError: (err, contact) => { warn(`Failed: ${contact.displayName} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would update ${result.success} contact(s)`);
+      } else {
+        success(`Updated ${result.success} contact(s), ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('add-to-group <groupResourceName>')
+  .description('Bulk add contacts to a group')
+  .option('-q, --query <query>', 'Search query')
+  .option('--contact-names <names>', 'Comma-separated contact resource names')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without adding')
+  .action(async (groupResourceName: string, opts) => {
+    try {
+      const client = await getClient();
+      const bulk = new BulkApi(client.getClient());
+      const contactNames = opts.contactNames ? opts.contactNames.split(',') : undefined;
+      const result = await bulk.addToGroup(groupResourceName, {
+        contactNames,
+        query: opts.query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        onProgress: (cur, total) => { process.stdout.write(`\r  Progress: ${cur}/${total}`); },
+        onError: (err, contact) => { warn(`Failed: ${contact.displayName} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would add ${result.success} contact(s) to group`);
+      } else {
+        success(`Added ${result.success} contact(s) to group, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('remove-from-group <groupResourceName>')
+  .description('Bulk remove contacts from a group')
+  .option('-q, --query <query>', 'Search query')
+  .option('--contact-names <names>', 'Comma-separated contact resource names')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--concurrency <number>', 'Max concurrent operations', '10')
+  .option('--dry-run', 'Preview without removing')
+  .action(async (groupResourceName: string, opts) => {
+    try {
+      const client = await getClient();
+      const bulk = new BulkApi(client.getClient());
+      const contactNames = opts.contactNames ? opts.contactNames.split(',') : undefined;
+      const result = await bulk.removeFromGroup(groupResourceName, {
+        contactNames,
+        query: opts.query,
+        maxResults: parseInt(opts.max),
+        concurrency: parseInt(opts.concurrency),
+        dryRun: opts.dryRun || false,
+        onProgress: (cur, total) => { process.stdout.write(`\r  Progress: ${cur}/${total}`); },
+        onError: (err, contact) => { warn(`Failed: ${contact.displayName} - ${err.message}`); },
+      });
+      process.stdout.write('\n');
+      if (opts.dryRun) {
+        info(`Dry run: would remove ${result.success} contact(s) from group`);
+      } else {
+        success(`Removed ${result.success} contact(s) from group, ${result.failed} failed`);
+      }
+      if (result.errors.length > 0) {
+        print(result.errors, 'pretty');
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);

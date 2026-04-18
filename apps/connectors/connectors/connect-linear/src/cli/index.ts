@@ -557,4 +557,120 @@ usersCmd
     }
   });
 
+// ============================================
+// Bulk Operations
+// ============================================
+
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations');
+
+bulkCmd
+  .command('issues')
+  .description('Bulk issue operations')
+  .option('--ids <ids>', 'Comma-separated issue IDs')
+  .option('--action <action>', 'Action: archive/change_state/assign/set_priority/add_to_project')
+  .option('--state-id <id>', 'Target state ID (for change_state)')
+  .option('--assignee-id <id>', 'Target user ID (for assign)')
+  .option('--priority <n>', 'Priority 0-4 (for set_priority)')
+  .option('--project-id <id>', 'Target project ID (for add_to_project)')
+  .option('--concurrency <n>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async (opts) => {
+    try {
+      const client = getClient();
+      const format = program.opts().format as OutputFormat;
+
+      if (!opts.ids || !opts.action) {
+        error('--ids and --action are required');
+        process.exit(1);
+      }
+
+      const issueIds = opts.ids.split(',').map((id: string) => id.trim()).filter(Boolean);
+
+      info(`Bulk ${opts.action} on ${issueIds.length} issues (concurrency: ${opts.concurrency}, dry-run: ${!!opts.dryRun})`);
+
+      const result = await client.bulk.issues({
+        issueIds,
+        action: opts.action,
+        stateId: opts.stateId,
+        assigneeId: opts.assigneeId,
+        priority: opts.priority ? parseInt(opts.priority, 10) : undefined,
+        projectId: opts.projectId,
+        concurrency: parseInt(opts.concurrency, 10),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+      });
+
+      console.log();
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        info(`Done: ${result.success} succeeded, ${result.failed} failed out of ${result.total}`);
+        if (result.errors.length > 0) {
+          error('Failures:');
+          result.errors.forEach((e: { issueId: string; error: string }) => {
+            console.error(`  - ${e.issueId}: ${e.error}`);
+          });
+        }
+      }
+    } catch (e) {
+      error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('labels')
+  .description('Bulk add/remove labels from issues')
+  .option('--issue-ids <ids>', 'Comma-separated issue IDs')
+  .option('--label-id <id>', 'Label ID to add or remove')
+  .option('--action <action>', 'Action: add or remove')
+  .option('--concurrency <n>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without executing')
+  .action(async (opts) => {
+    try {
+      const client = getClient();
+      const format = program.opts().format as OutputFormat;
+
+      if (!opts.issueIds || !opts.labelId || !opts.action) {
+        error('--issue-ids, --label-id, and --action are required');
+        process.exit(1);
+      }
+
+      const issueIds = opts.issueIds.split(',').map((id: string) => id.trim()).filter(Boolean);
+
+      info(`Bulk ${opts.action} label ${opts.labelId} to ${issueIds.length} issues (concurrency: ${opts.concurrency}, dry-run: ${!!opts.dryRun})`);
+
+      const result = await client.bulk.labels({
+        issueIds,
+        labelId: opts.labelId,
+        action: opts.action as 'add' | 'remove',
+        concurrency: parseInt(opts.concurrency, 10),
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+      });
+
+      console.log();
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        info(`Done: ${result.success} succeeded, ${result.failed} failed out of ${result.total}`);
+        if (result.errors.length > 0) {
+          error('Failures:');
+          result.errors.forEach((e: { issueId: string; error: string }) => {
+            console.error(`  - ${e.issueId}: ${e.error}`);
+          });
+        }
+      }
+    } catch (e) {
+      error((e as Error).message);
+      process.exit(1);
+    }
+  });
+
 program.parse();

@@ -2,6 +2,7 @@ import type { GoogleCalendarConfig } from '../types';
 import { GoogleCalendarClient, CALENDAR_SCOPES } from './client';
 import { CalendarsApi } from './calendars';
 import { EventsApi } from './events';
+import { BulkApi } from './bulk';
 
 /**
  * Main GoogleCalendar class
@@ -12,11 +13,13 @@ export class GoogleCalendar {
   // API modules
   public readonly calendars: CalendarsApi;
   public readonly events: EventsApi;
+  public readonly bulk: BulkApi;
 
   constructor(config: GoogleCalendarConfig) {
     this.client = new GoogleCalendarClient(config);
     this.calendars = new CalendarsApi(this.client);
     this.events = new EventsApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**

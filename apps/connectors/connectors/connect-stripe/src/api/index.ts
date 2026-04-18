@@ -18,6 +18,7 @@ import { WebhooksApi } from './webhooks';
 import { CheckoutSessionsApi } from './checkout-sessions';
 import { PaymentLinksApi } from './payment-links';
 import { BillingPortalApi } from './billing-portal';
+import { BulkApi } from './bulk';
 
 /**
  * Stripe API Connector class
@@ -44,6 +45,7 @@ export class Connector {
   public readonly checkoutSessions: CheckoutSessionsApi;
   public readonly paymentLinks: PaymentLinksApi;
   public readonly billingPortal: BillingPortalApi;
+  public readonly bulk: BulkApi;
 
   constructor(config: ConnectorConfig) {
     this.client = new ConnectorClient(config);
@@ -65,6 +67,7 @@ export class Connector {
     this.checkoutSessions = new CheckoutSessionsApi(this.client);
     this.paymentLinks = new PaymentLinksApi(this.client);
     this.billingPortal = new BillingPortalApi(this.client);
+    this.bulk = new BulkApi(this.client);
   }
 
   /**
@@ -123,3 +126,4 @@ export { WebhooksApi } from './webhooks';
 export { CheckoutSessionsApi } from './checkout-sessions';
 export { PaymentLinksApi } from './payment-links';
 export { BillingPortalApi } from './billing-portal';
+export { BulkApi } from './bulk';

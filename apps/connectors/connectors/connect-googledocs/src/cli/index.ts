@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { GoogleDocs } from '../api';
+import type { Request } from '../types';
 import {
   getApiKey,
   setApiKey,
@@ -272,6 +273,192 @@ program
       const result = await client.content.appendText(documentId, text);
       success('Text appended successfully');
       print(result, getFormat(program));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Bulk Commands
+// ============================================
+
+const bulkCmd = program
+  .command('bulk')
+  .description('Bulk operations on documents');
+
+bulkCmd
+  .command('create')
+  .description('Bulk create documents from titles')
+  .requiredOption('--titles <titles>', 'Comma-separated list of document titles')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      if (!client.hasWriteAccess()) {
+        error('Creating documents requires an OAuth access token.');
+        process.exit(1);
+      }
+
+      const titles = opts.titles.split(',').map((t: string) => t.trim()).filter(Boolean);
+      const concurrency = parseInt(opts.concurrency, 10);
+
+      if (titles.length === 0) {
+        error('No titles provided');
+        process.exit(1);
+      }
+
+      info(`Creating ${titles.length} document(s) (concurrency: ${concurrency})...`);
+      if (opts.dryRun) info('(dry run)');
+
+      const result = await client.bulk.createDocuments({
+        titles,
+        concurrency,
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+        onError: (err, title) => {
+          warn(`\n  Failed: ${title} - ${err.message}`);
+        },
+      });
+
+      console.log(); // newline after progress
+      success(`Done: ${result.success} created, ${result.failed} failed`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        for (const e of result.errors) {
+          console.log(`  - ${e.title}: ${e.error}`);
+        }
+      }
+      if (result.createdDocuments.length > 0) {
+        print(result.createdDocuments, getFormat(program));
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('find-replace')
+  .description('Bulk find and replace across documents')
+  .requiredOption('--entries <entries>', 'JSON array of {documentId, find, replace, matchCase?}')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      if (!client.hasWriteAccess()) {
+        error('Modifying documents requires an OAuth access token.');
+        process.exit(1);
+      }
+
+      let entries: Array<{documentId: string; find: string; replace: string; matchCase?: boolean}>;
+      try {
+        entries = JSON.parse(opts.entries) as Array<{documentId: string; find: string; replace: string; matchCase?: boolean}>;
+      } catch {
+        error('Invalid JSON for --entries');
+        process.exit(1);
+      }
+
+      const concurrency = parseInt(opts.concurrency, 10);
+
+      if (entries.length === 0) {
+        error('No entries provided');
+        process.exit(1);
+      }
+
+      info(`Processing ${entries.length} find/replace operation(s)...`);
+      if (opts.dryRun) info('(dry run)');
+
+      const result = await client.bulk.findReplace({
+        entries,
+        concurrency,
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+        onError: (err, entry) => {
+          const e = entry as { documentId: string };
+          warn(`\n  Failed: ${e.documentId} - ${err.message}`);
+        },
+      });
+
+      console.log(); // newline after progress
+      success(`Done: ${result.success} succeeded, ${result.failed} failed`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        for (const e of result.errors) {
+          console.log(`  - ${e.documentId} ("${e.find}"): ${e.error}`);
+        }
+      }
+      if (result.results.length > 0 && !opts.dryRun) {
+        info('Results:');
+        for (const r of result.results) {
+          console.log(`  ${r.documentId}: ${r.occurrencesChanged} occurrence(s) of "${r.find}" replaced with "${r.replace}"`);
+        }
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+bulkCmd
+  .command('batch-update')
+  .description('Bulk batch updates across documents')
+  .requiredOption('--entries <entries>', 'JSON array of {documentId, requests: [...]}')
+  .option('--concurrency <number>', 'Max concurrent requests', '10')
+  .option('--dry-run', 'Preview without making changes')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      if (!client.hasWriteAccess()) {
+        error('Modifying documents requires an OAuth access token.');
+        process.exit(1);
+      }
+
+      let entries: Array<{documentId: string; requests: Request[]}>;
+      try {
+        entries = JSON.parse(opts.entries) as Array<{documentId: string; requests: Request[]}>;
+      } catch {
+        error('Invalid JSON for --entries');
+        process.exit(1);
+      }
+
+      const concurrency = parseInt(opts.concurrency, 10);
+
+      if (entries.length === 0) {
+        error('No entries provided');
+        process.exit(1);
+      }
+
+      info(`Processing ${entries.length} batch update(s)...`);
+      if (opts.dryRun) info('(dry run)');
+
+      const result = await client.bulk.batchUpdate({
+        entries,
+        concurrency,
+        dryRun: opts.dryRun,
+        onProgress: (current, total) => {
+          process.stdout.write(`\rProgress: ${current}/${total}`);
+        },
+        onError: (err, entry) => {
+          const e = entry as { documentId: string };
+          warn(`\n  Failed: ${e.documentId} - ${err.message}`);
+        },
+      });
+
+      console.log(); // newline after progress
+      success(`Done: ${result.success} succeeded, ${result.failed} failed`);
+      if (result.errors.length > 0) {
+        warn('Errors:');
+        for (const e of result.errors) {
+          console.log(`  - ${e.documentId}: ${e.error}`);
+        }
+      }
     } catch (err) {
       error(String(err));
       process.exit(1);
