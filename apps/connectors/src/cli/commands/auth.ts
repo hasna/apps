@@ -56,8 +56,9 @@ export function registerCommands(program: Command): void {
     .option("-k, --key <value>", "API key or bearer token value (non-interactive)")
     .option("-f, --field <field>", "Which field to set (for multi-field connectors)")
     .option("--json", "Output as JSON", false)
+    .option("--no-browser", "Print OAuth URL without opening a browser (agent-friendly)", false)
     .description("Configure authentication for a connector")
-    .action(async (connector: string, options: { key?: string; field?: string; json: boolean }) => {
+    .action(async (connector: string, options: { key?: string; field?: string; json: boolean; browser: boolean }) => {
       const meta = getConnector(connector);
       if (!meta) {
         if (options.json) {
@@ -105,8 +106,78 @@ export function registerCommands(program: Command): void {
         console.log(chalk.yellow("OAuth connectors require browser-based authentication."));
         console.log();
 
+        const port = 9876; // Fixed port — OAuth redirect URIs must be pre-registered
+        const oauthUrl = `http://localhost:${port}/oauth/${connector}/start`;
+
         try {
-          const port = 9876; // Fixed port — OAuth redirect URIs must be pre-registered
+          if (!options.browser) {
+            // --no-browser: spawn a detached server process, print URL, wait for tokens
+            console.log(chalk.dim(`Starting OAuth server on port ${port}...`));
+            const { spawn } = await import("child_process");
+
+            // Resolve the path to the connectors CLI
+            const scriptPath = process.argv[1];
+            const serverProc = spawn("node", [scriptPath, "serve", "--port", String(port)], {
+              detached: true,
+              stdio: "ignore",
+            });
+
+            // Unref so we don't wait on the child if the parent exits
+            serverProc.unref();
+
+            // Give the server a moment to start
+            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+
+            // Verify the server is up
+            try {
+              await fetch(`http://localhost:${port}/api/connectors`);
+            } catch {
+              console.log(chalk.red(`OAuth server failed to start on port ${port}. Is the port already in use?`));
+              console.log(chalk.dim("Free the port and try again, or use 'connectors serve' for the full dashboard."));
+              process.exit(1);
+              return;
+            }
+
+            console.log(chalk.bold("Open this URL to authenticate:\n"));
+            console.log(`  ${chalk.cyan(oauthUrl)}\n`);
+            console.log(chalk.dim("Waiting for authentication to complete...\n"));
+
+            // Poll for the tokens file — OAuth callback writes tokens.json to the connector dir
+            const { join } = await import("path");
+            const { getConnectorsHome } = await import("../../db/database.js");
+            const connectorsHome = getConnectorsHome();
+            const connectorDirName = connector.startsWith("connect-") ? connector : `connect-${connector}`;
+            const tokensPath = join(connectorsHome, connectorDirName, "profiles", "default", "tokens.json");
+
+            let attempts = 0;
+            const maxAttempts = 360; // 3 minutes at 500ms intervals
+            while (attempts < maxAttempts) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 500));
+              if (existsSync(tokensPath)) {
+                break;
+              }
+              attempts++;
+            }
+
+            // Kill the server
+            try {
+              serverProc.kill("SIGTERM");
+            } catch {}
+
+            if (attempts >= maxAttempts) {
+              console.log(chalk.yellow("Timed out waiting for OAuth callback. The auth may still be in progress."));
+              console.log(chalk.dim(`Check ${tokensPath} for tokens.`));
+              console.log(chalk.dim("You can stop the server manually: lsof -ti :${port} | xargs kill"));
+              process.exit(1);
+              return;
+            }
+
+            console.log(chalk.green(`\n✓ Connected! ${meta.displayName} is now authenticated.`));
+            process.exit(0);
+            return;
+          }
+
+          // Default: run server in-process and auto-open browser
           const { startServer } = await import("../../server/serve.js");
 
           console.log(chalk.dim(`Starting temporary server on port ${port}...`));
@@ -114,7 +185,6 @@ export function registerCommands(program: Command): void {
           // strict: true ensures we fail if port 9876 is busy (OAuth requires exact port match)
           await startServer(port, { open: false, strict: true });
 
-          const oauthUrl = `http://localhost:${port}/oauth/${connector}/start`;
           console.log(chalk.bold(`\nOpen this URL to authenticate:\n`));
           console.log(`  ${chalk.cyan(oauthUrl)}\n`);
 
