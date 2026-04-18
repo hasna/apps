@@ -261,6 +261,7 @@ export async function runSingleScenario(
       screenshotter,
       model,
       runId,
+      sessionId: result.id,
       maxTurns: effectiveOptions.minimal ? 10 : 30,
       a11y: effectiveOptions.a11y,
       persona: persona ? {
