@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contacts",
-  "version": "0.6.15",
+  "version": "0.6.16",
   "description": "Contact management for AI coding agents — CLI + MCP + Web",
   "type": "module",
   "main": "dist/index.js",

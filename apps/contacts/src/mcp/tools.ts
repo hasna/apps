@@ -1245,7 +1245,7 @@ export const TOOL_DEFINITIONS = [
           title: { type: "string" },
           contact_id: { type: "string" },
           company_id: { type: "string" },
-          stage: { type: "string", enum: ["prospecting", "qualified", "proposal", "negotiation", "won", "lost"], description: "Deal stage (default: prospecting)" },
+          stage: { type: "string", enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost", "cancelled"], description: "Deal stage (default: lead)" },
           value_usd: { type: "number" },
           currency: { type: "string" },
           close_date: { type: "string", description: "Expected close date (YYYY-MM-DD)" },
@@ -1269,7 +1269,7 @@ export const TOOL_DEFINITIONS = [
       inputSchema: {
         type: "object",
         properties: {
-          stage: { type: "string", enum: ["prospecting", "qualified", "proposal", "negotiation", "won", "lost"] },
+          stage: { type: "string", enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost", "cancelled"] },
           contact_id: { type: "string" },
           company_id: { type: "string" },
         },
@@ -1283,7 +1283,7 @@ export const TOOL_DEFINITIONS = [
         properties: {
           id: { type: "string" },
           title: { type: "string" },
-          stage: { type: "string", enum: ["prospecting", "qualified", "proposal", "negotiation", "won", "lost"] },
+          stage: { type: "string", enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost", "cancelled"] },
           value_usd: { type: "number" },
           close_date: { type: "string" },
           notes: { type: "string" },

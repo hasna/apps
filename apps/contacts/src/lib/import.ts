@@ -267,11 +267,13 @@ function parseVcfBlock(block: string): CreateContactInput | null {
 }
 
 function decodeVcfValue(val: string): string {
+  // Process \\\\ FIRST so escaped backslashes don't get consumed by later replacements
   return val
+    .replace(/\\\\/g, "\x00")
     .replace(/\\n/g, "\n")
     .replace(/\\,/g, ",")
     .replace(/\\;/g, ";")
-    .replace(/\\\\/g, "\\");
+    .replace(/\x00/g, "\\");
 }
 
 function detectPlatform(url: string): SocialPlatform {

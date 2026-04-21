@@ -102,6 +102,19 @@ END:VCARD`;
     expect(contacts.length).toBeGreaterThanOrEqual(1);
     expect(contacts.some((c) => c.display_name === "Valid Person")).toBe(true);
   });
+
+  it("preserves escaped backslashes in vCard values", async () => {
+    // \\, in vCard means a literal backslash followed by a comma
+    // The \\ must be decoded first, then the , replacement must not consume the backslash
+    const vcf = `BEGIN:VCARD
+VERSION:3.0
+FN:Test\\\\Name
+NOTE:Line1\\nLine2
+END:VCARD`;
+    const contacts = await importContacts("vcf", vcf);
+    expect(contacts[0]!.display_name).toBe("Test\\Name");
+    expect(contacts[0]!.notes).toBe("Line1\nLine2");
+  });
 });
 
 describe("importContacts - JSON", () => {

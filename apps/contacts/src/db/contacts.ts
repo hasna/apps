@@ -626,7 +626,7 @@ export function autoLinkContactToCompany(contactId: string, db?: ContactsDatabas
   const d = db || getDatabase();
   const row = d.query(`SELECT * FROM contacts WHERE id = ?`).get(contactId) as ContactRow | null;
   if (!row || row.company_id) return null;
-  const emailRow = d.query(`SELECT address FROM emails WHERE contact_id = ? AND contact_id IS NOT NULL LIMIT 1`).get(contactId) as { address: string } | null;
+  const emailRow = d.query(`SELECT address FROM emails WHERE contact_id = ? LIMIT 1`).get(contactId) as { address: string } | null;
   if (!emailRow) return null;
   const domain = emailRow.address.split("@")[1];
   if (!domain) return null;
