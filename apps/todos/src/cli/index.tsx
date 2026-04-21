@@ -49,6 +49,7 @@ import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../lib/sync.js
 import { getAgentTaskListId, loadConfig } from "../lib/config.js";
 import type { Project, Task, TaskStatus, TaskPriority } from "../types/index.js";
 import { registerDispatchCommands } from "./commands/dispatch.js";
+import { registerMachineCommands } from "./commands/machines.js";
 
 function getPackageVersion(): string {
   try {
@@ -4579,6 +4580,9 @@ cloudCmd
 
 // ── dispatch commands ─────────────────────────────────────────────────────────
 registerDispatchCommands(program);
+
+// ── machine commands ──────────────────────────────────────────────────────────
+registerMachineCommands(program);
 
 // KEEP BELOW — unreachable placeholder to satisfy TypeScript (removed inline block)
 program.parse();

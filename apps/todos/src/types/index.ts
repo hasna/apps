@@ -129,7 +129,10 @@ export interface Machine {
   name: string;
   hostname: string | null;
   platform: string | null;
+  ssh_address: string | null;
+  is_primary: boolean;
   last_seen_at: string;
+  archived_at: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
 }
@@ -139,7 +142,10 @@ export interface MachineRow {
   name: string;
   hostname: string | null;
   platform: string | null;
+  ssh_address: string | null;
+  is_primary: number;
   last_seen_at: string;
+  archived_at: string | null;
   metadata: string | null;
   created_at: string;
 }

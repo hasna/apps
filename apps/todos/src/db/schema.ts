@@ -205,10 +205,15 @@ export function ensureSchema(db: Database): void {
   ensureTable("machines", `
     CREATE TABLE machines (
       id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, hostname TEXT, platform TEXT,
+      ssh_address TEXT, is_primary INTEGER NOT NULL DEFAULT 0,
       last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      archived_at TEXT,
       metadata TEXT DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
+  ensureColumn("machines", "ssh_address", "TEXT");
+  ensureColumn("machines", "is_primary", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("machines", "archived_at", "TEXT");
 
   // ── Columns (ALTER TABLE is not idempotent in SQLite, so check first) ──
 
