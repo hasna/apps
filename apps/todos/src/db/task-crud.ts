@@ -57,8 +57,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
@@ -66,6 +66,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           input.parent_id || null,
           input.plan_id || null,
           input.task_list_id || null,
+          input.cycle_id || null,
           input.title,
           input.description || null,
           input.status || "pending",

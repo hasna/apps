@@ -446,6 +446,27 @@ export function ensureSchema(db: Database): void {
   // Cross-project task dependencies
   ensureColumn("task_dependencies", "external_project_id", "TEXT");
   ensureColumn("task_dependencies", "external_task_id", "TEXT");
+
+  // ── Cycles ──
+  ensureTable("cycles", `
+    CREATE TABLE cycles (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      number INTEGER NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      duration_weeks INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'archived')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_cycles_project ON cycles(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_cycles_number ON cycles(number)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_cycles_status ON cycles(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_cycles_dates ON cycles(start_date, end_date)");
+
+  ensureColumn("tasks", "cycle_id", "TEXT REFERENCES cycles(id) ON DELETE SET NULL");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_cycle ON tasks(cycle_id) WHERE cycle_id IS NOT NULL");
 }
 
 export function backfillTaskTags(db: Database): void {

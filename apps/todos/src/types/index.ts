@@ -358,6 +358,7 @@ export interface CreateTaskInput {
   parent_id?: string;
   plan_id?: string;
   task_list_id?: string;
+  cycle_id?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
   agent_id?: string;
@@ -387,6 +388,7 @@ export interface UpdateTaskInput {
   assigned_to?: string;
   plan_id?: string;
   task_list_id?: string;
+  cycle_id?: string | null;
   tags?: string[];
   metadata?: Record<string, unknown>;
   due_at?: string | null;

@@ -49,6 +49,22 @@ export {
 } from "./db/tasks.js";
 export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput } from "./db/tasks.js";
 
+// Cycles
+export {
+  createCycle,
+  getCycle,
+  getCycleByNumber,
+  listCycles,
+  updateCycle,
+  deleteCycle,
+  generateCycles,
+  getCurrentCycle,
+  getNextCycle,
+  getCycleStats,
+  listCyclesWithStats,
+} from "./db/cycles.js";
+export type { Cycle, CycleWithStats, CreateCycleInput, CycleUpdateInput, CycleQueryOptions } from "./db/cycles.js";
+
 // Projects
 export {
   createProject,
