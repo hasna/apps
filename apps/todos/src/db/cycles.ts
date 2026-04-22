@@ -5,7 +5,7 @@
  * Tasks can be assigned to a cycle via the cycle_id column on tasks.
  */
 
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase } from "./database.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export function createCycle(input: CreateCycleInput, db?: Database): Cycle {
     INSERT INTO cycles (id, project_id, number, start_date, end_date, duration_weeks, status)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(id, project_id, number, input.start_date, end_date.toISOString().split("T")[0], duration_weeks, input.status || "active");
+  stmt.run(id, project_id, number, input.start_date, end_date.toISOString().split("T")[0]!, duration_weeks, input.status || "active");
 
   return getCycle(id, d)!;
 }
@@ -97,7 +97,7 @@ export function getCycleByNumber(project_id: string, number: number, db?: Databa
 export function listCycles(options: CycleQueryOptions = {}, db?: Database): Cycle[] {
   const d = db || getDatabase();
   let sql = "SELECT * FROM cycles WHERE 1=1";
-  const params: unknown[] = [];
+  const params: (SQLQueryBindings)[] = [];
 
   if (options.project_id) {
     sql += " AND project_id = ?";
@@ -121,7 +121,7 @@ export function updateCycle(id: string, input: CycleUpdateInput, db?: Database):
   if (!existing) return null;
 
   const parts: string[] = [];
-  const params: unknown[] = [];
+  const params: (SQLQueryBindings)[] = [];
 
   if (input.status !== undefined) { parts.push("status = ?"); params.push(input.status); }
   if (input.start_date !== undefined) { parts.push("start_date = ?"); params.push(input.start_date); }
@@ -158,7 +158,7 @@ export function generateCycles(
   for (let i = 0; i < options.count; i++) {
     const cycle = createCycle({
       project_id,
-      start_date: startDate.toISOString().split("T")[0],
+      start_date: startDate.toISOString().split("T")[0]!,
       duration_weeks,
     }, d);
     cycles.push(cycle);
@@ -175,7 +175,7 @@ export function generateCycles(
  */
 export function getCurrentCycle(project_id: string, db?: Database): Cycle | null {
   const d = db || getDatabase();
-  const today = new Date().toISOString().split("T")[0];
+  const today = new Date().toISOString().split("T")[0]!;
   return d.query(
     "SELECT * FROM cycles WHERE project_id = ? AND status = 'active' AND start_date <= ? AND end_date >= ? ORDER BY number DESC LIMIT 1"
   ).get(project_id, today, today) as Cycle | null;
@@ -186,7 +186,7 @@ export function getCurrentCycle(project_id: string, db?: Database): Cycle | null
  */
 export function getNextCycle(project_id: string, db?: Database): Cycle | null {
   const d = db || getDatabase();
-  const today = new Date().toISOString().split("T")[0];
+  const today = new Date().toISOString().split("T")[0]!;
   return d.query(
     "SELECT * FROM cycles WHERE project_id = ? AND start_date > ? ORDER BY number ASC LIMIT 1"
   ).get(project_id, today) as Cycle | null;
