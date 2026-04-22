@@ -54,6 +54,10 @@ function getConfigPath(): string {
 }
 let cached: TodosConfig | null = null;
 
+export function resetConfig() {
+  cached = null;
+}
+
 function normalizeAgent(agent: string): string {
   return agent.trim().toLowerCase();
 }

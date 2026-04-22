@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { addTaskFile, listTaskFiles, findTasksByFile, listActiveFiles, removeTaskFile, bulkFindTasksByFiles } from "./task-files.js";
+import { addTaskFile, listTaskFiles, findTasksByFile, listActiveFiles, removeTaskFile, bulkFindTasksByFiles, getTaskFile, updateTaskFileStatus, getFileHeatMap, bulkAddTaskFiles, detectFileConflicts } from "./task-files.js";
 import { createTask, updateTask, getTask } from "./tasks.js";
 import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
@@ -8,7 +8,6 @@ import { registerAgent } from "./agents.js";
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
-  getDatabase();
 });
 
 afterEach(() => {
@@ -152,7 +151,6 @@ describe("bulkFindTasksByFiles", () => {
 
 describe("detectFileConflicts", () => {
   it("returns conflicts for files claimed by other in-progress tasks", () => {
-    const { detectFileConflicts } = require("./task-files.js");
     const t1 = createTask({ title: "T1" });
     const t2 = createTask({ title: "T2" });
     updateTask(t1.id, { status: "in_progress", version: getTask(t1.id)!.version });
@@ -165,7 +163,6 @@ describe("detectFileConflicts", () => {
   });
 
   it("does not conflict with itself", () => {
-    const { detectFileConflicts } = require("./task-files.js");
     const task = createTask({ title: "T1" });
     updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
     addTaskFile({ task_id: task.id, path: "src/foo.ts" });
@@ -174,7 +171,6 @@ describe("detectFileConflicts", () => {
   });
 
   it("does not flag files from completed tasks", () => {
-    const { detectFileConflicts } = require("./task-files.js");
     const t1 = createTask({ title: "T1" });
     const t2 = createTask({ title: "T2" });
     // t1 is completed, not in_progress
@@ -182,5 +178,204 @@ describe("detectFileConflicts", () => {
     updateTask(t2.id, { status: "in_progress", version: getTask(t2.id)!.version });
     const conflicts = detectFileConflicts(t2.id, ["src/foo.ts"]);
     expect(conflicts).toHaveLength(0);
+  });
+});
+
+describe("getTaskFile", () => {
+  it("returns task file by id", () => {
+    const task = createTask({ title: "T1" });
+    const file = addTaskFile({ task_id: task.id, path: "src/foo.ts" });
+    const found = getTaskFile(file.id);
+    expect(found).not.toBeNull();
+    expect(found!.path).toBe("src/foo.ts");
+  });
+
+  it("returns null for nonexistent id", () => {
+    expect(getTaskFile("nonexistent")).toBeNull();
+  });
+
+  it("uses provided database", () => {
+    const d = getDatabase();
+    const task = createTask({ title: "T1" }, d);
+    const file = addTaskFile({ task_id: task.id, path: "src/bar.ts" }, d);
+    const found = getTaskFile(file.id, d);
+    expect(found).not.toBeNull();
+  });
+});
+
+describe("listTaskFiles", () => {
+  it("returns all files for a task ordered by path", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/z.ts" });
+    addTaskFile({ task_id: task.id, path: "src/a.ts" });
+    addTaskFile({ task_id: task.id, path: "src/m.ts" });
+    const files = listTaskFiles(task.id);
+    expect(files).toHaveLength(3);
+    expect(files[0]!.path).toBe("src/a.ts");
+    expect(files[1]!.path).toBe("src/m.ts");
+    expect(files[2]!.path).toBe("src/z.ts");
+  });
+
+  it("returns empty array for task with no files", () => {
+    const task = createTask({ title: "No files" });
+    expect(listTaskFiles(task.id)).toEqual([]);
+  });
+
+  it("uses provided database", () => {
+    const db = getDatabase();
+    const task = createTask({ title: "T1" }, db);
+    addTaskFile({ task_id: task.id, path: "src/x.ts" }, db);
+    expect(listTaskFiles(task.id, db)).toHaveLength(1);
+  });
+});
+
+describe("updateTaskFileStatus", () => {
+  it("updates status for task+path", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts", status: "active" });
+    const updated = updateTaskFileStatus(task.id, "src/foo.ts", "reviewed");
+    expect(updated).not.toBeNull();
+    expect(updated!.status).toBe("reviewed");
+  });
+
+  it("updates agent_id when provided", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts" });
+    const updated = updateTaskFileStatus(task.id, "src/foo.ts", "modified", "agent-123");
+    expect(updated!.agent_id).toBe("agent-123");
+  });
+
+  it("preserves existing agent_id when not provided", () => {
+    const task = createTask({ title: "T1" });
+    addTaskFile({ task_id: task.id, path: "src/foo.ts", agent_id: "existing-agent" });
+    const updated = updateTaskFileStatus(task.id, "src/foo.ts", "reviewed");
+    expect(updated!.agent_id).toBe("existing-agent");
+  });
+
+  it("returns null for nonexistent task+path", () => {
+    const task = createTask({ title: "T1" });
+    expect(updateTaskFileStatus(task.id, "nonexistent.ts", "active")).toBeNull();
+  });
+
+  it("uses provided database", () => {
+    const db = getDatabase();
+    const task = createTask({ title: "T1" }, db);
+    addTaskFile({ task_id: task.id, path: "src/bar.ts" }, db);
+    const updated = updateTaskFileStatus(task.id, "src/bar.ts", "planned", undefined, db);
+    expect(updated!.status).toBe("planned");
+  });
+});
+
+describe("getFileHeatMap", () => {
+  it("returns file edit aggregation", () => {
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    addTaskFile({ task_id: t1.id, path: "src/hot.ts", status: "active" });
+    addTaskFile({ task_id: t2.id, path: "src/hot.ts", status: "modified" });
+    addTaskFile({ task_id: t1.id, path: "src/cold.ts", status: "active" });
+    const heatMap = getFileHeatMap();
+    const hot = heatMap.find(h => h.path === "src/hot.ts")!;
+    expect(hot).toBeDefined();
+    expect(hot.edit_count).toBe(2);
+  });
+
+  it("respects limit parameter", () => {
+    const task = createTask({ title: "T1" });
+    for (let i = 0; i < 5; i++) {
+      addTaskFile({ task_id: task.id, path: `src/file-${i}.ts` });
+    }
+    const heatMap = getFileHeatMap({ limit: 2 });
+    expect(heatMap).toHaveLength(2);
+  });
+
+  it("respects min_edits filter", () => {
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    addTaskFile({ task_id: t1.id, path: "src/once.ts" });
+    addTaskFile({ task_id: t1.id, path: "src/twice.ts" });
+    addTaskFile({ task_id: t2.id, path: "src/twice.ts", status: "modified" });
+    const heatMap = getFileHeatMap({ min_edits: 2 });
+    expect(heatMap).toHaveLength(1);
+    expect(heatMap[0].path).toBe("src/twice.ts");
+  });
+
+  it("filters by project_id", () => {
+    const d = getDatabase();
+    const project = createProject({ name: "Test Project", path: "/tmp/test-proj" }, d);
+    const t1 = createTask({ title: "Proj task", project_id: project.id }, d);
+    const t2 = createTask({ title: "Other task" }, d);
+    addTaskFile({ task_id: t1.id, path: "src/shared.ts" }, d);
+    addTaskFile({ task_id: t2.id, path: "src/shared.ts" }, d);
+    const heatMap = getFileHeatMap({ project_id: project.id }, d);
+    expect(heatMap).toHaveLength(1);
+    expect(heatMap[0].path).toBe("src/shared.ts");
+    expect(heatMap[0].edit_count).toBe(1);
+  });
+
+  it("counts unique agents correctly", () => {
+    const agent1 = registerAgent({ name: "agent-a" });
+    const agent2 = registerAgent({ name: "agent-b" });
+    const t1 = createTask({ title: "T1" });
+    const t2 = createTask({ title: "T2" });
+    addTaskFile({ task_id: t1.id, path: "src/multi.ts", agent_id: agent1.id });
+    addTaskFile({ task_id: t2.id, path: "src/multi.ts", agent_id: agent2.id });
+    const heatMap = getFileHeatMap();
+    const entry = heatMap.find(h => h.path === "src/multi.ts")!;
+    expect(entry.unique_agents).toBe(2);
+    expect(entry.agent_ids).toHaveLength(2);
+  });
+
+  it("includes active task count", () => {
+    const t1 = createTask({ title: "Active", status: "in_progress" });
+    const t2 = createTask({ title: "Pending" });
+    addTaskFile({ task_id: t1.id, path: "src/active.ts" });
+    addTaskFile({ task_id: t2.id, path: "src/active.ts" });
+    const heatMap = getFileHeatMap();
+    const entry = heatMap.find(h => h.path === "src/active.ts")!;
+    expect(entry.active_task_count).toBe(1);
+  });
+
+  it("uses default limit of 20", () => {
+    const heatMap = getFileHeatMap();
+    expect(Array.isArray(heatMap)).toBe(true);
+  });
+
+  it("uses provided database", () => {
+    const db = getDatabase();
+    const task = createTask({ title: "T1" }, db);
+    addTaskFile({ task_id: task.id, path: "src/db.ts" }, db);
+    const heatMap = getFileHeatMap(undefined, db);
+    expect(Array.isArray(heatMap)).toBe(true);
+  });
+});
+
+describe("bulkAddTaskFiles", () => {
+  it("adds multiple files in a transaction", () => {
+    const task = createTask({ title: "T1" });
+    const results = bulkAddTaskFiles(task.id, ["src/a.ts", "src/b.ts", "src/c.ts"]);
+    expect(results).toHaveLength(3);
+    expect(results.map(r => r.path)).toContain("src/a.ts");
+    expect(results.map(r => r.path)).toContain("src/b.ts");
+    expect(results.map(r => r.path)).toContain("src/c.ts");
+    expect(results[0].status).toBe("active");
+  });
+
+  it("sets agent_id on all files", () => {
+    const agent = registerAgent({ name: "bulk-agent" });
+    const task = createTask({ title: "T1" });
+    const results = bulkAddTaskFiles(task.id, ["src/x.ts", "src/y.ts"], agent.id);
+    expect(results.every(r => r.agent_id === agent.id)).toBe(true);
+  });
+
+  it("returns empty array for empty paths", () => {
+    const task = createTask({ title: "T1" });
+    expect(bulkAddTaskFiles(task.id, [])).toEqual([]);
+  });
+
+  it("uses provided database", () => {
+    const db = getDatabase();
+    const task = createTask({ title: "T1" }, db);
+    const results = bulkAddTaskFiles(task.id, ["src/z.ts"], undefined, db);
+    expect(results).toHaveLength(1);
   });
 });

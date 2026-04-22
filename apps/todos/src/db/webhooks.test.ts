@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries, dispatchWebhook } from "./webhooks.js";
+import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries, dispatchWebhook, validateWebhookUrl } from "./webhooks.js";
 
 let db: Database;
 
@@ -221,7 +221,6 @@ describe("dispatchWebhook scope filtering", () => {
 
   it("should match unscoped webhooks to any event", () => {
     const wh = createWebhook({ url: "https://unscoped.com" }, db);
-    // Unscoped webhook has all null scope fields - should match any payload
     expect(wh.project_id).toBeNull();
     expect(wh.agent_id).toBeNull();
   });
@@ -229,6 +228,100 @@ describe("dispatchWebhook scope filtering", () => {
   it("should create scoped webhook that only fires for matching project", () => {
     const wh = createWebhook({ url: "https://scoped.com", project_id: "proj-abc" }, db);
     expect(wh.project_id).toBe("proj-abc");
-    // The actual filtering is tested in integration; unit test just validates creation
+  });
+});
+
+describe("validateWebhookUrl", () => {
+  it("should allow valid HTTPS URLs", () => {
+    const result = validateWebhookUrl("https://example.com/webhook");
+    expect(result.valid).toBe(true);
+  });
+
+  it("should reject HTTP URLs", () => {
+    const result = validateWebhookUrl("http://example.com/webhook");
+    expect(result.valid).toBe(false);
+    expect(result).toHaveProperty("error");
+  });
+
+  it("should reject localhost", () => {
+    const result = validateWebhookUrl("https://localhost/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject 127.0.0.1", () => {
+    const result = validateWebhookUrl("https://127.0.0.1/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject 0.0.0.0", () => {
+    const result = validateWebhookUrl("https://0.0.0.0/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject cloud metadata endpoint 169.254.169.254", () => {
+    const result = validateWebhookUrl("https://169.254.169.254/latest/meta-data/");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject any 169.254.x.x address", () => {
+    const result = validateWebhookUrl("https://169.254.1.1/test");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject 10.x.x.x private range", () => {
+    const result = validateWebhookUrl("https://10.0.0.1/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject 172.16-31.x.x private range", () => {
+    expect(validateWebhookUrl("https://172.16.0.1/webhook").valid).toBe(false);
+    expect(validateWebhookUrl("https://172.20.0.1/webhook").valid).toBe(false);
+    expect(validateWebhookUrl("https://172.31.0.1/webhook").valid).toBe(false);
+  });
+
+  it("should allow 172.15.x.x (outside private range)", () => {
+    expect(validateWebhookUrl("https://172.15.0.1/webhook").valid).toBe(true);
+  });
+
+  it("should reject 192.168.x.x private range", () => {
+    const result = validateWebhookUrl("https://192.168.1.1/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should allow 192.169.x.x (outside private range)", () => {
+    expect(validateWebhookUrl("https://192.169.0.1/webhook").valid).toBe(true);
+  });
+
+  it("should reject IPv6 private fc00 range", () => {
+    const result = validateWebhookUrl("https://[fc00::1]/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject IPv6 link-local fe80 range", () => {
+    const result = validateWebhookUrl("https://[fe80::1]/webhook");
+    expect(result.valid).toBe(false);
+  });
+
+  it("should reject invalid URLs", () => {
+    const result = validateWebhookUrl("not-a-url");
+    expect(result.valid).toBe(false);
+  });
+});
+
+describe("createWebhook URL validation", () => {
+  it("should reject HTTP URL", () => {
+    expect(() => createWebhook({ url: "http://example.com" }, db)).toThrow("Invalid webhook URL");
+  });
+
+  it("should reject localhost URL", () => {
+    expect(() => createWebhook({ url: "https://localhost/hook" }, db)).toThrow("localhost");
+  });
+
+  it("should reject private IP URL", () => {
+    expect(() => createWebhook({ url: "https://192.168.1.1/hook" }, db)).toThrow("private IP");
+  });
+
+  it("should reject invalid URL", () => {
+    expect(() => createWebhook({ url: "garbage" }, db)).toThrow("Invalid webhook URL");
   });
 });

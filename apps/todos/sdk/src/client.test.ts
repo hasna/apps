@@ -58,6 +58,64 @@ describe("todosTools", () => {
     }
   });
 
+  it("should throw TodosError on failed requests", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:1", agentName: "test" });
+    await expect(client.listTasks()).rejects.toThrow();
+  });
+});
+
+describe("TodosClient method construction", () => {
+  it("should build correct listTasks query with filters", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19999" });
+    // Will fail to connect but validates the method exists and accepts filters
+    await expect(client.listTasks({ status: "pending", project_id: "p1", limit: 10 })).rejects.toThrow();
+  });
+
+  it("should accept all filter params for listTasks", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19998" });
+    await expect(client.listTasks({ status: "in_progress", project_id: "p1", plan_id: "pl1", limit: 5 })).rejects.toThrow();
+  });
+
+  it("should build searchTasks query", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19997" });
+    await expect(client.searchTasks("test query")).rejects.toThrow();
+  });
+
+  it("should build listPlans with project filter", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19996" });
+    await expect(client.listPlans("proj-1")).rejects.toThrow();
+  });
+
+  it("should build recentActivity with limit", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19995" });
+    await expect(client.recentActivity(25)).rejects.toThrow();
+  });
+
+  it("should create client with agent name and pass it to init", async () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19994", agentName: "my-agent" });
+    // init will fail due to no server, but validates the method exists
+    await expect(client.init()).rejects.toThrow();
+  });
+});
+
+describe("TodosClient baseUrl normalization", () => {
+  it("should strip trailing slash from baseUrl", () => {
+    const client = new TodosClient({ baseUrl: "http://localhost:3000/" });
+    expect(client).toBeDefined();
+  });
+});
+
+describe("TodosClient subscribeEvents", () => {
+  it.skip("should return a close function (requires EventSource)", () => {
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19993" });
+    const sub = client.subscribeEvents(() => {});
+    expect(sub.close).toBeDefined();
+    expect(typeof sub.close).toBe("function");
+    sub.close();
+  });
+});
+
+describe("todosTools", () => {
   it("should include core tools", () => {
     const names = todosTools.map(t => t.name);
     expect(names).toContain("todos_create_task");

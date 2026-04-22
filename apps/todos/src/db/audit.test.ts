@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
+import { getDatabase, closeDatabase, resetDatabase, now } from "./database.js";
 import { createTask, startTask, completeTask, updateTask } from "./tasks.js";
-import { logTaskChange, getTaskHistory, getRecentActivity } from "./audit.js";
+import { logTaskChange, getTaskHistory, getRecentActivity, getRecap } from "./audit.js";
+import { createProject } from "./projects.js";
+import { addDependency } from "./task-graph.js";
+import { registerAgent } from "./agents.js";
 
 let db: Database;
 
@@ -186,5 +189,115 @@ describe("auto-audit in task mutations", () => {
     updateTask(task.id, { title: "Renamed", version: task.version }, db);
     const history = getTaskHistory(task.id, db);
     expect(history.some(h => h.field === "status")).toBe(false);
+  });
+});
+
+describe("getRecap", () => {
+  it("should return recap structure with empty data", () => {
+    const recap = getRecap(8, undefined, db);
+    expect(recap.hours).toBe(8);
+    expect(recap.since).toBeDefined();
+    expect(recap.completed).toEqual([]);
+    expect(recap.created).toEqual([]);
+    expect(recap.in_progress).toEqual([]);
+    expect(recap.blocked).toEqual([]);
+    expect(recap.stale).toEqual([]);
+    expect(recap.agents).toEqual([]);
+  });
+
+  it("should include completed tasks within the time window", () => {
+    const task = createTask({ title: "Completed" }, db);
+    const ts = now();
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [ts, task.id]);
+
+    const recap = getRecap(1, undefined, db);
+    expect(recap.completed).toHaveLength(1);
+    expect(recap.completed[0]!.title).toBe("Completed");
+  });
+
+  it("should include created tasks within the time window", () => {
+    createTask({ title: "Fresh task" }, db);
+
+    const recap = getRecap(1, undefined, db);
+    expect(recap.created).toHaveLength(1);
+    expect(recap.created[0]!.title).toBe("Fresh task");
+  });
+
+  it("should include in_progress tasks", () => {
+    const task = createTask({ title: "In Progress" }, db);
+    db.run("UPDATE tasks SET status = 'in_progress', started_at = ? WHERE id = ?", [now(), task.id]);
+
+    const recap = getRecap(8, undefined, db);
+    expect(recap.in_progress).toHaveLength(1);
+    expect(recap.in_progress[0]!.title).toBe("In Progress");
+  });
+
+  it("should include blocked tasks", () => {
+    const dep = createTask({ title: "Dependency" }, db);
+    const blocked = createTask({ title: "Blocked" }, db);
+    addDependency(blocked.id, dep.id, db);
+
+    const recap = getRecap(8, undefined, db);
+    expect(recap.blocked.length).toBeGreaterThanOrEqual(1);
+    const blockedTask = recap.blocked.find(b => b.title === "Blocked");
+    expect(blockedTask).toBeDefined();
+  });
+
+  it("should include stale tasks (not updated in 30 min)", () => {
+    const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    const task = createTask({ title: "Stale task" }, db);
+    db.run("UPDATE tasks SET status = 'in_progress', updated_at = ?, started_at = ? WHERE id = ?", [staleTime, staleTime, task.id]);
+
+    const recap = getRecap(8, undefined, db);
+    expect(recap.stale.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should include agent activity", () => {
+    const agent = registerAgent({ name: "test-agent-" + Date.now(), role: "agent", status: "active" }, db);
+    const task = createTask({ title: "Agent task", assigned_to: agent.id }, db);
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [now(), task.id]);
+    db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), agent.id]);
+
+    const recap = getRecap(1, undefined, db);
+    expect(recap.agents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should filter by project_id", () => {
+    const project = createProject({ name: "Recap Project", path: "/recap/proj-" + Date.now() }, db);
+    createTask({ title: "Project task", project_id: project.id }, db);
+    createTask({ title: "No project" }, db);
+
+    const recap = getRecap(1, project.id, db);
+    expect(recap.created).toHaveLength(1);
+    expect(recap.created[0]!.title).toBe("Project task");
+  });
+
+  it("should calculate duration_minutes for completed tasks with start/end times", () => {
+    const startedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const completedAt = now();
+    const task = createTask({ title: "Timed task" }, db);
+    db.run("UPDATE tasks SET status = 'completed', started_at = ?, completed_at = ? WHERE id = ?", [startedAt, completedAt, task.id]);
+
+    const recap = getRecap(1, undefined, db);
+    expect(recap.completed).toHaveLength(1);
+    expect(recap.completed[0]!.duration_minutes).toBeGreaterThanOrEqual(29);
+  });
+
+  it("should return null duration_minutes when started_at is missing", () => {
+    const task = createTask({ title: "No start" }, db);
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [now(), task.id]);
+
+    const recap = getRecap(1, undefined, db);
+    expect(recap.completed).toHaveLength(1);
+    expect(recap.completed[0]!.duration_minutes).toBeNull();
+  });
+
+  it("should exclude completed tasks outside the time window", () => {
+    const oldTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const task = createTask({ title: "Old task" }, db);
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [oldTime, task.id]);
+
+    const recap = getRecap(1, undefined, db);
+    expect(recap.completed).toHaveLength(0);
   });
 });

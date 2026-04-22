@@ -47,6 +47,8 @@ export function validateWebhookUrl(urlString: string): { valid: false; error: st
     }
 
     // Block private IP ranges
+    // For IPv6, strip surrounding brackets from hostname before checking
+    const cleanHostname = hostname.replace(/^\[|\]$/g, "");
     const privateRanges = [
       /^10\./,                    // 10.0.0.0/8
       /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
@@ -58,7 +60,7 @@ export function validateWebhookUrl(urlString: string): { valid: false; error: st
     ];
 
     for (const range of privateRanges) {
-      if (range.test(hostname)) {
+      if (range.test(cleanHostname)) {
         return { valid: false, error: "Webhook URLs cannot target private IP ranges" };
       }
     }

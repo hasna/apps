@@ -155,12 +155,12 @@ describe("findBestAgent (auto-assignment)", () => {
   });
 
   it("should prefer agent with fewer in-progress tasks", () => {
-    registerAgent({ name: "busy-agent" }, db);
-    registerAgent({ name: "idle-agent" }, db);
+    const busyAgent = registerAgent({ name: "busy-agent" }, db);
+    const idleAgent = registerAgent({ name: "idle-agent" }, db);
     // Give busy-agent 3 in-progress tasks
     for (let i = 0; i < 3; i++) {
-      const t = createTask({ title: `Busy ${i}`, assigned_to: "busy-agent" }, db);
-      startTask(t.id, "busy-agent", db);
+      const t = createTask({ title: `Busy ${i}`, assigned_to: busyAgent.id }, db);
+      startTask(t.id, busyAgent.id, db);
     }
     const task = createTask({ title: "New task" }, db);
     expect(findBestAgent(task, db)).toBe("idle-agent");

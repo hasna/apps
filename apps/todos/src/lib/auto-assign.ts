@@ -30,19 +30,23 @@ export function findBestAgent(_task: Task, db?: Database): string | null {
   if (agents.length === 0) return null;
 
   const inProgressTasks = listTasks({ status: "in_progress" as any }, d);
+  const idToName = new Map<string, string>();
   const load = new Map<string, number>();
-  for (const a of agents) load.set(a.name, 0);
+  for (const a of agents) {
+    idToName.set(a.id, a.name);
+    load.set(a.id, 0);
+  }
   for (const t of inProgressTasks) {
-    const name = t.assigned_to || t.agent_id;
-    if (name && load.has(name)) {
-      load.set(name, (load.get(name) || 0) + 1);
+    const agentId = t.assigned_to || t.agent_id;
+    if (agentId && load.has(agentId)) {
+      load.set(agentId, (load.get(agentId) || 0) + 1);
     }
   }
 
   let bestAgent = agents[0]!.name;
-  let bestLoad = load.get(bestAgent) ?? 0;
+  let bestLoad = load.get(agents[0]!.id) ?? 0;
   for (const a of agents) {
-    const l = load.get(a.name) ?? 0;
+    const l = load.get(a.id) ?? 0;
     if (l < bestLoad) { bestAgent = a.name; bestLoad = l; }
   }
   return bestAgent;

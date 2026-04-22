@@ -7,6 +7,11 @@ import {
   getMachine,
   getMachineByName,
   listMachines,
+  registerMachine,
+  setPrimaryMachine,
+  getPrimaryMachine,
+  archiveMachine,
+  unarchiveMachine,
   deleteMachine,
   backfillMachineId,
 } from "./machines.js";
@@ -258,5 +263,95 @@ describe("schema — machine_id and synced_at columns", () => {
     const db = getDatabase();
     const cols = db.query("PRAGMA table_info(task_lists)").all() as { name: string }[];
     expect(cols.map(c => c.name)).toContain("machine_id");
+  });
+});
+
+describe("registerMachine", () => {
+  it("should register a new machine with SSH address", () => {
+    const m = registerMachine("remote-box", { ssh_address: "user@remote.example.com" });
+    expect(m.name).toBe("remote-box");
+    expect(m.ssh_address).toBe("user@remote.example.com");
+    expect(m.is_primary).toBe(false);
+  });
+
+  it("should update existing machine on re-registration", () => {
+    const first = registerMachine("my-laptop", { ssh_address: "old@host" });
+    const second = registerMachine("my-laptop", { ssh_address: "new@host", hostname: "new-hostname" });
+    expect(second.id).toBe(first.id);
+    expect(second.ssh_address).toBe("new@host");
+    expect(second.hostname).toBe("new-hostname");
+  });
+
+  it("should set primary flag when requested", () => {
+    const m = registerMachine("primary-box", { primary: true });
+    expect(m.is_primary).toBe(true);
+    const primary = getPrimaryMachine();
+    expect(primary).not.toBeNull();
+    expect(primary!.id).toBe(m.id);
+  });
+});
+
+describe("setPrimaryMachine", () => {
+  it("should set one machine as primary and clear others", () => {
+    registerMachine("box-a", {});
+    registerMachine("box-b", {});
+    setPrimaryMachine("box-b");
+    expect(getPrimaryMachine()!.name).toBe("box-b");
+
+    setPrimaryMachine("box-a");
+    expect(getPrimaryMachine()!.name).toBe("box-a");
+    const boxB = getMachineByName("box-b");
+    expect(boxB!.is_primary).toBe(false);
+  });
+
+  it("should throw on non-existent machine", () => {
+    expect(() => setPrimaryMachine("nope")).toThrow("Machine 'nope' not found");
+  });
+
+  it("should not set archived machine as primary", () => {
+    const m = registerMachine("to-archive", {});
+    archiveMachine(m.id);
+    expect(() => setPrimaryMachine("to-archive")).toThrow("Cannot set archived machine");
+  });
+});
+
+describe("archiveMachine", () => {
+  it("should archive a machine", () => {
+    const m = registerMachine("archive-me", {});
+    archiveMachine(m.id);
+    const archived = getMachine(m.id)!;
+    expect(archived.archived_at).toBeTruthy();
+  });
+
+  it("should not archive primary machine", () => {
+    const m = registerMachine("cant-archive", { primary: true });
+    expect(() => archiveMachine(m.id)).toThrow("Cannot archive the primary machine");
+  });
+
+  it("should not archive machine with active tasks", () => {
+    const db = getDatabase();
+    const m = registerMachine("has-tasks", {}, db);
+    const task = createTask({ title: "active task" });
+    db.run("UPDATE tasks SET machine_id = ? WHERE id = ?", [m.id, task.id]);
+    expect(() => archiveMachine(m.id)).toThrow("Cannot archive machine with");
+  });
+
+  it("should exclude archived machines from list by default", () => {
+    const db = getDatabase();
+    const m = registerMachine("archive-hide", {}, db);
+    archiveMachine(m.id, db);
+    const active = listMachines(db);
+    expect(active.find((x) => x.id === m.id)).toBeUndefined();
+    const all = listMachines(db, true);
+    expect(all.find((x) => x.id === m.id)).toBeDefined();
+  });
+});
+
+describe("unarchiveMachine", () => {
+  it("should restore an archived machine", () => {
+    const m = registerMachine("restore-me", {});
+    archiveMachine(m.id);
+    const restored = unarchiveMachine(m.id)!;
+    expect(restored.archived_at).toBeNull();
   });
 });
