@@ -64,37 +64,37 @@ describe("visual regression (OPE9-00256)", () => {
   });
 
   describe("compareImages", () => {
-    test("returns 0% diff for identical images", () => {
+    test("returns 0% diff for identical images", async () => {
       const path = join(tmpDir, "same.png");
       createTestPng(path, "red");
-      const result = compareImages(path, path);
+      const result = await compareImages(path, path);
       expect(result.diffPercent).toBe(0);
       expect(result.diffPixels).toBe(0);
     });
 
-    test("throws if baseline image not found", () => {
+    test("throws if baseline image not found", async () => {
       const path = join(tmpDir, "missing.png");
       const current = join(tmpDir, "exists.png");
       createTestPng(current, "red");
-      expect(() => compareImages(path, current)).toThrow("Baseline image not found");
+      await expect(compareImages(path, current)).rejects.toThrow("Baseline image not found");
     });
 
-    test("throws if current image not found", () => {
+    test("throws if current image not found", async () => {
       const baseline = join(tmpDir, "exists.png");
       createTestPng(baseline, "red");
       const current = join(tmpDir, "missing.png");
-      expect(() => compareImages(baseline, current)).toThrow("Current image not found");
+      await expect(compareImages(baseline, current)).rejects.toThrow("Current image not found");
     });
   });
 
   describe("compareRunScreenshots", () => {
-    test("returns empty array when no screenshots", () => {
+    test("returns empty array when no screenshots", async () => {
       const run = createRun({ url: "http://test.example", model: "quick" });
-      const results = compareRunScreenshots(run.id, run.id);
+      const results = await compareRunScreenshots(run.id, run.id);
       expect(results).toHaveLength(0);
     });
 
-    test("compares matching screenshots between runs", () => {
+    test("compares matching screenshots between runs", async () => {
       const baselineRun = createRun({ url: "http://test.example", model: "quick" });
       const currentRun = createRun({ url: "http://test.example", model: "quick" });
 
@@ -109,14 +109,14 @@ describe("visual regression (OPE9-00256)", () => {
       createScreenshot({ resultId: baselineResult.id, stepNumber: 1, action: "check", filePath: imgPath, width: 1280, height: 720 });
       createScreenshot({ resultId: currentResult.id, stepNumber: 1, action: "check", filePath: imgPath, width: 1280, height: 720 });
 
-      const results = compareRunScreenshots(currentRun.id, baselineRun.id);
+      const results = await compareRunScreenshots(currentRun.id, baselineRun.id);
       expect(results).toHaveLength(1);
-      expect(results[0].diffPercent).toBe(0);
-      expect(results[0].isRegression).toBe(false);
+      expect(results[0]!.diffPercent).toBe(0);
+      expect(results[0]!.isRegression).toBe(false);
     });
 
-    test("throws for invalid run ID", () => {
-      expect(() => compareRunScreenshots("nonexistent", "also-nonexistent")).toThrow("Run not found");
+    test("throws for invalid run ID", async () => {
+      await expect(compareRunScreenshots("nonexistent", "also-nonexistent")).rejects.toThrow("Run not found");
     });
   });
 
