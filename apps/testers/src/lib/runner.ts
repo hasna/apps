@@ -436,7 +436,14 @@ export async function runSingleScenario(
     if (harPath) {
       try { updateResult(result.id, { metadata: { harPath } }); } catch { /* ignore */ }
     }
-    if (browser) await closeBrowser(browser, effectiveOptions.engine);
+    // Never let browser shutdown mask the underlying error or leak a process.
+    if (browser) {
+      try {
+        await closeBrowser(browser, effectiveOptions.engine);
+      } catch {
+        // Best effort — browser process leaks are better than crashing the run reporter.
+      }
+    }
   }
 }
 

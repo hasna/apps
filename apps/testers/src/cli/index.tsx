@@ -616,6 +616,10 @@ program
   .option("--max-cost <dollars>", "Hard budget cap in dollars — abort if estimated cost exceeds this (e.g. 0.50 for 50 cents)")
   .option("--cache-max-age <seconds>", "Skip scenarios that passed at the same URL within this many seconds (0 = disabled)", "0")
   .option("--diff", "Auto-detect changed files from git diff and run only relevant scenarios", false)
+  .option("--auto-generate", "If no scenarios exist, crawl the URL and generate scenarios automatically (enabled by default when a URL is given as the first arg)")
+  .option("--no-auto-generate", "Disable automatic scenario generation when no scenarios exist")
+  .option("--overall-timeout <ms>", "Hard overall timeout for the whole run in milliseconds (default 10 minutes)")
+  .option("-y, --yes", "Skip confirmation prompts (e.g. proceed past budget warnings)", false)
   .action(async (urlArg: string | undefined, description: string | undefined, opts) => {
     try {
       const projectId = resolveProject(opts.project);
@@ -639,9 +643,72 @@ program
       }
       if (!url) {
         logError(chalk.red("No URL provided. Pass a URL argument, use --env <name>, or set a default environment with 'testers env use <name>'."));
-        process.exit(1);
+        process.exit(2);
       }
 
+      // Preflight: API key must be present for any non-dry-run. Fail fast with a clear
+      // message and exit code 2 so CI can distinguish config errors from test failures.
+      if (!opts.dryRun) {
+        const hasAnthropic = Boolean(process.env["ANTHROPIC_API_KEY"]);
+        const hasOpenAI = Boolean(process.env["OPENAI_API_KEY"]);
+        const hasGoogle = Boolean(process.env["GOOGLE_API_KEY"]);
+        const hasCerebras = Boolean(process.env["CEREBRAS_API_KEY"]);
+        if (!hasAnthropic && !hasOpenAI && !hasGoogle && !hasCerebras) {
+          logError(
+            chalk.red(
+              "No AI API key found. Set ANTHROPIC_API_KEY (recommended), or OPENAI_API_KEY / GOOGLE_API_KEY / CEREBRAS_API_KEY.",
+            ),
+          );
+          logError(
+            chalk.red(
+              "For GitHub Actions, add ANTHROPIC_API_KEY to your repo secrets and pass it via: env: ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+            ),
+          );
+          process.exit(2);
+        }
+      }
+
+      // Preflight: URL reachability. A 1-shot HEAD (with GET fallback) tells us fast if the
+      // target URL is dead, so we don't burn an agent run on an unreachable host.
+      if (!opts.dryRun && !opts.background) {
+        const reachable = await (async (): Promise<{ ok: boolean; reason?: string }> => {
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 10_000);
+            let res: Response;
+            try {
+              res = await fetch(url, { method: "HEAD", signal: ctrl.signal, redirect: "follow" });
+            } catch {
+              res = await fetch(url, { method: "GET", signal: ctrl.signal, redirect: "follow" });
+            }
+            clearTimeout(t);
+            // 2xx, 3xx, and even 4xx (e.g. 401 for authenticated endpoints) count as "reachable"
+            // because the server responded. Only network failure or 5xx is treated as unreachable.
+            if (res.status >= 500) return { ok: false, reason: `HTTP ${res.status}` };
+            return { ok: true };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { ok: false, reason: msg };
+          }
+        })();
+        if (!reachable.ok) {
+          logError(chalk.red(`URL unreachable: ${url}${reachable.reason ? ` (${reachable.reason})` : ""}`));
+          logError(chalk.red("Check that your preview deployment is up and the URL is correct."));
+          process.exit(2);
+        }
+      }
+
+      // Overall timeout guard (CI safety net): if the run wedges for more than the overall
+      // budget, force-exit. Default 10 minutes — override with --overall-timeout.
+      const overallTimeoutMs = opts.overallTimeout
+        ? parseInt(opts.overallTimeout, 10)
+        : 10 * 60 * 1000;
+      if (!opts.dryRun && !opts.background && overallTimeoutMs > 0) {
+        setTimeout(() => {
+          logError(chalk.red(`Overall timeout reached (${Math.round(overallTimeoutMs / 1000)}s). Aborting.`));
+          process.exit(2);
+        }, overallTimeoutMs).unref();
+      }
 
       // Budget warning check (OPE9-00080)
       if (!opts.dryRun && !opts.background) {
@@ -901,6 +968,8 @@ program
             log(chalk.green("  GitHub PR comment posted."));
           } else if (!process.env["GITHUB_TOKEN"]) {
             log(chalk.yellow("  --github-comment: GITHUB_TOKEN not set, skipping PR comment."));
+          } else {
+            log(chalk.yellow("  --github-comment: could not post PR comment (check GITHUB_PR_NUMBER / GITHUB_REF / GITHUB_REPOSITORY env)."));
           }
         }
 
@@ -913,6 +982,42 @@ program
         const allScenarios = listScenarios({ projectId });
         log(chalk.bold(`  Running all ${allScenarios.length} scenarios...`));
         log("");
+      }
+
+      // --auto-generate: when a URL was provided as the first arg AND no scenarios exist
+      // for the current filter, crawl the URL and generate scenarios before running.
+      // Enabled by default when a URL is given as the first arg; opt out via --no-auto-generate.
+      // Commander stores --no-auto-generate as opts.autoGenerate = false.
+      const shouldAutoGenerate = (
+        urlArg !== undefined &&
+        opts.autoGenerate !== false &&
+        noFilters
+      );
+      if (shouldAutoGenerate) {
+        const existingScenarios = listScenarios({ projectId });
+        if (existingScenarios.length === 0) {
+          log(chalk.blue("  No scenarios found — crawling URL to auto-generate scenarios..."));
+          log(chalk.dim(`  (disable with --no-auto-generate)`));
+          try {
+            const { crawlAndGenerate } = await import("../lib/crawl-and-generate.js");
+            const crawlResult = await crawlAndGenerate({
+              url,
+              projectId,
+              maxPages: 5,
+              scenariosPerPage: 2,
+              model: opts.model,
+              apiKey: process.env["ANTHROPIC_API_KEY"],
+              headed: opts.headed,
+              tags: ["auto-generated"],
+            });
+            log(chalk.green(`  Generated ${crawlResult.totalScenariosCreated} scenarios from ${crawlResult.pagesGenerated} page(s).`));
+            log("");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log(chalk.yellow(`  Auto-generate failed: ${msg}`));
+            log(chalk.yellow(`  Continuing with 0 scenarios — the run will exit cleanly (0 passed, 0 failed).`));
+          }
+        }
       }
 
       // --diff mode: detect changed files from git and filter to relevant scenarios
@@ -981,6 +1086,20 @@ program
         }
       } else {
         log(formatTerminal(run, results, { failedOnly: opts.failedOnly }));
+      }
+
+      // Post GitHub PR comment if requested (works for the main run path too, not just ad-hoc)
+      if (opts.githubComment) {
+        const { postGitHubComment } = await import("../lib/ci.js");
+        const prNumber = opts.pr ? parseInt(opts.pr, 10) : undefined;
+        const posted = await postGitHubComment(run, results, { prNumber });
+        if (posted) {
+          log(chalk.green("  GitHub PR comment posted."));
+        } else if (!process.env["GITHUB_TOKEN"]) {
+          log(chalk.yellow("  --github-comment: GITHUB_TOKEN not set, skipping PR comment."));
+        } else {
+          log(chalk.yellow("  --github-comment: could not post PR comment (check GITHUB_PR_NUMBER / GITHUB_REF / GITHUB_REPOSITORY env)."));
+        }
       }
 
       process.exit(getExitCode(run));
@@ -1832,6 +1951,33 @@ program
       logError(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
+  });
+
+// ─── testers ci ─────────────────────────────────────────────────────────────
+
+program
+  .command("ci [provider]")
+  .description("Print or write a CI workflow (default provider: github)")
+  .option("-o, --output <path>", "Write the workflow to a file (e.g. .github/workflows/qa.yml)")
+  .action(async (providerArg: string | undefined, opts: { output?: string }) => {
+    const provider = (providerArg ?? "github").toLowerCase();
+    if (provider !== "github") {
+      logError(chalk.red(`Unknown CI provider: ${provider}. Supported: github`));
+      process.exit(2);
+    }
+    const workflow = generateGitHubActionsWorkflow();
+    if (opts.output) {
+      const outPath = resolve(opts.output);
+      const outDir = outPath.replace(/\/[^/]*$/, "");
+      if (outDir && !existsSync(outDir)) {
+        mkdirSync(outDir, { recursive: true });
+      }
+      writeFileSync(outPath, workflow, "utf-8");
+      log(chalk.green(`Workflow written to ${outPath}`));
+      return;
+    }
+    // Default: print to stdout so users can `testers ci > .github/workflows/qa.yml`
+    process.stdout.write(workflow);
   });
 
 // ─── testers init ──────────────────────────────────────────────────────────

@@ -2531,6 +2531,15 @@ registerCloudTools(server, "testers");
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
 
+// Keep MCP stdio transport alive even if a tool implementation throws asynchronously.
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  console.error(`[testers-mcp] Unhandled promise rejection: ${msg}`);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`[testers-mcp] Uncaught exception: ${err.stack ?? err.message}`);
+});
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
