@@ -283,3 +283,10 @@ export type { CaptureResult } from "./lib/screenshotter.js";
 export { resolveCredential, isCredentialReference } from "./lib/secrets-resolver.js";
 export { ensurePersonaAuthenticated, loginWithAuthConfig } from "./lib/persona-auth.js";
 export type { LoginResult } from "./lib/persona-auth.js";
+
+export {
+  generateGitHubActionsWorkflow,
+  formatPRComment,
+  postGitHubComment,
+  resolvePullRequestNumber,
+} from "./lib/ci.js";
