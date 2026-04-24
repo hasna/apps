@@ -7,6 +7,7 @@ import {
   getConnectorsWithCli,
   hasConnectorCommandSurface,
   buildEnvWithCredentials,
+  parseCommanderHelpOperations,
 } from "./runner";
 
 const originalFetch = global.fetch;
@@ -52,24 +53,83 @@ describe("Runner", () => {
   });
 
   describe("getConnectorOperations", () => {
+    test("parses commander command metadata without wrapped-description noise", () => {
+      const operations = parseCommanderHelpOperations([
+        "Usage: connect-example [options] [command]",
+        "",
+        "Commands:",
+        "  search [options] <query>  Search items by query",
+        "  bulk                      Bulk operations on files (using Drive search",
+        "                            queries)",
+        "  generate|gen              Text generation",
+        "  help [command]            display help for command",
+      ].join("\n"));
+
+      expect(operations.map((operation) => operation.name)).toEqual([
+        "search",
+        "bulk",
+        "generate",
+      ]);
+      expect(operations.map((operation) => operation.name)).not.toContain("queries)");
+      expect(operations[2].aliases).toEqual(["gen"]);
+      expect(operations[2].usage).toBe("generate|gen");
+      expect(operations[1].summary).toContain("Bulk operations");
+    });
+
     test("returns operations for stripe", async () => {
       const ops = await getConnectorOperations("stripe");
       expect(ops.hasCli).toBe(true);
       expect(ops.commands.length).toBeGreaterThan(0);
       expect(ops.commands).toContain("products");
       expect(ops.commands).toContain("customers");
+      expect(ops.operations.find((operation) => operation.name === "products")?.summary).toBeTruthy();
     });
 
     test("returns operations for gmail", async () => {
       const ops = await getConnectorOperations("gmail");
       expect(ops.hasCli).toBe(true);
       expect(ops.commands).toContain("messages");
+      expect(ops.commands).toContain("attachments");
+      expect(ops.commands).not.toContain("queries)");
+      expect(ops.operations.find((operation) => operation.name === "messages")?.summary).toContain("Email message");
+    });
+
+    test("returns clean operation descriptors for connector-backed skill surfaces", async () => {
+      const required: Record<string, string[]> = {
+        gmail: ["messages", "threads", "drafts", "attachments", "search"],
+        googledrive: ["files", "folders", "search", "revisions"],
+        googlecalendar: ["calendars", "events", "freebusy"],
+        googlegemini: ["generate", "image", "video", "speech", "files", "models"],
+      };
+
+      for (const [connector, expectedCommands] of Object.entries(required)) {
+        const ops = await getConnectorOperations(connector);
+        expect(ops.hasCli).toBe(true);
+        for (const command of expectedCommands) {
+          expect(ops.commands).toContain(command);
+          const descriptor = ops.operations.find((operation) => operation.name === command);
+          expect(descriptor).toBeDefined();
+          expect(descriptor?.usage.length).toBeGreaterThan(0);
+          expect(descriptor?.summary.length).toBeGreaterThan(0);
+        }
+        expect(ops.commands).not.toContain("queries)");
+      }
+    });
+
+    test("normalizes command aliases into typed metadata", async () => {
+      const ops = await getConnectorOperations("googlegemini");
+      expect(ops.commands).toContain("generate");
+      expect(ops.commands).toContain("image");
+      expect(ops.commands).not.toContain("generate|gen");
+      expect(ops.operations.find((operation) => operation.name === "generate")?.aliases).toEqual(["gen"]);
+      expect(ops.operations.find((operation) => operation.name === "image")?.aliases).toEqual(["img"]);
     });
 
     test("returns hasCli=false for non-existent connector", async () => {
       const ops = await getConnectorOperations("zzzznonexistent");
       expect(ops.hasCli).toBe(false);
       expect(ops.commands).toEqual([]);
+      expect(ops.operations).toEqual([]);
     });
 
     test("returns internal command surface for github", async () => {

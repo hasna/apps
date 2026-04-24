@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getConnector } from "../../lib/registry.js";
+import { getAuthStatus } from "../../server/auth.js";
 import {
   getConnectorOperations,
   runConnectorCommand,
@@ -62,6 +63,7 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
       }
 
       const ops = await getConnectorOperations(name);
+      const auth = getAuthStatus(name);
       return {
         content: [
           {
@@ -70,7 +72,9 @@ export function registerOperationsTools(server: McpServer, stripped: (text: stri
               {
                 connector: name,
                 displayName: meta.displayName,
+                auth,
                 commands: ops.commands,
+                operations: ops.operations,
                 helpText: ops.helpText,
               },
               null,

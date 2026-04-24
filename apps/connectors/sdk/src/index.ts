@@ -7,10 +7,16 @@
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface AuthStatus {
-  type: "api_key" | "oauth" | "none";
-  connected: boolean;
+  type: "apikey" | "api_key" | "oauth" | "bearer" | "none";
+  configured?: boolean;
+  connected?: boolean;
   expiresAt?: number | null;
+  tokenExpiry?: number | null;
+  hasRefreshToken?: boolean;
   profile?: string;
+  envVars?: Array<{ variable: string; description: string; set: boolean }>;
+  envVarSetCount?: number;
+  envVarTotalCount?: number;
 }
 
 export interface ConnectorSummary {
@@ -33,8 +39,18 @@ export interface Connector {
 export interface ConnectorOperationsResponse {
   connector: string;
   displayName: string;
+  auth?: AuthStatus;
   commands: string[];
+  operations: ConnectorOperationDescriptor[];
   helpText: string;
+}
+
+export interface ConnectorOperationDescriptor {
+  name: string;
+  aliases: string[];
+  usage: string;
+  summary: string;
+  source: "internal" | "cli";
 }
 
 export interface ConnectorOperationHelpResponse {

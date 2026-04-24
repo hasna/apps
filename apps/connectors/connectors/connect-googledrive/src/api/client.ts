@@ -213,4 +213,38 @@ export class DriveClient {
 
     return response.arrayBuffer();
   }
+
+  async downloadRevision(fileId: string, revisionId: string): Promise<ArrayBuffer> {
+    const accessToken = await getValidAccessToken();
+    const url = DRIVE_API_BASE + '/files/' + fileId + '/revisions/' + revisionId + '?alt=media&supportsAllDrives=true';
+
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': 'Bearer ' + accessToken,
+      },
+    });
+
+    if (!response.ok) {
+      throw new DriveApiError('Download revision failed: ' + response.statusText, response.status);
+    }
+
+    return response.arrayBuffer();
+  }
+
+  async exportRevision(fileId: string, revisionId: string, mimeType: string): Promise<ArrayBuffer> {
+    const accessToken = await getValidAccessToken();
+    const url = DRIVE_API_BASE + '/files/' + fileId + '/revisions/' + revisionId + '/export?mimeType=' + encodeURIComponent(mimeType);
+
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': 'Bearer ' + accessToken,
+      },
+    });
+
+    if (!response.ok) {
+      throw new DriveApiError('Export revision failed: ' + response.statusText, response.status);
+    }
+
+    return response.arrayBuffer();
+  }
 }

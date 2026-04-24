@@ -8,6 +8,9 @@ import { FiltersApi } from './filters';
 import { AttachmentsApi } from './attachments';
 import { ExportApi } from './export';
 import { BulkApi } from './bulk';
+import { HistoryApi } from './history';
+import { SettingsApi } from './settings';
+import { WatchApi } from './watch';
 import { refreshTokens } from '../utils/auth';
 
 /** Tokens passed to Gmail.createWithTokens() */
@@ -33,6 +36,9 @@ export class Gmail {
   public readonly attachments: AttachmentsApi;
   public readonly export: ExportApi;
   public readonly bulk: BulkApi;
+  public readonly history: HistoryApi;
+  public readonly settings: SettingsApi;
+  public readonly watch: WatchApi;
 
   constructor(client?: GmailClient) {
     this.client = client ?? new GmailClient();
@@ -45,6 +51,9 @@ export class Gmail {
     this.attachments = new AttachmentsApi(this.client);
     this.export = new ExportApi(this.client);
     this.bulk = new BulkApi(this.client);
+    this.history = new HistoryApi(this.client);
+    this.settings = new SettingsApi(this.client);
+    this.watch = new WatchApi(this.client);
   }
 
   /**
@@ -156,3 +165,6 @@ export { FiltersApi } from './filters';
 export { AttachmentsApi } from './attachments';
 export { ExportApi } from './export';
 export { BulkApi } from './bulk';
+export { HistoryApi } from './history';
+export { SettingsApi } from './settings';
+export { WatchApi } from './watch';

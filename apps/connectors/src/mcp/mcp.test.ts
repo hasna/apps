@@ -503,6 +503,15 @@ describe("MCP Server", () => {
       expect(data.commands.length).toBeGreaterThan(0);
       expect(data.commands).toContain("products");
       expect(data.commands).toContain("customers");
+      expect(data.auth.type).toBe("bearer");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "products",
+            source: "internal",
+          }),
+        ])
+      );
     });
 
     test("returns subcommand help when command specified", async () => {
@@ -527,6 +536,17 @@ describe("MCP Server", () => {
       const data = parseContent(res);
       expect(data.connector).toBe("gmail");
       expect(data.commands).toContain("messages");
+      expect(data.commands).toContain("attachments");
+      expect(data.commands).not.toContain("queries)");
+      expect(data.auth.type).toBe("oauth");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "messages",
+            source: "cli",
+          }),
+        ])
+      );
     });
 
     test("lists operations for anthropic", async () => {

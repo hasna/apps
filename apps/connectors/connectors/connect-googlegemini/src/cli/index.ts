@@ -289,7 +289,6 @@ imageCmd
           model: options.model,
           aspectRatio: options.aspectRatio as ImageConfig['aspectRatio'],
           imageSize: options.imageSize as ImageConfig['imageSize'],
-          numberOfImages: parseInt(options.number),
           filenamePrefix: outputName,
         });
 
@@ -300,7 +299,6 @@ imageCmd
           model: options.model,
           aspectRatio: options.aspectRatio as ImageConfig['aspectRatio'],
           imageSize: options.size as ImageConfig['imageSize'],
-          numberOfImages: parseInt(options.number),
         });
 
         success(`Generated ${images.length} image(s)`);

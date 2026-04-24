@@ -15,7 +15,6 @@ export type ImageModel =
 export interface ImageGenerationOptions {
   aspectRatio?: ImageConfig['aspectRatio'];
   imageSize?: ImageConfig['imageSize'];
-  numberOfImages?: number;
 }
 
 export interface GeneratedImage {
@@ -43,7 +42,6 @@ export class ImagesApi {
       imageConfig: {
         aspectRatio: options?.aspectRatio || '16:9',
         imageSize: options?.imageSize || '2K',
-        numberOfImages: options?.numberOfImages || 1,
       },
     };
 
@@ -87,7 +85,6 @@ export class ImagesApi {
       imageConfig: {
         aspectRatio: options?.aspectRatio,
         imageSize: options?.imageSize,
-        numberOfImages: options?.numberOfImages || 1,
       },
     };
 

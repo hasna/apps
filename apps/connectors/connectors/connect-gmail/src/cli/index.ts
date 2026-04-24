@@ -2419,5 +2419,242 @@ bulkCmd
     info('  bulk mark-read "is:unread older_than:7d" --batch');
   });
 
+// ============================================
+// History Commands
+// ============================================
+const historyCmd = program
+  .command('history')
+  .description('Mailbox history commands');
+
+historyCmd
+  .command('list')
+  .description('List mailbox change history')
+  .requiredOption('--start-history-id <id>', 'History ID to start from')
+  .option('--types <types>', 'History types: messageAdded,messageChanged,messageDeleted,labelAdded,labelRemoved')
+  .option('--label-id <id>', 'Filter by label ID')
+  .option('-n, --max <number>', 'Maximum history records to return', '50')
+  .action(async (opts) => {
+    try {
+      const gmail = requireAuth();
+      const historyTypes = opts.types ? opts.types.split(',').map((t: string) => t.trim()) : undefined;
+      const result = await gmail.history.list({
+        startHistoryId: opts.startHistoryId,
+        historyTypes,
+        labelId: opts.labelId,
+        maxResults: parseInt(opts.max),
+      });
+
+      if (!result.history || result.history.length === 0) {
+        info('No history records found');
+        return;
+      }
+
+      success(`Found ${result.history.length} history record(s):`);
+      const output = result.history.map(h => ({
+        id: h.id,
+        messagesAdded: h.messagesAdded?.length || 0,
+        messagesDeleted: h.messagesDeleted?.length || 0,
+        labelsAdded: h.labelsAdded?.length || 0,
+        labelsRemoved: h.labelsRemoved?.length || 0,
+        messagesChanged: h.messageChanged?.length || 0,
+      }));
+      print(output, getFormat(historyCmd));
+      info(`Current historyId: ${result.historyId}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Gmail Settings Commands (API settings, not CLI config)
+// ============================================
+const gmailSettingsCmd = program
+  .command('gmail-settings')
+  .description('Gmail account settings commands');
+
+gmailSettingsCmd
+  .command('get')
+  .description('Get Gmail account settings')
+  .action(async () => {
+    try {
+      const gmail = requireAuth();
+      const settings = await gmail.settings.get();
+      print({
+        displayName: settings.displayName,
+        emailAddress: settings.emailAddress,
+        language: settings.language,
+        locale: settings.locale,
+        autoDeleteChats: settings.autoDeleteChats,
+        vacationResponder: {
+          enabled: settings.vacationResponder.enableAutoReply,
+          subject: settings.vacationResponder.subject,
+          restrictToContacts: settings.vacationResponder.restrictToContacts,
+          restrictToDomain: settings.vacationResponder.restrictToDomain,
+        },
+        signature: settings.signatures?.find(s => s.isDefault)?.signature || 'None',
+      }, getFormat(gmailSettingsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+gmailSettingsCmd
+  .command('forwarding')
+  .description('Get auto-forwarding settings')
+  .action(async () => {
+    try {
+      const gmail = requireAuth();
+      const forwarding = await gmail.settings.getAutoForwarding();
+      print(forwarding, getFormat(gmailSettingsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+gmailSettingsCmd
+  .command('imap')
+  .description('Get IMAP settings')
+  .action(async () => {
+    try {
+      const gmail = requireAuth();
+      const imap = await gmail.settings.getImap();
+      print(imap, getFormat(gmailSettingsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+gmailSettingsCmd
+  .command('pop')
+  .description('Get POP settings')
+  .action(async () => {
+    try {
+      const gmail = requireAuth();
+      const pop = await gmail.settings.getPop();
+      print(pop, getFormat(gmailSettingsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+gmailSettingsCmd
+  .command('send-as')
+  .description('List send-as aliases')
+  .action(async () => {
+    try {
+      const gmail = requireAuth();
+      const result = await gmail.settings.listSendAs();
+
+      if (!result.sendAs || result.sendAs.length === 0) {
+        info('No send-as aliases found');
+        return;
+      }
+
+      success(`Found ${result.sendAs.length} send-as address(es):`);
+      const output = result.sendAs.map(s => ({
+        email: s.sendAsEmail,
+        displayName: s.displayName,
+        isDefault: s.isDefault,
+        isPrimary: s.isPrimary,
+        verified: s.verificationStatus,
+      }));
+      print(output, getFormat(gmailSettingsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+gmailSettingsCmd
+  .command('add-send-as')
+  .description('Add a send-as alias')
+  .requiredOption('--email <email>', 'Send-as email address')
+  .option('--display-name <name>', 'Display name')
+  .option('--reply-to <email>', 'Reply-to address')
+  .option('--signature <text>', 'Email signature')
+  .option('--set-default', 'Make this the default send-as')
+  .action(async (opts) => {
+    try {
+      const gmail = requireAuth();
+      const sendAs = await gmail.settings.createSendAs({
+        sendAsEmail: opts.email,
+        displayName: opts.displayName,
+        replyToAddress: opts.replyTo,
+        signature: opts.signature,
+        isDefault: opts.setDefault,
+      });
+      success(`Send-as alias created: ${sendAs.sendAsEmail}`);
+      info(`Verification status: ${sendAs.verificationStatus}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+gmailSettingsCmd
+  .command('delete-send-as <email>')
+  .description('Delete a send-as alias')
+  .action(async (email: string) => {
+    try {
+      const gmail = requireAuth();
+      await gmail.settings.deleteSendAs(email);
+      success(`Send-as alias deleted: ${email}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Watch Commands
+// ============================================
+const watchCmd = program
+  .command('watch')
+  .description('Push notification watch commands');
+
+watchCmd
+  .command('start')
+  .description('Start a push notification watch')
+  .requiredOption('--topic <topic>', 'Pub/Sub topic name (e.g., projects/my-project/topics/my-topic)')
+  .option('--label-ids <ids>', 'Comma-separated label IDs to watch')
+  .option('--label-filter <action>', 'Label filter: include or exclude', 'include')
+  .action(async (opts) => {
+    try {
+      const gmail = requireAuth();
+      const labelIds = opts.labelIds ? opts.labelIds.split(',').map((l: string) => l.trim()) : undefined;
+      const result = await gmail.watch.start({
+        topicName: opts.topic,
+        labelIds,
+        labelFilterAction: opts.labelFilter,
+      });
+
+      success('Watch started!');
+      info(`History ID: ${result.historyId}`);
+      info(`Expires: ${new Date(parseInt(result.historyId) > 1e12 ? parseInt(result.historyId) : Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+watchCmd
+  .command('stop')
+  .description('Stop push notification watch')
+  .action(async () => {
+    try {
+      const gmail = requireAuth();
+      await gmail.watch.stop();
+      success('Watch stopped');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

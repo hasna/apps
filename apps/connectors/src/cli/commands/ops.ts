@@ -51,13 +51,21 @@ export function registerCommands(program: Command): void {
         console.log(JSON.stringify({
           connector: name,
           displayName: meta.displayName,
+          auth: getAuthStatus(name),
           commands: ops.commands,
+          operations: ops.operations,
         }, null, 2));
       } else {
         console.log(chalk.bold(`\n${meta.displayName} operations:\n`));
-        if (ops.commands.length > 0) {
-          for (const cmd of ops.commands) {
-            console.log(`  ${chalk.cyan(cmd)}`);
+        if (ops.operations.length > 0) {
+          for (const operation of ops.operations) {
+            const aliases = operation.aliases.length > 0
+              ? chalk.dim(` aliases: ${operation.aliases.join(", ")}`)
+              : "";
+            const summary = operation.summary
+              ? chalk.dim(` — ${operation.summary}`)
+              : "";
+            console.log(`  ${chalk.cyan(operation.name)}${aliases}${summary}`);
           }
           console.log(chalk.dim(`\n  Run ${chalk.white(`connectors ops ${name} <command>`)} for details`));
           console.log(chalk.dim(`  Run ${chalk.white(`connectors run ${name} <command> [args...]`)} to execute\n`));
@@ -118,8 +126,9 @@ export function registerCommands(program: Command): void {
     .option("-f, --field <field>", "Which field to set (for multi-field connectors)")
     .option("-o, --overwrite", "Overwrite existing installation", false)
     .option("--json", "Output as JSON", false)
+    .option("--no-browser", "Print OAuth URL without opening a browser (agent-friendly)", false)
     .description("Install, configure auth, and verify a connector in one step")
-    .action(async (name: string, options: { key?: string; field?: string; overwrite: boolean; json: boolean }) => {
+    .action(async (name: string, options: { key?: string; field?: string; overwrite: boolean; json: boolean; browser: boolean }) => {
       const meta = getConnector(name);
       if (!meta) {
         if (options.json) {
@@ -204,12 +213,70 @@ export function registerCommands(program: Command): void {
 
             // Start server and open browser for OAuth
             console.log(`  ${chalk.yellow("⟳")} OAuth authentication required — starting server...`);
+
+            const port = 9876;
+            const oauthUrl = `http://localhost:${port}/oauth/${name}/start`;
+
+            if (!options.browser) {
+              // --no-browser: spawn detached server, print URL, wait for tokens
+              console.log(`\n  ${chalk.bold("Open this URL to authenticate:")}`);
+              console.log(`  ${chalk.cyan(oauthUrl)}\n`);
+
+              const { spawn } = await import("child_process");
+              const { getConnectorsHome } = await import("../../db/database.js");
+              const { existsSync } = await import("fs");
+              const { join } = await import("path");
+
+              const scriptPath = process.argv[1];
+              const serverProc = spawn("node", [scriptPath, "serve", "--port", String(port)], {
+                detached: true,
+                stdio: "ignore",
+              });
+              serverProc.unref();
+              await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+
+              try {
+                await fetch(`http://localhost:${port}/api/connectors`);
+              } catch {
+                console.log(`  ${chalk.red("✗")} OAuth server failed to start on port ${port}.`);
+                process.exit(1);
+                return;
+              }
+
+              console.log(chalk.dim("  Waiting for authentication to complete..."));
+              const connectorsHome = getConnectorsHome();
+              const connectorDirName = name.startsWith("connect-") ? name : `connect-${name}`;
+              const tokensPath = join(connectorsHome, connectorDirName, "profiles", "default", "tokens.json");
+
+              let attempts = 0;
+              const maxAttempts = 360;
+              while (attempts < maxAttempts) {
+                await new Promise<void>((resolve) => setTimeout(resolve, 500));
+                if (existsSync(tokensPath)) break;
+                attempts++;
+                if (attempts % 6 === 0) process.stdout.write(".");
+              }
+
+              try { serverProc.kill("SIGTERM"); } catch {}
+
+              if (attempts >= maxAttempts) {
+                console.log();
+                console.log(chalk.yellow("  Timed out waiting for OAuth callback."));
+                process.exit(1);
+                return;
+              }
+
+              console.log();
+              console.log(`  ${chalk.green("✓")} ${meta.displayName} is now authenticated.`);
+              authConfigured = true;
+              process.exit(0);
+              return;
+            }
+
             try {
-              const port = 9876; // Fixed port — OAuth redirect URIs must be pre-registered
               const { startServer } = await import("../../server/serve.js");
               await startServer(port, { open: false, strict: true });
 
-              const oauthUrl = `http://localhost:${port}/oauth/${name}/start`;
               console.log(`\n  ${chalk.bold("Open this URL to authenticate:")}`);
               console.log(`  ${chalk.cyan(oauthUrl)}\n`);
 

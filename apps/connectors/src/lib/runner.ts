@@ -47,6 +47,21 @@ function getInternalCommandRuntime(name: string) {
   return getInternalConnectorDefinition(name)?.commandRuntime;
 }
 
+export interface ConnectorOperationDescriptor {
+  name: string;
+  aliases: string[];
+  usage: string;
+  summary: string;
+  source: "internal" | "cli";
+}
+
+export interface ConnectorOperationsResult {
+  commands: string[];
+  operations: ConnectorOperationDescriptor[];
+  helpText: string;
+  hasCli: boolean;
+}
+
 /**
  * Derive the expected env var name from a connector name.
  * e.g. "exa" → "EXA", "stabilityai" → "STABILITYAI", "openweathermap" → "OPENWEATHERMAP"
@@ -129,6 +144,66 @@ export function getConnectorCliPath(name: string): string | null {
 
 export function hasConnectorCommandSurface(name: string): boolean {
   return Boolean(getInternalCommandRuntime(name)?.commands.length || getConnectorCliPath(name));
+}
+
+function normalizeCommanderUsage(usage: string): {
+  name: string;
+  aliases: string[];
+  usage: string;
+} | null {
+  const commandToken = usage.trim().split(/\s+/)[0];
+  if (!commandToken || commandToken === "help") return null;
+
+  const aliases = commandToken.split("|").filter(Boolean);
+  const [name, ...rest] = aliases;
+  if (!name) return null;
+
+  return {
+    name,
+    aliases: rest,
+    usage: usage.trim(),
+  };
+}
+
+export function parseCommanderHelpOperations(
+  helpText: string
+): ConnectorOperationDescriptor[] {
+  const operations: ConnectorOperationDescriptor[] = [];
+  const lines = helpText.split("\n");
+  let inCommands = false;
+
+  for (const line of lines) {
+    if (line.trim().startsWith("Commands:")) {
+      inCommands = true;
+      continue;
+    }
+
+    if (!inCommands) continue;
+
+    if (line.trim() === "") {
+      if (operations.length > 0) inCommands = false;
+      continue;
+    }
+
+    // Commander prints real command rows with exactly two leading spaces.
+    // Wrapped descriptions are indented much deeper and must not be parsed
+    // as runnable commands (for example "queries)" on a continuation line).
+    const row = line.match(/^ {2}(\S.*?)(?: {2,}(.+))?$/);
+    if (!row) continue;
+
+    const usage = row[1].trim();
+    const summary = (row[2] ?? "").trim();
+    const normalized = normalizeCommanderUsage(usage);
+    if (!normalized) continue;
+
+    operations.push({
+      ...normalized,
+      summary,
+      source: "cli",
+    });
+  }
+
+  return operations;
 }
 
 export interface RunResult {
@@ -237,11 +312,20 @@ function runLegacyConnectorCommand(
  */
 export async function getConnectorOperations(
   name: string
-): Promise<{ commands: string[]; helpText: string; hasCli: boolean }> {
+): Promise<ConnectorOperationsResult> {
   const internalRuntime = getInternalCommandRuntime(name);
   if (internalRuntime?.commands.length) {
+    const operations = internalRuntime.commands.map((command) => ({
+      name: command.name,
+      aliases: [],
+      usage: command.name,
+      summary: command.summary,
+      source: "internal" as const,
+    }));
+
     return {
-      commands: internalRuntime.commands.map((command) => command.name),
+      commands: operations.map((operation) => operation.name),
+      operations,
       helpText:
         internalRuntime.helpText ??
         buildInternalHelpText(name, internalRuntime.commands),
@@ -251,36 +335,19 @@ export async function getConnectorOperations(
 
   const cliPath = getConnectorCliPath(name);
   if (!cliPath) {
-    return { commands: [], helpText: "", hasCli: false };
+    return { commands: [], operations: [], helpText: "", hasCli: false };
   }
 
   const result = await runConnectorCommand(name, ["--help"]);
   const helpText = result.stdout || result.stderr;
+  const operations = parseCommanderHelpOperations(helpText);
 
-  // Parse Commander.js help output to extract commands
-  const commands: string[] = [];
-  const lines = helpText.split("\n");
-  let inCommands = false;
-
-  for (const line of lines) {
-    if (line.trim().startsWith("Commands:")) {
-      inCommands = true;
-      continue;
-    }
-    if (inCommands) {
-      // Commander outputs commands as "  command-name [options]  description"
-      const match = line.match(/^\s{2,}(\S+)/);
-      if (match && match[1] !== "help") {
-        commands.push(match[1]);
-      }
-      // Empty line or next section ends the commands block
-      if (line.trim() === "" && commands.length > 0) {
-        inCommands = false;
-      }
-    }
-  }
-
-  return { commands, helpText, hasCli: true };
+  return {
+    commands: operations.map((operation) => operation.name),
+    operations,
+    helpText,
+    hasCli: true,
+  };
 }
 
 /**

@@ -3,7 +3,7 @@ import chalk from "chalk";
 import { CONNECTORS } from "../../lib/registry.js";
 import { getConnector } from "../../lib/registry.js";
 import { getInstalledConnectors, getConnectorDocs } from "../../lib/installer.js";
-import { getAuthStatus, getAuthType, saveApiKey, getEnvVars, refreshOAuthToken } from "../../server/auth.js";
+import { getAuthStatus, getAuthType, saveApiKey, getEnvVars, refreshOAuthToken, loadTokens, getTokenExpiry } from "../../server/auth.js";
 import { getConnectorsHome } from "../../db/database.js";
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
@@ -48,6 +48,28 @@ function redactSecrets(obj: unknown): unknown {
   return obj;
 }
 
+/** Check if an OAuth connector has valid (non-expired) tokens */
+function getOAuthTokenState(name: string): { hasTokens: boolean; expired: boolean; expiresIn?: string } {
+  const tokens = loadTokens(name);
+  if (!tokens?.accessToken && !tokens?.refreshToken) {
+    return { hasTokens: false, expired: false };
+  }
+  if (!tokens.expiresAt) {
+    return { hasTokens: true, expired: false };
+  }
+  const now = Date.now();
+  // Consider expired if within 60 seconds of expiry
+  const isExpired = now >= tokens.expiresAt - 60_000;
+  const expiresIn = isExpired ? undefined : (() => {
+    const ms = tokens.expiresAt - now;
+    const mins = Math.floor(ms / 60_000);
+    if (mins < 1) return "less than a minute";
+    if (mins < 60) return `${mins}m`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  })();
+  return { hasTokens: true, expired: isExpired, expiresIn };
+}
+
 export function registerCommands(program: Command): void {
   // Auth command — configure connector authentication from CLI
   program
@@ -57,8 +79,10 @@ export function registerCommands(program: Command): void {
     .option("-f, --field <field>", "Which field to set (for multi-field connectors)")
     .option("--json", "Output as JSON", false)
     .option("--no-browser", "Print OAuth URL without opening a browser (agent-friendly)", false)
+    .option("--refresh", "Refresh expired OAuth tokens", false)
+    .option("--port <port>", "OAuth server port (default: 9876)", "9876")
     .description("Configure authentication for a connector")
-    .action(async (connector: string, options: { key?: string; field?: string; json: boolean; browser: boolean }) => {
+    .action(async (connector: string, options: { key?: string; field?: string; json: boolean; browser: boolean; refresh: boolean; port: string }) => {
       const meta = getConnector(connector);
       if (!meta) {
         if (options.json) {
@@ -74,6 +98,39 @@ export function registerCommands(program: Command): void {
       const authType = getAuthType(connector);
       const statusBefore = getAuthStatus(connector);
 
+      // --refresh: try to auto-refresh OAuth tokens
+      if (options.refresh) {
+        if (authType !== "oauth") {
+          if (options.json) {
+            console.log(JSON.stringify({ error: `${connector} does not use OAuth. Refresh is only available for OAuth connectors.` }));
+          } else {
+            console.log(chalk.red(`${meta.displayName} does not use OAuth. Refresh is only available for OAuth connectors.`));
+          }
+          process.exit(1);
+          return;
+        }
+        try {
+          const tokens = await refreshOAuthToken(connector);
+          if (options.json) {
+            console.log(JSON.stringify({ success: true, connector, tokenType: tokens.tokenType, scope: tokens.scope, expiresAt: tokens.expiresAt }));
+          } else {
+            console.log(chalk.green(`\n✓ Refreshed ${meta.displayName} tokens.`));
+            console.log(chalk.dim(`  Expires: ${new Date(tokens.expiresAt).toLocaleString()}`));
+          }
+          process.exit(0);
+          return;
+        } catch (err) {
+          if (options.json) {
+            console.log(JSON.stringify({ error: `Refresh failed: ${err instanceof Error ? err.message : String(err)}` }));
+          } else {
+            console.log(chalk.red(`\n✗ Refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+            console.log(chalk.dim("You may need to re-authenticate."));
+          }
+          process.exit(1);
+          return;
+        }
+      }
+
       // Show current status
       if (!options.json) {
         const statusLabel = statusBefore.configured
@@ -82,6 +139,16 @@ export function registerCommands(program: Command): void {
         console.log(chalk.bold(`\n${meta.displayName} — Auth Configuration\n`));
         console.log(`  Auth type: ${authType === "oauth" ? "OAuth" : authType === "apikey" ? "API Key" : "Bearer Token"}`);
         console.log(`  Status:    ${statusLabel}`);
+
+        // Show token state for OAuth connectors
+        if (authType === "oauth" && statusBefore.configured) {
+          const tokenState = getOAuthTokenState(connector);
+          if (tokenState.hasTokens && !tokenState.expired) {
+            console.log(`  Token:     ${chalk.green("valid")} (expires in ${tokenState.expiresIn})`);
+          } else if (tokenState.hasTokens && tokenState.expired) {
+            console.log(`  Token:     ${chalk.yellow("expired")} (run 'connectors auth ${connector} --refresh' or re-authenticate)`);
+          }
+        }
 
         const envVars = getEnvVars(connector);
         if (envVars.length > 0) {
@@ -92,11 +159,50 @@ export function registerCommands(program: Command): void {
 
       // Handle OAuth connectors
       if (authType === "oauth") {
+        // Check if already authenticated with valid tokens
+        const tokenState = getOAuthTokenState(connector);
+        if (tokenState.hasTokens && !tokenState.expired) {
+          if (options.json) {
+            console.log(JSON.stringify({ connector, authType: "oauth", status: "authenticated", message: `Tokens are valid and not expired.` }));
+          } else {
+            console.log(chalk.green(`\n✓ ${meta.displayName} is already authenticated (tokens valid, expires in ${tokenState.expiresIn}).`));
+            console.log(chalk.dim(`Use --refresh to renew tokens, or re-run auth to re-authenticate.`));
+          }
+          process.exit(0);
+          return;
+        }
+
+        // If tokens are expired, try auto-refresh
+        if (tokenState.hasTokens && tokenState.expired) {
+          if (!options.json) {
+            console.log(chalk.dim("Tokens expired — attempting auto-refresh..."));
+          }
+          try {
+            const tokens = await refreshOAuthToken(connector);
+            if (options.json) {
+              console.log(JSON.stringify({ connector, authType: "oauth", status: "refreshed", expiresAt: tokens.expiresAt }));
+            } else {
+              console.log(chalk.green(`\n✓ Refreshed ${meta.displayName} tokens.`));
+              console.log(chalk.dim(`  Expires: ${new Date(tokens.expiresAt).toLocaleString()}`));
+            }
+            process.exit(0);
+            return;
+          } catch {
+            if (!options.json) {
+              console.log(chalk.yellow("Auto-refresh failed. Proceeding with OAuth flow..."));
+              console.log();
+            }
+          }
+        }
+
         if (options.json) {
+          const port = parseInt(options.port, 10) || 9876;
+          const oauthUrl = `http://localhost:${port}/oauth/${connector}/start`;
           console.log(JSON.stringify({
             connector,
             authType: "oauth",
             message: "OAuth connectors require browser-based authentication. Use 'connectors serve' or pass --key to set tokens manually.",
+            oauthUrl,
           }));
           process.exit(0);
           return;
@@ -106,7 +212,7 @@ export function registerCommands(program: Command): void {
         console.log(chalk.yellow("OAuth connectors require browser-based authentication."));
         console.log();
 
-        const port = 9876; // Fixed port — OAuth redirect URIs must be pre-registered
+        const port = parseInt(options.port, 10) || 9876;
         const oauthUrl = `http://localhost:${port}/oauth/${connector}/start`;
 
         try {
@@ -140,11 +246,9 @@ export function registerCommands(program: Command): void {
 
             console.log(chalk.bold("Open this URL to authenticate:\n"));
             console.log(`  ${chalk.cyan(oauthUrl)}\n`);
-            console.log(chalk.dim("Waiting for authentication to complete...\n"));
+            console.log(chalk.dim("Waiting for authentication to complete..."));
 
-            // Poll for the tokens file — OAuth callback writes tokens.json to the connector dir
-            const { join } = await import("path");
-            const { getConnectorsHome } = await import("../../db/database.js");
+            // Poll for the tokens file with progress dots
             const connectorsHome = getConnectorsHome();
             const connectorDirName = connector.startsWith("connect-") ? connector : `connect-${connector}`;
             const tokensPath = join(connectorsHome, connectorDirName, "profiles", "default", "tokens.json");
@@ -157,6 +261,10 @@ export function registerCommands(program: Command): void {
                 break;
               }
               attempts++;
+              // Print progress dot every 6 intervals (~3 seconds) to keep output clean
+              if (attempts % 6 === 0) {
+                process.stdout.write(".");
+              }
             }
 
             // Kill the server
@@ -165,6 +273,7 @@ export function registerCommands(program: Command): void {
             } catch {}
 
             if (attempts >= maxAttempts) {
+              console.log();
               console.log(chalk.yellow("Timed out waiting for OAuth callback. The auth may still be in progress."));
               console.log(chalk.dim(`Check ${tokensPath} for tokens.`));
               console.log(chalk.dim("You can stop the server manually: lsof -ti :${port} | xargs kill"));
@@ -172,6 +281,7 @@ export function registerCommands(program: Command): void {
               return;
             }
 
+            console.log();
             console.log(chalk.green(`\n✓ Connected! ${meta.displayName} is now authenticated.`));
             process.exit(0);
             return;
@@ -182,7 +292,7 @@ export function registerCommands(program: Command): void {
 
           console.log(chalk.dim(`Starting temporary server on port ${port}...`));
           // startServer registers its own SIGINT handler and calls process.exit
-          // strict: true ensures we fail if port 9876 is busy (OAuth requires exact port match)
+          // strict: true ensures we fail if port is busy (OAuth requires exact port match)
           await startServer(port, { open: false, strict: true });
 
           console.log(chalk.bold(`\nOpen this URL to authenticate:\n`));

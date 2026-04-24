@@ -3,6 +3,8 @@ import { GoogleCalendarClient, CALENDAR_SCOPES } from './client';
 import { CalendarsApi } from './calendars';
 import { EventsApi } from './events';
 import { BulkApi } from './bulk';
+import { FreeBusyApi } from './freebusy';
+import { AclApi } from './acl';
 
 /**
  * Main GoogleCalendar class
@@ -14,12 +16,16 @@ export class GoogleCalendar {
   public readonly calendars: CalendarsApi;
   public readonly events: EventsApi;
   public readonly bulk: BulkApi;
+  public readonly freebusy: FreeBusyApi;
+  public readonly acl: AclApi;
 
   constructor(config: GoogleCalendarConfig) {
     this.client = new GoogleCalendarClient(config);
     this.calendars = new CalendarsApi(this.client);
     this.events = new EventsApi(this.client);
     this.bulk = new BulkApi(this.client);
+    this.freebusy = new FreeBusyApi(this.client);
+    this.acl = new AclApi(this.client);
   }
 
   /**

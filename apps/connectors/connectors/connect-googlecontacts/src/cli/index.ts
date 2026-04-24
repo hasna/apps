@@ -678,6 +678,145 @@ contactsCmd
   });
 
 // ============================================
+// Groups Commands — CRUD + membership
+// ============================================
+const groupsCmd = program
+  .command('groups')
+  .description('Manage contact groups (CRUD + membership)');
+
+groupsCmd
+  .command('list')
+  .description('List contact groups')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--page-token <token>', 'Page token for pagination')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const result = await client.groups.list({
+        pageSize: parseInt(opts.max),
+        pageToken: opts.pageToken,
+      });
+      print(result, getFormat(groupsCmd));
+      if ((result as any).nextPageToken) {
+        info(`More results available. Use --page-token ${(result as any).nextPageToken}`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('get <groupResourceName>')
+  .description('Get a contact group')
+  .action(async (groupResourceName: string) => {
+    try {
+      const client = await getClient();
+      const group = await client.groups.get(groupResourceName);
+      print(group, getFormat(groupsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('create')
+  .description('Create a new contact group')
+  .requiredOption('--name <name>', 'Group name')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const group = await client.groups.create({ name: opts.name });
+      success(`Group created: ${group.resourceName}`);
+      print(group, getFormat(groupsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('update <groupResourceName>')
+  .description('Update a contact group')
+  .requiredOption('--name <name>', 'New group name')
+  .action(async (groupResourceName: string, opts) => {
+    try {
+      const client = await getClient();
+      const group = await client.groups.update(groupResourceName, { name: opts.name });
+      success(`Group updated: ${group.resourceName}`);
+      print(group, getFormat(groupsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('delete <groupResourceName>')
+  .description('Delete a contact group')
+  .action(async (groupResourceName: string) => {
+    try {
+      const client = await getClient();
+      await client.groups.delete(groupResourceName);
+      success(`Group ${groupResourceName} deleted`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('members <groupResourceName>')
+  .description('List members of a contact group')
+  .option('-n, --max <number>', 'Maximum results', '100')
+  .option('--page-token <token>', 'Page token for pagination')
+  .action(async (groupResourceName: string, opts) => {
+    try {
+      const client = await getClient();
+      const result = await client.groups.getMembers(groupResourceName, {
+        pageSize: parseInt(opts.max),
+        pageToken: opts.pageToken,
+      });
+      print(result, getFormat(groupsCmd));
+      if (result.nextPageToken) {
+        info(`More results available. Use --page-token ${result.nextPageToken}`);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('add-member <groupResourceName> <contactResourceName>')
+  .description('Add a contact to a group')
+  .action(async (groupResourceName: string, contactResourceName: string) => {
+    try {
+      const client = await getClient();
+      await client.groups.addMember(groupResourceName, contactResourceName);
+      success(`Contact ${contactResourceName} added to group ${groupResourceName}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+groupsCmd
+  .command('remove-member <groupResourceName> <contactResourceName>')
+  .description('Remove a contact from a group')
+  .action(async (groupResourceName: string, contactResourceName: string) => {
+    try {
+      const client = await getClient();
+      await client.groups.removeMember(groupResourceName, contactResourceName);
+      success(`Contact ${contactResourceName} removed from group ${groupResourceName}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
 // Bulk Commands
 // ============================================
 const bulkCmd = program

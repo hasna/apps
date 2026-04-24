@@ -27,4 +27,6 @@ export {
   loadTokens,
   saveTokens,
   clearConfig,
+  setProfileOverride,
+  getProfileOverride,
 } from './utils/config.ts';

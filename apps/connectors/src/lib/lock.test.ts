@@ -1,14 +1,16 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { existsSync, unlinkSync, mkdirSync, openSync, closeSync, utimesSync } from "fs";
+import { existsSync, unlinkSync, mkdirSync, openSync, closeSync, utimesSync, rmSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { withWriteLock, LockTimeoutError } from "./lock.js";
 
 const TEST_CONNECTOR = `zzztest-lock-${process.pid}`;
-const lockFile = join(homedir(), ".hasna", "connectors", `connect-${TEST_CONNECTOR}`, ".write.lock");
+const TEST_DIR = join(homedir(), ".hasna", "connectors", `connect-${TEST_CONNECTOR}`);
+const lockFile = join(TEST_DIR, ".write.lock");
 
 afterEach(() => {
   try { unlinkSync(lockFile); } catch { /* already gone */ }
+  try { rmSync(TEST_DIR, { recursive: true, force: true }); } catch { /* already gone */ }
 });
 
 describe("withWriteLock", () => {

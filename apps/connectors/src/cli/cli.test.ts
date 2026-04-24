@@ -837,6 +837,12 @@ describe("CLI", () => {
       const data = JSON.parse(stdout);
       expect(data.connector).toBe("stripe");
       expect(data.commands).toContain("products");
+      expect(data.auth.type).toBe("bearer");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "products", source: "internal" }),
+        ])
+      );
     });
 
     test("shows subcommand help", async () => {
@@ -858,6 +864,14 @@ describe("CLI", () => {
       const data = JSON.parse(stdout);
       expect(data.connector).toBe("gmail");
       expect(data.commands).toContain("messages");
+      expect(data.commands).toContain("attachments");
+      expect(data.commands).not.toContain("queries)");
+      expect(data.auth.type).toBe("oauth");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "messages", source: "cli" }),
+        ])
+      );
     });
 
     test("lists operations for anthropic", async () => {
@@ -889,6 +903,7 @@ describe("CLI", () => {
         const data = JSON.parse(stdout);
         expect(data.connector).toBe(name);
         expect(data.commands.length).toBeGreaterThan(0);
+        expect(data.operations.length).toBe(data.commands.length);
       }
     // This sweep spawns the CLI once per connector, so cold Bun startups across
     // the entire catalog can exceed two minutes on slower machines.

@@ -5,6 +5,8 @@ import { TrashApi } from './trash.ts';
 import { StorageApi } from './storage.ts';
 import { DrivesApi } from './drives.ts';
 import { BulkApi } from './bulk.ts';
+import { ChangesApi } from './changes.ts';
+import { RevisionsApi } from './revisions.ts';
 
 export class Drive {
   private readonly client: DriveClient;
@@ -16,6 +18,8 @@ export class Drive {
   public readonly storage: StorageApi;
   public readonly drives: DrivesApi;
   public readonly bulk: BulkApi;
+  public readonly changes: ChangesApi;
+  public readonly revisions: RevisionsApi;
 
   constructor() {
     this.client = new DriveClient();
@@ -25,6 +29,8 @@ export class Drive {
     this.storage = new StorageApi(this.client);
     this.drives = new DrivesApi(this.client);
     this.bulk = new BulkApi(this.client);
+    this.changes = new ChangesApi(this.client);
+    this.revisions = new RevisionsApi(this.client);
   }
 
   /**
@@ -49,3 +55,5 @@ export { TrashApi } from './trash.ts';
 export { StorageApi } from './storage.ts';
 export { DrivesApi } from './drives.ts';
 export { BulkApi } from './bulk.ts';
+export { ChangesApi } from './changes.ts';
+export { RevisionsApi } from './revisions.ts';

@@ -161,7 +161,7 @@ function loadProfileConfig(name: string): Record<string, unknown> {
 /**
  * Load OAuth tokens for a connector
  */
-function loadTokens(name: string): OAuthTokens | null {
+export function loadTokens(name: string): OAuthTokens | null {
   const configDir = getConnectorConfigDir(name);
   const profile = getCurrentProfile(name);
 

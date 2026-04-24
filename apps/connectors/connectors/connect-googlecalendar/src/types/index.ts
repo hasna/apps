@@ -345,3 +345,93 @@ export class GoogleCalendarApiError extends Error {
     this.errors = errors;
   }
 }
+
+// ============================================
+// Free/Busy Types
+// ============================================
+
+export interface FreeBusyTimeRange {
+  start: string; // RFC3339
+  end: string;   // RFC3339
+}
+
+export interface FreeBusyGroup {
+  id: string;
+  members?: { id: string }[];
+}
+
+export interface FreeBusyCalendarRequest {
+  id: string;
+}
+
+export interface FreeBusyGroupRequest {
+  id: string;
+}
+
+export interface FreeBusyRequest {
+  timeMin?: string;       // RFC3339
+  timeMax?: string;       // RFC3339
+  items: (FreeBusyCalendarRequest | FreeBusyGroupRequest)[];
+  groupExpansionMax?: number;
+  timeZone?: string;
+}
+
+export interface FreeBusyBusyPeriod {
+  start: string;
+  end: string;
+}
+
+export interface FreeBusyCalendar {
+  busy: FreeBusyBusyPeriod[];
+  errors?: ApiErrorDetail[];
+}
+
+export interface FreeBusyCalendarResponse {
+  calendars: { [calendarId: string]: FreeBusyCalendar };
+  groups?: { [groupId: string]: FreeBusyGroup };
+  kind: 'calendar#freeBusy';
+  timeMax: string;
+  timeMin: string;
+}
+
+// ============================================
+// ACL Types
+// ============================================
+
+export type CalendarAclRole =
+  | 'none'
+  | 'freeBusyReader'
+  | 'reader'
+  | 'writer'
+  | 'owner';
+
+export type CalendarAclScopeType =
+  | 'default'
+  | 'user'
+  | 'group'
+  | 'domain';
+
+export interface CalendarAclScope {
+  type: CalendarAclScopeType;
+  value?: string; // email for user/group, domain for domain
+}
+
+export interface CalendarAcl {
+  kind: 'calendar#aclRule';
+  etag: string;
+  id: string;
+  role: CalendarAclRole;
+  scope: CalendarAclScope;
+}
+
+export interface CalendarAclListResponse {
+  kind: 'calendar#acl';
+  etag: string;
+  nextPageToken?: string;
+  items: CalendarAcl[];
+}
+
+export interface CalendarAclInsert {
+  role: CalendarAclRole;
+  scope: CalendarAclScope;
+}

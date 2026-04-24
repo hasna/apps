@@ -97,7 +97,24 @@ describe("ConnectorsClient", () => {
       const fetchMock = mockFetch(200, {
         connector: "github",
         displayName: "GitHub",
+        auth: { type: "bearer", configured: false },
         commands: ["repo", "user"],
+        operations: [
+          {
+            name: "repo",
+            aliases: [],
+            usage: "repo",
+            summary: "Repository operations",
+            source: "internal",
+          },
+          {
+            name: "user",
+            aliases: [],
+            usage: "user",
+            summary: "User operations",
+            source: "internal",
+          },
+        ],
         helpText: "Usage: connect-github ...",
       });
       global.fetch = fetchMock;
@@ -105,6 +122,11 @@ describe("ConnectorsClient", () => {
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/operations");
       expect(result.commands).toContain("repo");
+      expect(result.auth?.type).toBe("bearer");
+      expect(result.operations[0]).toMatchObject({
+        name: "repo",
+        source: "internal",
+      });
     });
   });
 

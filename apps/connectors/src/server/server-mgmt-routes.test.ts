@@ -192,11 +192,19 @@ describe("server management routes", () => {
       const data = (await res.json()) as {
         connector: string;
         commands: string[];
+        operations: Array<{ name: string; source: string; summary: string }>;
+        auth: { type: string; configured: boolean };
         helpText: string;
       };
       expect(data.connector).toBe("github");
       expect(data.commands).toContain("repo");
       expect(data.commands).toContain("user");
+      expect(data.auth.type).toBe("apikey");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "repo", source: "internal" }),
+        ])
+      );
       expect(data.helpText).toContain("connect-github");
     });
 
@@ -206,12 +214,51 @@ describe("server management routes", () => {
       const data = (await res.json()) as {
         connector: string;
         commands: string[];
+        operations: Array<{ name: string; aliases: string[]; source: string }>;
+        auth: { type: string; configured: boolean };
         helpText: string;
       };
       expect(data.connector).toBe("stripe");
       expect(data.commands).toContain("config");
       expect(data.commands).toContain("products");
+      expect(data.auth.type).toBe("bearer");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "products", source: "internal" }),
+        ])
+      );
       expect(data.helpText).toContain("connect-stripe");
+    });
+
+    test("returns clean typed command descriptors for skill connectors", async () => {
+      const res = await fetch(`${baseUrl}/api/connectors/googlegemini/operations`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        connector: string;
+        commands: string[];
+        operations: Array<{ name: string; aliases: string[]; usage: string; summary: string; source: string }>;
+        auth: { type: string; configured: boolean };
+      };
+
+      expect(data.connector).toBe("googlegemini");
+      expect(data.commands).toContain("generate");
+      expect(data.commands).toContain("image");
+      expect(data.commands).not.toContain("generate|gen");
+      expect(data.auth.type).toBe("apikey");
+      expect(data.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "generate",
+            aliases: ["gen"],
+            source: "cli",
+          }),
+          expect.objectContaining({
+            name: "image",
+            aliases: ["img"],
+            source: "cli",
+          }),
+        ])
+      );
     });
   });
 

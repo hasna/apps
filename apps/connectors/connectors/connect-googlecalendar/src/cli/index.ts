@@ -1137,5 +1137,206 @@ bulkCmd
     }
   });
 
+// ============================================
+// Free/Busy Commands
+// ============================================
+const freebusyCmd = program
+  .command('freebusy')
+  .description('Query free/busy information');
+
+freebusyCmd
+  .command('query')
+  .description('Query free/busy for one or more calendars')
+  .requiredOption('-c, --calendar <ids>', 'Comma-separated calendar IDs')
+  .requiredOption('--time-min <date>', 'Start time (RFC3339)')
+  .requiredOption('--time-max <date>', 'End time (RFC3339)')
+  .option('--timezone <tz>', 'Timezone')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const calendarIds = opts.calendar.split(',').map((s: string) => s.trim());
+
+      const result = await client.freebusy.query({
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        items: calendarIds.map((id: string) => ({ id })),
+        timeZone: opts.timezone,
+      });
+
+      const format = getFormat(freebusyCmd);
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        for (const [calId, calInfo] of Object.entries(result.calendars)) {
+          console.log(chalk.bold(`  ${calId}`));
+          if (calInfo.busy.length === 0) {
+            info('    Free');
+          } else {
+            for (const slot of calInfo.busy) {
+              const start = new Date(slot.start).toLocaleString();
+              const end = new Date(slot.end).toLocaleString();
+              console.log(`    ${chalk.yellow('Busy:')} ${start} → ${end}`);
+            }
+          }
+          if (calInfo.errors && calInfo.errors.length > 0) {
+            for (const e of calInfo.errors) {
+              warn(`    Error: ${e.message}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+freebusyCmd
+  .command('check')
+  .description('Quick check if a calendar is free during a time range')
+  .requiredOption('-c, --calendar <id>', 'Calendar ID')
+  .requiredOption('--time-min <date>', 'Start time (RFC3339)')
+  .requiredOption('--time-max <date>', 'End time (RFC3339)')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const free = await client.freebusy.isFree(opts.calendar, opts.timeMin, opts.timeMax);
+
+      const format = getFormat(freebusyCmd);
+      if (format === 'json') {
+        print({ calendar: opts.calendar, free, timeMin: opts.timeMin, timeMax: opts.timeMax }, format);
+      } else {
+        if (free) {
+          success(`${opts.calendar} is free from ${new Date(opts.timeMin).toLocaleString()} to ${new Date(opts.timeMax).toLocaleString()}`);
+        } else {
+          warn(`${opts.calendar} is busy during ${new Date(opts.timeMin).toLocaleString()} to ${new Date(opts.timeMax).toLocaleString()}`);
+        }
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// ACL Commands
+// ============================================
+const aclCmd = program
+  .command('acl')
+  .description('Manage calendar access control lists');
+
+aclCmd
+  .command('list')
+  .description('List ACL rules for a calendar')
+  .requiredOption('-c, --calendar <id>', 'Calendar ID')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const result = await client.acl.list(opts.calendar);
+
+      const format = getFormat(aclCmd);
+      if (format === 'json') {
+        print(result, format);
+      } else {
+        if (result.items.length === 0) {
+          info(`No ACL rules found for ${opts.calendar}`);
+          return;
+        }
+        success(`ACL rules for ${opts.calendar}:`);
+        for (const rule of result.items) {
+          const scopeStr = rule.scope.type === 'default'
+            ? 'default'
+            : `${rule.scope.type}:${rule.scope.value}`;
+          console.log(`  ${rule.role.padEnd(18)} ${scopeStr}`);
+        }
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+aclCmd
+  .command('add')
+  .description('Add an ACL rule to a calendar')
+  .requiredOption('-c, --calendar <id>', 'Calendar ID')
+  .requiredOption('-r, --role <role>', 'Role: freeBusyReader, reader, writer, owner')
+  .requiredOption('--scope-type <type>', 'Scope type: user, group, domain, default')
+  .option('--scope-value <value>', 'Scope value (email for user/group, domain for domain)')
+  .action(async (opts) => {
+    try {
+      const role = opts.role as 'freeBusyReader' | 'reader' | 'writer' | 'owner';
+      const validRoles = ['freeBusyReader', 'reader', 'writer', 'owner'];
+      if (!validRoles.includes(role)) {
+        error(`Invalid role: ${role}. Must be one of: ${validRoles.join(', ')}`);
+        process.exit(1);
+      }
+
+      const scopeType = opts.scopeType as 'user' | 'group' | 'domain' | 'default';
+      const validTypes = ['user', 'group', 'domain', 'default'];
+      if (!validTypes.includes(scopeType)) {
+        error(`Invalid scope type: ${scopeType}. Must be one of: ${validTypes.join(', ')}`);
+        process.exit(1);
+      }
+
+      if (scopeType !== 'default' && !opts.scopeValue) {
+        error('--scope-value is required for user/group/domain scope types');
+        process.exit(1);
+      }
+
+      const client = await getClient();
+      const rule = await client.acl.insert(opts.calendar, {
+        role,
+        scope: {
+          type: scopeType,
+          value: opts.scopeValue,
+        },
+      });
+
+      success(`ACL rule added:`);
+      info(`  Role: ${rule.role}`);
+      info(`  Scope: ${rule.scope.type}${rule.scope.value ? `:${rule.scope.value}` : ''}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+aclCmd
+  .command('remove')
+  .description('Remove an ACL rule from a calendar')
+  .requiredOption('-c, --calendar <id>', 'Calendar ID')
+  .requiredOption('-i, --rule-id <id>', 'ACL rule ID to remove')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      await client.acl.delete(opts.calendar, opts.ruleId);
+      success(`ACL rule "${opts.ruleId}" removed from ${opts.calendar}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+aclCmd
+  .command('share')
+  .description('Share a calendar with a user')
+  .requiredOption('-c, --calendar <id>', 'Calendar ID')
+  .requiredOption('--with <email>', 'Email address to share with')
+  .option('-r, --role <role>', 'Access level: reader (default), writer, freeBusyReader', 'reader')
+  .action(async (opts) => {
+    try {
+      const client = await getClient();
+      const rule = await client.acl.insert(opts.calendar, {
+        role: opts.role,
+        scope: { type: 'user', value: opts.with },
+      });
+      success(`Shared ${opts.calendar} with ${opts.with} as ${rule.role}`);
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

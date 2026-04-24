@@ -1752,5 +1752,180 @@ bulkCmd
     info('  bulk star "sharedWithMe" -n 50');
   });
 
+// ============================================
+// Changes Commands
+// ============================================
+const changesCmd = program
+  .command('changes')
+  .description('Track changes to Drive files');
+
+changesCmd
+  .command('start-page-token')
+  .description('Get the current starting page token for change tracking')
+  .option('--drive <driveId>', 'Get token for a specific shared drive')
+  .action(async (opts) => {
+    try {
+      const drive = requireAuth();
+      const result = await drive.changes.getStartPageToken({
+        driveId: opts.drive,
+        supportsAllDrives: !!opts.drive,
+      });
+      success('Current page token: ' + result.nextPageToken);
+      info('Use this token with "changes list" to begin tracking');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+changesCmd
+  .command('list <pageToken>')
+  .description('List changes since the given page token')
+  .option('-n, --max <number>', 'Maximum changes to return', '50')
+  .option('--include-removed', 'Include removed items')
+  .option('--my-drive-only', 'Only track My Drive changes (exclude shared drives)')
+  .action(async (pageToken: string, opts) => {
+    try {
+      const drive = requireAuth();
+      const result = await drive.changes.list({
+        pageToken,
+        pageSize: parseInt(opts.max),
+        includeRemoved: opts.includeRemoved,
+        restrictToMyDrive: opts.myDriveOnly,
+        includeItemsFromAllDrives: !opts.myDriveOnly,
+        supportsAllDrives: true,
+      });
+
+      if (!result.changes || result.changes.length === 0) {
+        info('No changes found');
+        return;
+      }
+
+      success('Found ' + result.changes.length + ' change(s):');
+      info('New start page token: ' + result.newStartPageToken);
+
+      const changes = result.changes.map((c: any) => ({
+        fileId: c.fileId,
+        type: c.type,
+        removed: c.removed || false,
+        fileName: c.file?.name || '-',
+        mimeType: c.file?.mimeType || '-',
+      }));
+
+      print(changes, getFormat(changesCmd));
+
+      if (result.nextPageToken) {
+        info('Next page token: ' + result.nextPageToken);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+// ============================================
+// Revisions Commands
+// ============================================
+const revisionsCmd = program
+  .command('revisions')
+  .description('File revision history commands');
+
+revisionsCmd
+  .command('list <fileId>')
+  .description('List revisions of a file')
+  .action(async (fileId: string) => {
+    try {
+      const drive = requireAuth();
+      const result = await drive.revisions.list(fileId);
+
+      if (!result.revisions || result.revisions.length === 0) {
+        info('No revisions found');
+        return;
+      }
+
+      success('Found ' + result.revisions.length + ' revision(s):');
+
+      const revisions = result.revisions.map((r: any) => ({
+        id: r.id,
+        mimeType: r.mimeType,
+        size: r.size ? formatBytes(r.size) : '-',
+        modified: r.modifiedTime ? new Date(r.modifiedTime).toLocaleString() : '-',
+        keepForever: r.keepForever || false,
+      }));
+
+      print(revisions, getFormat(revisionsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+revisionsCmd
+  .command('get <fileId> <revisionId>')
+  .description('Get details of a specific revision')
+  .action(async (fileId: string, revisionId: string) => {
+    try {
+      const drive = requireAuth();
+      const revision = await drive.revisions.get(fileId, revisionId);
+      print(revision, getFormat(revisionsCmd));
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+revisionsCmd
+  .command('download <fileId> <revisionId> [destination]')
+  .description('Download a specific revision')
+  .action(async (fileId: string, revisionId: string, destination?: string) => {
+    try {
+      const drive = requireAuth();
+      info('Downloading revision...');
+
+      const data = await drive.revisions.download(fileId, revisionId);
+
+      if (destination) {
+        writeFileSync(destination, Buffer.from(data));
+        success('Downloaded revision to: ' + destination);
+      } else {
+        const destPath = join(process.cwd(), 'revision-' + revisionId);
+        writeFileSync(destPath, Buffer.from(data));
+        success('Downloaded revision');
+        info('Saved to: ' + destPath);
+      }
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+revisionsCmd
+  .command('keep-forever <fileId> <revisionId>')
+  .description('Mark a revision to be kept forever (not auto-deleted)')
+  .action(async (fileId: string, revisionId: string) => {
+    try {
+      const drive = requireAuth();
+      await drive.revisions.update(fileId, revisionId, { keepForever: true });
+      success('Revision marked to keep forever');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
+revisionsCmd
+  .command('delete <fileId> <revisionId>')
+  .description('Delete a specific revision')
+  .action(async (fileId: string, revisionId: string) => {
+    try {
+      const drive = requireAuth();
+      await drive.revisions.delete(fileId, revisionId);
+      success('Revision deleted');
+    } catch (err) {
+      error(String(err));
+      process.exit(1);
+    }
+  });
+
 // Parse and execute
 program.parse();

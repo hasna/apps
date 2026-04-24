@@ -1,6 +1,7 @@
 import type { GoogleContactsConfig, OAuthTokens } from '../types';
 import { GoogleContactsClient } from './client';
 import { ContactsApi } from './contacts';
+import { GroupsApi } from './groups';
 import { BulkApi } from './bulk';
 
 /**
@@ -11,11 +12,13 @@ export class GoogleContacts {
 
   // API modules
   public readonly contacts: ContactsApi;
+  public readonly groups: GroupsApi;
   public readonly bulk: BulkApi;
 
   constructor(config: GoogleContactsConfig) {
     this.client = new GoogleContactsClient(config);
     this.contacts = new ContactsApi(this.client);
+    this.groups = new GroupsApi(this.client);
     this.bulk = new BulkApi(this.client);
   }
 
@@ -100,4 +103,5 @@ export class GoogleContacts {
 
 export { GoogleContactsClient } from './client';
 export { ContactsApi } from './contacts';
+export { GroupsApi } from './groups';
 export { BulkApi } from './bulk';

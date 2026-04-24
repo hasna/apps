@@ -87,6 +87,7 @@ export function registerCommands(program: Command): void {
         try {
           const globalDirs = readdirSync(configDir).filter((f: string) => {
             if (!f.startsWith("connect-")) return false;
+            if (f.startsWith("connect-zzztest")) return false;
             try { return statSync(join(configDir, f)).isDirectory(); } catch { return false; }
           });
 

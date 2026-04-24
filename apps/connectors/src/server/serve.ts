@@ -349,7 +349,9 @@ export async function startServer(requestedPort: number, options?: { open?: bool
           {
             connector: name,
             displayName: meta.displayName,
+            auth: getAuthStatus(name),
             commands: ops.commands,
+            operations: ops.operations,
             helpText: ops.helpText,
           },
           200,

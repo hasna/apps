@@ -25,13 +25,20 @@ export function registerSearchTools(server: McpServer, stripped: (text: string) 
         try {
           const ops = await getConnectorOperations(name);
           const meta = getConnector(name);
-          for (const cmd of ops.commands || []) {
-            if (cmd.toLowerCase().includes(query.toLowerCase()) ||
-                (ops.helpText && ops.helpText.toLowerCase().includes(query.toLowerCase()))) {
+          for (const operation of ops.operations || []) {
+            const searchable = [
+              operation.name,
+              operation.aliases.join(" "),
+              operation.usage,
+              operation.summary,
+              ops.helpText,
+            ].join("\n").toLowerCase();
+
+            if (searchable.includes(query.toLowerCase())) {
               results.push({
                 connector: name,
-                operation: cmd,
-                description: ops.helpText || "",
+                operation: operation.name,
+                description: operation.summary || ops.helpText || "",
               });
             }
           }
