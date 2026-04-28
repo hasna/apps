@@ -1,6 +1,12 @@
-import { describe, it, expect } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { TodosClient, TodosError } from "./client.js";
 import { todosTools } from "./schemas.js";
+
+const originalEventSource = globalThis.EventSource;
+
+afterEach(() => {
+  globalThis.EventSource = originalEventSource;
+});
 
 describe("TodosClient", () => {
   it("should create with default options", () => {
@@ -106,12 +112,26 @@ describe("TodosClient baseUrl normalization", () => {
 });
 
 describe("TodosClient subscribeEvents", () => {
-  it.skip("should return a close function (requires EventSource)", () => {
+  it("should return a close function", () => {
+    let closed = false;
+    class MockEventSource {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+
+      constructor(public url: string) {}
+
+      close() {
+        closed = true;
+      }
+    }
+
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+
     const client = new TodosClient({ baseUrl: "http://127.0.0.1:19993" });
     const sub = client.subscribeEvents(() => {});
     expect(sub.close).toBeDefined();
     expect(typeof sub.close).toBe("function");
     sub.close();
+    expect(closed).toBe(true);
   });
 });
 

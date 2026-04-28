@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import {
   ensureDir,
   listJsonFiles,
@@ -24,12 +24,13 @@ describe("ensureDir", () => {
   });
 
   it("should create nested directories", () => {
-    const dir = `/tmp/todos-test-nested-${Date.now()}/a/b/c`;
+    const root = `/tmp/todos-test-nested-${Date.now()}`;
+    const dir = `${root}/a/b/c`;
     try {
       ensureDir(dir);
       expect(existsSync(dir)).toBe(true);
     } finally {
-      rmSync(`/tmp/todos-test-nested-${Date.now()}`, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

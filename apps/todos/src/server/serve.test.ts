@@ -8,6 +8,8 @@ let proc: ReturnType<typeof Bun.spawn>;
 let tmpDir: string;
 let dbPath: string;
 
+const SERVER_HOOK_TIMEOUT_MS = 15_000;
+
 function url(path: string): string {
   return `http://localhost:${port}${path}`;
 }
@@ -68,13 +70,13 @@ beforeAll(async () => {
   if (!ready) {
     throw new Error(`Server did not start on port ${port} within 10 seconds`);
   }
-});
+}, SERVER_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
   proc.kill();
   await proc.exited;
   await rm(tmpDir, { recursive: true, force: true });
-});
+}, SERVER_HOOK_TIMEOUT_MS);
 
 // ── GET /api/stats ──────────────────────────────────────────────────────────
 
