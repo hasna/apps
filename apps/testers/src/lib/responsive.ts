@@ -1,4 +1,4 @@
-import type { Page, BrowserContext } from "playwright";
+import type { Page } from "playwright";
 
 /**
  * Device presets for mobile/responsive testing.
@@ -39,7 +39,7 @@ export async function setDevicePreset(page: Page, deviceName: string): Promise<v
   }
 
   const context = page.context();
-  await context.setViewportSize(preset.viewport);
+  await page.setViewportSize(preset.viewport);
 
   if (preset.userAgent) {
     // Note: user agent can only be set at context creation time in Playwright.

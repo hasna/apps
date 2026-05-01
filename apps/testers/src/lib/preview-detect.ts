@@ -102,11 +102,9 @@ export function parsePrNumber(value: string): number | null {
  */
 export function buildPreviewUrl(
   baseUrl: string,
-  prNumber: number,
+  _prNumber: number,
   provider?: DeployProvider,
 ): string | null {
-  const pr = prNumber;
-
   switch (provider) {
     case "vercel":
       // Vercel: pr-{num}-{repo}-{org}.vercel.app

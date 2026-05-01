@@ -133,7 +133,7 @@ export async function collectPerformanceMetrics(page: Page): Promise<WebVitals> 
     let cls = 0;
     const layoutShifts = performance.getEntriesByType("layout-shift") as PerformanceEntry[];
     for (const shift of layoutShifts) {
-      const entry = shift as { value?: number };
+      const entry = shift as { value?: number; hadRecentInput?: boolean };
       if (entry.value && !entry.hadRecentInput) {
         cls += entry.value;
       }

@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { execSync } from "node:child_process";
 import { BrowserError } from "../types/index.js";
 // Use @hasna/browser for the Playwright engine launch/close — avoids reimplementing

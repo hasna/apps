@@ -137,7 +137,7 @@ async function executeAction(page: Page, action: BatchAction): Promise<unknown> 
       if (action.selector) {
         await page.locator(action.selector).first().waitFor({ state: "visible", timeout: action.timeout });
       } else {
-        await page.waitForTimeout(action.timeout);
+        await page.waitForTimeout(action.timeout ?? 10000);
       }
       return;
 

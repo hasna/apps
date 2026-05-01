@@ -36,6 +36,14 @@ export interface A11yAuditOptions {
   exclude?: string[];
 }
 
+type AxeNode = Record<string, unknown>;
+
+interface AxeRunResult {
+  violations?: Array<Record<string, unknown>>;
+  passes?: Array<Record<string, unknown>>;
+  incomplete?: Array<Record<string, unknown>>;
+}
+
 /**
  * Run axe-core accessibility audit on the current page.
  * Injects axe via CDN and runs accessibility checks.
@@ -69,7 +77,7 @@ export async function runA11yAudit(
     // @ts-ignore - axe is loaded via script tag
     const axeResult = await window.axe.run(auditConfig);
     return axeResult;
-  }, config);
+  }, config) as AxeRunResult;
 
   const violations: A11yViolation[] = (result.violations ?? []).map((v: Record<string, unknown>) => ({
     id: v.id as string,
@@ -77,7 +85,7 @@ export async function runA11yAudit(
     description: v.description as string,
     help: v.help as string,
     helpUrl: v.helpUrl as string,
-    nodes: (v.nodes ?? []).map((n: Record<string, unknown>) => ({
+    nodes: ((v.nodes ?? []) as AxeNode[]).map((n) => ({
       html: n.html as string,
       target: n.target as string[],
       failureSummary: n.failureSummary as string | undefined,

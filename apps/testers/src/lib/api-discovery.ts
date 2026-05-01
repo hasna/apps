@@ -1,4 +1,4 @@
-import type { Page, Route, Request as PWRequest } from "playwright";
+import type { Page, Request as PWRequest } from "playwright";
 
 export interface DiscoveredEndpoint {
   url: string;
@@ -101,7 +101,6 @@ export function generateApiScenarios(endpoints: DiscoveredEndpoint[]): Array<{
 }> {
   return endpoints.map((ep) => {
     const pathName = new URL(ep.url).pathname;
-    const shortName = pathName.replace(/^\//, "").replace(/\//g, "_").replace(/[^a-zA-Z0-9_]/g, "") || "root";
 
     return {
       name: `API: ${ep.method} ${pathName}`,
@@ -124,9 +123,9 @@ export function groupEndpoints(endpoints: DiscoveredEndpoint[]): Record<string, 
 
   for (const ep of endpoints) {
     const pathParts = new URL(ep.url).pathname.split("/").filter(Boolean);
-    const group = pathParts.length > 0 ? pathParts[0] : "root";
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(ep);
+    const group = pathParts[0] ?? "root";
+    const bucket = groups[group] ?? (groups[group] = []);
+    bucket.push(ep);
   }
 
   return groups;

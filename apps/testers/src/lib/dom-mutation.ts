@@ -211,9 +211,11 @@ export function extractElements(html: string): Record<string, string> {
   let match;
   while ((match = tagRegex.exec(html)) !== null) {
     const tag = match[1];
+    if (!tag) continue;
     const id = match[2];
     const cls = match[3];
-    const key = id ? `#${id}` : cls ? `${tag}.${cls.split(" ")[0]}` : tag;
+    const firstClass = cls?.split(" ")[0];
+    const key = id ? `#${id}` : firstClass ? `${tag}.${firstClass}` : tag;
     els[key] = match[0];
   }
   return els;

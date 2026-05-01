@@ -68,7 +68,10 @@ export async function enableThrottling(context: BrowserContext, profile: Throttl
   const pages = context.pages();
   if (pages.length === 0) return;
 
-  const cdpSession = await pages[0].context().newCDPSession(pages[0]);
+  const page = pages[0];
+  if (!page) return;
+
+  const cdpSession = await page.context().newCDPSession(page);
   await cdpSession.send("Network.enable");
   await cdpSession.send("Network.emulateNetworkConditions", {
     offline: false,
@@ -85,7 +88,10 @@ export async function disableThrottling(context: BrowserContext): Promise<void> 
   const pages = context.pages();
   if (pages.length === 0) return;
 
-  const cdpSession = await context.newCDPSession(pages[0]);
+  const page = pages[0];
+  if (!page) return;
+
+  const cdpSession = await context.newCDPSession(page);
   await cdpSession.send("Network.emulateNetworkConditions", {
     offline: false,
     latency: 0,

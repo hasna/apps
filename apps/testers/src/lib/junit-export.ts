@@ -1,4 +1,4 @@
-import type { Result, Scenario } from "../types/index.js";
+import type { Result } from "../types/index.js";
 import { getScenario } from "../db/scenarios.js";
 
 export interface JUnitTestSuite {
@@ -55,7 +55,6 @@ export function toJUnitXml(
     return testCase;
   });
 
-  const passed = results.filter((r) => r.status === "passed").length;
   const failed = results.filter((r) => r.status === "failed").length;
   const errors = results.filter((r) => r.status === "error").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
@@ -78,7 +77,7 @@ export function toJUnitXml(
 function buildJUnitXml(suite: JUnitTestSuite, runId: string): string {
   let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
   xml += `<testsuites name="${escapeXml(suite.name)}" tests="${suite.tests}" failures="${suite.failures}" errors="${suite.errors}" skipped="${suite.skipped}" time="${suite.time.toFixed(3)}" timestamp="${suite.timestamp}">\n`;
-  xml += `  <testsuite name="${escapeXml(suite.name)}" tests="${suite.tests}" failures="${suite.failures}" errors="${suite.errors}" skipped="${suite.skipped}" time="${suite.time.toFixed(3)}">\n`;
+  xml += `  <testsuite id="${escapeXml(runId)}" name="${escapeXml(suite.name)}" tests="${suite.tests}" failures="${suite.failures}" errors="${suite.errors}" skipped="${suite.skipped}" time="${suite.time.toFixed(3)}">\n`;
 
   for (const tc of suite.testCases) {
     xml += `    <testcase name="${escapeXml(tc.name)}" classname="${escapeXml(tc.classname)}" time="${tc.time.toFixed(3)}">`;

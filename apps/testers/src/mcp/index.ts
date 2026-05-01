@@ -163,16 +163,17 @@ server.tool(
 
 server.tool(
   "batch_create_scenarios",
-  "Create multiple test scenarios in a single call. Each item requires name and description.",
+  "Create multiple test scenarios in a single call. Each item requires name; description defaults to the name.",
   {
     scenarios: z.array(z.object({
       name: z.string().describe("Scenario name"),
-      description: z.string().describe("What this scenario tests"),
+      description: z.string().optional().describe("What this scenario tests"),
       steps: z.array(z.string()).optional().describe("Ordered test steps"),
       tags: z.array(z.string()).optional().describe("Tags for filtering"),
       priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Scenario priority"),
       model: z.string().optional().describe(MODEL_DESC),
       targetPath: z.string().optional().describe("URL path to navigate to"),
+      url: z.string().optional().describe("Alias for targetPath"),
       requiresAuth: z.boolean().optional().describe("Whether scenario requires authentication"),
     })).min(1).max(100).describe("Array of scenarios to create"),
     projectId: z.string().optional().describe("Project ID to scope all scenarios to"),
@@ -182,7 +183,12 @@ server.tool(
       const results: { id: string; name: string; shortId: string; error?: string }[] = [];
       for (const s of scenarios) {
         try {
-          const scenario = createScenario({ ...s, projectId });
+          const scenario = createScenario({
+            ...s,
+            description: s.description ?? s.name,
+            targetPath: s.targetPath ?? s.url,
+            projectId,
+          });
           results.push({ id: scenario.id, name: scenario.name, shortId: scenario.shortId });
         } catch (e) {
           results.push({ id: "", name: s.name, shortId: "", error: e instanceof Error ? e.message : String(e) });
@@ -727,53 +733,6 @@ server.tool(
     } catch (error) {
       return errorResponse(error);
     }
-  },
-);
-
-// ─── 20. batch_create_scenarios ──────────────────────────────────────────────
-
-server.tool(
-  "batch_create_scenarios",
-  "Create multiple scenarios in a single call. Returns created scenarios and any failures.",
-  {
-    scenarios: z.array(
-      z.object({
-        name: z.string().describe("Scenario name"),
-        url: z.string().optional().describe("Target URL (stored as targetPath)"),
-        description: z.string().optional().describe("What this scenario tests"),
-        steps: z.array(z.string()).optional().describe("Ordered test steps"),
-        tags: z.array(z.string()).optional().describe("Tags for filtering"),
-        priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Scenario priority"),
-      })
-    ).describe("Array of scenarios to create"),
-  },
-  async ({ scenarios }) => {
-    const created: ReturnType<typeof createScenario>[] = [];
-    const failed: { index: number; name: string; error: string }[] = [];
-
-    for (let i = 0; i < scenarios.length; i++) {
-      const input = scenarios[i];
-      try {
-        const scenario = createScenario({
-          name: input.name,
-          description: input.description ?? input.name,
-          steps: input.steps,
-          tags: input.tags,
-          priority: input.priority,
-          targetPath: input.url,
-        });
-        created.push(scenario);
-      } catch (error) {
-        const e = error instanceof Error ? error : new Error(String(error));
-        failed.push({ index: i, name: input.name, error: e.message });
-      }
-    }
-
-    const lines = [
-      `Created: ${created.length} scenario(s)`,
-      ...created.map((s) => `  [${s.shortId}] ${s.name}`),
-    ];
-    return json({ created, failed });
   },
 );
 

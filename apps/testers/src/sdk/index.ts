@@ -14,14 +14,12 @@ export type {
   Scenario,
   Run,
   Result,
-  RunOptions,
   CreateScenarioInput,
   UpdateScenarioInput,
   Persona,
   CreatePersonaInput,
   UpdatePersonaInput,
   PersonaAuth,
-  Webhook,
   AuthProfile,
   AuthStrategy,
   Assertion,
@@ -30,10 +28,8 @@ export type {
   ResultStatus,
   ModelPreset,
   BrowserEngine,
-  DevicePreset,
 } from "../types/index.js";
 
-export type { RunEvent } from "../lib/runner.js";
 export type { MockRule } from "../lib/network-mock.js";
 export type { BatchAction, BatchActionResult } from "../lib/batch-actions.js";
 export type { MutationEvent, MutationOptions } from "../lib/dom-mutation.js";
@@ -42,6 +38,7 @@ export type { A11yAuditResult, A11yAuditOptions, A11yViolation } from "../lib/a1
 export type { Environment, EnvironmentInfo } from "../lib/environment.js";
 export type { ThrottleProfile } from "../lib/offline-mode.js";
 export type { ChainOutput, ChainLink } from "../lib/scenario-chain.js";
+export type { Webhook, WebhookPayload, ApiCheckWebhookPayload } from "../lib/webhooks.js";
 
 // ─── Scenario Management ─────────────────────────────────────────────────────
 
@@ -130,6 +127,7 @@ export {
   isMobileViewport,
   listDevicePresets,
 } from "../lib/responsive.js";
+export type { DevicePreset } from "../lib/responsive.js";
 
 // ─── Batch Actions ───────────────────────────────────────────────────────────
 

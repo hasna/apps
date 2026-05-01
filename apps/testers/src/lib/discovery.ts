@@ -1,7 +1,17 @@
 import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join, resolve } from "path";
-import type { CreateScenarioInput, FileScenario } from "../types/index.js";
 import { upsertScenario } from "../db/scenarios.js";
+
+type FileScenario = {
+  name: string;
+  description?: string;
+  steps?: string[];
+  tags?: string[];
+  priority?: "low" | "medium" | "high" | "critical";
+  model?: string;
+  targetPath?: string;
+  requiresAuth?: boolean;
+};
 
 export interface TestersConfig {
   url?: string;
@@ -93,7 +103,7 @@ function parseYamlLike(content: string): TestersConfig {
     const kvMatch = raw.match(/^(\s*)([a-zA-Z_]\w*):\s*(.*)?$/);
     if (!kvMatch) continue;
 
-    const [, indentStr, key, rawVal] = kvMatch;
+    const [, , key, rawVal] = kvMatch;
     const val = rawVal?.trim() ?? "";
 
     // Top-level (indent 0)
