@@ -26,6 +26,7 @@ import { runApiCheck, runApiChecksByFilter } from "../lib/api-runner.js";
 import { createPersona, getPersona, listPersonas, updatePersona, deletePersona } from "../db/personas.js";
 import { PersonaNotFoundError } from "../types/index.js";
 import { getTestersDir } from "../lib/paths.js";
+import { createProdDebugPlan } from "../lib/prod-debug.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -132,6 +133,32 @@ const server = new McpServer({
   name: "testers",
   version: "0.0.1",
 });
+
+server.tool(
+  "create_prod_debug_plan",
+  "Create a safe production debug plan for a URL, session ID, project ID, user report, or request ID. Does not use passwords or raw cookies; browser debugging is blocked unless an audited support URL is supplied or an app adapter can resolve a support grant.",
+  {
+    target: z.string().describe("Production URL, session ID, project ID, request ID, or other target evidence"),
+    app: z.string().optional().describe("App name for reporting"),
+    profile: z.string().optional().describe("prodDebug app profile from testers config"),
+    actor: z.string().optional().describe("Operator/agent identity for audit context"),
+    reason: z.string().optional().describe("Debug reason or support context"),
+    supportUrl: z.string().optional().describe("Audited support browser/session URL minted by the target app"),
+    supportGrantId: z.string().optional().describe("Audited support access grant ID"),
+    ttlMinutes: z.number().optional().describe("Support access TTL in minutes, capped at 60"),
+    includeBrowser: z.boolean().optional().describe("Include user-scoped browser reproduction check"),
+    includeLogs: z.boolean().optional().describe("Include log timeline adapter requirement"),
+    allowWrites: z.boolean().optional().describe("Document that writes require a separate explicit approval"),
+  },
+  async (input) => {
+    try {
+      const config = loadConfig();
+      return json(createProdDebugPlan(input, config.prodDebug));
+    } catch (error) {
+      return errorResponse(error);
+    }
+  },
+);
 
 // ─── 1. create_scenario ─────────────────────────────────────────────────────
 

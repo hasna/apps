@@ -285,6 +285,21 @@ export { ensurePersonaAuthenticated, loginWithAuthConfig } from "./lib/persona-a
 export type { LoginResult } from "./lib/persona-auth.js";
 
 export {
+  createProdDebugPlan,
+  formatProdDebugPlan,
+  parseProdDebugTarget,
+  redactProdDebugText,
+} from "./lib/prod-debug.js";
+export type {
+  ProdDebugAppProfile,
+  ProdDebugCheck,
+  ProdDebugConfig,
+  ProdDebugIdentifiers,
+  ProdDebugInput,
+  ProdDebugPlan,
+} from "./lib/prod-debug.js";
+
+export {
   generateGitHubActionsWorkflow,
   formatPRComment,
   postGitHubComment,

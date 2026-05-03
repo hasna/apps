@@ -23,6 +23,7 @@ import { diffRuns, formatDiffTerminal, formatDiffJSON } from "../lib/diff.js";
 import { setBaseline, getBaseline, compareRunScreenshots, formatVisualDiffTerminal } from "../lib/visual-diff.js";
 import { generateHtmlReport, generateLatestReport } from "../lib/report.js";
 import { getCostSummary, formatCostsTerminal, formatCostsJSON, formatCostsCsv, checkBudget, getCostsByScenario, formatCostsByScenarioTerminal } from "../lib/costs.js";
+import { createProdDebugPlan, formatProdDebugPlan } from "../lib/prod-debug.js";
 
 import { createProject, getProject, listProjects, ensureProject } from "../db/projects.js";
 import { createPersona, getPersona, listPersonas, deletePersona } from "../db/personas.js";
@@ -236,6 +237,44 @@ program
   .description("AI-powered browser testing CLI")
   .option("-q, --quiet", "Suppress all output", false)
   .option("--no-color", "Disable color output");
+
+program
+  .command("prod-debug <target>")
+  .description("Create a safe production debug plan for a URL/session/request without leaking secrets")
+  .option("--app <name>", "App name for reporting")
+  .option("--profile <name>", "prodDebug app profile from testers config")
+  .option("--actor <name>", "Operator/agent identity for support audit context")
+  .option("--reason <text>", "Debug reason or support context")
+  .option("--support-url <url>", "Audited support browser/session URL minted by the target app")
+  .option("--support-grant <id>", "Audited support access grant ID")
+  .option("--ttl <minutes>", "Support access TTL in minutes, capped at 60", "15")
+  .option("--no-browser", "Do not include user-scoped browser reproduction")
+  .option("--logs", "Include log timeline adapter requirement", false)
+  .option("--allow-writes", "Document that a separate explicit approval is required for writes", false)
+  .option("--json", "Output JSON", false)
+  .option("-o, --output <filepath>", "Write plan to file")
+  .action((target: string, opts) => {
+    const config = loadConfig();
+    const plan = createProdDebugPlan({
+      target,
+      app: opts.app,
+      profile: opts.profile,
+      actor: opts.actor,
+      reason: opts.reason,
+      supportUrl: opts.supportUrl,
+      supportGrantId: opts.supportGrant,
+      ttlMinutes: parseInt(opts.ttl, 10),
+      includeBrowser: opts.browser,
+      includeLogs: opts.logs,
+      allowWrites: opts.allowWrites,
+    }, config.prodDebug);
+    const output = opts.json ? JSON.stringify(plan, null, 2) : formatProdDebugPlan(plan);
+    if (opts.output) {
+      writeFileSync(resolve(opts.output), output + "\n");
+    } else {
+      log(output);
+    }
+  });
 
 // ─── Helper: active project ─────────────────────────────────────────────────
 

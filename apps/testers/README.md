@@ -29,6 +29,38 @@ Passing a URL as the first argument will, by default, crawl the site and auto-ge
 - `--overall-timeout <ms>` — hard timeout for the whole run (default: 10 minutes; CI safety net).
 - `--github-comment` — post a pass/fail summary as a comment on the current GitHub PR.
 
+### Secure Production Debugging
+
+Use `prod-debug` when an agent or support engineer needs to inspect a production issue without handling customer passwords, raw cookies, bearer tokens, or OAuth codes:
+
+```bash
+testers prod-debug "https://alumia.com/acme/projects/project-123?agent=agent-id" --reason "connector auth error"
+testers prod-debug "req_abc123" --logs --json
+testers prod-debug "https://app.example.com/org/projects/p1" --profile app --json
+testers prod-debug "https://app.example.com/org/projects/p1" --support-url "https://support.example.com/scoped/session" --support-grant support-grant-123
+```
+
+The command parses the target, redacts sensitive URL parameters, emits safe browser/API/log checks, and blocks user-scoped browser reproduction until the target app provides an audited support browser/session URL or a configured profile that can resolve one. It is app-generic: add a profile in `~/.hasna/testers/config.json` for each production app rather than hardcoding app-specific behavior in the CLI.
+
+```json
+{
+  "prodDebug": {
+    "apps": {
+      "app": {
+        "name": "App",
+        "origins": ["https://app.example.com", "*.app.example.org"],
+        "supportGrantRef": "$APP_SUPPORT_GRANT",
+        "supportUrlTemplate": "https://support.example.com/scoped/session?grant={supportGrant}&target={targetUrlEncoded}",
+        "piiOrigin": "https://api.app.example.com",
+        "logCommand": "app logs --project {project} --session {session} --request {request}"
+      }
+    }
+  }
+}
+```
+
+Credential-bearing profile values can point at environment variables (`$APP_SUPPORT_GRANT`) or the local Hasna secrets vault (`@secrets:division/app/support/grant`). Generated plans redact token, grant, session, key, password, OAuth code, and bearer values before printing or writing output.
+
 ### Exit Codes
 
 | Code | Meaning |

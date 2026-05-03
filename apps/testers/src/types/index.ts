@@ -1,3 +1,5 @@
+import type { ProdDebugConfig } from "../lib/prod-debug.js";
+
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 export type ScenarioPriority = "low" | "medium" | "high" | "critical";
@@ -466,6 +468,7 @@ export interface TestersConfig {
   selfHeal?: boolean;     // enable self-healing selector repair (default false)
   conversationsSpace?: string;  // conversations MCP space ID to post run results to
   defaultMaxCostCents?: number; // hard budget cap per run in cents
+  prodDebug?: ProdDebugConfig;  // generic app profiles for secure production debugging
 }
 
 // ─── Row Converters ──────────────────────────────────────────────────────────

@@ -63,6 +63,7 @@ export function loadConfig(): TestersConfig {
     judgeProvider: fileConfig.judgeProvider,
     selfHeal: fileConfig.selfHeal ?? false,
     conversationsSpace: fileConfig.conversationsSpace,
+    prodDebug: fileConfig.prodDebug,
   };
 
   // Environment variable overrides
