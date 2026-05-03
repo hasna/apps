@@ -1,6 +1,6 @@
 {
   "name": "@hasna/testers",
-  "version": "0.0.30",
+  "version": "0.0.31",
   "description": "AI-powered QA testing CLI — spawns cheap AI agents to test web apps with headless browsers",
   "type": "module",
   "main": "dist/index.js",
@@ -65,7 +65,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/testers.git"
+    "url": "git+https://github.com/hasna/testers.git"
   },
   "license": "Apache-2.0",
   "keywords": [

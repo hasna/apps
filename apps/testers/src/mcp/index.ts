@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { registerCloudTools } from "@hasna/cloud";
+import pkg from "../../package.json";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
 import { getTemplate, listTemplateNames, SCENARIO_TEMPLATES } from "../lib/templates.js";
@@ -42,7 +43,7 @@ Options:
 }
 
 if (cliArgs.has("--version") || cliArgs.has("-V")) {
-  console.log("0.0.1");
+  console.log(pkg.version);
   process.exit(0);
 }
 
@@ -131,7 +132,7 @@ const MODEL_DESC =
 
 const server = new McpServer({
   name: "testers",
-  version: "0.0.1",
+  version: pkg.version,
 });
 
 server.tool(

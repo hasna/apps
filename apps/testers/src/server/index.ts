@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync } from "fs";
 import { join } from "path";
+import pkg from "../../package.json";
 import { getTestersDir } from "../lib/paths.js";
 import { z } from "zod";
 import { listScenarios, createScenario, getScenario, getScenarioByShortId, updateScenario, deleteScenario, countScenarios } from "../db/scenarios.js";
@@ -37,7 +38,7 @@ Environment:
 }
 
 if (cliArgs.has("--version") || cliArgs.has("-V")) {
-  console.log("0.0.1");
+  console.log(pkg.version);
   process.exit(0);
 }
 
@@ -289,7 +290,7 @@ async function handleRequest(req: Request): Promise<Response> {
       runCount: runs.length,
       apiCheckCount: countApiChecks(),
       personaCount: countPersonas(),
-      version: "0.0.1",
+      version: pkg.version,
     });
   }
 
