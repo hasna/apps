@@ -2,6 +2,7 @@
 
 import { spawn } from "child_process";
 import { DEFAULT_EXCLUDE_DIRS, relevanceScore } from "./filters.js";
+import { getShell } from "../shell.js";
 
 export interface ContentMatch {
   line: number;
@@ -23,12 +24,22 @@ export interface ContentSearchResult {
   tokensSaved?: number;
 }
 
+const MAX_MATCHES_PER_FILE = 3;
+const MAX_MATCH_CHARS = 120;
+
+function compactMatchContent(content: string): string {
+  const trimmed = content.trim();
+  if (trimmed.length <= MAX_MATCH_CHARS) return trimmed;
+  return `${trimmed.slice(0, MAX_MATCH_CHARS - 1)}…`;
+}
+
 function exec(command: string, cwd: string): Promise<string> {
   return new Promise((resolve) => {
-    const proc = spawn("/bin/zsh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(getShell(), ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     proc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
     proc.on("close", () => resolve(out));
+    proc.on("error", () => resolve(""));
   });
 }
 
@@ -71,7 +82,7 @@ export async function searchContent(
     if (!fileMap.has(path)) fileMap.set(path, []);
     fileMap.get(path)!.push({
       line: parseInt(lineNum),
-      content: content.trim(),
+      content: compactMatchContent(content),
     });
   }
 
@@ -79,7 +90,7 @@ export async function searchContent(
   const files: ContentFileMatch[] = [...fileMap.entries()]
     .map(([path, matches]) => ({
       path,
-      matches: matches.slice(0, 5), // max 5 matches per file
+      matches: matches.slice(0, MAX_MATCHES_PER_FILE),
       relevance: relevanceScore(path),
     }))
     .sort((a, b) => b.relevance - a.relevance)

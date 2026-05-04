@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.tsx",
-    "start": "node dist/cli.js",
+    "start": "bun dist/cli.js",
+    "benchmark": "bun run build && bun benchmarks/benchmark.mjs",
     "test": "bun test",
     "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
   },
