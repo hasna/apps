@@ -56,11 +56,6 @@ function fingerprint(command: string, output: string, exitCode?: number): string
     return "✓ Success (no output)";
   }
 
-  // Single-line trivial outputs — pass through without AI
-  if (lines.length === 1 && trimmed.length < 80) {
-    return trimmed; // Already concise enough
-  }
-
   // Git: common known patterns
   if (/^Already up to date\.?$/i.test(trimmed)) return "✓ Already up to date";
   if (/^nothing to commit, working tree clean$/i.test(trimmed)) return "✓ Clean working tree, nothing to commit";
@@ -87,6 +82,11 @@ function fingerprint(command: string, output: string, exitCode?: number): string
   if (/^(?:find|fd|rg\s+--files)\b/.test(command.trim())) {
     const listing = summarizeFileListing(trimmed);
     if (listing) return listing;
+  }
+
+  // Single-line trivial outputs — pass through without AI
+  if (lines.length === 1 && trimmed.length < 80) {
+    return trimmed; // Already concise enough
   }
 
   // Build/compile success with no errors

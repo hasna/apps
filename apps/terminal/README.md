@@ -72,9 +72,9 @@ Real installed-CLI gate:                   NOT SUPPORTED
 Latest local real installed-CLI result:
 
 ```text
-Weighted real installed-CLI token reduction: 9.0%
-Quality failures:                            4
-Floor failures:                              12
+Weighted real installed-CLI token reduction: single digits in the checked run
+Quality failures:                            present
+Workflow/category floor failures:            present
 90% real installed-CLI target:               NOT SUPPORTED
 ```
 

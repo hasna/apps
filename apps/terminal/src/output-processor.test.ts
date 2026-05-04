@@ -32,6 +32,12 @@ describe("processOutput deterministic summaries", () => {
     expect(processed.tokensSaved).toBeGreaterThan(0);
   });
 
+  it("summarizes clean short git status instead of passing through raw branch syntax", async () => {
+    const processed = await processOutput("git status --short --branch", "## main...origin/main", "summarize the current changes");
+    expect(processed.aiProcessed).toBe(false);
+    expect(processed.summary).toBe("Branch: main (up to date)\nClean working tree");
+  });
+
   it("uses local search summaries for prompt-framed ripgrep output", async () => {
     const output = Array.from({ length: 30 }, (_, i) => `src/file-${i % 3}.test.ts:${i + 1}:describe("case ${i}", () => {})`).join("\n");
 
