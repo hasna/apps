@@ -9,6 +9,23 @@ interface StoredOutput {
   timestamp: number;
 }
 
+export interface ExpandOptions {
+  grep?: string;
+  offset?: number;
+  limit?: number;
+  context?: number;
+}
+
+export interface ExpandResult {
+  found: boolean;
+  output?: string;
+  lines?: number;
+  totalLines?: number;
+  offset?: number;
+  limit?: number;
+  truncated?: boolean;
+}
+
 const store = new Map<string, StoredOutput>();
 let counter = 0;
 
@@ -31,20 +48,59 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Retrieve full output by key, optionally filtered */
-export function expandOutput(key: string, grep?: string): { found: boolean; output?: string; lines?: number } {
+function normalizeOptions(options?: string | ExpandOptions): ExpandOptions {
+  if (typeof options === "string") return { grep: options };
+  return options ?? {};
+}
+
+function clampNonNegative(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+/** Retrieve output by key with optional filtering and line windows. */
+export function expandOutput(key: string, options?: string | ExpandOptions): ExpandResult {
   const entry = store.get(key);
   if (!entry) return { found: false };
 
-  let output = entry.output;
-  if (grep) {
+  const opts = normalizeOptions(options);
+  let lines = entry.output.split("\n");
+  const totalLines = lines.length;
+
+  if (opts.grep) {
     // Escape metacharacters so user input like "[error" or "func()" doesn't crash
-    const safe = escapeRegex(grep);
+    const safe = escapeRegex(opts.grep);
     const pattern = new RegExp(safe, "i");
-    output = output.split("\n").filter(l => pattern.test(l)).join("\n");
+    const context = clampNonNegative(opts.context, 0);
+    if (context === 0) {
+      lines = lines.filter(l => pattern.test(l));
+    } else {
+      const keep = new Set<number>();
+      for (let i = 0; i < lines.length; i++) {
+        if (!pattern.test(lines[i])) continue;
+        for (let j = Math.max(0, i - context); j <= Math.min(lines.length - 1, i + context); j++) {
+          keep.add(j);
+        }
+      }
+      lines = [...keep].sort((a, b) => a - b).map((i) => lines[i]);
+    }
   }
 
-  return { found: true, output, lines: output.split("\n").length };
+  const filteredLines = lines.length;
+  const offset = clampNonNegative(opts.offset, 0);
+  const limit = opts.limit === undefined ? filteredLines : Math.max(0, Math.floor(opts.limit));
+  const windowed = lines.slice(offset, offset + limit);
+  const output = windowed.join("\n");
+
+  return {
+    found: true,
+    output,
+    lines: windowed.length,
+    totalLines: filteredLines,
+    offset,
+    limit,
+    truncated: offset > 0 || offset + limit < filteredLines,
+  };
 }
 
 /** List available stored outputs */
