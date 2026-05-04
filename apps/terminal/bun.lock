@@ -6,7 +6,7 @@
       "name": "@hasna/terminal",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
-        "@hasna/cloud": "0.1.5",
+        "@hasna/cloud": "^0.1.24",
         "@hasna/mementos": "^0.10.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "@typescript/vfs": "^1.6.4",
@@ -77,7 +77,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.27.4", "", { "os": "win32", "cpu": "x64" }, "sha512-+knoa0BDoeXgkNvvV1vvbZX4+hizelrkwmGJBdT17t8FNPwG2lKemmuMZlmaNQ3ws3DKKCxpb4zRZEIp3UxFCg=="],
 
-    "@hasna/cloud": ["@hasna/cloud@0.1.5", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-B82jy53QC7xphchffDVZc7gw9OLkcX2rMnmytTQ6FZEeHgG/ySgfM3Om07OOl72dc8ZUkqOpcK+2OYBUYkFR/A=="],
+    "@hasna/cloud": ["@hasna/cloud@0.1.30", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-qpDiJNsU/K1cFDk1l+xUA1xEEq8+Q37OdAz/ec0LwrQiA1HyWukzR8Lh7igkOqBT2foa46cxhB7yGnfiT2cWrA=="],
 
     "@hasna/mementos": ["@hasna/mementos@0.10.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "mementos": "dist/cli/index.js", "mementos-mcp": "dist/mcp/index.js", "mementos-serve": "dist/server/index.js" } }, "sha512-3T7Tk33l2DuLrzcSdlokCiOqQbb+WXTNGxSPB1HFgBZMzOdi+jGx1WE05nW9v5OUFJzjuz0/gd5WoeXArYmo8Q=="],
 
