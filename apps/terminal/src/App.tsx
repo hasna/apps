@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { spawn } from "child_process";
+import { getShell } from "./shell.js";
 import { translateToCommand, explainCommand, fixCommand, checkPermissions, isIrreversible, type SessionEntry } from "./ai.js";
 import { loadHistory, appendHistory, loadConfig, saveConfig, type Permissions } from "./history.js";
 import { loadCache } from "./cache.js";
@@ -92,7 +93,7 @@ function runCommand(
   onDone: (code: number) => void,
   signal: AbortSignal
 ) {
-  const proc = spawn("/bin/zsh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  const proc = spawn(getShell(), ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
   const handle = (d: Buffer) => d.toString().split("\n").forEach(l => { if (l) onLine(l); });
   proc.stdout?.on("data", handle);
   proc.stderr?.on("data", handle);

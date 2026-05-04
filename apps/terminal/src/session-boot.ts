@@ -4,16 +4,18 @@
 import { spawn } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { getShell } from "./shell.js";
 
 let bootCache: Record<string, unknown> | null = null;
 let bootCwd: string = "";
 
 function exec(command: string, cwd: string): Promise<string> {
   return new Promise((resolve) => {
-    const proc = spawn("/bin/zsh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(getShell(), ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     proc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
     proc.on("close", () => resolve(out.trim()));
+    proc.on("error", () => resolve(""));
   });
 }
 

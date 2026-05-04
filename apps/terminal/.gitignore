@@ -6,6 +6,7 @@ dist/
 .secrets/
 temp/
 .connectors/
+.takumi/
 *.pem
 *.key
 imported_modules.txt

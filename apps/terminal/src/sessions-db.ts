@@ -1,8 +1,6 @@
 // SQLite session database — tracks every terminal interaction
-
-// @ts-ignore — bun:sqlite is a bun built-in
+// @ts-ignore — bun:sqlite is a Bun built-in
 import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -16,7 +14,7 @@ let db: Database | null = null;
 function getDb(): Database {
   if (db) return db;
   if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
-  db = new SqliteAdapter(DB_PATH) as unknown as Database;
+  db = new Database(DB_PATH);
   db.exec("PRAGMA journal_mode = WAL");
 
   db.exec(`
@@ -164,7 +162,6 @@ export function logInteraction(sessionId: string, data: {
     data.cached ? 1 : 0,
     Date.now()
   );
-  // bun:sqlite — lastInsertRowid is a property on the statement after run()
   const lastId = getDb().prepare("SELECT last_insert_rowid() as id").get() as any;
   return lastId?.id ?? 0;
 }
@@ -339,7 +336,7 @@ export function pruneSessions(olderThanDays: number = 90): { sessionsDeleted: nu
   const placeholders = ids.map(() => "?").join(",");
 
   const intResult = d.prepare(`DELETE FROM interactions WHERE session_id IN (${placeholders})`).run(...ids);
-  const sesResult = d.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids);
+  d.prepare(`DELETE FROM sessions WHERE id IN (${placeholders})`).run(...ids);
 
   // Also prune old corrections and outputs
   d.prepare("DELETE FROM corrections WHERE created_at < ?").run(cutoff);
