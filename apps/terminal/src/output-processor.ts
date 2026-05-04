@@ -8,6 +8,12 @@ import { discoverOutputHints } from "./context-hints.js";
 import { formatProfileHints } from "./tool-profiles.js";
 import { stripAnsi } from "./compression.js";
 import { stripNoise } from "./noise-filter.js";
+import {
+  summarizeDiffStat,
+  summarizeFileListing,
+  summarizeGitShortStatus,
+  summarizeSearchOutput,
+} from "./terminal-summaries.js";
 
 export interface ProcessedOutput {
   /** AI-generated summary (concise, structured) */
@@ -65,6 +71,22 @@ function fingerprint(command: string, output: string, exitCode?: number): string
   if (/^Your branch is up to date/m.test(trimmed) && /nothing to commit/m.test(trimmed)) {
     const branch = trimmed.match(/^On branch (\S+)/m)?.[1] ?? "?";
     return `✓ Branch ${branch} up to date, clean`;
+  }
+  if (/\bgit\s+status\b/.test(command)) {
+    const status = summarizeGitShortStatus(trimmed);
+    if (status) return status;
+  }
+  if (/\bgit\s+diff\b/.test(command) && /--stat\b/.test(command)) {
+    const stat = summarizeDiffStat(trimmed);
+    if (stat) return stat;
+  }
+  if (/^(?:rg|grep)\b/.test(command.trim())) {
+    const search = summarizeSearchOutput(trimmed);
+    if (search) return search;
+  }
+  if (/^(?:find|fd|rg\s+--files)\b/.test(command.trim())) {
+    const listing = summarizeFileListing(trimmed);
+    if (listing) return listing;
   }
 
   // Build/compile success with no errors
@@ -146,7 +168,7 @@ export async function processOutput(
 
   // Fingerprint check — skip AI entirely for known patterns (0ms, $0)
   const fp = fingerprint(command, output);
-  if (fp && !originalPrompt) {
+  if (fp) {
     const saved = Math.max(0, estimateTokens(output) - estimateTokens(fp));
     if (saved > 0) recordSaving("compressed", saved);
     return {

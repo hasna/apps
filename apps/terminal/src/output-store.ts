@@ -93,7 +93,9 @@ export function saveOutput(command: string, rawOutput: string): string {
 
 /** Format the hint line that tells agents where to find full output */
 export function formatOutputHint(filepath: string): string {
-  return `[full output: ${filepath}]`;
+  const home = process.env.HOME;
+  const displayPath = home && filepath.startsWith(home) ? `~${filepath.slice(home.length)}` : filepath;
+  return `[full: ${displayPath}]`;
 }
 
 /** Get the outputs directory path */
