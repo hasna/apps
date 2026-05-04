@@ -11,11 +11,6 @@ function compactList(items: string[], limit: number): string {
   return shown.join(", ") + suffix;
 }
 
-function trimSnippet(value: string, max = 90): string {
-  const oneLine = value.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
-}
-
 function parseBranch(line: string): string {
   const raw = line.replace(/^##\s+/, "").trim();
   const [name, tracking = ""] = raw.split("...");
@@ -68,7 +63,8 @@ export function summarizeGitShortStatus(output: string, branchFallback?: string)
   if (!parsed) return null;
 
   const lines: string[] = [];
-  if (parsed.branch) lines.push(`Branch: ${parsed.branch}`);
+  const branch = parsed.count > 0 ? parsed.branch?.replace(/ \(up to date\)$/, "") : parsed.branch;
+  if (branch) lines.push(`Branch: ${branch}`);
   if (parsed.count === 0) {
     lines.push("Clean working tree");
     return lines.join("\n");
@@ -76,10 +72,6 @@ export function summarizeGitShortStatus(output: string, branchFallback?: string)
 
   const counts = Object.entries(parsed.counts).map(([kind, count]) => `${count} ${kind}`).join(", ");
   lines.push(`${parsed.count} changed: ${counts}`);
-  if (parsed.samples.length > 0) {
-    const more = parsed.count > parsed.samples.length ? `, +${parsed.count - parsed.samples.length} more` : "";
-    lines.push(`Sample: ${parsed.samples.join(", ")}${more}`);
-  }
   return lines.join("\n");
 }
 
@@ -99,12 +91,9 @@ export function summarizeSearchOutput(output: string): string | null {
     .slice(0, 5)
     .map(([file, count]) => `${file} x${count}`);
 
-  const samples = matches.slice(0, 3).map((match) => `- ${match.file}:${match.line} ${trimSnippet(match.text)}`);
   return [
     `${matches.length} matches in ${fileCounts.size} files`,
     `Top: ${compactList(topFiles, 5)}`,
-    "Samples:",
-    ...samples,
   ].join("\n");
 }
 
@@ -128,7 +117,6 @@ export function summarizeFileListing(output: string): string | null {
 
   return [
     `${files.length} files; areas: ${compactList(topAreas, 5)}`,
-    `Sample: ${compactList(files.slice(0, 3), 3)}`,
   ].join("\n");
 }
 

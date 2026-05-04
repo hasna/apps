@@ -72,13 +72,13 @@ Real installed-CLI gate:                   NOT SUPPORTED
 Latest local real installed-CLI result:
 
 ```text
-Weighted real installed-CLI token reduction: single digits in the checked run
-Quality failures:                            present
-Workflow/category floor failures:            present
+Weighted real installed-CLI token reduction: 85.7%
+Quality failures:                            0
+Workflow/category floor failures:            6
 90% real installed-CLI target:               NOT SUPPORTED
 ```
 
-The honest result is not "90% everywhere." Some synthetic workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, large repetitive listings, indexed diffs, and huge logs. Real workflows that require the full list of files or matches often lose most savings after expansion is charged, and small outputs can be negative because the wrapper adds status text.
+The honest result is not "90% everywhere." Some synthetic workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, large repetitive listings, indexed diffs, and huge logs. The real installed-CLI gate now clears provider/quality failures and compresses search into compact file/line manifests, but full file-list expansion is still the blocker: `what tests exist` and `show source structure` must load enough path detail that their file/test categories stay far below the 70% floor. Tiny outputs use a bounded-overhead floor because percentage savings on a 4-token success result are not meaningful, but those tokens still count in the weighted total.
 
 Current pass/fail rule: the synthetic suite must cover every required workflow, preserve critical error markers, keep no-savings scenarios honest, include at least 200 stress scenarios with at least 10 scenarios per required workflow, clear a synthetic 90% weighted token-reduction threshold, and preserve at least 99.99% quality. The final 90% target also requires a real installed-CLI report with both target repos covered, zero quality failures, no workflow/category floor failures, and at least 90% weighted reduction after stdout, stderr, status text, hints, penalties, and full-output expansion costs are counted.
 

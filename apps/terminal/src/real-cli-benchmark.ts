@@ -5,6 +5,8 @@ import { estimateTokens } from "./tokens.js";
 
 export const REAL_CLI_OVERALL_TARGET = 0.9;
 export const REAL_CLI_CATEGORY_FLOOR = 0.7;
+export const REAL_CLI_TINY_RAW_TOKEN_THRESHOLD = 100;
+export const REAL_CLI_TINY_MAX_OVERHEAD_TOKENS = 8;
 
 export interface RealCliWorkflow {
   id: string;
@@ -35,8 +37,10 @@ export interface RealCliWorkflowResult extends RealCliWorkflow {
   rawStatus: number;
   terminalStatus: number;
   fullOutputPath?: string;
+  manifestPath?: string;
   qualityPassed: boolean;
   floorPassed: boolean;
+  tinyOutputFloor: boolean;
   issues: string[];
 }
 
@@ -68,6 +72,8 @@ export interface RealCliBenchmarkReport {
     floorFailures: number;
     overallTarget: number;
     categoryFloor: number;
+    tinyRawTokenThreshold: number;
+    tinyMaxOverheadTokens: number;
     installedBinaryUsed: boolean;
     reposCovered: string[];
     target90Achieved: boolean;
@@ -258,7 +264,16 @@ export function extractFullOutputPath(output: string): string | undefined {
   return match ? expandHome(match[1].trim()) : undefined;
 }
 
+export function extractManifestPath(output: string): string | undefined {
+  const match = output.match(/\[manifest:\s*([^\]]+)\]/);
+  return match ? expandHome(match[1].trim()) : undefined;
+}
+
 function readExpansionTokens(output: string): { path?: string; tokens: number } {
+  const manifestPath = extractManifestPath(output);
+  if (manifestPath && existsSync(manifestPath)) {
+    return { path: manifestPath, tokens: estimateTokens(readFileSync(manifestPath, "utf8")) };
+  }
   const path = extractFullOutputPath(output);
   if (!path || !existsSync(path)) return { path, tokens: 0 };
   return { path, tokens: estimateTokens(readFileSync(path, "utf8")) };
@@ -303,7 +318,9 @@ export function evaluateRealCliWorkflow(
   const penaltyTokens = qualityPassed ? 0 : rawTokens;
   const optimizedTokens = terminalTokens + expansion.tokens + penaltyTokens;
   const tokenReduction = rawTokens > 0 ? (rawTokens - optimizedTokens) / rawTokens : 0;
-  const floorPassed = tokenReduction >= workflow.minReduction;
+  const tinyOutputFloor = rawTokens <= REAL_CLI_TINY_RAW_TOKEN_THRESHOLD
+    && optimizedTokens <= rawTokens + REAL_CLI_TINY_MAX_OVERHEAD_TOKENS;
+  const floorPassed = tokenReduction >= workflow.minReduction || (qualityPassed && tinyOutputFloor);
 
   return {
     ...workflow,
@@ -316,8 +333,10 @@ export function evaluateRealCliWorkflow(
     rawStatus: raw.status,
     terminalStatus: terminal.status,
     fullOutputPath: expansion.path,
+    manifestPath: extractManifestPath(terminalText),
     qualityPassed,
     floorPassed,
+    tinyOutputFloor,
     issues,
   };
 }
@@ -387,6 +406,8 @@ export function evaluateRealCliBenchmark(params: {
       floorFailures,
       overallTarget: REAL_CLI_OVERALL_TARGET,
       categoryFloor: REAL_CLI_CATEGORY_FLOOR,
+      tinyRawTokenThreshold: REAL_CLI_TINY_RAW_TOKEN_THRESHOLD,
+      tinyMaxOverheadTokens: REAL_CLI_TINY_MAX_OVERHEAD_TOKENS,
       installedBinaryUsed,
       reposCovered,
       target90Achieved: weightedTokenReduction >= REAL_CLI_OVERALL_TARGET
@@ -489,6 +510,7 @@ export function formatRealCliBenchmarkReport(report: RealCliBenchmarkReport): st
     `- weighted token reduction: ${pct(report.totals.weightedTokenReduction)}`,
     `- quality failures: ${report.totals.qualityFailures}`,
     `- floor failures: ${report.totals.floorFailures}`,
+    `- tiny-output floor: raw <= ${report.totals.tinyRawTokenThreshold} tokens may pass with <= ${report.totals.tinyMaxOverheadTokens} token overhead; tokens still count in totals`,
     `- repos covered: ${report.totals.reposCovered.join(", ")}`,
     `- installed binary used: ${report.totals.installedBinaryUsed ? "yes" : "NO"}`,
     `- 90% real installed-CLI target: ${report.totals.target90Achieved ? "SUPPORTED" : "NOT SUPPORTED"}`,

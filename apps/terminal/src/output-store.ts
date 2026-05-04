@@ -5,12 +5,15 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync
 import { join } from "path";
 import { createHash } from "crypto";
 import { getTerminalDir } from "./paths.js";
+import { buildOutputManifest } from "./output-manifest.js";
 
 const OUTPUTS_DIR = join(getTerminalDir(), "outputs");
+const MANIFESTS_DIR = join(getTerminalDir(), "manifests");
 
 /** Ensure outputs directory exists */
 function ensureDir() {
   if (!existsSync(OUTPUTS_DIR)) mkdirSync(OUTPUTS_DIR, { recursive: true });
+  if (!existsSync(MANIFESTS_DIR)) mkdirSync(MANIFESTS_DIR, { recursive: true });
 }
 
 /** Generate a short hash for an output */
@@ -91,11 +94,31 @@ export function saveOutput(command: string, rawOutput: string): string {
   return filepath;
 }
 
+/** Save a compact structured manifest for outputs where full raw text is too noisy. */
+export function saveOutputManifest(command: string, rawOutput: string): string | null {
+  const manifest = buildOutputManifest(command, rawOutput);
+  if (!manifest) return null;
+  ensureDir();
+
+  const hash = hashOutput(command, manifest.content);
+  const filename = `${hash}.${manifest.kind}.txt`;
+  const filepath = join(MANIFESTS_DIR, filename);
+  writeFileSync(filepath, manifest.content, "utf8");
+  return filepath;
+}
+
 /** Format the hint line that tells agents where to find full output */
 export function formatOutputHint(filepath: string): string {
   const home = process.env.HOME;
   const displayPath = home && filepath.startsWith(home) ? `~${filepath.slice(home.length)}` : filepath;
   return `[full: ${displayPath}]`;
+}
+
+/** Format the compact manifest hint line. */
+export function formatManifestHint(filepath: string): string {
+  const home = process.env.HOME;
+  const displayPath = home && filepath.startsWith(home) ? `~${filepath.slice(home.length)}` : filepath;
+  return `[manifest: ${displayPath}]`;
 }
 
 /** Get the outputs directory path */

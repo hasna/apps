@@ -4,6 +4,7 @@ import {
   evaluateRealCliBenchmark,
   evaluateRealCliWorkflow,
   extractFullOutputPath,
+  extractManifestPath,
   toRealCliGateEvidence,
   type RealCliWorkflow,
 } from "./real-cli-benchmark.js";
@@ -55,14 +56,14 @@ describe("real CLI benchmark", () => {
 
   it("requires per-workflow and per-category floors, not only aggregate savings", () => {
     const pass = evaluateRealCliWorkflow(
-      { ...workflow, requiresFullOutput: false, minReduction: 0.8 },
+      { ...workflow, requiresFullOutput: false, minReduction: 0.8, weight: 10 },
       { stdout: "raw\n".repeat(1000), stderr: "", status: 0 },
       { stdout: "matches\n", stderr: "", status: 0 },
     );
     const weak = evaluateRealCliWorkflow(
       { ...workflow, id: "weak", category: "small", requiresFullOutput: false, minReduction: 0.8 },
-      { stdout: "ok\n", stderr: "", status: 0 },
-      { stdout: "$ echo ok\nok\n", stderr: "", status: 0 },
+      { stdout: "raw\n".repeat(200), stderr: "", status: 0 },
+      { stdout: "raw\n".repeat(140), stderr: "", status: 0 },
     );
 
     const report = evaluateRealCliBenchmark({
@@ -76,6 +77,18 @@ describe("real CLI benchmark", () => {
     expect(report.totals.weightedTokenReduction).toBeGreaterThan(0.9);
     expect(report.totals.floorFailures).toBeGreaterThan(0);
     expect(report.totals.target90Achieved).toBe(false);
+  });
+
+  it("does not fail floors for tiny outputs that stay within bounded overhead", () => {
+    const result = evaluateRealCliWorkflow(
+      { ...workflow, requiresFullOutput: false, minReduction: 0.8, requiredPatterns: ["Branch:"] },
+      { stdout: "## main...origin/main\n", stderr: "", status: 0 },
+      { stdout: "Branch:main clean\n", stderr: "", status: 0 },
+    );
+
+    expect(result.tokenReduction).toBeLessThan(0.8);
+    expect(result.tinyOutputFloor).toBe(true);
+    expect(result.floorPassed).toBe(true);
   });
 
   it("extracts real evidence for the synthetic benchmark gate", () => {
@@ -92,5 +105,6 @@ describe("real CLI benchmark", () => {
   it("parses full-output hints with compact and legacy labels", () => {
     expect(extractFullOutputPath("[full: ~/.hasna/terminal/outputs/a.txt]")).toContain(".hasna/terminal/outputs/a.txt");
     expect(extractFullOutputPath("[full output: /tmp/a.txt]")).toBe("/tmp/a.txt");
+    expect(extractManifestPath("[manifest: /tmp/m.txt]")).toBe("/tmp/m.txt");
   });
 });

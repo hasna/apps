@@ -8,7 +8,7 @@ import {
 import { estimateTokens } from "./tokens.js";
 
 describe("terminal summaries", () => {
-  it("compacts large git status output while preserving counts and samples", () => {
+  it("compacts large git status output while preserving counts", () => {
     const output = [
       "## main...origin/main",
       ...Array.from({ length: 100 }, (_, i) => ` M src/file-${i}.ts`),
@@ -20,6 +20,7 @@ describe("terminal summaries", () => {
     expect(summary).toContain("101 changed");
     expect(summary).toContain("100 modified");
     expect(summary).toContain("1 untracked");
+    expect(summary).not.toContain("Sample:");
     expect(estimateTokens(summary ?? "")).toBeLessThan(estimateTokens(output) * 0.1);
   });
 
@@ -28,7 +29,7 @@ describe("terminal summaries", () => {
     const summary = summarizeSearchOutput(output);
     expect(summary).toContain("50 matches in 5 files");
     expect(summary).toContain("Top:");
-    expect(summary).toContain("Samples:");
+    expect(summary).not.toContain("Samples:");
     expect(estimateTokens(summary ?? "")).toBeLessThan(estimateTokens(output) * 0.25);
   });
 

@@ -47,4 +47,10 @@ describe("processOutput deterministic summaries", () => {
     expect(processed.summary).not.toContain("No results");
     expect(processed.tokensSaved).toBeGreaterThan(0);
   });
+
+  it("compresses successful typecheck wrapper output to a one-token ok result", async () => {
+    const processed = await processOutput("bun run typecheck", "$ tsc --noEmit", "run typecheck");
+    expect(processed.aiProcessed).toBe(false);
+    expect(processed.summary).toBe("ok");
+  });
 });

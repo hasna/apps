@@ -469,7 +469,7 @@ else if (args.length > 0) {
   const { processOutput, shouldProcess } = await import("./output-processor.js");
   const { rewriteCommand } = await import("./command-rewriter.js");
   const { shouldBeLazy, toLazy } = await import("./lazy-executor.js");
-  const { saveOutput, formatOutputHint } = await import("./output-store.js");
+  const { saveOutput, formatOutputHint, saveOutputManifest, formatManifestHint } = await import("./output-store.js");
   const { estimateTokens } = await import("./tokens.js");
   const { recordSaving, recordUsage } = await import("./economy.js");
   const { isTestOutput, trackTests, formatWatchResult } = await import("./test-watchlist.js");
@@ -605,8 +605,10 @@ else if (args.length > 0) {
     } catch {}
   }
 
-  // Show what we're running
-  console.error(`$ ${shortcut?.displayCommand ?? command}`);
+  // Show translated commands unless a deterministic local shortcut already names the intent.
+  if (!shortcut || process.env.TERMINAL_SHOW_COMMAND === "1") {
+    console.error(`$ ${shortcut?.displayCommand ?? command}`);
+  }
 
   // Step 3: Rewrite for optimization
   const rw = rewriteCommand(command);
@@ -644,11 +646,17 @@ else if (args.length > 0) {
         if (rawTokens > 500 && processed.tokensSaved > 50) {
           const outputPath = saveOutput(actualCmd, clean);
           console.log(processed.summary);
+          const manifestPath = saveOutputManifest(actualCmd, clean);
+          if (manifestPath) console.log(formatManifestHint(manifestPath));
           console.log(formatOutputHint(outputPath));
         } else {
           console.log(processed.summary);
+          const manifestPath = saveOutputManifest(actualCmd, clean);
+          if (manifestPath) console.log(formatManifestHint(manifestPath));
         }
-        if (processed.tokensSaved > 10) console.error(`[open-terminal] ${rawTokens} → ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+        if (process.env.TERMINAL_SHOW_SAVINGS === "1" && processed.tokensSaved > 10) {
+          console.error(`[open-terminal] ${rawTokens} -> ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+        }
         process.exit(0);
       }
     }
@@ -665,7 +673,10 @@ else if (args.length > 0) {
     // Fallback: AI unavailable — pass through clean
     console.log(clean);
     const saved = rawTokens - estimateTokens(clean);
-    if (saved > 10) { recordSaving("compressed", saved); console.error(`[open-terminal] saved ${saved} tokens`); }
+    if (saved > 10) {
+      recordSaving("compressed", saved);
+      if (process.env.TERMINAL_SHOW_SAVINGS === "1") console.error(`[open-terminal] saved ${saved} tokens`);
+    }
   } catch (e: any) {
     // Empty result (grep exit 1 = no matches) — not a real error
     const errStdout = e.stdout?.toString() ?? "";

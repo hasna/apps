@@ -84,16 +84,16 @@ function fingerprint(command: string, output: string, exitCode?: number): string
     if (listing) return listing;
   }
 
-  // Single-line trivial outputs — pass through without AI
-  if (lines.length === 1 && trimmed.length < 80) {
-    return trimmed; // Already concise enough
-  }
-
   // Build/compile success with no errors
   if (/^(tsc|bun|npm|yarn|pnpm)\s/.test(command)) {
     if (lines.length <= 3 && (exitCode === 0 || exitCode === undefined) && !/error|Error|ERROR|fail|FAIL/.test(trimmed)) {
-      return `✓ Build succeeded${lines.length > 0 ? ` (${lines.length} lines)` : ""}`;
+      return "ok";
     }
+  }
+
+  // Single-line trivial outputs — pass through without AI
+  if (lines.length === 1 && trimmed.length < 80) {
+    return trimmed; // Already concise enough
   }
 
   // npm/bun install success
