@@ -27,6 +27,7 @@ terminal stats
 terminal sessions stats
 terminal discover --days=30
 bun run benchmark
+bun run benchmark:real || true
 bun benchmarks/benchmark.mjs --variant=baseline
 bun benchmarks/benchmark.mjs --variant=progressive
 bun benchmarks/benchmark.mjs --compare
@@ -40,9 +41,19 @@ The benchmark is intentionally adversarial. It treats the old optimistic 90% res
 bun run build
 bun test
 bun run benchmark
+bun run benchmark:real || true
+bun benchmarks/real-cli-benchmark.mjs --output=.benchmark-artifacts/real-cli-benchmark.json || true
+bun benchmarks/benchmark.mjs --real-cli-report=.benchmark-artifacts/real-cli-benchmark.json
 ```
 
-Latest local result, comparing the old baseline with the progressive disclosure and indexed variants:
+There are now two gates:
+
+- the synthetic adversarial suite, which is useful for stress-testing scenarios and implementation assumptions
+- the real installed-CLI suite, which runs equivalent raw shell workflows against the actual `terminal` binary in `open-terminal` and `iapp-logos`
+
+The official 90% claim requires both gates. Synthetic results alone are not enough.
+
+Latest local synthetic result, comparing the old baseline with the progressive disclosure and indexed variants:
 
 ```text
 Baseline adversarial token reduction:     56.4%
@@ -52,13 +63,24 @@ Indexed cost reduction:                   98.0%
 Indexed quality rate:                     100.0%
 Stress scenarios:                         320
 Minimum scenarios per workflow:           17
-90% weighted adversarial target:          SUPPORTED
+Synthetic 90% target:                      SUPPORTED
+Real installed-CLI gate:                   NOT SUPPORTED
+90% weighted target:                       NOT SUPPORTED
 99.99% quality target:                    SUPPORTED
 ```
 
-The honest result is not "90% everywhere." Some workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, large repetitive listings, paged search results, indexed diffs, and huge logs. Other workflows are intentionally weaker or zero-savings: small outputs, already-compact output, and short retry outputs where there is not much token budget to save.
+Latest local real installed-CLI result:
 
-Current pass/fail rule: the suite must cover every required workflow, preserve critical error markers, keep no-savings scenarios honest, include at least 200 stress scenarios with at least 10 scenarios per required workflow, clear a 90% weighted token-reduction threshold, and preserve at least 99.99% quality. The indexed variant reaches that by returning summaries/handles first, then charging only realistic follow-up expansion through deterministic manifests and `grep`, `offset`, `limit`, and `context` windows when details are needed.
+```text
+Weighted real installed-CLI token reduction: 9.0%
+Quality failures:                            4
+Floor failures:                              12
+90% real installed-CLI target:               NOT SUPPORTED
+```
+
+The honest result is not "90% everywhere." Some synthetic workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, large repetitive listings, indexed diffs, and huge logs. Real workflows that require the full list of files or matches often lose most savings after expansion is charged, and small outputs can be negative because the wrapper adds status text.
+
+Current pass/fail rule: the synthetic suite must cover every required workflow, preserve critical error markers, keep no-savings scenarios honest, include at least 200 stress scenarios with at least 10 scenarios per required workflow, clear a synthetic 90% weighted token-reduction threshold, and preserve at least 99.99% quality. The final 90% target also requires a real installed-CLI report with both target repos covered, zero quality failures, no workflow/category floor failures, and at least 90% weighted reduction after stdout, stderr, status text, hints, penalties, and full-output expansion costs are counted.
 
 The app gets there through several cheap layers:
 

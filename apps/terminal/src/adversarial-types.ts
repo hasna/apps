@@ -120,6 +120,12 @@ export interface BenchmarkReport {
     qualityFailures: number;
     qualityRate: number;
     target9999QualityAchieved: boolean;
+    syntheticTarget90Achieved: boolean;
+    realCliGateRequired: boolean;
+    realCliGateAchieved: boolean;
+    realCliWeightedTokenReduction?: number;
+    realCliQualityFailures?: number;
+    realCliFloorFailures?: number;
     stressScenarioCount: number;
     minWorkflowScenarios: number;
     target90Achieved: boolean;
@@ -127,4 +133,14 @@ export interface BenchmarkReport {
     defensibleThreshold: number;
     defensibleThresholdAchieved: boolean;
   };
+}
+
+export interface RealCliGateEvidence {
+  target90Achieved: boolean;
+  weightedTokenReduction: number;
+  qualityFailures: number;
+  floorFailures: number;
+  installedBinaryUsed: boolean;
+  reposCovered: string[];
+  workflowCount: number;
 }

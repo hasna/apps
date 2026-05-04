@@ -19,6 +19,7 @@
     "dev": "tsx src/cli.tsx",
     "start": "bun dist/cli.js",
     "benchmark": "bun run build && bun benchmarks/benchmark.mjs",
+    "benchmark:real": "bun run build && bun benchmarks/real-cli-benchmark.mjs",
     "test": "bun test",
     "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
   },

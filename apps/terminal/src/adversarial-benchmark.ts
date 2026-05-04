@@ -8,6 +8,7 @@ import {
   type BenchmarkVariant,
   type CategoryResult,
   type Provider,
+  type RealCliGateEvidence,
   type Scenario,
   type ScenarioResult,
 } from "./adversarial-types.js";
@@ -21,6 +22,7 @@ export type {
   BenchmarkVariant,
   CategoryResult,
   Provider,
+  RealCliGateEvidence,
   Scenario,
   ScenarioResult,
 } from "./adversarial-types.js";
@@ -163,7 +165,21 @@ function categoryResults(results: ScenarioResult[]): CategoryResult[] {
   }).sort((a, b) => a.category.localeCompare(b.category));
 }
 
-export function runAdversarialBenchmark(variant: BenchmarkVariant = "indexed"): BenchmarkReport {
+export interface AdversarialBenchmarkOptions {
+  realCliGate?: RealCliGateEvidence;
+}
+
+function realCliGatePassed(evidence: RealCliGateEvidence | undefined): boolean {
+  return Boolean(evidence?.target90Achieved
+    && evidence.installedBinaryUsed
+    && evidence.qualityFailures === 0
+    && evidence.floorFailures === 0
+    && evidence.reposCovered.includes("open-terminal")
+    && evidence.reposCovered.includes("iapp-logos")
+    && evidence.workflowCount > 0);
+}
+
+export function runAdversarialBenchmark(variant: BenchmarkVariant = "indexed", options: AdversarialBenchmarkOptions = {}): BenchmarkReport {
   const scenarios = adversarialScenarios();
   const results = scenarios.map((scenario) => scenarioResult(scenario, variant));
   const weightedRawTokens = results.reduce((sum, result) => sum + result.baselineBillableTokens * result.weight, 0);
@@ -179,6 +195,8 @@ export function runAdversarialBenchmark(variant: BenchmarkVariant = "indexed"): 
   const qualityRate = results.length > 0 ? (results.length - qualityFailures) / results.length : 0;
   const qualityPassed = qualityRate >= QUALITY_THRESHOLD;
   const stressGatePassed = stressScenarioCount >= MIN_STRESS_SCENARIOS_FOR_90 && Math.min(...workflowCounts) >= MIN_WORKFLOW_SCENARIOS_FOR_90;
+  const syntheticTarget90Achieved = weightedTokenReduction >= 0.9 && qualityPassed && stressGatePassed;
+  const realCliGateAchieved = realCliGatePassed(options.realCliGate);
 
   return {
     variant,
@@ -202,12 +220,18 @@ export function runAdversarialBenchmark(variant: BenchmarkVariant = "indexed"): 
       qualityFailures,
       qualityRate,
       target9999QualityAchieved: qualityPassed,
+      syntheticTarget90Achieved,
+      realCliGateRequired: true,
+      realCliGateAchieved,
+      realCliWeightedTokenReduction: options.realCliGate?.weightedTokenReduction,
+      realCliQualityFailures: options.realCliGate?.qualityFailures,
+      realCliFloorFailures: options.realCliGate?.floorFailures,
       stressScenarioCount,
       minWorkflowScenarios: Math.min(...workflowCounts),
-      target90Achieved: weightedTokenReduction >= 0.9 && qualityPassed && stressGatePassed,
+      target90Achieved: syntheticTarget90Achieved && realCliGateAchieved,
       target70Achieved: weightedTokenReduction >= 0.7 && qualityPassed,
       defensibleThreshold: DEFENSIBLE_THRESHOLD,
-      defensibleThresholdAchieved: weightedTokenReduction >= DEFENSIBLE_THRESHOLD && qualityPassed,
+      defensibleThresholdAchieved: weightedTokenReduction >= DEFENSIBLE_THRESHOLD && qualityPassed && realCliGateAchieved,
     },
   };
 }
@@ -288,6 +312,13 @@ export function formatAdversarialReport(report: BenchmarkReport): string {
     `- quality failures: ${report.totals.qualityFailures}`,
     `- quality rate: ${pct(report.totals.qualityRate)}`,
     `- 99.99% quality target: ${report.totals.target9999QualityAchieved ? "SUPPORTED" : "NOT SUPPORTED"}`,
+    `- synthetic 90% target: ${report.totals.syntheticTarget90Achieved ? "SUPPORTED" : "NOT SUPPORTED"}`,
+    `- real installed-CLI gate: ${report.totals.realCliGateAchieved ? "SUPPORTED" : "NOT SUPPORTED"}`,
+    ...(report.totals.realCliWeightedTokenReduction === undefined ? ["- real installed-CLI evidence: missing"] : [
+      `- real installed-CLI reduction: ${pct(report.totals.realCliWeightedTokenReduction)}`,
+      `- real installed-CLI quality failures: ${report.totals.realCliQualityFailures ?? 0}`,
+      `- real installed-CLI floor failures: ${report.totals.realCliFloorFailures ?? 0}`,
+    ]),
     `- stress scenarios: ${report.totals.stressScenarioCount}`,
     `- minimum scenarios per required workflow: ${report.totals.minWorkflowScenarios}`,
     `- 70% target: ${report.totals.target70Achieved ? "SUPPORTED" : "NOT SUPPORTED"}`,
@@ -298,7 +329,9 @@ export function formatAdversarialReport(report: BenchmarkReport): string {
   );
 
   if (report.totals.target90Achieved) {
-    lines.push(`The ${report.variant} variant supports a 90% weighted token-reduction target across the curated and stress suites.`);
+    lines.push(`The ${report.variant} variant supports a 90% weighted token-reduction target with both synthetic coverage and real installed-CLI evidence.`);
+  } else if (report.totals.syntheticTarget90Achieved && !report.totals.realCliGateAchieved) {
+    lines.push(`The ${report.variant} variant reaches the synthetic 90% threshold, but the real installed-CLI gate is missing or failed, so the 90% claim remains unsupported.`);
   } else if (report.totals.target70Achieved) {
     lines.push(`The ${report.variant} variant supports a 70% weighted token-reduction target while the 90% all-workflows claim remains unsupported.`);
   } else if (report.totals.weightedTokenReduction >= 0.7 && report.totals.qualityFailures > 0) {

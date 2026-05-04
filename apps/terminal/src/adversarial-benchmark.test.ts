@@ -57,6 +57,17 @@ describe("adversarial benchmark", () => {
     const baseline = runAdversarialBenchmark("baseline");
     const progressive = runAdversarialBenchmark("progressive");
     const indexed = runAdversarialBenchmark("indexed");
+    const indexedWithRealEvidence = runAdversarialBenchmark("indexed", {
+      realCliGate: {
+        target90Achieved: true,
+        weightedTokenReduction: 0.91,
+        qualityFailures: 0,
+        floorFailures: 0,
+        installedBinaryUsed: true,
+        reposCovered: ["open-terminal", "iapp-logos"],
+        workflowCount: 12,
+      },
+    });
 
     expect(baseline.totals.weightedTokenReduction).toBeLessThan(0.7);
     expect(progressive.totals.weightedTokenReduction).toBeGreaterThanOrEqual(0.9);
@@ -66,8 +77,13 @@ describe("adversarial benchmark", () => {
     expect(indexed.totals.weightedTokenReduction).toBeGreaterThanOrEqual(0.9);
     expect(indexed.totals.qualityRate).toBeGreaterThanOrEqual(0.9999);
     expect(indexed.totals.target9999QualityAchieved).toBe(true);
-    expect(indexed.totals.target90Achieved).toBe(true);
-    expect(indexed.totals.defensibleThresholdAchieved).toBe(true);
+    expect(indexed.totals.syntheticTarget90Achieved).toBe(true);
+    expect(indexed.totals.realCliGateAchieved).toBe(false);
+    expect(indexed.totals.target90Achieved).toBe(false);
+    expect(indexed.totals.defensibleThresholdAchieved).toBe(false);
+    expect(indexedWithRealEvidence.totals.realCliGateAchieved).toBe(true);
+    expect(indexedWithRealEvidence.totals.target90Achieved).toBe(true);
+    expect(indexedWithRealEvidence.totals.defensibleThresholdAchieved).toBe(true);
   });
 
   it("stress tests hundreds of hard agent terminal scenarios", () => {

@@ -5,6 +5,7 @@ dist/
 .secrets
 .secrets/
 temp/
+.benchmark-artifacts/
 .connectors/
 .takumi/
 *.pem
