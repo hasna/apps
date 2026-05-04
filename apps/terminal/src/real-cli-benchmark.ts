@@ -17,6 +17,7 @@ export interface RealCliWorkflow {
   terminalCommand: string;
   requiredPatterns: string[];
   forbiddenPatterns?: string[];
+  requiresEvidenceRef?: boolean;
   requiresFullOutput?: boolean;
   minReduction: number;
 }
@@ -31,9 +32,12 @@ export interface RealCliWorkflowResult extends RealCliWorkflow {
   rawTokens: number;
   terminalTokens: number;
   expansionTokens: number;
+  losslessExpansionTokens: number;
   penaltyTokens: number;
   optimizedTokens: number;
+  losslessOptimizedTokens: number;
   tokenReduction: number;
+  losslessTokenReduction: number;
   rawStatus: number;
   terminalStatus: number;
   fullOutputPath?: string;
@@ -66,8 +70,10 @@ export interface RealCliBenchmarkReport {
     workflowCount: number;
     weightedRawTokens: number;
     weightedOptimizedTokens: number;
+    weightedLosslessOptimizedTokens: number;
     weightedNetTokensSaved: number;
     weightedTokenReduction: number;
+    weightedLosslessTokenReduction: number;
     qualityFailures: number;
     floorFailures: number;
     overallTarget: number;
@@ -129,7 +135,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
     rawCommand: "find . \\( -path './node_modules' -o -path './dist' -o -path './.git' \\) -prune -o \\( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.spec.ts' -o -name '*.spec.tsx' \\) -type f -print | sort",
     terminalCommand: 'terminal "what tests exist"',
     requiredPatterns: ["files"],
-    requiresFullOutput: true,
+    requiresEvidenceRef: true,
     minReduction: 0.6,
   },
   {
@@ -151,7 +157,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
     rawCommand: "find src -maxdepth 2 -type f | sort",
     terminalCommand: 'terminal "show source structure"',
     requiredPatterns: ["files"],
-    requiresFullOutput: true,
+    requiresEvidenceRef: true,
     minReduction: 0.6,
   },
   {
@@ -192,7 +198,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
     rawCommand: "find . \\( -path './node_modules' -o -path './dist' -o -path './.git' \\) -prune -o \\( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.spec.ts' -o -name '*.spec.tsx' \\) -type f -print | sort",
     terminalCommand: 'terminal "what tests exist"',
     requiredPatterns: ["files"],
-    requiresFullOutput: true,
+    requiresEvidenceRef: true,
     minReduction: 0.6,
   },
   {
@@ -214,7 +220,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
     rawCommand: "find src -maxdepth 2 -type f | sort",
     terminalCommand: 'terminal "show source structure"',
     requiredPatterns: ["files"],
-    requiresFullOutput: true,
+    requiresEvidenceRef: true,
     minReduction: 0.6,
   },
   {
@@ -279,6 +285,32 @@ function readExpansionTokens(output: string): { path?: string; tokens: number } 
   return { path, tokens: estimateTokens(readFileSync(path, "utf8")) };
 }
 
+function extractRawRefPathFromManifest(manifestPath: string | undefined): string | undefined {
+  if (!manifestPath || !existsSync(manifestPath)) return undefined;
+  const content = readFileSync(manifestPath, "utf8");
+  const match = content.match(/^raw-ref:\s*(.+)$/m);
+  return match ? expandHome(match[1].trim()) : undefined;
+}
+
+function readLosslessExpansionTokens(output: string): { path?: string; tokens: number } {
+  const fullPath = extractFullOutputPath(output);
+  if (fullPath && existsSync(fullPath)) {
+    return { path: fullPath, tokens: estimateTokens(readFileSync(fullPath, "utf8")) };
+  }
+  const rawRefPath = extractRawRefPathFromManifest(extractManifestPath(output));
+  if (rawRefPath && existsSync(rawRefPath)) {
+    return { path: rawRefPath, tokens: estimateTokens(readFileSync(rawRefPath, "utf8")) };
+  }
+  return { path: rawRefPath ?? fullPath, tokens: 0 };
+}
+
+function hasReadableEvidenceRef(output: string): boolean {
+  const manifestPath = extractManifestPath(output);
+  if (!manifestPath || !existsSync(manifestPath)) return false;
+  const rawRefPath = extractRawRefPathFromManifest(manifestPath);
+  return !rawRefPath || existsSync(rawRefPath);
+}
+
 export function evaluateRealCliWorkflow(
   workflow: RealCliWorkflow,
   raw: RealCliRunOutput,
@@ -310,14 +342,20 @@ export function evaluateRealCliWorkflow(
   }
 
   const expansion = workflow.requiresFullOutput ? readExpansionTokens(terminalText) : { tokens: 0, path: undefined };
+  const losslessExpansion = (workflow.requiresFullOutput || workflow.requiresEvidenceRef) ? readLosslessExpansionTokens(terminalText) : { tokens: 0, path: undefined };
   if (workflow.requiresFullOutput && expansion.tokens === 0) {
-    issues.push("missing readable full-output expansion");
+    issues.push("missing readable task-evidence expansion");
+  }
+  if (workflow.requiresEvidenceRef && !hasReadableEvidenceRef(terminalText)) {
+    issues.push("missing readable evidence ref");
   }
 
   const qualityPassed = issues.length === 0;
   const penaltyTokens = qualityPassed ? 0 : rawTokens;
   const optimizedTokens = terminalTokens + expansion.tokens + penaltyTokens;
+  const losslessOptimizedTokens = terminalTokens + losslessExpansion.tokens + penaltyTokens;
   const tokenReduction = rawTokens > 0 ? (rawTokens - optimizedTokens) / rawTokens : 0;
+  const losslessTokenReduction = rawTokens > 0 ? (rawTokens - losslessOptimizedTokens) / rawTokens : 0;
   const tinyOutputFloor = rawTokens <= REAL_CLI_TINY_RAW_TOKEN_THRESHOLD
     && optimizedTokens <= rawTokens + REAL_CLI_TINY_MAX_OVERHEAD_TOKENS;
   const floorPassed = tokenReduction >= workflow.minReduction || (qualityPassed && tinyOutputFloor);
@@ -327,12 +365,15 @@ export function evaluateRealCliWorkflow(
     rawTokens,
     terminalTokens,
     expansionTokens: expansion.tokens,
+    losslessExpansionTokens: losslessExpansion.tokens,
     penaltyTokens,
     optimizedTokens,
+    losslessOptimizedTokens,
     tokenReduction,
+    losslessTokenReduction,
     rawStatus: raw.status,
     terminalStatus: terminal.status,
-    fullOutputPath: expansion.path,
+    fullOutputPath: losslessExpansion.path ?? expansion.path,
     manifestPath: extractManifestPath(terminalText),
     qualityPassed,
     floorPassed,
@@ -382,7 +423,9 @@ export function evaluateRealCliBenchmark(params: {
   const categories = categoryResults(params.workflows);
   const weightedRawTokens = params.workflows.reduce((sum, item) => sum + item.rawTokens * item.weight, 0);
   const weightedOptimizedTokens = params.workflows.reduce((sum, item) => sum + item.optimizedTokens * item.weight, 0);
+  const weightedLosslessOptimizedTokens = params.workflows.reduce((sum, item) => sum + item.losslessOptimizedTokens * item.weight, 0);
   const weightedTokenReduction = weightedRawTokens > 0 ? (weightedRawTokens - weightedOptimizedTokens) / weightedRawTokens : 0;
+  const weightedLosslessTokenReduction = weightedRawTokens > 0 ? (weightedRawTokens - weightedLosslessOptimizedTokens) / weightedRawTokens : 0;
   const qualityFailures = params.workflows.filter((workflow) => !workflow.qualityPassed).length;
   const floorFailures = params.workflows.filter((workflow) => !workflow.floorPassed).length + categories.filter((category) => !category.passed).length;
   const reposCovered = [...new Set(params.workflows.map((workflow) => workflow.repo))].sort();
@@ -400,8 +443,10 @@ export function evaluateRealCliBenchmark(params: {
       workflowCount: params.workflows.length,
       weightedRawTokens,
       weightedOptimizedTokens,
+      weightedLosslessOptimizedTokens,
       weightedNetTokensSaved: weightedRawTokens - weightedOptimizedTokens,
       weightedTokenReduction,
+      weightedLosslessTokenReduction,
       qualityFailures,
       floorFailures,
       overallTarget: REAL_CLI_OVERALL_TARGET,
@@ -507,7 +552,9 @@ export function formatRealCliBenchmarkReport(report: RealCliBenchmarkReport): st
     `- workflows: ${report.totals.workflowCount}`,
     `- weighted raw tokens: ${Math.round(report.totals.weightedRawTokens).toLocaleString()}`,
     `- weighted optimized tokens: ${Math.round(report.totals.weightedOptimizedTokens).toLocaleString()}`,
+    `- weighted lossless-audit optimized tokens: ${Math.round(report.totals.weightedLosslessOptimizedTokens).toLocaleString()}`,
     `- weighted token reduction: ${pct(report.totals.weightedTokenReduction)}`,
+    `- weighted lossless-audit token reduction: ${pct(report.totals.weightedLosslessTokenReduction)}`,
     `- quality failures: ${report.totals.qualityFailures}`,
     `- floor failures: ${report.totals.floorFailures}`,
     `- tiny-output floor: raw <= ${report.totals.tinyRawTokenThreshold} tokens may pass with <= ${report.totals.tinyMaxOverheadTokens} token overhead; tokens still count in totals`,

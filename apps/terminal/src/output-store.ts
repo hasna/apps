@@ -100,10 +100,15 @@ export function saveOutputManifest(command: string, rawOutput: string): string |
   if (!manifest) return null;
   ensureDir();
 
-  const hash = hashOutput(command, manifest.content);
+  const rawHash = hashOutput(command, rawOutput);
+  const rawPath = join(OUTPUTS_DIR, `${rawHash}.raw.txt`);
+  writeFileSync(rawPath, `$ ${command}\n${"─".repeat(60)}\n${rawOutput}`, "utf8");
+
+  const content = `${manifest.content}\nraw-ref: ${rawPath}`;
+  const hash = hashOutput(command, content);
   const filename = `${hash}.${manifest.kind}.txt`;
   const filepath = join(MANIFESTS_DIR, filename);
-  writeFileSync(filepath, manifest.content, "utf8");
+  writeFileSync(filepath, content, "utf8");
   return filepath;
 }
 

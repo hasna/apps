@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   REAL_CLI_WORKFLOWS,
   evaluateRealCliBenchmark,
@@ -28,7 +31,7 @@ describe("real CLI benchmark", () => {
     expect(REAL_CLI_WORKFLOWS.every((item) => item.weight > 0 && item.rawCommand && item.terminalCommand)).toBe(true);
   });
 
-  it("charges a penalty when full-output expansion is required but unavailable", () => {
+  it("charges a penalty when task evidence is required but unavailable", () => {
     const result = evaluateRealCliWorkflow(
       workflow,
       { stdout: "src/a.ts:1:describe test\nsrc/b.ts:2:describe test\n", stderr: "", status: 0 },
@@ -36,9 +39,46 @@ describe("real CLI benchmark", () => {
     );
 
     expect(result.qualityPassed).toBe(false);
-    expect(result.issues).toContain("missing readable full-output expansion");
+    expect(result.issues).toContain("missing readable task-evidence expansion");
     expect(result.penaltyTokens).toBe(result.rawTokens);
     expect(result.optimizedTokens).toBeGreaterThan(result.terminalTokens);
+  });
+
+  it("can require a readable evidence ref without loading it into task tokens", () => {
+    const dir = mkdtempSync(join(tmpdir(), "terminal-real-cli-ref-"));
+    const rawPath = join(dir, "raw.txt");
+    const manifestPath = join(dir, "manifest.txt");
+    writeFileSync(rawPath, "src/a.test.ts\nsrc/b.test.ts\n", "utf8");
+    writeFileSync(manifestPath, `file refs: 2 files in 1 groups\nraw-ref: ${rawPath}`, "utf8");
+
+    const result = evaluateRealCliWorkflow(
+      { ...workflow, requiresFullOutput: false, requiresEvidenceRef: true, requiredPatterns: ["files"] },
+      { stdout: "src/a.test.ts\nsrc/b.test.ts\n", stderr: "", status: 0 },
+      { stdout: `2 files; areas: src x2\n[manifest: ${manifestPath}]\n`, stderr: "", status: 0 },
+    );
+
+    expect(result.qualityPassed).toBe(true);
+    expect(result.expansionTokens).toBe(0);
+    expect(result.losslessExpansionTokens).toBeGreaterThan(0);
+  });
+
+  it("counts compact task evidence separately from lossless raw refs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "terminal-real-cli-"));
+    const rawPath = join(dir, "raw.txt");
+    const manifestPath = join(dir, "manifest.txt");
+    const rawOutput = Array.from({ length: 20 }, (_, i) => `src/file-${i}.ts:${i + 1}:describe test`).join("\n");
+    writeFileSync(rawPath, rawOutput, "utf8");
+    writeFileSync(manifestPath, `search refs: 2 matches in 2 files\nraw-ref: ${rawPath}`, "utf8");
+
+    const result = evaluateRealCliWorkflow(
+      workflow,
+      { stdout: rawOutput, stderr: "", status: 0 },
+      { stdout: `2 matches in 2 files\n[manifest: ${manifestPath}]\n`, stderr: "", status: 0 },
+    );
+
+    expect(result.qualityPassed).toBe(true);
+    expect(result.expansionTokens).toBeLessThan(result.losslessExpansionTokens);
+    expect(result.fullOutputPath).toBe(rawPath);
   });
 
   it("fails provider errors instead of counting them as savings", () => {

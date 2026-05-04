@@ -3,17 +3,17 @@ import { buildFileManifest, buildSearchManifest } from "./output-manifest.js";
 import { estimateTokens } from "./tokens.js";
 
 describe("output manifest", () => {
-  it("groups search matches by file while keeping every match address", () => {
+  it("groups search matches by file while keeping bounded match addresses", () => {
     const output = Array.from({ length: 40 }, (_, i) => `src/file-${i % 4}.test.ts:${i + 1}:describe("case ${i}", () => {})`).join("\n");
     const manifest = buildSearchManifest('rg -n "describe" src', output);
     expect(manifest?.content).toContain("40 matches in 4 files");
-    expect(manifest?.content).toContain("src/file-0.test.ts");
+    expect(manifest?.content).toContain("top files:");
     expect(manifest?.content).toContain("src/file-0.test.ts:1");
     expect(manifest?.content).not.toContain("describe(\"case");
     expect(estimateTokens(manifest?.content ?? "")).toBeLessThan(estimateTokens(output));
   });
 
-  it("groups file lists by area while preserving paths", () => {
+  it("groups file lists by area without echoing every path stem", () => {
     const output = [
       "src/cli/index.ts",
       "src/cli/run.ts",
@@ -25,8 +25,9 @@ describe("output manifest", () => {
     ].join("\n");
     const manifest = buildFileManifest("find src -maxdepth 2 -type f", output);
     expect(manifest?.content).toContain("7 files in 3 groups");
-    expect(manifest?.content).toContain("src/cli/*.ts{index,run}");
-    expect(manifest?.content).toContain("src/mcp/*.ts{server,tools}");
+    expect(manifest?.content).toContain("areas: src/lib x3");
+    expect(manifest?.content).toContain("src/cli/*.ts x2");
+    expect(manifest?.content).not.toContain("{index,run}");
   });
 
   it("does not treat git status porcelain as a file listing manifest", () => {

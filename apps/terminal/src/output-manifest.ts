@@ -3,9 +3,9 @@ export interface OutputManifest {
   content: string;
 }
 
-function compactList(items: string[], limit: number): string {
-  const shown = items.slice(0, limit);
-  return items.length > limit ? `${shown.join(",")},+${items.length - limit} more` : shown.join(",");
+function compactPairs(items: [string, number][], limit: number): string {
+  const shown = items.slice(0, limit).map(([name, count]) => `${name} x${count}`);
+  return items.length > limit ? `${shown.join("; ")}; +${items.length - limit} more` : shown.join("; ");
 }
 
 function compactRanges(values: string[]): string {
@@ -52,12 +52,18 @@ export function buildSearchManifest(command: string, output: string): OutputMani
   const byFile = new Map<string, string[]>();
   for (const match of matches) byFile.set(match.file, [...(byFile.get(match.file) ?? []), match.line]);
 
+  const rankedFiles = [...byFile.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const lineRefs = rankedFiles
+    .slice(0, 12)
+    .map(([file, fileMatches]) => `${file}:${compactRanges(fileMatches)}`);
+
   const parts = [
     `search refs: ${matches.length} matches in ${byFile.size} files`,
+    `top files: ${compactPairs(rankedFiles.map(([file, fileMatches]) => [file, fileMatches.length]), 12)}`,
+    `line refs: ${lineRefs.join("; ")}`,
   ];
-  for (const [file, fileMatches] of [...byFile.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    parts.push(`${file}:${compactRanges(fileMatches)}`);
-  }
+  if (rankedFiles.length > lineRefs.length) parts.push(`omitted line refs: ${rankedFiles.length - lineRefs.length} files`);
   return { kind: "search", content: parts.join("\n") };
 }
 
@@ -67,6 +73,8 @@ export function buildFileManifest(command: string, output: string): OutputManife
   if (!files.every((file) => /[/.]/.test(file) && !/\s/.test(file))) return null;
 
   const byPattern = new Map<string, string[]>();
+  const byArea = new Map<string, number>();
+  const byType = new Map<string, number>();
   for (const file of files) {
     const clean = file.replace(/^\.\//, "");
     const parts = clean.split("/");
@@ -75,14 +83,23 @@ export function buildFileManifest(command: string, output: string): OutputManife
     const { stem, suffix } = splitCompoundSuffix(basename);
     const pattern = suffix ? `${dir}/*${suffix}` : dir;
     byPattern.set(pattern, [...(byPattern.get(pattern) ?? []), stem]);
+    const area = parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0];
+    byArea.set(area, (byArea.get(area) ?? 0) + 1);
+    byType.set(suffix || "(none)", (byType.get(suffix || "(none)") ?? 0) + 1);
   }
+
+  const rankedAreas = [...byArea.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const rankedPatterns = [...byPattern.entries()]
+    .map(([pattern, stems]) => [pattern, stems.length] as [string, number])
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const rankedTypes = [...byType.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
   const parts = [
     `file refs: ${files.length} files in ${byPattern.size} groups`,
+    `areas: ${compactPairs(rankedAreas, 10)}`,
+    `groups: ${compactPairs(rankedPatterns, 14)}`,
+    `types: ${compactPairs(rankedTypes, 8)}`,
   ];
-  for (const [pattern, stems] of [...byPattern.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    parts.push(`${pattern}{${compactList(stems, 80)}}`);
-  }
   return { kind: "files", content: parts.join("\n") };
 }
 
