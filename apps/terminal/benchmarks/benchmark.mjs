@@ -12,9 +12,22 @@ if (!existsSync(builtModule)) {
   process.exit(1);
 }
 
-const report = runAdversarialBenchmark();
+const variantArg = process.argv.find((arg) => arg.startsWith("--variant="));
+const variant = variantArg?.split("=")[1] ?? "progressive";
+if (!["baseline", "progressive"].includes(variant)) {
+  console.error("Invalid variant. Use --variant=baseline or --variant=progressive");
+  process.exit(1);
+}
+
+const report = runAdversarialBenchmark(variant);
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify(report, null, 2));
 } else {
+  if (process.argv.includes("--compare")) {
+    const baseline = runAdversarialBenchmark("baseline");
+    console.log(`Baseline token reduction: ${(baseline.totals.weightedTokenReduction * 100).toFixed(1)}%`);
+    console.log(`Progressive token reduction: ${(report.totals.weightedTokenReduction * 100).toFixed(1)}%`);
+    console.log("");
+  }
   console.log(formatAdversarialReport(report));
 }

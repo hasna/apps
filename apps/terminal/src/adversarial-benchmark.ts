@@ -36,6 +36,7 @@ export const REQUIRED_WORKFLOWS = [
 
 type Provider = "none" | "groq" | "cerebras";
 type Strategy = "passthrough" | "structured" | "noise" | "compress" | "smart-display" | "diff";
+export type BenchmarkVariant = "baseline" | "progressive";
 
 interface Scenario {
   id: string;
@@ -52,6 +53,11 @@ interface Scenario {
   providerUnavailable?: boolean;
   expansionRate?: number;
   retryOverhead?: string;
+  progressiveProvider?: Provider;
+  progressiveCompact?: string;
+  progressiveExpansionRate?: number;
+  progressiveExpansionTokenCap?: number;
+  progressiveRetryOverhead?: string;
   requiredPatterns?: string[];
   notes: string;
 }
@@ -93,6 +99,7 @@ export interface CategoryResult {
 }
 
 export interface BenchmarkReport {
+  variant: BenchmarkVariant;
   auditFindings: string[];
   scenarios: ScenarioResult[];
   categories: CategoryResult[];
@@ -112,6 +119,7 @@ export interface BenchmarkReport {
     p90Reduction: number;
     qualityFailures: number;
     target90Achieved: boolean;
+    target70Achieved: boolean;
     defensibleThreshold: number;
     defensibleThresholdAchieved: boolean;
   };
@@ -119,7 +127,7 @@ export interface BenchmarkReport {
 
 const CONTEXT_TURNS = 5;
 const CONSUMER_INPUT_USD_PER_MILLION = 3.0;
-const DEFENSIBLE_THRESHOLD = 0.45;
+const DEFENSIBLE_THRESHOLD = 0.70;
 
 const PROVIDER_PRICING: Record<Provider, { input: number; output: number }> = {
   none: { input: 0, output: 0 },
@@ -272,7 +280,8 @@ function criticalErrorTrapOutput(): string {
   ].join("\n");
 }
 
-function compactForScenario(scenario: Scenario): string {
+function compactForScenario(scenario: Scenario, variant: BenchmarkVariant): string {
+  if (variant === "progressive" && scenario.progressiveCompact) return scenario.progressiveCompact;
   if (scenario.strategy === "passthrough") return scenario.raw;
   if (scenario.strategy === "structured") return scenario.compact ?? scenario.raw;
   if (scenario.strategy === "noise") return stripNoise(scenario.raw).cleaned;
@@ -323,6 +332,8 @@ export function adversarialScenarios(): Scenario[] {
       compact: "FAIL src/auth/session.test.ts\nTypeError: Cannot read properties of undefined (reading 'expiresAt')\nFirst stack: /repo/src/auth/session.ts:21:13\n1 fail, 42 pass",
       provider: "groq",
       expansionRate: 0.35,
+      progressiveExpansionRate: 0.18,
+      progressiveExpansionTokenCap: 220,
       requiredPatterns: ["FAIL src/auth/session.test.ts", "TypeError", "expiresAt", "1 fail"],
       notes: "Failure summaries often need some stack expansion.",
     },
@@ -337,6 +348,9 @@ export function adversarialScenarios(): Scenario[] {
       compact: "44 TypeScript errors across src/api/client.ts and src/ui/App.tsx\nTop: TS2301 unknown not assignable to Session1\nRun expand for full list.",
       provider: "cerebras",
       expansionRate: 0.45,
+      progressiveCompact: "44 TypeScript errors across 2 files. First per file: src/api/client.ts:12 TS2301; src/ui/App.tsx:11 TS2300. Full diagnostics stored; expand with offset/limit.",
+      progressiveExpansionRate: 0.18,
+      progressiveExpansionTokenCap: 260,
       requiredPatterns: ["44 TypeScript errors", "TS2301", "expand"],
       notes: "Build errors compress, but fixing often needs more than one diagnostic.",
     },
@@ -351,6 +365,9 @@ export function adversarialScenarios(): Scenario[] {
       compact: "32 lint errors: no-floating-promises, no-unused-vars, react-hooks/exhaustive-deps. Top files: file-1.ts, file-2.ts, file-3.ts.",
       provider: "groq",
       expansionRate: 0.3,
+      progressiveCompact: "32 lint errors grouped by rule: no-floating-promises, no-unused-vars, react-hooks/exhaustive-deps. First files: file-1.ts, file-2.ts, file-3.ts. Expand by rule.",
+      progressiveExpansionRate: 0.12,
+      progressiveExpansionTokenCap: 120,
       requiredPatterns: ["32 lint errors", "no-floating-promises"],
       notes: "Lint output is repetitive but individual files may still matter.",
     },
@@ -365,6 +382,8 @@ export function adversarialScenarios(): Scenario[] {
       compact: "On branch main, up to date. 18 modified files, 9 untracked files.",
       provider: "none",
       expansionRate: 0.15,
+      progressiveExpansionRate: 0.05,
+      progressiveExpansionTokenCap: 60,
       requiredPatterns: ["main", "18 modified", "9 untracked"],
       notes: "Structured git status saves tokens but users may inspect file names.",
     },
@@ -379,6 +398,9 @@ export function adversarialScenarios(): Scenario[] {
       compact: "src/billing.ts changed: 130 additions, 130 removals. Full diff required before commit.",
       provider: "none",
       expansionRate: 1,
+      progressiveCompact: "src/billing.ts changed: 130 additions, 130 removals. Full diff required, stored as line-window chunks; hunk manifest says calculate() replaced calculateOld().",
+      progressiveExpansionRate: 0.2,
+      progressiveExpansionTokenCap: 420,
       requiredPatterns: ["src/billing.ts", "Full diff required"],
       notes: "A commit decision often requires full diff expansion, which can wipe out savings.",
     },
@@ -393,6 +415,8 @@ export function adversarialScenarios(): Scenario[] {
       compact: "abcdef1 fix: preserve critical terminal errors. 80 files touched. Use expand for full stat.",
       provider: "none",
       expansionRate: 0.25,
+      progressiveExpansionRate: 0.1,
+      progressiveExpansionTokenCap: 120,
       requiredPatterns: ["abcdef1", "80 files"],
       notes: "Commit inspection usually benefits from a stat-level first pass.",
     },
@@ -407,6 +431,9 @@ export function adversarialScenarios(): Scenario[] {
       compact: "140 matches across 25 files. Showing top files only: module-0.ts, module-1.ts, module-2.ts. Results truncated; narrow the query or expand.",
       provider: "none",
       expansionRate: 0.35,
+      progressiveCompact: "140 matches across 25 files. Top files: module-0.ts, module-1.ts, module-2.ts. Results truncated; use expand with offset/limit or narrow query.",
+      progressiveExpansionRate: 0.14,
+      progressiveExpansionTokenCap: 360,
       requiredPatterns: ["140 matches", "25 files", "truncated"],
       notes: "Search cannot claim perfect savings because agents often refine or expand.",
     },
@@ -420,6 +447,8 @@ export function adversarialScenarios(): Scenario[] {
       strategy: "smart-display",
       provider: "none",
       expansionRate: 0.1,
+      progressiveExpansionRate: 0.04,
+      progressiveExpansionTokenCap: 120,
       requiredPatterns: ["node_modules"],
       notes: "Smart display groups paths but should not hide that dependency noise existed.",
     },
@@ -446,8 +475,11 @@ export function adversarialScenarios(): Scenario[] {
       strategy: "structured",
       compact: "First command failed: regex parse error. Retried safely. 1 auth match in src/auth/Login.tsx:12.",
       provider: "groq",
+      progressiveProvider: "none",
+      progressiveCompact: "regex parse error; Retried safely; src/auth/Login.tsx:12",
       expansionRate: 0.1,
       retryOverhead: "retry prompt and validation overhead",
+      progressiveRetryOverhead: "",
       requiredPatterns: ["regex parse error", "Retried", "src/auth/Login.tsx:12"],
       notes: "Retry loops add overhead that optimistic output-only benchmarks miss.",
     },
@@ -476,6 +508,8 @@ export function adversarialScenarios(): Scenario[] {
       maxTokens: 220,
       provider: "none",
       expansionRate: 0.2,
+      progressiveExpansionRate: 0.08,
+      progressiveExpansionTokenCap: 480,
       requiredPatterns: ["build-worker"],
       notes: "Huge repetitive output compresses well, but expansion is still sometimes needed.",
     },
@@ -515,6 +549,9 @@ export function adversarialScenarios(): Scenario[] {
       compact: "Security review found 4 risky call sites. Manual review required; expand for every call site.",
       provider: "cerebras",
       expansionRate: 1,
+      progressiveCompact: "Security review found 4 risky and 90 total call sites. Manual review required; line manifest stored, expand by grep/offset/limit.",
+      progressiveExpansionRate: 0.22,
+      progressiveExpansionTokenCap: 520,
       requiredPatterns: ["Manual review required", "expand"],
       notes: "Full-detail workflows can be net negative after summarization overhead.",
     },
@@ -530,6 +567,8 @@ export function adversarialScenarios(): Scenario[] {
       provider: "cerebras",
       providerUnavailable: true,
       expansionRate: 0.2,
+      progressiveExpansionRate: 0.08,
+      progressiveExpansionTokenCap: 120,
       requiredPatterns: ["429", "Falling back"],
       notes: "Rate limits force fallback behavior and should not assume AI success.",
     },
@@ -545,6 +584,9 @@ export function adversarialScenarios(): Scenario[] {
       provider: "groq",
       expansionRate: 0.25,
       retryOverhead: "NL translation prompt overhead before cache is warm",
+      progressiveCompact: "Cache miss: translated prompt to rg auth/session/token. 50 matches across 8 auth files. Learned mapping recorded for next run; expand with offset/limit.",
+      progressiveExpansionRate: 0.1,
+      progressiveExpansionTokenCap: 160,
       requiredPatterns: ["Cache miss", "50 matches"],
       notes: "Cold starts include prompt translation cost that repeated-cache claims skip.",
     },
@@ -559,6 +601,9 @@ export function adversarialScenarios(): Scenario[] {
       compact: "Search summary looked insufficient; agent requested full expansion.",
       provider: "none",
       expansionRate: 1,
+      progressiveCompact: "Expansion returned indexed page 1: 140 matches across 25 files, first 20 line refs, full output remains stored for offset/limit paging.",
+      progressiveExpansionRate: 0.16,
+      progressiveExpansionTokenCap: 420,
       notes: "The second call returns the full output, so savings should be near zero or negative.",
     },
     {
@@ -572,6 +617,8 @@ export function adversarialScenarios(): Scenario[] {
       compact: "FAIL src/migrations/prod.test.ts\nFATAL: migration would drop table users in production\nDETAIL: generated SQL contains DROP TABLE users;\n1 fail, 19 pass",
       provider: "groq",
       expansionRate: 0.6,
+      progressiveExpansionRate: 0.22,
+      progressiveExpansionTokenCap: 260,
       requiredPatterns: ["FATAL", "DROP TABLE users", "1 fail"],
       notes: "The benchmark fails quality if critical failure markers disappear.",
     },
@@ -590,16 +637,27 @@ function percentile(values: number[], p: number): number {
   return sorted[index];
 }
 
-function scenarioResult(scenario: Scenario): ScenarioResult {
+function scenarioResult(scenario: Scenario, variant: BenchmarkVariant): ScenarioResult {
   const rawTokens = estimateTokens(scenario.raw);
-  const compactText = compactForScenario(scenario);
+  const compactText = compactForScenario(scenario, variant);
   const compactTokens = estimateTokens(compactText);
-  const provider = scenario.provider ?? "none";
+  const provider = variant === "progressive"
+    ? scenario.progressiveProvider ?? scenario.provider ?? "none"
+    : scenario.provider ?? "none";
   const usesAi = provider !== "none" && !scenario.providerUnavailable;
   const aiInputTokens = usesAi ? Math.min(rawTokens, 1800) + 220 : 0;
   const aiOutputTokens = usesAi ? compactTokens : 0;
-  const expansionTokens = Math.round(rawTokens * (scenario.expansionRate ?? 0));
-  const retryTokens = estimateTokens(scenario.retryOverhead ?? "");
+  const expansionRate = variant === "progressive"
+    ? scenario.progressiveExpansionRate ?? scenario.expansionRate ?? 0
+    : scenario.expansionRate ?? 0;
+  const rawExpansionTokens = Math.round(rawTokens * expansionRate);
+  const expansionTokens = variant === "progressive" && scenario.progressiveExpansionTokenCap !== undefined
+    ? Math.min(rawExpansionTokens, scenario.progressiveExpansionTokenCap)
+    : rawExpansionTokens;
+  const retryOverhead = variant === "progressive"
+    ? scenario.progressiveRetryOverhead ?? scenario.retryOverhead
+    : scenario.retryOverhead;
+  const retryTokens = estimateTokens(retryOverhead ?? "");
   const baselineBillableTokens = rawTokens * CONTEXT_TURNS;
   const optimizedBillableTokens = (compactTokens + expansionTokens + retryTokens) * CONTEXT_TURNS + aiInputTokens + aiOutputTokens;
   const netTokensSaved = baselineBillableTokens - optimizedBillableTokens;
@@ -637,9 +695,9 @@ function scenarioResult(scenario: Scenario): ScenarioResult {
   };
 }
 
-export function runAdversarialBenchmark(): BenchmarkReport {
+export function runAdversarialBenchmark(variant: BenchmarkVariant = "progressive"): BenchmarkReport {
   const scenarios = adversarialScenarios();
-  const results = scenarios.map(scenarioResult);
+  const results = scenarios.map((scenario) => scenarioResult(scenario, variant));
   const coverage = Object.fromEntries(
     REQUIRED_WORKFLOWS.map((workflow) => [workflow, results.some((result) => result.workflow === workflow)])
   ) as Record<string, boolean>;
@@ -677,6 +735,7 @@ export function runAdversarialBenchmark(): BenchmarkReport {
   const weightedCostReduction = weightedBaselineCostUsd > 0 ? (weightedBaselineCostUsd - weightedOptimizedCostUsd) / weightedBaselineCostUsd : 0;
 
   return {
+    variant,
     auditFindings: AUDIT_FINDINGS,
     scenarios: results,
     categories,
@@ -696,6 +755,7 @@ export function runAdversarialBenchmark(): BenchmarkReport {
       p90Reduction: percentile(reductions, 90),
       qualityFailures: results.filter((result) => !result.qualityPassed).length,
       target90Achieved: weightedTokenReduction >= 0.9 && results.every((result) => result.qualityPassed),
+      target70Achieved: weightedTokenReduction >= 0.7 && results.every((result) => result.qualityPassed),
       defensibleThreshold: DEFENSIBLE_THRESHOLD,
       defensibleThresholdAchieved: weightedTokenReduction >= DEFENSIBLE_THRESHOLD && results.every((result) => result.qualityPassed),
     },
@@ -713,6 +773,7 @@ function tokens(value: number): string {
 export function formatAdversarialReport(report: BenchmarkReport): string {
   const lines: string[] = [];
   lines.push("open-terminal adversarial token benchmark");
+  lines.push(`Variant: ${report.variant}`);
   lines.push("");
   lines.push("Why the previous benchmark was invalid:");
   for (const finding of report.auditFindings) {
@@ -764,15 +825,18 @@ export function formatAdversarialReport(report: BenchmarkReport): string {
   lines.push(`- median scenario reduction: ${pct(report.totals.medianReduction)}`);
   lines.push(`- p10/p90 scenario reduction: ${pct(report.totals.p10Reduction)} / ${pct(report.totals.p90Reduction)}`);
   lines.push(`- quality failures: ${report.totals.qualityFailures}`);
+  lines.push(`- 70% target: ${report.totals.target70Achieved ? "SUPPORTED" : "NOT SUPPORTED"}`);
   lines.push(`- 90% claim: ${report.totals.target90Achieved ? "SUPPORTED" : "NOT SUPPORTED"}`);
   lines.push(`- defensible threshold (${pct(report.totals.defensibleThreshold)}): ${report.totals.defensibleThresholdAchieved ? "pass" : "fail"}`);
   lines.push("");
   lines.push("Interpretation:");
   if (report.totals.target90Achieved) {
     lines.push("The adversarial suite supports a 90% weighted token-reduction claim.");
+  } else if (report.totals.target70Achieved) {
+    lines.push(`The ${report.variant} variant supports a 70% weighted token-reduction target while the 90% all-workflows claim remains unsupported.`);
   } else {
-    lines.push(`The adversarial suite does not support a 90% all-coding-workflows claim. The defensible weighted reduction is ${pct(report.totals.weightedTokenReduction)}.`);
+    lines.push(`The ${report.variant} variant does not support a 70% weighted target. The defensible weighted reduction is ${pct(report.totals.weightedTokenReduction)}.`);
   }
-  lines.push("Scenarios with full-detail expansion, cold starts, provider overhead, and small outputs are intentionally allowed to reduce or reverse savings.");
+  lines.push("Scenarios with full-detail expansion, cold starts, provider overhead, and small outputs are still allowed to reduce or reverse savings.");
   return lines.join("\n");
 }

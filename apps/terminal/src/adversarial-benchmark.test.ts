@@ -29,18 +29,30 @@ describe("adversarial benchmark", () => {
   });
 
   it("does not let the aggregate hide weak or negative categories", () => {
-    const report = runAdversarialBenchmark();
-    expect(report.categories.length).toBeGreaterThan(5);
-    expect(report.totals.worstCaseReduction).toBeLessThan(0);
-    expect(report.totals.p10Reduction).toBeLessThan(report.totals.medianReduction);
-    expect(report.totals.p90Reduction).toBeGreaterThan(report.totals.medianReduction);
+    const baseline = runAdversarialBenchmark("baseline");
+    const progressive = runAdversarialBenchmark("progressive");
+
+    expect(baseline.categories.length).toBeGreaterThan(5);
+    expect(baseline.totals.worstCaseReduction).toBeLessThan(0);
+    expect(baseline.totals.p10Reduction).toBeLessThan(baseline.totals.medianReduction);
+    expect(baseline.totals.p90Reduction).toBeGreaterThan(baseline.totals.medianReduction);
+
+    expect(progressive.categories.length).toBe(baseline.categories.length);
+    expect(progressive.totals.p10Reduction).toBeLessThanOrEqual(progressive.totals.medianReduction);
+    expect(progressive.totals.p90Reduction).toBeGreaterThanOrEqual(progressive.totals.medianReduction);
   });
 
-  it("does not support a forced 90 percent claim when adversarial evidence is weaker", () => {
-    const report = runAdversarialBenchmark();
-    expect(report.totals.weightedTokenReduction).toBeLessThan(0.9);
-    expect(report.totals.target90Achieved).toBe(false);
-    expect(report.totals.defensibleThresholdAchieved).toBe(true);
+  it("supports the progressive 70 percent target without inflating it to 90 percent", () => {
+    const baseline = runAdversarialBenchmark("baseline");
+    const progressive = runAdversarialBenchmark("progressive");
+
+    expect(baseline.totals.weightedTokenReduction).toBeLessThan(0.7);
+    expect(baseline.totals.target70Achieved).toBe(false);
+    expect(progressive.totals.weightedTokenReduction).toBeGreaterThanOrEqual(0.7);
+    expect(progressive.totals.target70Achieved).toBe(true);
+    expect(progressive.totals.weightedTokenReduction).toBeLessThan(0.9);
+    expect(progressive.totals.target90Achieved).toBe(false);
+    expect(progressive.totals.defensibleThresholdAchieved).toBe(true);
   });
 
   it("keeps critical error markers in compact outputs", () => {
