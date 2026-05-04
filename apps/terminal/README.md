@@ -28,6 +28,7 @@ terminal sessions stats
 terminal discover --days=30
 bun run benchmark
 bun benchmarks/benchmark.mjs --variant=baseline
+bun benchmarks/benchmark.mjs --variant=progressive
 bun benchmarks/benchmark.mjs --compare
 ```
 
@@ -41,19 +42,23 @@ bun test
 bun run benchmark
 ```
 
-Latest local result, comparing the old baseline with the progressive disclosure variant:
+Latest local result, comparing the old baseline with the progressive disclosure and indexed variants:
 
 ```text
-Baseline adversarial token reduction:     49.8%
-Progressive token reduction:              85.0%
-Progressive cost reduction:               89.1%
-70% adversarial target:                   SUPPORTED
-90% all-coding-workflows claim:           NOT SUPPORTED
+Baseline adversarial token reduction:     56.4%
+Progressive token reduction:              93.6% (quality failures remain)
+Indexed token reduction:                  98.0%
+Indexed cost reduction:                   98.0%
+Indexed quality rate:                     100.0%
+Stress scenarios:                         320
+Minimum scenarios per workflow:           17
+90% weighted adversarial target:          SUPPORTED
+99.99% quality target:                    SUPPORTED
 ```
 
-The honest result is not "90% everywhere." Some workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, and large repetitive listings. Other workflows are intentionally weaker or zero-savings: small outputs, already-compact output, and cases where the agent must inspect exact lines instead of trusting a summary.
+The honest result is not "90% everywhere." Some workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, large repetitive listings, paged search results, indexed diffs, and huge logs. Other workflows are intentionally weaker or zero-savings: small outputs, already-compact output, and short retry outputs where there is not much token budget to save.
 
-Current pass/fail rule: the suite must cover every required workflow, preserve critical error markers, keep no-savings scenarios honest, and clear a 70% weighted token-reduction threshold. The progressive variant reaches that by returning summaries/handles first, then charging only realistic follow-up expansion through `grep`, `offset`, `limit`, and `context` windows when details are needed.
+Current pass/fail rule: the suite must cover every required workflow, preserve critical error markers, keep no-savings scenarios honest, include at least 200 stress scenarios with at least 10 scenarios per required workflow, clear a 90% weighted token-reduction threshold, and preserve at least 99.99% quality. The indexed variant reaches that by returning summaries/handles first, then charging only realistic follow-up expansion through deterministic manifests and `grep`, `offset`, `limit`, and `context` windows when details are needed.
 
 The app gets there through several cheap layers:
 

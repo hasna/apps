@@ -13,9 +13,9 @@ if (!existsSync(builtModule)) {
 }
 
 const variantArg = process.argv.find((arg) => arg.startsWith("--variant="));
-const variant = variantArg?.split("=")[1] ?? "progressive";
-if (!["baseline", "progressive"].includes(variant)) {
-  console.error("Invalid variant. Use --variant=baseline or --variant=progressive");
+const variant = variantArg?.split("=")[1] ?? "indexed";
+if (!["baseline", "progressive", "indexed"].includes(variant)) {
+  console.error("Invalid variant. Use --variant=baseline, --variant=progressive, or --variant=indexed");
   process.exit(1);
 }
 
@@ -25,8 +25,11 @@ if (process.argv.includes("--json")) {
 } else {
   if (process.argv.includes("--compare")) {
     const baseline = runAdversarialBenchmark("baseline");
+    const progressive = runAdversarialBenchmark("progressive");
+    const indexed = runAdversarialBenchmark("indexed");
     console.log(`Baseline token reduction: ${(baseline.totals.weightedTokenReduction * 100).toFixed(1)}%`);
-    console.log(`Progressive token reduction: ${(report.totals.weightedTokenReduction * 100).toFixed(1)}%`);
+    console.log(`Progressive token reduction: ${(progressive.totals.weightedTokenReduction * 100).toFixed(1)}%`);
+    console.log(`Indexed token reduction: ${(indexed.totals.weightedTokenReduction * 100).toFixed(1)}%`);
     console.log("");
   }
   console.log(formatAdversarialReport(report));
