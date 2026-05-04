@@ -27,6 +27,8 @@ terminal stats
 terminal sessions stats
 terminal discover --days=30
 bun run benchmark
+bun benchmarks/benchmark.mjs --variant=baseline
+bun benchmarks/benchmark.mjs --compare
 ```
 
 ## Token Reduction
@@ -39,25 +41,25 @@ bun test
 bun run benchmark
 ```
 
-Latest local result:
+Latest local result, comparing the old baseline with the progressive disclosure variant:
 
 ```text
-Weighted raw billable tokens:       1,121,590
-Weighted optimized billable tokens:   562,605
-Weighted net tokens saved:            558,985
-Weighted token reduction:              49.8%
-Weighted cost reduction:               54.0%
-90% all-coding-workflows claim:        NOT SUPPORTED
+Baseline adversarial token reduction:     49.8%
+Progressive token reduction:              85.0%
+Progressive cost reduction:               89.1%
+70% adversarial target:                   SUPPORTED
+90% all-coding-workflows claim:           NOT SUPPORTED
 ```
 
-The honest result is not "90% everywhere." Some workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, and large repetitive listings. Other workflows are weak or negative: full diffs before commit, security/detail review, command retries, cold-cache starts, and cases where the agent must expand full output.
+The honest result is not "90% everywhere." Some workflows beat 90%: passing test summaries, package-install noise, repeated identical/diff test loops, and large repetitive listings. Other workflows are intentionally weaker or zero-savings: small outputs, already-compact output, and cases where the agent must inspect exact lines instead of trusting a summary.
 
-Current pass/fail rule: the suite must cover every required workflow, preserve critical error markers, and clear a 45% weighted token-reduction threshold. The threshold is deliberately below 90% because the suite includes workflows where compression should not claim savings.
+Current pass/fail rule: the suite must cover every required workflow, preserve critical error markers, keep no-savings scenarios honest, and clear a 70% weighted token-reduction threshold. The progressive variant reaches that by returning summaries/handles first, then charging only realistic follow-up expansion through `grep`, `offset`, `limit`, and `context` windows when details are needed.
 
 The app gets there through several cheap layers:
 
 - zero-AI compression for ANSI stripping, noise filtering, dedupe, truncation, lazy expansion, smart directory display, and diff caching
 - structured MCP tools for `execute_smart`, `execute_diff`, `search_content`, `search_files`, `read_file`, `repo_state`, `token_stats`, and `session_history`
+- progressive output expansion so agents can request matching lines, bounded windows, or context around a match instead of reloading the entire command output
 - cheap AI routing for terminal summaries, preferring Groq for output processing and Cerebras for open-source model execution when keys are available
 - local learned prompt-to-command mappings so repeated agent requests can skip AI entirely
 - persistent economy/session stats so agents can measure token savings, cost, and ROI over time
