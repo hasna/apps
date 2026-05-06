@@ -138,6 +138,17 @@ shortlinks cloud sync
 
 The cloud database service name is `shortlinks`.
 
+## AWS Origin
+
+For an apex domain that needs stable A records, `infra/aws-ec2-user-data.sh` bootstraps a small EC2 redirect origin with:
+
+- `@hasna/shortlinks` installed through Bun
+- local SQLite data synced with the `shortlinks` RDS database through `@hasna/cloud`
+- Caddy terminating HTTPS and proxying to `shortlinks serve`
+- a systemd timer that syncs links and clicks every minute
+
+The script reads the RDS password from AWS Secrets Manager through the instance role; it does not contain secret values.
+
 ## Development
 
 ```bash
