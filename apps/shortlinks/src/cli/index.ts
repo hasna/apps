@@ -646,6 +646,8 @@ program
         },
         environment: {
           cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
+          cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
+          cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),
           shortlinks_origin_present: Boolean(process.env.SHORTLINKS_ORIGIN),
         },
       };

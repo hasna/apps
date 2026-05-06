@@ -95,11 +95,27 @@ SHORTLINKS_ORIGIN = "${options.origin || "https://shortlinks.example.com"}"
   return { workerPath, wranglerPath };
 }
 
-async function cloudflareRequest<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
+function cloudflareAuthHeaders(token?: string): Record<string, string> {
+  const apiToken = token || process.env.CLOUDFLARE_API_TOKEN;
+  if (apiToken) return { authorization: `Bearer ${apiToken}` };
+
+  const apiKey = process.env.CLOUDFLARE_API_KEY;
+  const email = process.env.CLOUDFLARE_EMAIL;
+  if (apiKey && email) {
+    return {
+      "x-auth-key": apiKey,
+      "x-auth-email": email,
+    };
+  }
+
+  throw new Error("Cloudflare auth is required: set CLOUDFLARE_API_TOKEN, or CLOUDFLARE_API_KEY plus CLOUDFLARE_EMAIL.");
+}
+
+async function cloudflareRequest<T>(token: string | undefined, path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${token}`,
+      ...cloudflareAuthHeaders(token),
       "content-type": "application/json",
       ...(init.headers || {}),
     },
@@ -121,7 +137,7 @@ function candidateZones(hostname: string): string[] {
   return candidates;
 }
 
-export async function findCloudflareZoneId(hostname: string, token: string): Promise<string> {
+export async function findCloudflareZoneId(hostname: string, token?: string): Promise<string> {
   for (const zone of candidateZones(hostname)) {
     const result = await cloudflareRequest<Array<{ id: string; name: string }>>(token, `/zones?name=${encodeURIComponent(zone)}`);
     if (result[0]?.id) return result[0].id;
@@ -138,7 +154,6 @@ export async function upsertCloudflareDnsRecord(options: CloudflareDnsOptions): 
     proxied: options.proxied,
   });
   if (options.dryRun) return plan;
-  if (!token) throw new Error("CLOUDFLARE_API_TOKEN is required unless --dry-run is used.");
   const zoneId = options.zoneId || await findCloudflareZoneId(plan.hostname, token);
   const existing = await cloudflareRequest<Array<{ id: string }>>(
     token,

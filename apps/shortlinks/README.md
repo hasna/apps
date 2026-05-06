@@ -96,7 +96,7 @@ shortlinks cloudflare worker \
   --origin https://shortlinks.hasna.xyz
 ```
 
-Upsert DNS when `CLOUDFLARE_API_TOKEN` is available:
+Upsert DNS when `CLOUDFLARE_API_TOKEN` is available. Global API key auth is also supported with `CLOUDFLARE_API_KEY` plus `CLOUDFLARE_EMAIL`.
 
 ```bash
 shortlinks cloudflare dns has.na --target shortlinks.hasna.xyz
