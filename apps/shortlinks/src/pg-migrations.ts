@@ -60,12 +60,5 @@ export const PG_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_clicks_domain ON clicks(domain_id);
   CREATE INDEX IF NOT EXISTS idx_clicks_clicked_at ON clicks(clicked_at);
   CREATE INDEX IF NOT EXISTS idx_clicks_updated ON clicks(updated_at);
-
-  CREATE TABLE IF NOT EXISTS _pg_migrations (
-    id INTEGER PRIMARY KEY,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-
-  INSERT INTO _pg_migrations (id) VALUES (1) ON CONFLICT DO NOTHING;
   `,
 ];
