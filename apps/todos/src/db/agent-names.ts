@@ -124,9 +124,30 @@ export function isBlockedAgentName(name: string): boolean {
   return isGenericAgentName(normalized) || hasGeneratedNumericSuffix(normalized) || !ONE_WORD_NAME_RE.test(normalized);
 }
 
+function alphabeticSuffix(index: number): string {
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  let value = index;
+  let suffix = "";
+  do {
+    suffix = letters[value % letters.length] + suffix;
+    value = Math.floor(value / letters.length) - 1;
+  } while (value >= 0);
+  return suffix;
+}
+
 export function suggestAgentNames(existingNames: Iterable<string> = []): string[] {
   const existing = new Set([...existingNames].map(normalizeAgentNameInput));
-  return PREFERRED_AGENT_NAMES.filter((name) => !existing.has(name));
+  const suggestions: string[] = PREFERRED_AGENT_NAMES.filter((name) => !existing.has(name));
+  for (let suffixIndex = 0; suggestions.length < 20 && suffixIndex < 1000; suffixIndex++) {
+    const suffix = alphabeticSuffix(suffixIndex);
+    for (const base of PREFERRED_AGENT_NAMES) {
+      const candidate = `${base}${suffix}`;
+      if (existing.has(candidate) || suggestions.includes(candidate)) continue;
+      suggestions.push(candidate);
+      if (suggestions.length >= 20) break;
+    }
+  }
+  return suggestions;
 }
 
 export function validateAgentName(name: string, existingNames: Iterable<string> = []): string {

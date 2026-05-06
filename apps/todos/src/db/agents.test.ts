@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import { registerAgent, isAgentConflict, releaseAgent, autoReleaseStaleAgents, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent, archiveAgent, unarchiveAgent, normalizeGeneratedAgentNames, InvalidAgentNameError } from "./agents.js";
+import { PREFERRED_AGENT_NAMES } from "./agent-names.js";
 
 let uniqueNameCounter = 0;
 
@@ -231,6 +232,27 @@ describe("normalizeGeneratedAgentNames", () => {
     expect(comment.agent_id).toBe(renamed[0]!.new_name);
     expect(task.agent_id).toBe(renamed[1]!.new_name);
     expect(task.locked_by).toBe(renamed[2]!.new_name);
+  });
+
+  it("should use alphabetic fallback names when the preferred pool is exhausted", () => {
+    const db = getDatabase();
+    const timestamp = new Date().toISOString();
+    for (const [index, name] of PREFERRED_AGENT_NAMES.entries()) {
+      db.run(
+        "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+        [`pref${String(index).padStart(4, "0")}`, name, timestamp, timestamp],
+      );
+    }
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+      ["bad99999", "agent-1", timestamp, timestamp],
+    );
+
+    const renamed = normalizeGeneratedAgentNames(db);
+    expect(renamed).toHaveLength(1);
+    expect(renamed[0]!.old_name).toBe("agent-1");
+    expect(renamed[0]!.new_name).toMatch(/^[a-z]+$/);
+    expect(PREFERRED_AGENT_NAMES).not.toContain(renamed[0]!.new_name as any);
   });
 });
 
