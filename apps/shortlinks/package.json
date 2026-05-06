@@ -1,0 +1,77 @@
+{
+  "name": "@hasna/shortlinks",
+  "version": "0.1.0",
+  "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and @hasna cloud sync",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "shortlinks": "dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./cloudflare": {
+      "types": "./dist/cloudflare.d.ts",
+      "import": "./dist/cloudflare.js"
+    }
+  },
+  "files": [
+    "dist",
+    "cloudflare",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/cloud && bun build src/index.ts --outdir dist --target bun --external @hasna/cloud && bun build src/server.ts --outdir dist --target bun && bun build src/cloudflare.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev:cli": "bun run src/cli/index.ts",
+    "prepublishOnly": "bun run test && bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/shortlinks 2>/dev/null || true"
+  },
+  "keywords": [
+    "shortlinks",
+    "shortlink",
+    "url-shortener",
+    "cli",
+    "cloudflare",
+    "custom-domains",
+    "ai-agents",
+    "agentic",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/shortlinks.git"
+  },
+  "homepage": "https://github.com/hasna/shortlinks",
+  "bugs": {
+    "url": "https://github.com/hasna/shortlinks/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@hasna/cloud": "^0.1.30",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}
