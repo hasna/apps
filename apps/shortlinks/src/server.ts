@@ -45,13 +45,23 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
       return json({ service: "shortlinks", ok: true });
     }
 
-    const slug = decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] || "");
+    let slug = "";
+    try {
+      slug = decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] || "");
+    } catch {
+      return json({ error: "Invalid slug." }, 400);
+    }
     if (!slug) return json({ error: "Missing slug." }, 404);
 
     const host = getHost(request, options.defaultHost);
     if (!host) return json({ error: "Missing Host header." }, 400);
 
-    const link = store.resolve(host, slug);
+    let link: Link | null = null;
+    try {
+      link = store.resolve(host, slug);
+    } catch {
+      return json({ error: "Shortlink not found.", slug, host }, 404);
+    }
     if (!link) return json({ error: "Shortlink not found.", slug, host }, 404);
     if (!link.active) return json({ error: "Shortlink is disabled.", slug, host }, 410);
     if (isExpired(link)) return json({ error: "Shortlink is expired.", slug, host }, 410);

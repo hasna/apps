@@ -56,4 +56,21 @@ describe("redirect handler", () => {
 
     store.close();
   });
+
+  test("returns not found for scanner paths with invalid slug characters", async () => {
+    const store = new ShortlinksStore(dbPath);
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+
+    const handler = createShortlinksHandler({ store });
+    const response = await handler(new Request("https://has.na/application.properties", { headers: { host: "has.na" } }));
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      error: "Shortlink not found.",
+      slug: "application.properties",
+      host: "has.na",
+    });
+
+    store.close();
+  });
 });
