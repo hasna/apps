@@ -467,6 +467,22 @@ export function ensureSchema(db: Database): void {
 
   ensureColumn("tasks", "cycle_id", "TEXT REFERENCES cycles(id) ON DELETE SET NULL");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_tasks_cycle ON tasks(cycle_id) WHERE cycle_id IS NOT NULL");
+
+  // API keys — hashed credentials for external app/API access
+  ensureTable("api_keys", `
+    CREATE TABLE api_keys (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      prefix TEXT NOT NULL UNIQUE,
+      permissions TEXT NOT NULL DEFAULT '["*"]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      expires_at TEXT,
+      revoked_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(revoked_at, expires_at)");
 }
 
 export function backfillTaskTags(db: Database): void {

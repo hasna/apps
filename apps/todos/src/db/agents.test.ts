@@ -1,6 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
-import { registerAgent, isAgentConflict, releaseAgent, autoReleaseStaleAgents, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent, archiveAgent, unarchiveAgent } from "./agents.js";
+import { registerAgent, isAgentConflict, releaseAgent, autoReleaseStaleAgents, getAgent, getAgentByName, listAgents, updateAgentActivity, updateAgent, deleteAgent, archiveAgent, unarchiveAgent, normalizeGeneratedAgentNames, InvalidAgentNameError } from "./agents.js";
+
+let uniqueNameCounter = 0;
+
+function uniqueName(prefix: string): string {
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  uniqueNameCounter += 1;
+  const first = letters[uniqueNameCounter % letters.length]!;
+  const second = letters[Math.floor(uniqueNameCounter / letters.length) % letters.length]!;
+  const third = letters[Math.floor(uniqueNameCounter / (letters.length * letters.length)) % letters.length]!;
+  return `${prefix}${first}${second}${third}`;
+}
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -30,20 +41,29 @@ describe("registerAgent", () => {
   });
 
   it("should be idempotent and return same ID on re-register", () => {
-    const first = registerAgent({ name: "test-agent" });
-    const second = registerAgent({ name: "test-agent" });
+    const first = registerAgent({ name: "testagent" });
+    const second = registerAgent({ name: "testagent" });
     expect(second.id).toBe(first.id);
     expect(second.last_seen_at).toBeDefined();
   });
 
   it("should store description and metadata", () => {
     const agent = registerAgent({
-      name: "custom-bot",
+      name: "custombot",
       description: "A custom bot",
       metadata: { version: "1.0", features: ["search"] },
     });
     expect(agent.description).toBe("A custom bot");
     expect(agent.metadata).toEqual({ version: "1.0", features: ["search"] });
+  });
+
+  it("should reject generic and generated numbered names", () => {
+    expect(() => registerAgent({ name: "agent" })).toThrow(InvalidAgentNameError);
+    expect(() => registerAgent({ name: "agent-1" })).toThrow(/generic names/);
+    expect(() => registerAgent({ name: "assistant-2" })).toThrow(/generic names/);
+    expect(() => registerAgent({ name: "valeria-29" })).toThrow(/numbered suffix/);
+    expect(() => registerAgent({ name: "two words" })).toThrow(/single word/);
+    expect(() => registerAgent({ name: "busy-agent" })).toThrow(/one word/);
   });
 });
 
@@ -108,10 +128,10 @@ describe("getAgent", () => {
 
 describe("getAgentByName", () => {
   it("should return agent by name", () => {
-    registerAgent({ name: "my-agent" });
-    const found = getAgentByName("my-agent");
+    registerAgent({ name: "myagent" });
+    const found = getAgentByName("myagent");
     expect(found).not.toBeNull();
-    expect(found!.name).toBe("my-agent");
+    expect(found!.name).toBe("myagent");
   });
 
   it("should return null for non-existent name", () => {
@@ -148,20 +168,20 @@ describe("updateAgentActivity", () => {
 
 describe("updateAgent", () => {
   it("should update agent name", () => {
-    const agent = registerAgent({ name: "old-name-" + Date.now() });
-    const newName = "new-name-" + Date.now();
+    const agent = registerAgent({ name: uniqueName("oldname") });
+    const newName = uniqueName("newname");
     const updated = updateAgent(agent.id, { name: newName });
     expect(updated.name).toBe(newName);
   });
 
   it("should update agent description", () => {
-    const agent = registerAgent({ name: "desc-test-" + Date.now() });
+    const agent = registerAgent({ name: uniqueName("desctest") });
     const updated = updateAgent(agent.id, { description: "New description" });
     expect(updated.description).toBe("New description");
   });
 
   it("should update agent role", () => {
-    const agent = registerAgent({ name: "role-test-" + Date.now() });
+    const agent = registerAgent({ name: uniqueName("roletest") });
     const updated = updateAgent(agent.id, { role: "admin" });
     expect(updated.role).toBe("admin");
   });
@@ -171,10 +191,46 @@ describe("updateAgent", () => {
   });
 
   it("should update multiple fields at once", () => {
-    const agent = registerAgent({ name: "multi-" + Date.now() });
-    const updated = updateAgent(agent.id, { name: "renamed-" + Date.now(), description: "Updated", role: "observer" });
+    const agent = registerAgent({ name: uniqueName("multi") });
+    const updated = updateAgent(agent.id, { name: uniqueName("renamed"), description: "Updated", role: "observer" });
     expect(updated.description).toBe("Updated");
     expect(updated.role).toBe("observer");
+  });
+
+  it("should reject renames to generated numbered names", () => {
+    const agent = registerAgent({ name: uniqueName("plain") });
+    expect(() => updateAgent(agent.id, { name: "agent-3" })).toThrow(InvalidAgentNameError);
+  });
+});
+
+describe("normalizeGeneratedAgentNames", () => {
+  it("should rename generic generated agents and update name references", () => {
+    const db = getDatabase();
+    const timestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)",
+      ["bad00001", "agent-1", timestamp, timestamp, "bad00002", "valeria-29", timestamp, timestamp, "bad00003", "busy-agent", timestamp, timestamp],
+    );
+    db.run(
+      "INSERT INTO tasks (id, title, status, priority, assigned_to, agent_id, locked_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ["task0001", "Assigned", "pending", "medium", "agent-1", "valeria-29", "busy-agent", timestamp, timestamp],
+    );
+    db.run(
+      "INSERT INTO task_comments (id, task_id, agent_id, content, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["comment1", "task0001", "agent-1", "progress", timestamp],
+    );
+
+    const renamed = normalizeGeneratedAgentNames(db);
+    expect(renamed).toHaveLength(3);
+    expect(renamed.map((item) => item.old_name)).toEqual(["agent-1", "valeria-29", "busy-agent"]);
+    expect(renamed.every((item) => !item.new_name.match(/-\d+$/))).toBe(true);
+
+    const task = db.query("SELECT assigned_to, agent_id, locked_by FROM tasks WHERE id = ?").get("task0001") as { assigned_to: string; agent_id: string; locked_by: string };
+    const comment = db.query("SELECT agent_id FROM task_comments WHERE id = ?").get("comment1") as { agent_id: string };
+    expect(task.assigned_to).toBe(renamed[0]!.new_name);
+    expect(comment.agent_id).toBe(renamed[0]!.new_name);
+    expect(task.agent_id).toBe(renamed[1]!.new_name);
+    expect(task.locked_by).toBe(renamed[2]!.new_name);
   });
 });
 
@@ -234,7 +290,7 @@ describe("archiveAgent / unarchiveAgent", () => {
 
 describe("releaseAgent", () => {
   it("should clear session_id and make agent immediately stale", () => {
-    const agent = registerAgent({ name: "release-test", session_id: "sess-1" }) as any;
+    const agent = registerAgent({ name: "releasetest", session_id: "sess-1" }) as any;
     expect(releaseAgent(agent.id)).toBe(true);
     const after = getAgent(agent.id)!;
     expect(after.session_id).toBeNull();
@@ -243,13 +299,13 @@ describe("releaseAgent", () => {
   });
 
   it("should allow release with matching session_id", () => {
-    const agent = registerAgent({ name: "release-match", session_id: "sess-abc" }) as any;
+    const agent = registerAgent({ name: "releasematch", session_id: "sess-abc" }) as any;
     expect(releaseAgent(agent.id, "sess-abc")).toBe(true);
     expect(getAgent(agent.id)!.session_id).toBeNull();
   });
 
   it("should deny release with non-matching session_id", () => {
-    const agent = registerAgent({ name: "release-deny", session_id: "sess-real" }) as any;
+    const agent = registerAgent({ name: "releasedeny", session_id: "sess-real" }) as any;
     expect(releaseAgent(agent.id, "sess-fake")).toBe(false);
     // Agent should still have its session
     expect(getAgent(agent.id)!.session_id).toBe("sess-real");
@@ -260,10 +316,10 @@ describe("releaseAgent", () => {
   });
 
   it("should make name immediately available for re-registration", () => {
-    const agent = registerAgent({ name: "reuse-me", session_id: "sess-old" }) as any;
+    const agent = registerAgent({ name: "reuseme", session_id: "sess-old" }) as any;
     releaseAgent(agent.id);
     // Now a different session should be able to take the name
-    const result = registerAgent({ name: "reuse-me", session_id: "sess-new" });
+    const result = registerAgent({ name: "reuseme", session_id: "sess-new" });
     expect(isAgentConflict(result)).toBe(false);
     expect((result as any).session_id).toBe("sess-new");
   });
@@ -289,60 +345,60 @@ describe("registerAgent — tightened no-session path", () => {
 
   it("should allow no-session registration when agent is stale", () => {
     const db = getDatabase();
-    const agent = registerAgent({ name: "stale-guard", session_id: "old-sess" }) as any;
+    const agent = registerAgent({ name: "staleguard", session_id: "old-sess" }) as any;
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, agent.id]);
     // No-session registration should succeed for stale agents
-    const result = registerAgent({ name: "stale-guard" });
+    const result = registerAgent({ name: "staleguard" });
     expect(isAgentConflict(result)).toBe(false);
   });
 });
 
 describe("registerAgent — force flag", () => {
   it("should allow force takeover of active agent with different session", () => {
-    registerAgent({ name: "force-target", session_id: "sess-a" });
-    const result = registerAgent({ name: "force-target", session_id: "sess-b", force: true });
+    registerAgent({ name: "forcetarget", session_id: "sess-a" });
+    const result = registerAgent({ name: "forcetarget", session_id: "sess-b", force: true });
     expect(isAgentConflict(result)).toBe(false);
     expect((result as any).session_id).toBe("sess-b");
   });
 
   it("should allow force takeover when caller has no session", () => {
-    registerAgent({ name: "force-nosess", session_id: "active-sess" });
-    const result = registerAgent({ name: "force-nosess", force: true });
+    registerAgent({ name: "forcenosess", session_id: "active-sess" });
+    const result = registerAgent({ name: "forcenosess", force: true });
     expect(isAgentConflict(result)).toBe(false);
   });
 
   it("should not need force for stale agents", () => {
     const db = getDatabase();
-    const agent = registerAgent({ name: "no-force-needed", session_id: "old" }) as any;
+    const agent = registerAgent({ name: "noforceneeded", session_id: "old" }) as any;
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, agent.id]);
-    const result = registerAgent({ name: "no-force-needed", session_id: "new" });
+    const result = registerAgent({ name: "noforceneeded", session_id: "new" });
     expect(isAgentConflict(result)).toBe(false);
   });
 });
 
 describe("updateAgent — rename conflict check", () => {
   it("should reject rename to a name held by active agent", () => {
-    const agentA = registerAgent({ name: "holder-a" }) as any;
-    const agentB = registerAgent({ name: "holder-b" }) as any;
-    expect(() => updateAgent(agentB.id, { name: "holder-a" })).toThrow("Cannot rename");
+    const agentA = registerAgent({ name: "holdera" }) as any;
+    const agentB = registerAgent({ name: "holderb" }) as any;
+    expect(() => updateAgent(agentB.id, { name: "holdera" })).toThrow("Cannot rename");
   });
 
   it("should allow rename to a free name", () => {
-    const agent = registerAgent({ name: "rename-free" }) as any;
-    const updated = updateAgent(agent.id, { name: "totally-new-name" });
-    expect(updated.name).toBe("totally-new-name");
+    const agent = registerAgent({ name: "renamefree" }) as any;
+    const updated = updateAgent(agent.id, { name: "totallynewname" });
+    expect(updated.name).toBe("totallynewname");
   });
 
   it("should allow rename to a stale agent's name", () => {
     const db = getDatabase();
-    const holder = registerAgent({ name: "stale-holder" }) as any;
+    const holder = registerAgent({ name: "staleholder" }) as any;
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, holder.id]);
-    const agent = registerAgent({ name: "wants-rename" }) as any;
-    const updated = updateAgent(agent.id, { name: "stale-holder" });
-    expect(updated.name).toBe("stale-holder");
+    const agent = registerAgent({ name: "wantsrename" }) as any;
+    const updated = updateAgent(agent.id, { name: "staleholder" });
+    expect(updated.name).toBe("staleholder");
   });
 });
 
@@ -351,29 +407,29 @@ describe("configurable stale window", () => {
     const db = getDatabase();
     // Set a 5-second timeout
     process.env["TODOS_AGENT_TIMEOUT_MS"] = "5000";
-    const agent = registerAgent({ name: "short-timeout", session_id: "sess-short" }) as any;
+    const agent = registerAgent({ name: "shorttimeout", session_id: "sess-short" }) as any;
     // Manually set last_seen_at to 6 seconds ago (beyond the 5s window)
     const staleTime = new Date(Date.now() - 6000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, agent.id]);
     // Different session should succeed — agent is stale under the 5s window
-    const result = registerAgent({ name: "short-timeout", session_id: "sess-other" });
+    const result = registerAgent({ name: "shorttimeout", session_id: "sess-other" });
     expect(isAgentConflict(result)).toBe(false);
     delete process.env["TODOS_AGENT_TIMEOUT_MS"];
   });
 
   it("should default to 30 minutes when env var is not set", () => {
     delete process.env["TODOS_AGENT_TIMEOUT_MS"];
-    const agent = registerAgent({ name: "default-timeout", session_id: "sess-default" }) as any;
+    const agent = registerAgent({ name: "defaulttimeout", session_id: "sess-default" }) as any;
     // Should be active (not stale) — different session should be blocked
-    const result = registerAgent({ name: "default-timeout", session_id: "sess-intruder" });
+    const result = registerAgent({ name: "defaulttimeout", session_id: "sess-intruder" });
     expect(isAgentConflict(result)).toBe(true);
   });
 
   it("should ignore invalid env var values", () => {
     process.env["TODOS_AGENT_TIMEOUT_MS"] = "not-a-number";
-    const agent = registerAgent({ name: "bad-env", session_id: "sess-1" }) as any;
+    const agent = registerAgent({ name: "badenv", session_id: "sess-1" }) as any;
     // Should fall back to 30min default — agent is active, so different session blocked
-    const result = registerAgent({ name: "bad-env", session_id: "sess-2" });
+    const result = registerAgent({ name: "badenv", session_id: "sess-2" });
     expect(isAgentConflict(result)).toBe(true);
     delete process.env["TODOS_AGENT_TIMEOUT_MS"];
   });
@@ -384,7 +440,7 @@ describe("autoReleaseStaleAgents", () => {
     const db = getDatabase();
     process.env["TODOS_AGENT_AUTO_RELEASE"] = "true";
     process.env["TODOS_AGENT_TIMEOUT_MS"] = "5000";
-    const agent = registerAgent({ name: "auto-rel", session_id: "sess-auto" }) as any;
+    const agent = registerAgent({ name: "autorel", session_id: "sess-auto" }) as any;
     // Make agent stale
     const staleTime = new Date(Date.now() - 6000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, agent.id]);
@@ -398,7 +454,7 @@ describe("autoReleaseStaleAgents", () => {
   it("should not release when disabled", () => {
     const db = getDatabase();
     delete process.env["TODOS_AGENT_AUTO_RELEASE"];
-    const agent = registerAgent({ name: "no-auto", session_id: "sess-no" }) as any;
+    const agent = registerAgent({ name: "noauto", session_id: "sess-no" }) as any;
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [staleTime, agent.id]);
     const released = autoReleaseStaleAgents(db);
@@ -409,7 +465,7 @@ describe("autoReleaseStaleAgents", () => {
   it("should not release active agents", () => {
     const db = getDatabase();
     process.env["TODOS_AGENT_AUTO_RELEASE"] = "true";
-    const agent = registerAgent({ name: "still-active", session_id: "sess-act" }) as any;
+    const agent = registerAgent({ name: "stillactive", session_id: "sess-act" }) as any;
     // Agent was just created — should be active
     const released = autoReleaseStaleAgents(db);
     expect(released).toBe(0);

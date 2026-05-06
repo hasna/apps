@@ -11,6 +11,7 @@ import { registerCloudCommands } from "./commands/cloud-commands.js";
 import { registerMcpHooksCommands } from "./commands/mcp-hooks-commands.js";
 import { registerDispatchCommands } from "./commands/dispatch.js";
 import { registerMachineCommands } from "./commands/machines.js";
+import { registerApiKeyCommands } from "./commands/api-key-commands.js";
 
 const program = new Command();
 
@@ -35,5 +36,6 @@ registerCloudCommands(program);
 registerMcpHooksCommands(program);
 registerDispatchCommands(program);
 registerMachineCommands(program);
+registerApiKeyCommands(program);
 
 program.parse();

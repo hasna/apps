@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "node:child_process";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
-import { releaseAgent, listAgents } from "../../db/agents.js";
+import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNames } from "../../db/agents.js";
 import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
 import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
@@ -116,6 +116,32 @@ export function registerAgentCommands(program: Command) {
         }
         for (const a of agents) {
           console.log(`  ${chalk.cyan(a.id)} ${chalk.bold(a.name)} ${chalk.dim(a.last_seen_at)}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
+    .command("agents-normalize")
+    .alias("normalize-agents")
+    .description("Rename invalid/generated agent names (agent, agent-1, name-2, two-word names) to safe one-word names")
+    .action(async () => {
+      const globalOpts = program.opts();
+      try {
+        const db = getDatabase();
+        const renamed = normalizeGeneratedAgentNames(db);
+        if (globalOpts.json) {
+          output({ renamed, suggestions: suggestAgentNames(listAgents().map((agent) => agent.name)).slice(0, 5) }, true);
+          return;
+        }
+        if (renamed.length === 0) {
+          console.log(chalk.green("No invalid or generated agent names found."));
+          return;
+        }
+        console.log(chalk.green(`Normalized ${renamed.length} agent name(s):`));
+        for (const item of renamed) {
+          console.log(`  ${chalk.cyan(item.id)} ${chalk.red(item.old_name)} ${chalk.dim("->")} ${chalk.bold(item.new_name)} ${chalk.dim(`(${item.reference_updates} reference updates)`)}`);
         }
       } catch (e) {
         handleError(e);

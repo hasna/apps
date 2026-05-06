@@ -1,6 +1,15 @@
 import type { Database } from "bun:sqlite";
 import type { Agent, AgentConflictError, AgentRow, AgentStatus, RegisterAgentInput } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
+import {
+  InvalidAgentNameError,
+  normalizeAgentNameInput,
+  normalizeGeneratedAgentNames,
+  suggestAgentNames,
+  validateAgentName,
+} from "./agent-names.js";
+
+export { InvalidAgentNameError, normalizeGeneratedAgentNames, suggestAgentNames };
 
 /** How long (ms) before an agent is considered stale and its name can be taken over.
  *  Configurable via TODOS_AGENT_TIMEOUT_MS env var, defaults to 30 minutes. */
@@ -39,7 +48,9 @@ export function getAvailableNamesFromPool(pool: string[], db: Database): string[
     (db.query("SELECT name FROM agents WHERE status = 'active' AND last_seen_at > ?").all(cutoff) as { name: string }[])
       .map((r) => r.name.toLowerCase()),
   );
-  return pool.filter((name) => !activeNames.has(name.toLowerCase()));
+  return pool
+    .map(normalizeAgentNameInput)
+    .filter((name) => !activeNames.has(name));
 }
 
 function shortUuid(): string {
@@ -70,9 +81,10 @@ function rowToAgent(row: AgentRow): Agent {
  */
 export function registerAgent(input: RegisterAgentInput, db?: Database): Agent | AgentConflictError {
   const d = db || getDatabase();
-  const normalizedName = input.name.trim().toLowerCase();
+  const existingNames = (d.query("SELECT name FROM agents").all() as { name: string }[]).map((row) => row.name);
+  const normalizedName = validateAgentName(input.name, existingNames);
 
-  // Pool is advisory — any name is allowed, pool just provides suggestions on conflict
+  // Pool is advisory for availability, but generated/generic names are blocked globally.
 
   const existing = getAgentByName(normalizedName, d);
   if (existing) {
@@ -235,7 +247,8 @@ export function updateAgent(
   const params: (string | null)[] = [now()];
 
   if (input.name !== undefined) {
-    const newName = input.name.trim().toLowerCase();
+    const existingNames = (d.query("SELECT name FROM agents WHERE id != ?").all(id) as { name: string }[]).map((row) => row.name);
+    const newName = validateAgentName(input.name, existingNames);
     // Check if name is held by a different active agent
     const holder = getAgentByName(newName, d);
     if (holder && holder.id !== id) {

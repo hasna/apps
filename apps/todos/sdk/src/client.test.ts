@@ -3,9 +3,14 @@ import { TodosClient, TodosError } from "./client.js";
 import { todosTools } from "./schemas.js";
 
 const originalEventSource = globalThis.EventSource;
+const originalFetch = globalThis.fetch;
+const originalTodosApiKey = process.env["TODOS_API_KEY"];
 
 afterEach(() => {
   globalThis.EventSource = originalEventSource;
+  globalThis.fetch = originalFetch;
+  if (originalTodosApiKey === undefined) delete process.env["TODOS_API_KEY"];
+  else process.env["TODOS_API_KEY"] = originalTodosApiKey;
 });
 
 describe("TodosClient", () => {
@@ -20,7 +25,7 @@ describe("TodosClient", () => {
   });
 
   it("should create with agent name", () => {
-    const client = new TodosClient({ agentName: "test-agent" });
+    const client = new TodosClient({ agentName: "testagent" });
     expect(client).toBeDefined();
   });
 
@@ -37,6 +42,41 @@ describe("TodosClient", () => {
   it("should throw if myQueue called before init", async () => {
     const client = new TodosClient();
     expect(client.myQueue()).rejects.toThrow("Call init() first");
+  });
+});
+
+describe("TodosClient API keys", () => {
+  it("sends API key from options as bearer auth", async () => {
+    let observedHeaders: HeadersInit | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedHeaders = init?.headers;
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const client = new TodosClient({ baseUrl: "http://todos.test", apiKey: "test-option-key" });
+    await client.listTasks();
+
+    expect((observedHeaders as Record<string, string>).Authorization).toBe("Bearer test-option-key");
+  });
+
+  it("reads TODOS_API_KEY when apiKey option is omitted", async () => {
+    process.env["TODOS_API_KEY"] = "test-env-key";
+    let observedHeaders: HeadersInit | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedHeaders = init?.headers;
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const client = new TodosClient({ baseUrl: "http://todos.test" });
+    await client.listTasks();
+
+    expect((observedHeaders as Record<string, string>).Authorization).toBe("Bearer test-env-key");
   });
 });
 
@@ -98,7 +138,7 @@ describe("TodosClient method construction", () => {
   });
 
   it("should create client with agent name and pass it to init", async () => {
-    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19994", agentName: "my-agent" });
+    const client = new TodosClient({ baseUrl: "http://127.0.0.1:19994", agentName: "myagent" });
     // init will fail due to no server, but validates the method exists
     await expect(client.init()).rejects.toThrow();
   });

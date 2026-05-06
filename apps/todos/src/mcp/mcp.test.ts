@@ -333,6 +333,18 @@ describe("MCP tool wrappers", () => {
     const released = await callCapturedTool(tools, "release_agent", { agent_id: "mcpagent" });
     expect(released.content[0]!.text).toContain("Agent released");
   });
+
+  it("agent tools reject generated generic names", async () => {
+    const tools = captureTools(registerAgentTools);
+    const tool = tools.get("register_agent");
+    expect(tool).toBeDefined();
+
+    const result = await tool!.handler({
+      name: "agent-1",
+    }) as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Invalid agent name");
+  });
 });
 
 describe("Recurring task operations", () => {

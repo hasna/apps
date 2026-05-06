@@ -1247,7 +1247,7 @@ describe("getNextTask", () => {
   });
 
   it("should prefer tasks assigned to the given agent", () => {
-    const agent = registerAgent({ name: "test-agent" }, db);
+    const agent = registerAgent({ name: "testagent" }, db);
     createTask({ title: "Unassigned critical", priority: "critical" }, db);
     createTask({ title: "Assigned medium", priority: "medium", assigned_to: agent.id }, db);
 
@@ -1312,14 +1312,14 @@ describe("claimNextTask", () => {
   });
 
   it("should return null when no tasks available", () => {
-    const agent = registerAgent({ name: "claimer-empty" }, db);
+    const agent = registerAgent({ name: "claimerempty" }, db);
     const claimed = claimNextTask(agent.id, undefined, db);
     expect(claimed).toBeNull();
   });
 
   it("should not allow two agents to claim the same task", () => {
-    const agent1 = registerAgent({ name: "agent-one" }, db);
-    const agent2 = registerAgent({ name: "agent-two" }, db);
+    const agent1 = registerAgent({ name: "agentone" }, db);
+    const agent2 = registerAgent({ name: "agenttwo" }, db);
     createTask({ title: "Only task", priority: "critical" }, db);
 
     const claimed1 = claimNextTask(agent1.id, undefined, db);
@@ -1333,7 +1333,7 @@ describe("claimNextTask", () => {
   });
 
   it("should respect project_id filter", () => {
-    const agent = registerAgent({ name: "claimer-filter" }, db);
+    const agent = registerAgent({ name: "claimerfilter" }, db);
     const projectA = createProject({ name: "Proj A", path: "/tmp/claim-a" }, db);
     const projectB = createProject({ name: "Proj B", path: "/tmp/claim-b" }, db);
     createTask({ title: "Task in A", project_id: projectA.id, priority: "low" }, db);
@@ -1346,7 +1346,7 @@ describe("claimNextTask", () => {
   });
 
   it("should skip blocked tasks", () => {
-    const agent = registerAgent({ name: "claimer-blocked" }, db);
+    const agent = registerAgent({ name: "claimerblocked" }, db);
     const blocker = createTask({ title: "Blocker", priority: "low" }, db);
     const blocked = createTask({ title: "Blocked critical", priority: "critical" }, db);
     addDependency(blocked.id, blocker.id, db);
@@ -1510,7 +1510,7 @@ describe("failTask", () => {
   });
 
   it("should release lock on failure", () => {
-    const agent = registerAgent({ name: "lock-agent" }, db);
+    const agent = registerAgent({ name: "lockagent" }, db);
     const task = createTask({ title: "Locked task" }, db);
     lockTask(task.id, agent.id, db);
     const locked = getTask(task.id, db)!;
@@ -2020,7 +2020,7 @@ describe("getOverdueTasks", () => {
     yesterday.setDate(yesterday.getDate() - 1);
 
     const task = createTask({ title: "Done overdue", due_at: yesterday.toISOString() }, db);
-    const agent = registerAgent({ name: "test-overdue-agent" }, db) as any;
+    const agent = registerAgent({ name: "testoverdueagent" }, db) as any;
     startTask(task.id, agent.id, db);
     completeTask(task.id, undefined, db);
 

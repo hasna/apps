@@ -22,6 +22,14 @@ function parsePort(): number {
   return DEFAULT_PORT;
 }
 
+function parseStringArg(name: string): string | undefined {
+  const arg = process.argv.find((a) => a === name || a.startsWith(`${name}=`));
+  if (!arg) return undefined;
+  if (arg.includes("=")) return arg.split("=")[1] || undefined;
+  const idx = process.argv.indexOf(arg);
+  return process.argv[idx + 1] || undefined;
+}
+
 async function findFreePort(start: number): Promise<number> {
   for (let port = start; port < start + 100; port++) {
     try {
@@ -42,7 +50,11 @@ async function main() {
     console.log(`Port ${requestedPort} in use, using ${port}`);
   }
   const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true";
-  startServer(port, { open: !noOpen });
+  startServer(port, {
+    open: !noOpen,
+    host: parseStringArg("--host"),
+    apiKey: parseStringArg("--api-key"),
+  });
 }
 
 main();

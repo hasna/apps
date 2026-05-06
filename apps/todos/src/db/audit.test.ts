@@ -253,7 +253,7 @@ describe("getRecap", () => {
   });
 
   it("should include agent activity", () => {
-    const agent = registerAgent({ name: "test-agent-" + Date.now(), role: "agent", status: "active" }, db);
+    const agent = registerAgent({ name: "testagent", role: "agent", status: "active" }, db);
     const task = createTask({ title: "Agent task", assigned_to: agent.id }, db);
     db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [now(), task.id]);
     db.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), agent.id]);

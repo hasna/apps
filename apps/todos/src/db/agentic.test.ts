@@ -149,28 +149,28 @@ describe("findBestAgent (auto-assignment)", () => {
   });
 
   it("should return the only agent", () => {
-    registerAgent({ name: "solo-agent" }, db);
+    registerAgent({ name: "soloagent" }, db);
     const task = createTask({ title: "Test" }, db);
-    expect(findBestAgent(task, db)).toBe("solo-agent");
+    expect(findBestAgent(task, db)).toBe("soloagent");
   });
 
   it("should prefer agent with fewer in-progress tasks", () => {
-    const busyAgent = registerAgent({ name: "busy-agent" }, db);
-    const idleAgent = registerAgent({ name: "idle-agent" }, db);
+    const busyAgent = registerAgent({ name: "busyagent" }, db);
+    const idleAgent = registerAgent({ name: "idleagent" }, db);
     // Give busy-agent 3 in-progress tasks
     for (let i = 0; i < 3; i++) {
       const t = createTask({ title: `Busy ${i}`, assigned_to: busyAgent.id }, db);
       startTask(t.id, busyAgent.id, db);
     }
     const task = createTask({ title: "New task" }, db);
-    expect(findBestAgent(task, db)).toBe("idle-agent");
+    expect(findBestAgent(task, db)).toBe("idleagent");
   });
 
   it("should skip admin agents", () => {
-    registerAgent({ name: "admin-agent", role: "admin" }, db);
-    registerAgent({ name: "worker" }, db);
+    registerAgent({ name: "adminagent", role: "admin" }, db);
+    registerAgent({ name: "janus" }, db);
     const task = createTask({ title: "Test" }, db);
-    expect(findBestAgent(task, db)).toBe("worker");
+    expect(findBestAgent(task, db)).toBe("janus");
   });
 
   it("should skip observer agents", () => {
@@ -181,19 +181,19 @@ describe("findBestAgent (auto-assignment)", () => {
   });
 
   it("should return null when only admin and observer agents exist", () => {
-    registerAgent({ name: "admin-only", role: "admin" }, db);
-    registerAgent({ name: "observer-only", role: "observer" }, db);
+    registerAgent({ name: "adminonly", role: "admin" }, db);
+    registerAgent({ name: "observeronly", role: "observer" }, db);
     const task = createTask({ title: "Test" }, db);
     expect(findBestAgent(task, db)).toBeNull();
   });
 
   it("should pick agent with equal load", () => {
-    registerAgent({ name: "agent-a" }, db);
-    registerAgent({ name: "agent-b" }, db);
+    registerAgent({ name: "agenta" }, db);
+    registerAgent({ name: "agentb" }, db);
     const task = createTask({ title: "Test" }, db);
     const result = findBestAgent(task, db);
     // Either agent is valid since both have 0 load
-    expect(["agent-a", "agent-b"]).toContain(result);
+    expect(["agenta", "agentb"]).toContain(result);
   });
 });
 

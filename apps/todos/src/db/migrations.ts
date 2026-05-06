@@ -838,4 +838,21 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_tasks_cycle ON tasks(cycle_id) WHERE cycle_id IS NOT NULL;
   INSERT OR IGNORE INTO _migrations (id) VALUES (49);
   `,
+  // Migration 50: API keys for authenticated app/API access
+  `
+  CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    prefix TEXT NOT NULL UNIQUE,
+    permissions TEXT NOT NULL DEFAULT '["*"]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT,
+    expires_at TEXT,
+    revoked_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix);
+  CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(revoked_at, expires_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (50);
+  `,
 ];

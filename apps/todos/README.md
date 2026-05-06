@@ -31,6 +31,18 @@ todos-mcp
 todos-serve
 ```
 
+Generate an API key before exposing the REST API to another app. Once at least one
+generated key exists, all `/api/*` requests require `x-api-key` or
+`Authorization: Bearer`.
+
+```bash
+todos api-keys create "My app"
+todos-serve --host 0.0.0.0
+```
+
+Pass the generated key from your app as `x-api-key` or set `TODOS_API_KEY` for
+the SDK client.
+
 ## Cloud Sync
 
 This package supports cloud sync via `@hasna/cloud`:

@@ -21,7 +21,7 @@ import {
   claimNextTask,
 } from "../db/tasks.js";
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
-import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent } from "../db/agents.js";
+import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
 import { createPlan, getPlan, listPlans, updatePlan, deletePlan } from "../db/plans.js";
 import { getDatabase } from "../db/database.js";
 import { listOrgs, createOrg, updateOrg, deleteOrg } from "../db/orgs.js";
@@ -451,29 +451,34 @@ export function handleDeleteProject(id: string, _ctx: RouteContext, json: (data:
 }
 
 export async function handleAgentMe(_req: Request, url: URL, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
-  const name = url.searchParams.get("name");
-  if (!name) return json({ error: "Missing name param" }, 400);
-  const agentResult = registerAgent({ name });
-  if (isAgentConflict(agentResult)) return json({ error: agentResult.message, conflict: true }, 409);
-  const agent = agentResult;
-  const tasks = listTasks({ assigned_to: name });
-  const agentIdTasks = listTasks({ agent_id: agent.id });
-  const allTasks = [...tasks, ...agentIdTasks.filter(t => !tasks.some(tt => tt.id === t.id))];
-  const pending = allTasks.filter(t => t.status === "pending");
-  const inProgress = allTasks.filter(t => t.status === "in_progress");
-  const completed = allTasks.filter(t => t.status === "completed");
-  return json({
-    agent,
-    pending_tasks: pending.map(t => taskToSummary(t)),
-    in_progress_tasks: inProgress.map(t => taskToSummary(t)),
-    stats: {
-      total: allTasks.length,
-      pending: pending.length,
-      in_progress: inProgress.length,
-      completed: completed.length,
-      completion_rate: allTasks.length > 0 ? Math.round((completed.length / allTasks.length) * 100) : 0,
-    },
-  });
+  try {
+    const name = url.searchParams.get("name");
+    if (!name) return json({ error: "Missing name param" }, 400);
+    const agentResult = registerAgent({ name });
+    if (isAgentConflict(agentResult)) return json({ error: agentResult.message, conflict: true }, 409);
+    const agent = agentResult;
+    const tasks = listTasks({ assigned_to: agent.name });
+    const agentIdTasks = listTasks({ agent_id: agent.id });
+    const allTasks = [...tasks, ...agentIdTasks.filter(t => !tasks.some(tt => tt.id === t.id))];
+    const pending = allTasks.filter(t => t.status === "pending");
+    const inProgress = allTasks.filter(t => t.status === "in_progress");
+    const completed = allTasks.filter(t => t.status === "completed");
+    return json({
+      agent,
+      pending_tasks: pending.map(t => taskToSummary(t)),
+      in_progress_tasks: inProgress.map(t => taskToSummary(t)),
+      stats: {
+        total: allTasks.length,
+        pending: pending.length,
+        in_progress: inProgress.length,
+        completed: completed.length,
+        completion_rate: allTasks.length > 0 ? Math.round((completed.length / allTasks.length) * 100) : 0,
+      },
+    });
+  } catch (e) {
+    if (e instanceof InvalidAgentNameError) return json({ error: e.message, suggestions: e.suggestions }, 400);
+    return json({ error: e instanceof Error ? e.message : "Failed to get agent profile" }, 500);
+  }
 }
 
 export function handleAgentQueue(agentId: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Response {
@@ -548,6 +553,7 @@ export async function handleRegisterAgent(req: Request, _ctx: RouteContext, json
     if (isAgentConflict(result)) return json({ error: result.message, conflict: true }, 409);
     return json(result, 201);
   } catch (e) {
+    if (e instanceof InvalidAgentNameError) return json({ error: e.message, suggestions: e.suggestions }, 400);
     return json({ error: e instanceof Error ? e.message : "Failed to register agent" }, 500);
   }
 }
@@ -558,6 +564,7 @@ export async function handleUpdateAgent(id: string, req: Request, _ctx: RouteCon
     const agent = updateAgent(id, body);
     return json(agent);
   } catch (e) {
+    if (e instanceof InvalidAgentNameError) return json({ error: e.message, suggestions: e.suggestions }, 400);
     return json({ error: e instanceof Error ? e.message : "Failed to update agent" }, 500);
   }
 }

@@ -134,4 +134,5 @@ export interface TodosClientOptions {
   baseUrl?: string;
   agentName?: string;
   agentRole?: string;
+  apiKey?: string;
 }

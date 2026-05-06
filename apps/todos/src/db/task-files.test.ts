@@ -73,13 +73,13 @@ describe("listActiveFiles", () => {
   });
 
   it("includes agent name when agent assigned", () => {
-    const agent = registerAgent({ name: "test-agent" });
+    const agent = registerAgent({ name: "testagent" });
     const task = createTask({ title: "T1", assigned_to: agent.id });
     updateTask(task.id, { status: "in_progress", version: getTask(task.id)!.version });
     addTaskFile({ task_id: task.id, path: "src/foo.ts" });
 
     const files = listActiveFiles();
-    expect(files[0]!.agent_name).toBe("test-agent");
+    expect(files[0]!.agent_name).toBe("testagent");
   });
 
   it("returns empty when no in-progress tasks have files", () => {
@@ -313,8 +313,8 @@ describe("getFileHeatMap", () => {
   });
 
   it("counts unique agents correctly", () => {
-    const agent1 = registerAgent({ name: "agent-a" });
-    const agent2 = registerAgent({ name: "agent-b" });
+    const agent1 = registerAgent({ name: "agenta" });
+    const agent2 = registerAgent({ name: "agentb" });
     const t1 = createTask({ title: "T1" });
     const t2 = createTask({ title: "T2" });
     addTaskFile({ task_id: t1.id, path: "src/multi.ts", agent_id: agent1.id });
@@ -361,7 +361,7 @@ describe("bulkAddTaskFiles", () => {
   });
 
   it("sets agent_id on all files", () => {
-    const agent = registerAgent({ name: "bulk-agent" });
+    const agent = registerAgent({ name: "bulkagent" });
     const task = createTask({ title: "T1" });
     const results = bulkAddTaskFiles(task.id, ["src/x.ts", "src/y.ts"], agent.id);
     expect(results.every(r => r.agent_id === agent.id)).toBe(true);

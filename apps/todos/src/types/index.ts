@@ -222,6 +222,18 @@ export interface AgentConflictError {
   suggestions?: string[]; // available names from the project pool to try instead
 }
 
+// API Key
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  permissions: string[];
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+
 // Task List
 export interface TaskList {
   id: string;

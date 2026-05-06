@@ -438,10 +438,17 @@ describe("Unknown routes", () => {
 
 describe("API - Agent CRUD", () => {
   it("POST /api/agents should register agent", async () => {
-    const res = await api("POST", "/api/agents", { name: "test-agent-" + Date.now() });
+    const res = await api("POST", "/api/agents", { name: "testagent" });
     expect(res.status).toBe(201);
     const data = (await res.json()) as Record<string, unknown>;
-    expect((data.name as string)).toContain("test-agent");
+    expect((data.name as string)).toContain("testagent");
+  });
+
+  it("POST /api/agents should reject generated generic names", async () => {
+    const res = await api("POST", "/api/agents", { name: "agent-1" });
+    expect(res.status).toBe(400);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(String(data.error)).toContain("Invalid agent name");
   });
 
   it("POST /api/agents should reject missing name", async () => {
@@ -450,7 +457,7 @@ describe("API - Agent CRUD", () => {
   });
 
   it("PATCH /api/agents/:id should update agent", async () => {
-    const createRes = await api("POST", "/api/agents", { name: "patch-test-" + Date.now() });
+    const createRes = await api("POST", "/api/agents", { name: "patchtest" });
     const agent = (await createRes.json()) as Record<string, unknown>;
 
     const res = await api("PATCH", `/api/agents/${agent.id}`, { description: "Updated via API", role: "admin" });
@@ -461,7 +468,7 @@ describe("API - Agent CRUD", () => {
   });
 
   it("DELETE /api/agents/:id should delete agent", async () => {
-    const createRes = await api("POST", "/api/agents", { name: "delete-test-" + Date.now() });
+    const createRes = await api("POST", "/api/agents", { name: "deletetest" });
     const agent = (await createRes.json()) as Record<string, unknown>;
 
     const res = await api("DELETE", `/api/agents/${agent.id}`);

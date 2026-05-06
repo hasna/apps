@@ -79,17 +79,17 @@ afterAll(async () => {
 
 describe("GET /api/agents/me", () => {
   it("should auto-register and return agent profile", async () => {
-    const res = await fetch(url("/api/agents/me?name=test-discovery"));
+    const res = await fetch(url("/api/agents/me?name=testdiscovery"));
     expect(res.status).toBe(200);
     const data = (await res.json()) as Record<string, unknown>;
-    expect((data.agent as Record<string, unknown>).name).toBe("test-discovery");
+    expect((data.agent as Record<string, unknown>).name).toBe("testdiscovery");
     expect(data.stats).toBeDefined();
     expect(data.pending_tasks).toBeDefined();
     expect(data.in_progress_tasks).toBeDefined();
   });
 
   it("should return stats with correct shape", async () => {
-    const res = await fetch(url("/api/agents/me?name=stats-agent"));
+    const res = await fetch(url("/api/agents/me?name=statsagent"));
     const data = (await res.json()) as Record<string, unknown>;
     const stats = data.stats as Record<string, unknown>;
     expect(stats).toHaveProperty("total");
@@ -106,10 +106,17 @@ describe("GET /api/agents/me", () => {
     expect(res.status).toBe(400);
   });
 
+  it("should reject generated generic names", async () => {
+    const res = await fetch(url("/api/agents/me?name=agent-1"));
+    expect(res.status).toBe(400);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(String(data.error)).toContain("Invalid agent name");
+  });
+
   it("should be idempotent for same agent name", async () => {
-    const res1 = await fetch(url("/api/agents/me?name=idempotent-agent"));
+    const res1 = await fetch(url("/api/agents/me?name=idempotentagent"));
     const data1 = (await res1.json()) as Record<string, unknown>;
-    const res2 = await fetch(url("/api/agents/me?name=idempotent-agent"));
+    const res2 = await fetch(url("/api/agents/me?name=idempotentagent"));
     const data2 = (await res2.json()) as Record<string, unknown>;
     const agent1 = data1.agent as Record<string, unknown>;
     const agent2 = data2.agent as Record<string, unknown>;

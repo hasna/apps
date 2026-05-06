@@ -8,6 +8,7 @@ import { existsSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { getDatabase } from "../db/database.js";
+import { hasActiveApiKeys, verifyApiKey } from "../db/api-keys.js";
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
@@ -60,14 +61,26 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Permissions-Policy": "camera=, microphone=, geolocation=",
 };
 
+function getProvidedApiKey(req: Request): string | null {
+  const headerKey = req.headers.get("x-api-key");
+  if (headerKey) return headerKey.trim();
+  const auth = req.headers.get("authorization");
+  if (!auth) return null;
+  return auth.replace(/^Bearer\s+/i, "").trim() || null;
+}
+
 /** Check API key auth — returns a Response if unauthorized, null if OK */
 function checkAuth(req: Request, apiKey: string | null): Response | null {
-  if (!apiKey) return null; // no key configured, skip auth
-  const provided = req.headers.get("x-api-key") || req.headers.get("authorization")?.replace("Bearer ", "");
-  if (!provided || provided !== apiKey) {
+  const generatedKeysEnabled = hasActiveApiKeys();
+  if (!apiKey && !generatedKeysEnabled) return null; // no key configured, skip auth
+
+  const provided = getProvidedApiKey(req);
+  const matchesEnvKey = Boolean(apiKey && provided && provided === apiKey);
+  const matchesGeneratedKey = Boolean(provided && verifyApiKey(provided));
+  if (!matchesEnvKey && !matchesGeneratedKey) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
-      headers: { "Content-Type": "application/json", ...SECURITY_HEADERS },
+      headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer", ...SECURITY_HEADERS },
     });
   }
   return null;

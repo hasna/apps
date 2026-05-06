@@ -124,8 +124,20 @@ export {
   getOrgChart,
   matchCapabilities,
   getCapableAgents,
+  normalizeGeneratedAgentNames,
+  suggestAgentNames,
 } from "./db/agents.js";
 export type { OrgNode } from "./db/agents.js";
+
+// API keys
+export {
+  createApiKey,
+  listApiKeys,
+  hasActiveApiKeys,
+  verifyApiKey,
+  revokeApiKey,
+} from "./db/api-keys.js";
+export type { ApiKeyRecord, CreateApiKeyInput, CreatedApiKey } from "./db/api-keys.js";
 
 // Task Lists
 export {

@@ -21,8 +21,8 @@ afterEach(() => {
 describe("work stealing", () => {
   it("should steal a stale task from another agent", () => {
     const db = getDatabase();
-    const agent1 = registerAgent({ name: "worker1" }) as any;
-    const agent2 = registerAgent({ name: "worker2" }) as any;
+    const agent1 = registerAgent({ name: "janus" }) as any;
+    const agent2 = registerAgent({ name: "minerva" }) as any;
     const task = createTask({ title: "Stealable task" }, db);
     startTask(task.id, agent1.id, db);
     // Make it stale
@@ -72,7 +72,7 @@ describe("claimOrSteal", () => {
 
   it("should steal when no pending tasks", () => {
     const db = getDatabase();
-    const agent1 = registerAgent({ name: "holder2" }) as any;
+    const agent1 = registerAgent({ name: "holdertwo" }) as any;
     const task = createTask({ title: "Only task" }, db);
     startTask(task.id, agent1.id, db);
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
@@ -182,7 +182,7 @@ describe("agent budgets", () => {
 
   it("should block when concurrent limit reached", () => {
     const db = getDatabase();
-    const agent = registerAgent({ name: "busy-agent" }, db) as any;
+    const agent = registerAgent({ name: "busyagent" }, db) as any;
     setBudget(agent.id, { max_concurrent: 2 }, db);
 
     const t1 = createTask({ title: "Task 1" }, db);

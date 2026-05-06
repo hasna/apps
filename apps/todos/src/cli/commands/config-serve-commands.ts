@@ -78,6 +78,7 @@ export function registerConfigServeCommands(program: Command) {
     .description("Start the web dashboard")
     .option("--port <port>", "Port number", "19427")
     .option("--host <host>", "Host to bind (default: 127.0.0.1 localhost only, use 0.0.0.0 for all interfaces)")
+    .option("--api-key <key>", "Require this API key for /api/* requests")
     .option("--no-open", "Don't open browser automatically")
     .action(async (opts) => {
       const { startServer } = await import("../../server/serve.js");
@@ -95,7 +96,7 @@ export function registerConfigServeCommands(program: Command) {
       if (port !== requestedPort) {
         console.log(`Port ${requestedPort} in use, using ${port}`);
       }
-      await startServer(port, { open: opts.open !== false, host: opts.host });
+      await startServer(port, { open: opts.open !== false, host: opts.host, apiKey: opts.apiKey });
     });
 
   // watch

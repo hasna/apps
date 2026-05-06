@@ -92,9 +92,9 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
   if (shouldRegisterTool("register_agent")) {
     server.tool(
       "register_agent",
-      "Register an agent. Any name is allowed — the configured pool is advisory, not enforced. Returns a conflict error if the name is held by a recently-active agent.",
+      "Register an agent with a distinctive one-word name. Generic/generated names like agent, agent-1, assistant, or worker-2 are rejected. Prefer Roman or Greek names from suggest_agent_name.",
       {
-        name: z.string().describe("Agent name — any name is allowed. Use suggest_agent_name to see pool suggestions and avoid conflicts."),
+        name: z.string().describe("Distinctive one-word agent name. Use suggest_agent_name first; avoid agent, agent-1, and other numbered generated names."),
         description: z.string().optional(),
         role: z.string().optional(),
         title: z.string().optional(),
@@ -139,7 +139,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
   if (shouldRegisterTool("suggest_agent_name")) {
     server.tool(
       "suggest_agent_name",
-      "Get available agent names for a project. Shows configured pool, active agents, and suggestions. If no pool is configured, any name is allowed.",
+      "Get available Roman/Greek-style agent names for a project. Use these instead of generic generated names.",
       {
         working_dir: z.string().optional().describe("Your working directory — used to look up the project's allowed name pool from config"),
       },
@@ -151,8 +151,13 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
 
           if (!pool) {
             // No pool configured — any name works, just show active agents to avoid conflicts
+            const suggestions = getAvailableNamesFromPool([
+              "caesar", "augustus", "marcus", "brutus", "cicero", "cato", "nero", "claudius", "tiberius", "hadrian",
+              "athena", "apollo", "artemis", "iris", "hector", "sophia", "thalia", "phoebe", "daphne",
+            ], getDatabase());
             const lines = [
-              "No agent pool configured — any name is allowed.",
+              "No project pool configured. Use a distinctive one-word name; generic generated names are blocked.",
+              `Suggested names: ${suggestions.slice(0, 8).join(", ")}`,
               allActive.length > 0
                 ? `Active agents (avoid these names): ${allActive.map(a => `${a.name} (seen ${Math.round((Date.now() - new Date(a.last_seen_at).getTime()) / 60000)}m ago)`).join(", ")}`
                 : "No active agents.",

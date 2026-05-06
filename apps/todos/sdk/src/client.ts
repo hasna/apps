@@ -13,10 +13,13 @@ export class TodosClient {
   private baseUrl: string;
   private agentName: string | null = null;
   private agentId: string | null = null;
+  private apiKey: string | null = null;
 
   constructor(options: TodosClientOptions = {}) {
     this.baseUrl = (options.baseUrl || "http://localhost:19427").replace(/\/$/, "");
     if (options.agentName) this.agentName = options.agentName;
+    const envApiKey = typeof process !== "undefined" ? process.env["TODOS_API_KEY"] : undefined;
+    this.apiKey = options.apiKey || envApiKey || null;
   }
 
   // ── Agent Identity ──────────────────────────────────────────────────────
@@ -220,7 +223,7 @@ export class TodosClient {
   // ── HTTP helpers ────────────────────────────────────────────────────────
 
   private async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`);
+    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.authHeaders() });
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
       throw new TodosError(body.error || res.statusText, res.status);
@@ -231,7 +234,7 @@ export class TodosClient {
   private async post<T>(path: string, body: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -244,7 +247,7 @@ export class TodosClient {
   private async patch<T>(path: string, body: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -255,12 +258,17 @@ export class TodosClient {
   }
 
   private async del<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { method: "DELETE" });
+    const res = await fetch(`${this.baseUrl}${path}`, { method: "DELETE", headers: this.authHeaders() });
     if (!res.ok) {
       const data = await res.json().catch(() => ({ error: res.statusText }));
       throw new TodosError(data.error || res.statusText, res.status);
     }
     return res.json() as Promise<T>;
+  }
+
+  private authHeaders(headers: Record<string, string> = {}): Record<string, string> {
+    if (!this.apiKey) return headers;
+    return { ...headers, Authorization: `Bearer ${this.apiKey}` };
   }
 }
 

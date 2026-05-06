@@ -177,7 +177,7 @@ describe("backfillMachineId", () => {
 
   it("should stamp machine_id on agents without one", () => {
     const db = getDatabase();
-    const agent = registerAgent({ name: "test-agent" });
+    const agent = registerAgent({ name: "testagent" });
 
     const row = db.query("SELECT machine_id FROM agents WHERE id = ?").get(agent.id) as { machine_id: string | null };
     expect(row.machine_id).toBeNull();
