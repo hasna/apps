@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
-import { listTasks } from "../../tasks.js";
+import { listTasks } from "../../db/tasks.js";
 
 interface TaskRelContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -37,7 +37,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ agent_id, project_id, summary, completed, in_progress, blockers, next_steps }) => {
         try {
-          const { createHandoff } = require("../db/handoffs.js") as any;
+          const { createHandoff } = require("../../db/handoffs.js") as any;
           const handoff = createHandoff({
             agent_id, project_id: project_id ? resolveId(project_id, "projects") : undefined,
             summary, completed, in_progress, blockers, next_steps,
@@ -60,7 +60,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ agent_id, project_id }) => {
         try {
-          const { getLatestHandoff } = require("../db/handoffs.js") as any;
+          const { getLatestHandoff } = require("../../db/handoffs.js") as any;
           const handoff = getLatestHandoff(agent_id, project_id ? resolveId(project_id, "projects") : undefined);
           if (!handoff) return { content: [{ type: "text" as const, text: "No handoffs found." }] };
           const lines = [
@@ -93,7 +93,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ source_task_id, target_task_id, relationship_type, created_by }) => {
         try {
-          const { addTaskRelationship } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+          const { addTaskRelationship } = require("../../db/task-relationships.js") as typeof import("../../db/task-relationships.js");
           const rel = addTaskRelationship({
             source_task_id: resolveId(source_task_id),
             target_task_id: resolveId(target_task_id),
@@ -120,7 +120,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ id, source_task_id, target_task_id, relationship_type }) => {
         try {
-          const { removeTaskRelationship, removeTaskRelationshipByPair } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+          const { removeTaskRelationship, removeTaskRelationshipByPair } = require("../../db/task-relationships.js") as typeof import("../../db/task-relationships.js");
           let removed = false;
           if (id) {
             removed = removeTaskRelationship(id);
@@ -147,7 +147,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id, relationship_type }) => {
         try {
-          const { getTaskRelationships } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+          const { getTaskRelationships } = require("../../db/task-relationships.js") as typeof import("../../db/task-relationships.js");
           const rels = getTaskRelationships(resolveId(task_id), relationship_type);
           if (rels.length === 0) return { content: [{ type: "text" as const, text: "No relationships found." }] };
           const lines = rels.map(r => `${r.source_task_id.slice(0,8)} --[${r.relationship_type}]--> ${r.target_task_id.slice(0,8)}${r.metadata && Object.keys(r.metadata).length > 0 ? ` (${JSON.stringify(r.metadata)})` : ""}`);
@@ -168,7 +168,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id }) => {
         try {
-          const { autoDetectFileRelationships } = require("../db/task-relationships.js") as typeof import("../db/task-relationships.js");
+          const { autoDetectFileRelationships } = require("../../db/task-relationships.js") as typeof import("../../db/task-relationships.js");
           const created = autoDetectFileRelationships(resolveId(task_id));
           return { content: [{ type: "text" as const, text: created.length > 0 ? `Created ${created.length} file relationship(s).` : "No file overlaps detected." }] };
         } catch (e) {
@@ -187,7 +187,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       {},
       async () => {
         try {
-          const { syncKgEdges } = require("../db/kg.js") as typeof import("../db/kg.js");
+          const { syncKgEdges } = require("../../db/kg.js") as typeof import("../../db/kg.js");
           const result = syncKgEdges();
           return { content: [{ type: "text" as const, text: `Knowledge graph synced: ${result.synced} edge(s) processed.` }] };
         } catch (e) {
@@ -210,7 +210,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ entity_id, relation_type, entity_type, direction, limit }) => {
         try {
-          const { getRelated } = require("../db/kg.js") as typeof import("../db/kg.js");
+          const { getRelated } = require("../../db/kg.js") as typeof import("../../db/kg.js");
           const edges = getRelated(entity_id, { relation_type, entity_type, direction, limit });
           if (edges.length === 0) return { content: [{ type: "text" as const, text: "No related entities found." }] };
           const lines = edges.map(e => `${e.source_id.slice(0,12)}(${e.source_type}) --[${e.relation_type}]--> ${e.target_id.slice(0,12)}(${e.target_type})`);
@@ -234,7 +234,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ source_id, target_id, max_depth, relation_types }) => {
         try {
-          const { findPath } = require("../db/kg.js") as typeof import("../db/kg.js");
+          const { findPath } = require("../../db/kg.js") as typeof import("../../db/kg.js");
           const paths = findPath(source_id, target_id, { max_depth, relation_types });
           if (paths.length === 0) return { content: [{ type: "text" as const, text: "No path found." }] };
           const lines = paths.map((path, i) => {
@@ -260,7 +260,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ entity_id, max_depth, relation_types }) => {
         try {
-          const { getImpactAnalysis } = require("../db/kg.js") as typeof import("../db/kg.js");
+          const { getImpactAnalysis } = require("../../db/kg.js") as typeof import("../../db/kg.js");
           const impact = getImpactAnalysis(entity_id, { max_depth, relation_types });
           if (impact.length === 0) return { content: [{ type: "text" as const, text: "No downstream impact detected." }] };
           const byDepth = new Map<number, typeof impact>();
@@ -293,7 +293,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, limit }) => {
         try {
-          const { getCriticalPath } = require("../db/kg.js") as typeof import("../db/kg.js");
+          const { getCriticalPath } = require("../../db/kg.js") as typeof import("../../db/kg.js");
           const result = getCriticalPath({ project_id: project_id ? resolveId(project_id, "projects") : undefined, limit });
           if (result.length === 0) return { content: [{ type: "text" as const, text: "No critical path data. Run sync_kg first to populate the knowledge graph." }] };
           const lines = result.map((r, i) => `${i + 1}. ${r.task_id.slice(0,8)} blocks ${r.blocking_count} task(s), max depth ${r.depth}`);
@@ -319,8 +319,8 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, agent_name, role, is_lead }) => {
         try {
-          const { setProjectAgentRole } = require("../db/project-agent-roles.js") as any;
-          const { getAgentByName } = require("../db/agents.js") as typeof import("../db/agents.js");
+          const { setProjectAgentRole } = require("../../db/project-agent-roles.js") as any;
+          const { getAgentByName } = require("../../db/agents.js") as typeof import("../../db/agents.js");
           const agent = getAgentByName(agent_name);
           if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_name}` }], isError: true };
           const pid = resolveId(project_id, "projects");
@@ -342,7 +342,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, format, filter_to_project }) => {
         try {
-          const { getProjectOrgChart } = require("../db/project-agent-roles.js") as any;
+          const { getProjectOrgChart } = require("../../db/project-agent-roles.js") as any;
           const pid = resolveId(project_id, "projects");
           const tree = getProjectOrgChart(pid, { filter_to_project });
 
@@ -382,7 +382,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id }) => {
         try {
-          const { listProjectAgentRoles } = require("../db/project-agent-roles.js") as any;
+          const { listProjectAgentRoles } = require("../../db/project-agent-roles.js") as any;
           const pid = resolveId(project_id, "projects");
           const roles = listProjectAgentRoles(pid);
           return { content: [{ type: "text" as const, text: JSON.stringify(roles, null, 2) }] };
@@ -404,7 +404,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ capabilities, min_score, limit }) => {
         try {
-          const { getCapableAgents } = require("../db/agents.js") as typeof import("../db/agents.js");
+          const { getCapableAgents } = require("../../db/agents.js") as typeof import("../../db/agents.js");
           const results = getCapableAgents(capabilities, { min_score, limit });
           if (results.length === 0) return { content: [{ type: "text" as const, text: "No agents match the given capabilities." }] };
           const lines = results.map(r => `${r.agent.name} (${r.agent.id}) score:${(r.score * 100).toFixed(0)}% caps:[${r.agent.capabilities.join(",")}]`);
@@ -429,7 +429,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ stuck_minutes, confidence_threshold, project_id }) => {
         try {
-          const { patrolTasks } = require("../db/patrol.js") as typeof import("../db/patrol.js");
+          const { patrolTasks } = require("../../db/patrol.js") as typeof import("../../db/patrol.js");
           const result = patrolTasks({
             stuck_minutes,
             confidence_threshold,
@@ -459,7 +459,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, limit }) => {
         try {
-          const { getReviewQueue } = require("../db/patrol.js") as typeof import("../db/patrol.js");
+          const { getReviewQueue } = require("../../db/patrol.js") as typeof import("../../db/patrol.js");
           const tasks = getReviewQueue({
             project_id: project_id ? resolveId(project_id, "projects") : undefined,
             limit,
@@ -489,7 +489,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id, score, reviewer_id }) => {
         try {
-          const { scoreTask } = require("../db/agent-metrics.js") as typeof import("../db/agent-metrics.js");
+          const { scoreTask } = require("../../db/agent-metrics.js") as typeof import("../../db/agent-metrics.js");
           scoreTask(resolveId(task_id), score, reviewer_id);
           return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} scored: ${score}` }] };
         } catch (e) {
@@ -515,7 +515,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id, minutes, agent_id, started_at, ended_at, notes }) => {
         try {
-          const { logTime } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { logTime } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           logTime({ task_id: resolveId(task_id), minutes, agent_id, started_at, ended_at, notes });
           return { content: [{ type: "text" as const, text: `Logged ${minutes} min on task ${task_id.slice(0,8)}` }] };
         } catch (e) {
@@ -536,7 +536,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, agent_id, since }) => {
         try {
-          const { getTimeReport } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { getTimeReport } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const report = getTimeReport({ project_id: project_id ? resolveId(project_id, "projects") : undefined, agent_id, since });
           if (report.length === 0) return { content: [{ type: "text" as const, text: "No completed tasks found." }] };
           const lines = report.map(r => {
@@ -565,7 +565,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id, agent_id }) => {
         try {
-          const { watchTask } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { watchTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           watchTask(resolveId(task_id), agent_id || "");
           return { content: [{ type: "text" as const, text: `Now watching task ${task_id.slice(0,8)}` }] };
         } catch (e) {
@@ -585,7 +585,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id, agent_id }) => {
         try {
-          const { unwatchTask } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { unwatchTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           unwatchTask(resolveId(task_id), agent_id || "");
           return { content: [{ type: "text" as const, text: `Stopped watching task ${task_id.slice(0,8)}` }] };
         } catch (e) {
@@ -604,7 +604,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ task_id }) => {
         try {
-          const { getTaskWatchers } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { getTaskWatchers } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const watchers = getTaskWatchers(resolveId(task_id));
           if (watchers.length === 0) return { content: [{ type: "text" as const, text: "No watchers." }] };
           return { content: [{ type: "text" as const, text: `Watching (${watchers.length}): ${watchers.map(w => w.agent_id).join(", ")}` }] };
@@ -630,8 +630,8 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, plan_id, task_list_id, since, agent_id }) => {
         try {
-          const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
-          const { patrolTasks } = require("../db/patrol.js") as typeof import("../db/patrol.js");
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { patrolTasks } = require("../../db/patrol.js") as typeof import("../../db/patrol.js");
           const completed = listTasks({ status: "completed", project_id, plan_id, task_list_id, assigned_to: agent_id, limit: 500 }, undefined) as any[];
           const filtered = since ? completed.filter((t: any) => t.completed_at && t.completed_at >= since) : completed;
           const total = filtered.length;
@@ -668,7 +668,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, limit }) => {
         try {
-          const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({ status: "pending", project_id, assigned_to: "", limit: limit || 20 }, undefined) as any[];
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "Inbox is empty." }] };
           const lines = tasks.map((t: any) => `[${t.priority}] ${t.title.slice(0,60)} (${t.id.slice(0,8)})`);
@@ -692,7 +692,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ agent_id, project_id }) => {
         try {
-          const { getAgentMetrics } = require("../db/agent-metrics.js") as typeof import("../db/agent-metrics.js");
+          const { getAgentMetrics } = require("../../db/agent-metrics.js") as typeof import("../../db/agent-metrics.js");
           const metrics = getAgentMetrics(agent_id, {
             project_id: project_id ? resolveId(project_id, "projects") : undefined,
           });
@@ -724,7 +724,7 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
       },
       async ({ project_id, limit }) => {
         try {
-          const { getLeaderboard } = require("../db/agent-metrics.js") as typeof import("../db/agent-metrics.js");
+          const { getLeaderboard } = require("../../db/agent-metrics.js") as typeof import("../../db/agent-metrics.js");
           const entries = getLeaderboard({
             project_id: project_id ? resolveId(project_id, "projects") : undefined,
             limit,

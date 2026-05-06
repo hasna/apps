@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
+import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -19,6 +20,16 @@ interface TaskWorkflowContext {
 
 export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask } = ctx;
+
+  function versionFor(taskId: string, version?: number): number {
+    const { getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+    const current = getTask(taskId);
+    if (!current) throw new TaskNotFoundError(taskId);
+    if (version !== undefined && current.version !== version) {
+      throw new VersionConflictError(taskId, version, current.version);
+    }
+    return current.version;
+  }
 
   // === APPROVE / FAIL ===
 
@@ -34,13 +45,14 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ task_id, approved_by, notes, version }) => {
         try {
-          const { updateTask } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           const resolvedApprover = approved_by ? resolveId(approved_by, "agents") : undefined;
           const task = updateTask(resolvedId, {
             approved_by: resolvedApprover,
             metadata: notes ? { approval_notes: notes } : {},
-          }, version);
+            version: versionFor(resolvedId, version),
+          });
           return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} approved by ${resolvedApprover || "unknown"}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -61,15 +73,11 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ task_id, reason, agent_id, version }) => {
         try {
-          const { updateTask } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { failTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
-          const task = updateTask(resolvedId, {
-            status: "pending",
-            retry_count: (getTask(resolvedId)?.retry_count ?? 0) + 1,
-            back_on_board: false,
-            metadata: reason ? { failure_reason: reason } : {},
-          }, version);
-          return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${task.retry_count}` }] };
+          versionFor(resolvedId, version);
+          const result = failTask(resolvedId, agent_id, reason);
+          return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} marked failed. Retry count: ${result.task.retry_count}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -85,13 +93,13 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       "Get tasks assigned to the calling agent. Supports focus mode scoping.",
       {
         agent_id: z.string().optional().describe("Agent ID (defaults to context agent)"),
-        status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional().describe("Filter by status"),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional().describe("Filter by status"),
         project_id: z.string().optional().describe("Filter by project (respects focus mode)"),
         limit: z.number().optional().describe("Max results (default: 50)"),
       },
       async ({ agent_id, status, project_id, limit }) => {
         try {
-          const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           const effectiveProjectId = focus?.project_id || project_id;
@@ -111,6 +119,132 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
     );
   }
 
+  if (shouldRegisterTool("get_next_task")) {
+    server.tool(
+      "get_next_task",
+      "Get the best available pending task without claiming it.",
+      {
+        agent_id: z.string().optional().describe("Agent ID or name for assignment affinity"),
+        project_id: z.string().optional().describe("Filter by project"),
+        task_list_id: z.string().optional().describe("Filter by task list"),
+        plan_id: z.string().optional().describe("Filter by plan"),
+        tags: z.array(z.string()).optional().describe("Filter by tags"),
+      },
+      async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
+        try {
+          const { getNextTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const filters: Record<string, unknown> = {};
+          if (project_id) filters.project_id = resolveId(project_id, "projects");
+          if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+          if (plan_id) filters.plan_id = resolveId(plan_id, "plans");
+          if (tags) filters.tags = tags;
+          const task = getNextTask(agent_id, filters);
+          return { content: [{ type: "text" as const, text: task ? formatTask(task) : "No available task." }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("claim_next_task")) {
+    server.tool(
+      "claim_next_task",
+      "Atomically claim and start the best available pending task for an agent.",
+      {
+        agent_id: z.string().describe("Agent ID or name claiming the task"),
+        project_id: z.string().optional().describe("Filter by project"),
+        task_list_id: z.string().optional().describe("Filter by task list"),
+        plan_id: z.string().optional().describe("Filter by plan"),
+        tags: z.array(z.string()).optional().describe("Filter by tags"),
+      },
+      async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
+        try {
+          const { claimNextTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const filters: Record<string, unknown> = {};
+          if (project_id) filters.project_id = resolveId(project_id, "projects");
+          if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+          if (plan_id) filters.plan_id = resolveId(plan_id, "plans");
+          if (tags) filters.tags = tags;
+          const task = claimNextTask(agent_id, filters);
+          return { content: [{ type: "text" as const, text: task ? formatTask(task) : "No available task to claim." }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_tasks_changed_since")) {
+    server.tool(
+      "get_tasks_changed_since",
+      "List tasks changed since an ISO timestamp.",
+      {
+        since: z.string().describe("ISO timestamp"),
+        project_id: z.string().optional().describe("Filter by project"),
+        task_list_id: z.string().optional().describe("Filter by task list"),
+        limit: z.number().optional().describe("Maximum tasks to return"),
+      },
+      async ({ since, project_id, task_list_id, limit }) => {
+        try {
+          const { getTasksChangedSince } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const filters: Record<string, string> = {};
+          if (project_id) filters.project_id = resolveId(project_id, "projects");
+          if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+          const tasks = getTasksChangedSince(since, filters).slice(0, limit || 50);
+          if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No changed tasks." }] };
+          return { content: [{ type: "text" as const, text: tasks.map(formatTask).join("\n") }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  function registerContextTool(name: "get_context" | "bootstrap", description: string) {
+    if (!shouldRegisterTool(name)) return;
+    server.tool(
+      name,
+      description,
+      {
+        agent_id: z.string().optional().describe("Agent ID or name"),
+        project_id: z.string().optional().describe("Filter by project"),
+        task_list_id: z.string().optional().describe("Filter by task list"),
+        explain_blocked: z.boolean().optional().describe("Include blocked task details"),
+      },
+      async ({ agent_id, project_id, task_list_id, explain_blocked }) => {
+        try {
+          const { getStatus, getNextTask, getOverdueTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { getLatestHandoff } = require("../../db/handoffs.js") as typeof import("../../db/handoffs.js");
+          const filters: Record<string, string> = {};
+          if (project_id) filters.project_id = resolveId(project_id, "projects");
+          if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+          const status = getStatus(filters, agent_id, { explain_blocked });
+          const next_task = getNextTask(agent_id, filters);
+          const overdue = getOverdueTasks(filters.project_id);
+          const latest_handoff = getLatestHandoff(agent_id, filters.project_id);
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                status,
+                next_task,
+                overdue_count: overdue.length,
+                latest_handoff,
+                as_of: new Date().toISOString(),
+              }, null, 2),
+            }],
+          };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  registerContextTool("get_context", "Get session start context: queue status, next task, overdue count, and latest handoff.");
+  registerContextTool("bootstrap", "Bootstrap an agent session with queue context and the next available task.");
+
   // === ORG CHART ===
 
   if (shouldRegisterTool("get_org_chart")) {
@@ -122,7 +256,7 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ format }) => {
         try {
-          const { getOrgChart } = require("../db/agents.js") as typeof import("../db/agents.js");
+          const { getOrgChart } = require("../../db/agents.js") as typeof import("../../db/agents.js");
           const tree = getOrgChart();
 
           if (format === "json") {
@@ -163,10 +297,10 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
       },
       async ({ agent_id, reports_to }) => {
         try {
-          const { setReportsTo } = require("../db/agents.js") as typeof import("../db/agents.js");
+          const { updateAgent } = require("../../db/agents.js") as typeof import("../../db/agents.js");
           const resolvedAgent = resolveId(agent_id, "agents");
           const resolvedManager = resolveId(reports_to, "agents");
-          setReportsTo(resolvedAgent, resolvedManager);
+          updateAgent(resolvedAgent, { reports_to: resolvedManager });
           return { content: [{ type: "text" as const, text: `${agent_id} now reports to ${reports_to}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

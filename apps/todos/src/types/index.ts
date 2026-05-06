@@ -369,6 +369,10 @@ export interface CreateTaskInput {
   metadata?: Record<string, unknown>;
   due_at?: string;
   estimated_minutes?: number;
+  confidence?: number;
+  retry_count?: number;
+  max_retries?: number;
+  retry_after?: string | null;
   requires_approval?: boolean;
   recurrence_rule?: string;
   recurrence_parent_id?: string;
@@ -385,6 +389,7 @@ export interface UpdateTaskInput {
   description?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
+  project_id?: string | null;
   assigned_to?: string;
   plan_id?: string;
   task_list_id?: string;
@@ -393,6 +398,12 @@ export interface UpdateTaskInput {
   metadata?: Record<string, unknown>;
   due_at?: string | null;
   estimated_minutes?: number;
+  actual_minutes?: number;
+  completed_at?: string | null;
+  confidence?: number | null;
+  retry_count?: number;
+  max_retries?: number;
+  retry_after?: string | null;
   requires_approval?: boolean;
   approved_by?: string;
   recurrence_rule?: string | null;

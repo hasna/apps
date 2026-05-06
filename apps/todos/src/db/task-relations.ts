@@ -94,6 +94,38 @@ export function bulkUpdateTasks(
   return { updated, failed };
 }
 
+export function bulkDeleteTasks(
+  taskIds: string[],
+  force = false,
+  db?: Database,
+): { deleted: number; skipped: number; failed: { id: string; error: string }[] } {
+  const d = db || getDatabase();
+  let deleted = 0;
+  let skipped = 0;
+  const failed: { id: string; error: string }[] = [];
+
+  const tx = d.transaction(() => {
+    for (const id of taskIds) {
+      try {
+        const childCount = d
+          .query("SELECT COUNT(*) as count FROM tasks WHERE parent_id = ?")
+          .get(id) as { count: number };
+        if (!force && childCount.count > 0) {
+          skipped++;
+          continue;
+        }
+        const result = d.run("DELETE FROM tasks WHERE id = ?", [id]);
+        if (result.changes > 0) deleted++;
+      } catch (e) {
+        failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  });
+  tx();
+
+  return { deleted, skipped, failed };
+}
+
 /**
  * Archive tasks matching the criteria. Archives completed/failed/cancelled tasks
  * older than `olderThanDays` days. Returns count of archived tasks.
@@ -134,6 +166,33 @@ export function archiveTasks(options: {
   return { archived: result.changes };
 }
 
+export function archiveCompletedTasks(days = 7, projectId?: string, db?: Database): number {
+  return archiveTasks({
+    project_id: projectId,
+    older_than_days: days,
+    status: ["completed"],
+  }, db).archived;
+}
+
+export function getArchivedTasks(opts: { project_id?: string; limit?: number } = {}, db?: Database): Task[] {
+  const d = db || getDatabase();
+  const conditions = ["archived_at IS NOT NULL"];
+  const params: SQLQueryBindings[] = [];
+  if (opts.project_id) {
+    conditions.push("project_id = ?");
+    params.push(opts.project_id);
+  }
+  let limitClause = "";
+  if (opts.limit) {
+    limitClause = " LIMIT ?";
+    params.push(opts.limit);
+  }
+  const rows = d
+    .query(`SELECT * FROM tasks WHERE ${conditions.join(" AND ")} ORDER BY archived_at DESC${limitClause}`)
+    .all(...params) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
 /**
  * Unarchive (restore) a specific task.
  */
@@ -152,6 +211,90 @@ export function getOverdueTasks(projectId?: string, db?: Database): Task[] {
   query += ` ORDER BY due_at ASC`;
   const rows = d.query(query).all(...params) as TaskRow[];
   return rows.map(rowToTask);
+}
+
+export function notifyUpcomingDeadlines(
+  opts: { hours?: number; project_id?: string; agent_id?: string } = {},
+  db?: Database,
+): Task[] {
+  const d = db || getDatabase();
+  const hours = opts.hours ?? 24;
+  const start = new Date().toISOString();
+  const end = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const conditions = [
+    "archived_at IS NULL",
+    "due_at IS NOT NULL",
+    "due_at >= ?",
+    "due_at <= ?",
+    "status NOT IN ('completed', 'cancelled', 'failed')",
+  ];
+  const params: SQLQueryBindings[] = [start, end];
+  if (opts.project_id) {
+    conditions.push("project_id = ?");
+    params.push(opts.project_id);
+  }
+  if (opts.agent_id) {
+    conditions.push("assigned_to = ?");
+    params.push(opts.agent_id);
+  }
+  const rows = d
+    .query(`SELECT * FROM tasks WHERE ${conditions.join(" AND ")} ORDER BY due_at ASC`)
+    .all(...params) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
+export function getBlockedTasks(projectId?: string, db?: Database): Array<Task & { blocked_by: string[] }> {
+  const d = db || getDatabase();
+  const params: SQLQueryBindings[] = [];
+  let projectClause = "";
+  if (projectId) {
+    projectClause = "AND t.project_id = ?";
+    params.push(projectId);
+  }
+  const rows = d.query(`
+    SELECT t.*, GROUP_CONCAT(dep.id) AS blocked_by_ids
+    FROM tasks t
+    JOIN task_dependencies td ON td.task_id = t.id
+    JOIN tasks dep ON dep.id = td.depends_on
+    WHERE t.archived_at IS NULL
+      AND t.status NOT IN ('completed', 'cancelled', 'failed')
+      AND dep.status NOT IN ('completed', 'cancelled')
+      ${projectClause}
+    GROUP BY t.id
+    ORDER BY t.priority DESC, t.created_at DESC
+  `).all(...params) as Array<TaskRow & { blocked_by_ids: string | null }>;
+
+  return rows.map(row => ({
+    ...rowToTask(row),
+    blocked_by: row.blocked_by_ids ? row.blocked_by_ids.split(",") : [],
+  }));
+}
+
+export function getBlockingTasks(projectId?: string, db?: Database): Array<Task & { blocking_count: number }> {
+  const d = db || getDatabase();
+  const params: SQLQueryBindings[] = [];
+  let projectClause = "";
+  if (projectId) {
+    projectClause = "AND blocker.project_id = ?";
+    params.push(projectId);
+  }
+  const rows = d.query(`
+    SELECT blocker.*, COUNT(DISTINCT blocked.id) AS blocking_count
+    FROM tasks blocker
+    JOIN task_dependencies td ON td.depends_on = blocker.id
+    JOIN tasks blocked ON blocked.id = td.task_id
+    WHERE blocker.archived_at IS NULL
+      AND blocker.status NOT IN ('completed', 'cancelled', 'failed')
+      AND blocked.status NOT IN ('completed', 'cancelled', 'failed')
+      ${projectClause}
+    GROUP BY blocker.id
+    ORDER BY blocking_count DESC, blocker.created_at DESC
+  `).all(...params) as Array<TaskRow & { blocking_count: number }>;
+
+  return rows.map(row => ({
+    ...rowToTask(row),
+    blocking_count: row.blocking_count,
+  }));
 }
 
 // ── Time Tracking ────────────────────────────────────────────────────────────────

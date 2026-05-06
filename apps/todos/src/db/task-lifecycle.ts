@@ -74,7 +74,7 @@ export function completeTask(
   id: string,
   agentId?: string,
   db?: Database,
-  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number },
+  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number; completed_at?: string },
 ): Task {
   const d = db || getDatabase();
   const task = getTask(id, d);
@@ -105,7 +105,7 @@ export function completeTask(
   }
   const hasMeta = Object.keys(completionMeta).length > 0;
 
-  const timestamp = now();
+  const timestamp = options?.completed_at || now();
   const confidence = options?.confidence !== undefined ? options.confidence : null;
 
   // Perform both updates atomically in a transaction with optimistic locking

@@ -22,6 +22,15 @@ interface TaskCrudContext {
 export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask } = ctx;
 
+  function versionFor(taskId: string, version?: number): number {
+    const current = getTask(taskId);
+    if (!current) throw new TaskNotFoundError(taskId);
+    if (version !== undefined && current.version !== version) {
+      throw new VersionConflictError(taskId, version, current.version);
+    }
+    return current.version;
+  }
+
   // === CREATE TASK ===
 
   if (shouldRegisterTool("create_task")) {
@@ -31,8 +40,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       {
         title: z.string().describe("Task title"),
         description: z.string().optional().describe("Task description (markdown)"),
-        status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional().describe("Initial status (default: pending)"),
-        priority: z.enum(["low", "medium", "high", "urgent"]).optional().describe("Priority (default: medium)"),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional().describe("Initial status (default: pending)"),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Priority (default: medium)"),
         project_id: z.string().optional().describe("Project ID"),
         task_list_id: z.string().optional().describe("Task list ID"),
         assigned_to: z.string().optional().describe("Agent ID or name to assign to"),
@@ -55,8 +64,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           if (tags) resolved.tags = tags;
           if (estimate !== undefined) resolved.estimated_minutes = estimate;
           if (confidence !== undefined) resolved.confidence = confidence;
-          if (retry_count !== undefined) resolved.retry_count = retry_count;
-          if (deadline) resolved.deadline = deadline;
+          if (retry_count !== undefined) resolved.max_retries = retry_count;
+          if (deadline) resolved.due_at = deadline;
 
           const task = createTask(resolved as Parameters<typeof createTask>[0]);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
@@ -74,8 +83,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
       "list_tasks",
       "List tasks with optional filters. Pass empty arrays for multi-value filters (e.g. status=[] shows all).",
       {
-        status: z.union([z.enum(["pending", "in_progress", "completed", "cancelled"]), z.array(z.enum(["pending", "in_progress", "completed", "cancelled"]))]).optional().describe("Filter by status"),
-        priority: z.union([z.enum(["low", "medium", "high", "urgent"]), z.array(z.enum(["low", "medium", "high", "urgent"]))]).optional().describe("Filter by priority"),
+        status: z.union([z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]), z.array(z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]))]).optional().describe("Filter by status"),
+        priority: z.union([z.enum(["low", "medium", "high", "critical"]), z.array(z.enum(["low", "medium", "high", "critical"]))]).optional().describe("Filter by priority"),
         project_id: z.string().optional().describe("Filter by project"),
         task_list_id: z.string().optional().describe("Filter by task list"),
         assigned_to: z.string().optional().describe("Filter by assignee (agent ID or name, empty string = unassigned)"),
@@ -115,7 +124,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         try {
           const resolvedId = resolveId(task_id);
           const task = getTask(resolvedId);
-          if (!task) throw new NotFoundError(`Task not found: ${task_id}`);
+          if (!task) throw new TaskNotFoundError(task_id);
           const focus = ctx.getAgentFocus(task.assigned_to || "");
           const lines = [
             `ID:       ${task.id}`,
@@ -129,7 +138,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
             task.estimated_minutes != null ? `Estimate: ${task.estimated_minutes} min` : null,
             task.actual_minutes != null ? `Actual:   ${task.actual_minutes} min` : null,
             task.confidence != null ? `Confidence: ${task.confidence}` : null,
-            task.deadline ? `Deadline: ${task.deadline}` : null,
+            task.due_at ? `Due: ${task.due_at}` : null,
             task.completed_at ? `Completed: ${task.completed_at}` : null,
             focus ? `Focus:    agent=${focus.agent_id} project=${focus.project_id || "(global)"}` : null,
             task.created_at ? `Created:  ${task.created_at}` : null,
@@ -155,8 +164,8 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         task_id: z.string().describe("Task ID"),
         title: z.string().optional(),
         description: z.string().optional(),
-        status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
-        priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional(),
         assigned_to: z.string().nullable().optional().describe("Agent ID or name, null to unassign"),
         project_id: z.string().nullable().optional(),
         task_list_id: z.string().nullable().optional(),
@@ -181,9 +190,16 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           if (resolved.project_id && typeof resolved.project_id === "string") resolved.project_id = resolveId(resolved.project_id, "projects");
           if (resolved.task_list_id && typeof resolved.task_list_id === "string") resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
           if (resolved.depends_on && Array.isArray(resolved.depends_on)) resolved.depends_on = (resolved.depends_on as string[]).map(resolveId);
-          if (resolved.estimate !== undefined) resolved.estimated_minutes = resolved.estimate;
+          if (resolved.estimate !== undefined) {
+            resolved.estimated_minutes = resolved.estimate;
+            delete resolved.estimate;
+          }
+          if (resolved.deadline !== undefined) {
+            resolved.due_at = resolved.deadline;
+            delete resolved.deadline;
+          }
 
-          const task = updateTask(resolvedId, resolved as Parameters<typeof updateTask>[1], version);
+          const task = updateTask(resolvedId, { ...resolved, version: versionFor(resolvedId, version) } as Parameters<typeof updateTask>[1]);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

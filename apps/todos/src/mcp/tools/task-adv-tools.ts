@@ -25,18 +25,31 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
   if (shouldRegisterTool("get_status")) {
     server.tool(
       "get_status",
-      "Get a task's current status including blockers, dependencies, comments, and assignee.",
+      "Get queue status summary, or pass task_id for a task's detailed status.",
       {
-        task_id: z.string().describe("Task ID"),
+        task_id: z.string().optional().describe("Task ID for task-specific status"),
+        project_id: z.string().optional().describe("Filter summary by project"),
+        task_list_id: z.string().optional().describe("Filter summary by task list"),
+        agent_id: z.string().optional().describe("Agent for next-task affinity"),
+        explain_blocked: z.boolean().optional().describe("Include blocked task explanations in summary"),
       },
-      async ({ task_id }) => {
+      async ({ task_id, project_id, task_list_id, agent_id, explain_blocked }) => {
         try {
+          if (!task_id) {
+            const { getStatus } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+            const filters: Record<string, string> = {};
+            if (project_id) filters.project_id = resolveId(project_id, "projects");
+            if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
+            const status = getStatus(filters, agent_id, { explain_blocked });
+            return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] };
+          }
+
           const resolvedId = resolveId(task_id);
           const { getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const task = getTask(resolvedId);
           if (!task) throw new Error(`Task not found: ${task_id}`);
           const { getTaskDependencies } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const { listComments } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const { listTaskFiles } = require("../../db/task-files.js") as any;
           const [deps, comments, files] = await Promise.all([
             Promise.resolve(getTaskDependencies(resolvedId, "both")),
@@ -46,12 +59,12 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           const lines = [
             `Status: ${task.status} | Priority: ${task.priority}`,
             task.assigned_to ? `Assigned: ${task.assigned_to}` : "Unassigned",
-            task.deadline ? `Deadline: ${task.deadline}` : null,
+            task.due_at ? `Due: ${task.due_at}` : null,
             task.confidence != null ? `Confidence: ${task.confidence}` : null,
             deps.length > 0 ? `\nDependencies (${deps.length}):` : null,
             ...deps.map((d: any) => `  [${d.direction}] ${d.task_id.slice(0,8)} (${d.status})`),
             comments.length > 0 ? `\nComments (${comments.length}):` : null,
-            ...comments.map((c: any) => `  [${c.author || "?"}] ${c.created_at?.slice(0,16)}: ${c.body.slice(0,80)}`),
+            ...comments.map((c: any) => `  [${c.agent_id || "?"}] ${c.created_at?.slice(0,16)}: ${c.content.slice(0,80)}`),
             files.length > 0 ? `\nFiles (${files.length}):` : null,
             ...files.map((f: any) => `  ${f.status} ${f.path}`),
           ].filter(Boolean);
@@ -78,9 +91,9 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           if (!task) throw new Error(`Task not found: ${task_id}`);
           const { getTaskDependencies } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { getTaskRelationships } = require("../../db/task-relationships.js") as typeof import("../../db/task-relationships.js");
-          const { listComments } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const { listTaskFiles } = require("../../db/task-files.js") as any;
-          const { getTaskCommits } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { getTaskCommits } = require("../../db/task-commits.js") as typeof import("../../db/task-commits.js");
           const { getTaskWatchers } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const [deps, rels, comments, files, commits, watchers] = await Promise.all([
             Promise.resolve(getTaskDependencies(resolvedId, "both")),
@@ -101,14 +114,14 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
             task.tags?.length ? `Tags:     ${task.tags.join(", ")}` : null,
             task.created_at ? `Created:  ${task.created_at}` : null,
             task.updated_at ? `Updated:  ${task.updated_at}` : null,
-            task.deadline ? `Deadline: ${task.deadline}` : null,
+            task.due_at ? `Due: ${task.due_at}` : null,
             task.completed_at ? `Completed: ${task.completed_at}` : null,
             deps.length > 0 ? `\n--- Dependencies (${deps.length}) ---` : null,
             ...deps.map((d: any) => `  [${d.direction}] ${d.task_id.slice(0,8)} (${d.status})`),
             rels.length > 0 ? `\n--- Relationships (${rels.length}) ---` : null,
             ...rels.map((r: any) => `  ${r.source_task_id.slice(0,8)} --[${r.relationship_type}]--> ${r.target_task_id.slice(0,8)}`),
             comments.length > 0 ? `\n--- Comments (${comments.length}) ---` : null,
-            ...comments.map((c: any) => `  [${c.author || "?"}] ${c.created_at?.slice(0,16)}: ${c.body.slice(0,120)}`),
+            ...comments.map((c: any) => `  [${c.agent_id || "?"}] ${c.created_at?.slice(0,16)}: ${c.content.slice(0,120)}`),
             files.length > 0 ? `\n--- Files (${files.length}) ---` : null,
             ...files.map((f: any) => `  [${f.status}] ${f.path}`),
             commits.length > 0 ? `\n--- Commits (${commits.length}) ---` : null,
@@ -194,11 +207,11 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, agent_id }) => {
         try {
-          const { updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { startTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           const focus = ctx.getAgentFocus(agent_id || "");
-          const effectiveAgent = focus ? focus.agent_id : agent_id || "";
-          const task = updateTask(resolvedId, { status: "in_progress", assigned_to: effectiveAgent });
+          const effectiveAgent = focus ? focus.agent_id : agent_id || "mcp";
+          const task = startTask(resolvedId, effectiveAgent);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -216,8 +229,11 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id }) => {
         try {
-          const { updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const task = updateTask(resolveId(task_id), { status: "pending", assigned_to: null });
+          const { getTask, updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const resolvedId = resolveId(task_id);
+          const current = getTask(resolvedId);
+          if (!current) throw new Error(`Task not found: ${task_id}`);
+          const task = updateTask(resolvedId, { status: "pending", assigned_to: null, version: current.version });
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -241,7 +257,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           const task = getTask(resolvedId);
           if (!task) throw new Error(`Task not found: ${task_id}`);
           const currentEstimate = task.estimated_minutes || 0;
-          const updated = updateTask(resolvedId, { estimated_minutes: currentEstimate + minutes });
+          const updated = updateTask(resolvedId, { estimated_minutes: currentEstimate + minutes, version: task.version });
           return { content: [{ type: "text" as const, text: `Estimate updated: ${currentEstimate} → ${updated.estimated_minutes} min (+${minutes})` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -261,10 +277,10 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, body, author }) => {
         try {
-          const { createComment } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { addComment } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const resolvedId = resolveId(task_id);
           const resolvedAuthor = author ? resolveId(author, "agents") : undefined;
-          createComment({ task_id: resolvedId, body, author: resolvedAuthor });
+          addComment({ task_id: resolvedId, content: body, agent_id: resolvedAuthor });
           return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -282,10 +298,10 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id }) => {
         try {
-          const { listComments } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const comments = listComments(resolveId(task_id));
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
-          const lines = comments.map(c => `[${c.author || "?"}] ${c.created_at?.slice(0,16)}: ${c.body}`);
+          const lines = comments.map(c => `[${c.agent_id || "?"}] ${c.created_at?.slice(0,16)}: ${c.content}`);
           return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -300,7 +316,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       "Alias for get_my_tasks.",
       {
         agent_id: z.string().optional().describe("Agent ID (defaults to context agent)"),
-        status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
         project_id: z.string().optional().describe("Filter by project"),
         limit: z.number().optional(),
       },
@@ -326,157 +342,4 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
     );
   }
 
-  if (shouldRegisterTool("list_agents")) {
-    server.tool(
-      "list_agents",
-      "List all registered agents.",
-      {
-        project_id: z.string().optional().describe("Filter by project"),
-        role: z.string().optional().describe("Filter by global role"),
-        capabilities: z.array(z.string()).optional().describe("Filter by capabilities"),
-      },
-      async ({ project_id, role, capabilities }) => {
-        try {
-          const { listAgents } = require("../../db/agents.js") as typeof import("../../db/agents.js");
-          const resolved: Record<string, unknown> = {};
-          if (project_id) resolved.project_id = resolveId(project_id, "projects");
-          if (role) resolved.role = role;
-          if (capabilities) resolved.capabilities = capabilities;
-          const agents = listAgents(resolved as Parameters<typeof listAgents>[0]);
-          if (agents.length === 0) return { content: [{ type: "text" as const, text: "No agents found." }] };
-          const lines = agents.map(a => `● ${a.name} [${a.role || "no role"}]${a.capabilities?.length ? ` caps:[${a.capabilities.join(",")}]` : ""}`);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
-
-  if (shouldRegisterTool("get_agent")) {
-    server.tool(
-      "get_agent",
-      "Get full details for an agent.",
-      {
-        agent_id: z.string().describe("Agent ID or name"),
-      },
-      async ({ agent_id }) => {
-        try {
-          const { getAgentByName, getAgent } = require("../../db/agents.js") as typeof import("../../db/agents.js");
-          const resolvedId = resolveId(agent_id, "agents");
-          const agent = agent_id.includes("@") || !resolvedId.startsWith("agent_")
-            ? getAgentByName(agent_id)
-            : getAgent(resolvedId);
-          if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
-          const lines = [
-            `ID:          ${agent.id}`,
-            `Name:        ${agent.name}`,
-            agent.email ? `Email:       ${agent.email}` : null,
-            agent.title ? `Title:       ${agent.title}` : null,
-            agent.role ? `Role:        ${agent.role}` : null,
-            agent.capabilities?.length ? `Capabilities: ${agent.capabilities.join(", ")}` : null,
-            agent.last_seen_at ? `Last Seen:   ${agent.last_seen_at}` : null,
-          ].filter(Boolean);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
-
-  if (shouldRegisterTool("update_agent")) {
-    server.tool(
-      "update_agent",
-      "Update an agent's fields.",
-      {
-        agent_id: z.string().describe("Agent ID or name"),
-        name: z.string().optional(),
-        email: z.string().optional(),
-        title: z.string().optional(),
-        role: z.string().optional(),
-        capabilities: z.array(z.string()).optional(),
-      },
-      async ({ agent_id, ...updates }) => {
-        try {
-          const { getAgentByName, updateAgent } = require("../../db/agents.js") as typeof import("../../db/agents.js");
-          const resolvedId = resolveId(agent_id, "agents");
-          const agent = agent_id.includes("@") || !resolvedId.startsWith("agent_")
-            ? getAgentByName(agent_id)
-            : { id: resolvedId };
-          updateAgent(agent.id, updates as Parameters<typeof updateAgent>[1]);
-          return { content: [{ type: "text" as const, text: `Agent ${agent.id.slice(0,8)} updated.` }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
-
-  if (shouldRegisterTool("delete_agent")) {
-    server.tool(
-      "delete_agent",
-      "Deregister an agent.",
-      {
-        agent_id: z.string().describe("Agent ID or name"),
-      },
-      async ({ agent_id }) => {
-        try {
-          const { getAgentByName, deleteAgent } = require("../../db/agents.js") as typeof import("../../db/agents.js");
-          const resolvedId = resolveId(agent_id, "agents");
-          const agent = agent_id.includes("@") || !resolvedId.startsWith("agent_")
-            ? getAgentByName(agent_id)
-            : { id: resolvedId };
-          if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${agent_id}` }], isError: true };
-          deleteAgent(agent.id);
-          return { content: [{ type: "text" as const, text: `Agent ${agent_id} deleted.` }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
-
-  if (shouldRegisterTool("register_agent")) {
-    server.tool(
-      "register_agent",
-      "Register a new agent.",
-      {
-        name: z.string().describe("Agent name"),
-        email: z.string().optional(),
-        title: z.string().optional(),
-        role: z.string().optional(),
-        capabilities: z.array(z.string()).optional(),
-      },
-      async ({ name, email, title, role, capabilities }) => {
-        try {
-          const { registerAgent } = require("../../db/agents.js") as typeof import("../../db/agents.js");
-          const agent = registerAgent({ name, email, title, role, capabilities });
-          return { content: [{ type: "text" as const, text: `Agent registered: ${agent.name} (${agent.id})` }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
-
-  if (shouldRegisterTool("heartbeat")) {
-    server.tool(
-      "heartbeat",
-      "Agent heartbeat — updates last_seen_at timestamp.",
-      {
-        agent_id: z.string().describe("Agent ID"),
-        status: z.string().optional().describe("Current status message"),
-      },
-      async ({ agent_id, status }) => {
-        try {
-          const { heartbeat } = require("../../db/agents.js") as typeof import("../../db/agents.js");
-          heartbeat(resolveId(agent_id, "agents"), status);
-          return { content: [{ type: "text" as const, text: "Heartbeat received." }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
 }

@@ -68,7 +68,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ task_id, path, paths: multiplePaths, status, agent_id, note }) => {
         try {
-          const { addTaskFile, bulkAddTaskFiles, detectFileConflicts } = require("../db/task-files.js") as any;
+          const { addTaskFile, bulkAddTaskFiles, detectFileConflicts } = require("../../db/task-files.js") as any;
           const resolvedId = resolveId(task_id);
 
           let addedFiles: any[];
@@ -120,7 +120,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       { task_id: z.string().describe("Task ID") },
       async ({ task_id }) => {
         try {
-          const { listTaskFiles } = require("../db/task-files.js") as any;
+          const { listTaskFiles } = require("../../db/task-files.js") as any;
           const resolvedId = resolveId(task_id);
           const files: any[] = listTaskFiles(resolvedId);
           if (files.length === 0) return { content: [{ type: "text" as const, text: "No files linked." }] };
@@ -140,7 +140,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       { path: z.string().describe("File path to search for") },
       async ({ path }) => {
         try {
-          const { findTasksByFile } = require("../db/task-files.js") as any;
+          const { findTasksByFile } = require("../../db/task-files.js") as any;
           const files: any[] = findTasksByFile(path);
           if (files.length === 0) return { content: [{ type: "text" as const, text: `No tasks linked to ${path}` }] };
           const lines = files.map((f: any) => `${f.task_id.slice(0, 8)} [${f.status}]${f.agent_id ? ` (${f.agent_id})` : ""}`);
@@ -163,7 +163,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ limit, project_id, min_edits }) => {
         try {
-          const { getFileHeatMap } = require("../db/task-files.js") as any;
+          const { getFileHeatMap } = require("../../db/task-files.js") as any;
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const results = getFileHeatMap({ limit, project_id: resolvedProjectId, min_edits });
           return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
@@ -181,7 +181,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ paths }) => {
         try {
-          const { bulkFindTasksByFiles } = require("../db/task-files.js") as any;
+          const { bulkFindTasksByFiles } = require("../../db/task-files.js") as any;
           const results = bulkFindTasksByFiles(paths);
           return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
         } catch (e) {
@@ -200,11 +200,11 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ project_id }) => {
         try {
-          const { listActiveFiles } = require("../db/task-files.js") as any;
+          const { listActiveFiles } = require("../../db/task-files.js") as any;
           let files: any[] = listActiveFiles();
           if (project_id) {
             const pid = resolveId(project_id, "projects");
-            const db = require("../db/database.js").getDatabase();
+            const db = require("../../db/database.js").getDatabase();
             files = db.query(`
               SELECT
                 tf.path,
@@ -307,7 +307,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ path, agent_id, task_id, ttl_seconds }) => {
         try {
-          const { lockFile } = require("../db/file-locks.js") as any;
+          const { lockFile } = require("../../db/file-locks.js") as any;
           const lock = lockFile({ path, agent_id, task_id, ttl_seconds });
           return { content: [{ type: "text" as const, text: JSON.stringify(lock, null, 2) }] };
         } catch (e) {
@@ -327,7 +327,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ path, agent_id }) => {
         try {
-          const { unlockFile } = require("../db/file-locks.js") as any;
+          const { unlockFile } = require("../../db/file-locks.js") as any;
           const released = unlockFile(path, agent_id);
           return { content: [{ type: "text" as const, text: JSON.stringify({ released, path }) }] };
         } catch (e) {
@@ -346,7 +346,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ path }) => {
         try {
-          const { checkFileLock } = require("../db/file-locks.js") as any;
+          const { checkFileLock } = require("../../db/file-locks.js") as any;
           const lock = checkFileLock(path);
           if (!lock) return { content: [{ type: "text" as const, text: JSON.stringify({ path, locked: false }) }] };
           return { content: [{ type: "text" as const, text: JSON.stringify({ path, locked: true, ...lock }) }] };
@@ -366,7 +366,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ agent_id }) => {
         try {
-          const { listFileLocks } = require("../db/file-locks.js") as any;
+          const { listFileLocks } = require("../../db/file-locks.js") as any;
           const locks = listFileLocks(agent_id);
           return { content: [{ type: "text" as const, text: JSON.stringify(locks, null, 2) }] };
         } catch (e) {

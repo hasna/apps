@@ -96,16 +96,20 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       {
         name: z.string().describe("Agent name — any name is allowed. Use suggest_agent_name to see pool suggestions and avoid conflicts."),
         description: z.string().optional(),
+        role: z.string().optional(),
+        title: z.string().optional(),
+        level: z.string().optional(),
+        permissions: z.array(z.string()).optional(),
         capabilities: z.array(z.string()).optional().describe("Agent capabilities/skills for task routing (e.g. ['typescript', 'testing', 'devops'])"),
         session_id: z.string().optional().describe("Unique ID for this coding session (e.g. process PID + timestamp, or env var). Used to detect name collisions across sessions. Store it and pass on every register_agent call."),
         working_dir: z.string().optional().describe("Working directory of this session — used to look up the project's agent pool and identify who holds the name in a conflict"),
         force: z.boolean().optional().describe("Force takeover of an active agent's name. Use with caution — only when you know the previous session is dead."),
       },
-      async ({ name, description, capabilities, session_id, working_dir, force }) => {
+      async ({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force }) => {
         try {
           // Look up the pool for this project (from config, based on working_dir) — null = no restriction
           const pool = getAgentPoolForProject(working_dir);
-          const result = registerAgent({ name, description, capabilities, session_id, working_dir, force, pool: pool || undefined });
+          const result = registerAgent({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force, pool: pool || undefined });
           if (isAgentConflict(result)) {
             const suggestLine = result.suggestions && result.suggestions.length > 0
               ? `\nAvailable names: ${result.suggestions.join(", ")}`
@@ -205,17 +209,19 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       "get_agent",
       "Get agent details by ID or name. Provide one of id or name.",
       {
+        agent_id: z.string().optional(),
         id: z.string().optional(),
         name: z.string().optional(),
       },
-      async ({ id, name }) => {
+      async ({ agent_id, id, name }) => {
         try {
-          if (!id && !name) {
-            return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+          const identifier = agent_id || id || name;
+          if (!identifier) {
+            return { content: [{ type: "text" as const, text: "Provide agent_id, id, or name." }], isError: true };
           }
-          const agent = id ? getAgent(id) : getAgentByName(name!);
+          const agent = getAgent(identifier) || getAgentByName(identifier);
           if (!agent) {
-            return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+            return { content: [{ type: "text" as const, text: `Agent not found: ${identifier}` }], isError: true };
           }
           const parts = [
             `ID: ${agent.id}`,
@@ -285,6 +291,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       "update_agent",
       "Update an agent's description, role, title, or other metadata. Resolve by id or name.",
       {
+        agent_id: z.string().optional(),
         id: z.string().optional(),
         name: z.string().optional(),
         description: z.string().optional(),
@@ -295,14 +302,15 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
         permissions: z.array(z.string()).optional(),
         metadata: z.record(z.unknown()).optional(),
       },
-      async ({ id, name, ...updates }) => {
+      async ({ agent_id, id, name, ...updates }) => {
         try {
-          if (!id && !name) {
-            return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+          const identifier = agent_id || id || name;
+          if (!identifier) {
+            return { content: [{ type: "text" as const, text: "Provide agent_id, id, or name." }], isError: true };
           }
-          const agent = id ? getAgent(id) : getAgentByName(name!);
+          const agent = getAgent(identifier) || getAgentByName(identifier);
           if (!agent) {
-            return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+            return { content: [{ type: "text" as const, text: `Agent not found: ${identifier}` }], isError: true };
           }
           const updated = updateAgent(agent.id, updates);
           return { content: [{ type: "text" as const, text: `Agent updated: ${updated.name} (${updated.id.slice(0, 8)})` }] };
@@ -319,17 +327,19 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       "delete_agent",
       "Archive an agent (soft delete). The agent is hidden from list_agents but preserved for task history. Use unarchive_agent to restore. Resolve by id or name.",
       {
+        agent_id: z.string().optional(),
         id: z.string().optional(),
         name: z.string().optional(),
       },
-      async ({ id, name }) => {
+      async ({ agent_id, id, name }) => {
         try {
-          if (!id && !name) {
-            return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+          const identifier = agent_id || id || name;
+          if (!identifier) {
+            return { content: [{ type: "text" as const, text: "Provide agent_id, id, or name." }], isError: true };
           }
-          const agent = id ? getAgent(id) : getAgentByName(name!);
+          const agent = getAgent(identifier) || getAgentByName(identifier);
           if (!agent) {
-            return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+            return { content: [{ type: "text" as const, text: `Agent not found: ${identifier}` }], isError: true };
           }
           const archived = archiveAgent(agent.id);
           return {
@@ -352,17 +362,19 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       "unarchive_agent",
       "Restore an archived agent back to active status. Resolve by id or name.",
       {
+        agent_id: z.string().optional(),
         id: z.string().optional(),
         name: z.string().optional(),
       },
-      async ({ id, name }) => {
+      async ({ agent_id, id, name }) => {
         try {
-          if (!id && !name) {
-            return { content: [{ type: "text" as const, text: "Provide either id or name." }], isError: true };
+          const identifier = agent_id || id || name;
+          if (!identifier) {
+            return { content: [{ type: "text" as const, text: "Provide agent_id, id, or name." }], isError: true };
           }
-          const agent = id ? getAgent(id) : getAgentByName(name!);
+          const agent = getAgent(identifier) || getAgentByName(identifier);
           if (!agent) {
-            return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
+            return { content: [{ type: "text" as const, text: `Agent not found: ${identifier}` }], isError: true };
           }
           if (agent.status === "active") {
             return { content: [{ type: "text" as const, text: `Agent ${agent.name} is already active.` }] };

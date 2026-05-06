@@ -57,8 +57,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
@@ -81,6 +81,10 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           timestamp,
           input.due_at || null,
           input.estimated_minutes || null,
+          input.confidence ?? null,
+          input.retry_count ?? 0,
+          input.max_retries ?? 3,
+          input.retry_after ?? null,
           input.requires_approval ? 1 : 0,
           null,
           null,
@@ -416,8 +420,10 @@ export function updateTask(
     throw new VersionConflictError(id, input.version, task.version);
   }
 
+  const timestamp = now();
+  const completionTimestamp = input.completed_at ?? timestamp;
   const sets: string[] = ["version = version + 1", "updated_at = ?"];
-  const params: SQLQueryBindings[] = [now()];
+  const params: SQLQueryBindings[] = [timestamp];
 
   if (input.title !== undefined) {
     sets.push("title = ?");
@@ -436,12 +442,16 @@ export function updateTask(
     params.push(input.status);
     if (input.status === "completed") {
       sets.push("completed_at = ?");
-      params.push(now());
+      params.push(completionTimestamp);
     }
   }
   if (input.priority !== undefined) {
     sets.push("priority = ?");
     params.push(input.priority);
+  }
+  if (input.project_id !== undefined) {
+    sets.push("project_id = ?");
+    params.push(input.project_id);
   }
   if (input.assigned_to !== undefined) {
     sets.push("assigned_to = ?");
@@ -470,6 +480,30 @@ export function updateTask(
   if (input.estimated_minutes !== undefined) {
     sets.push("estimated_minutes = ?");
     params.push(input.estimated_minutes);
+  }
+  if (input.actual_minutes !== undefined) {
+    sets.push("actual_minutes = ?");
+    params.push(input.actual_minutes);
+  }
+  if (input.completed_at !== undefined && input.status !== "completed") {
+    sets.push("completed_at = ?");
+    params.push(input.completed_at);
+  }
+  if (input.confidence !== undefined) {
+    sets.push("confidence = ?");
+    params.push(input.confidence);
+  }
+  if (input.retry_count !== undefined) {
+    sets.push("retry_count = ?");
+    params.push(input.retry_count);
+  }
+  if (input.max_retries !== undefined) {
+    sets.push("max_retries = ?");
+    params.push(input.max_retries);
+  }
+  if (input.retry_after !== undefined) {
+    sets.push("retry_after = ?");
+    params.push(input.retry_after);
   }
   if (input.requires_approval !== undefined) {
     sets.push("requires_approval = ?");
@@ -533,11 +567,16 @@ export function updateTask(
     tags: input.tags ?? task.tags,
     metadata: input.metadata ?? task.metadata,
     version: task.version + 1,
-    updated_at: now(),
-    completed_at: input.status === "completed" ? now() : task.completed_at,
+    updated_at: timestamp,
+    completed_at: input.status === "completed" ? completionTimestamp : input.completed_at !== undefined ? input.completed_at : task.completed_at,
+    actual_minutes: input.actual_minutes ?? task.actual_minutes,
+    confidence: input.confidence !== undefined ? input.confidence : task.confidence,
+    retry_count: input.retry_count ?? task.retry_count,
+    max_retries: input.max_retries ?? task.max_retries,
+    retry_after: input.retry_after !== undefined ? input.retry_after : task.retry_after,
     requires_approval: input.requires_approval !== undefined ? input.requires_approval : task.requires_approval,
     approved_by: input.approved_by ?? task.approved_by,
-    approved_at: input.approved_by ? now() : task.approved_at,
+    approved_at: input.approved_by ? timestamp : task.approved_at,
   };
 }
 

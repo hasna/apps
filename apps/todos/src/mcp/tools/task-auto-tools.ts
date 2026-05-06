@@ -94,13 +94,12 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ task_id }) => {
         try {
-          const { autoAssign } = require("../../db/agents.js") as typeof import("../../db/agents.js");
           const resolvedId = resolveId(task_id);
-          const assignment = autoAssign(resolvedId);
-          if (!assignment) return { content: [{ type: "text" as const, text: "No suitable agent found for this task." }] };
-          const { updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          updateTask(resolvedId, { assigned_to: assignment.agent_id });
-          return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} assigned to ${assignment.agent_name} (score: ${assignment.score.toFixed(2)})` }] };
+          const { autoAssignTask } = require("../../lib/auto-assign.js") as typeof import("../../lib/auto-assign.js");
+          const assignment = await autoAssignTask(resolvedId);
+          if (!assignment.assigned_to) return { content: [{ type: "text" as const, text: "No suitable agent found for this task." }] };
+          const reason = assignment.reason ? ` — ${assignment.reason}` : "";
+          return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} assigned to ${assignment.agent_name || assignment.assigned_to} via ${assignment.method}${reason}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -117,10 +116,23 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ agent_id }) => {
         try {
-          const { getAgentWorkload } = require("../../db/agents.js") as typeof import("../../db/agents.js");
+          const { listTasks, getBlockedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
-          const workload = getAgentWorkload(effectiveAgentId);
+          if (!effectiveAgentId) {
+            return { content: [{ type: "text" as const, text: "No agent_id provided and no agent focus is active." }], isError: true };
+          }
+          const assigned = listTasks({ assigned_to: effectiveAgentId, limit: 500 }, undefined) as Task[];
+          const now = Date.now();
+          const dueSoonCutoff = now + 24 * 60 * 60 * 1000;
+          const blocked = getBlockedTasks().filter((t: Task) => t.assigned_to === effectiveAgentId);
+          const workload = {
+            in_progress: assigned.filter(t => t.status === "in_progress").length,
+            pending: assigned.filter(t => t.status === "pending").length,
+            completed_recent: assigned.filter(t => t.status === "completed" && t.completed_at && now - new Date(t.completed_at).getTime() <= 7 * 24 * 60 * 60 * 1000).length,
+            due_soon: assigned.filter(t => t.due_at && new Date(t.due_at).getTime() <= dueSoonCutoff && new Date(t.due_at).getTime() >= now && !["completed", "cancelled", "failed"].includes(t.status)).length,
+            blocked: blocked.length,
+          };
           const lines = [
             `Agent: ${effectiveAgentId}`,
             `In Progress: ${workload.in_progress}`,
@@ -147,10 +159,32 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ project_id, max_per_agent }) => {
         try {
-          const { rebalanceWorkload } = require("../../db/agents.js") as typeof import("../../db/agents.js");
+          const { listAgents } = require("../../db/agents.js") as typeof import("../../db/agents.js");
+          const { listTasks, updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
-          const result = rebalanceWorkload({ project_id: resolvedProjectId, max_per_agent: max_per_agent || 5 });
-          return { content: [{ type: "text" as const, text: `Rebalanced: moved ${result.moved} task(s), ${result.skipped} skipped.` }] };
+          const limit = max_per_agent || 5;
+          const agents = listAgents().filter((agent: any) => agent.status === "active");
+          if (agents.length === 0) return { content: [{ type: "text" as const, text: "No active agents available for rebalancing." }] };
+          const activeTasks = listTasks({ project_id: resolvedProjectId, status: ["pending", "in_progress"], limit: 1000 }, undefined) as Task[];
+          const load = new Map(agents.map((agent: any) => [agent.id, activeTasks.filter(t => t.assigned_to === agent.id).length]));
+          let moved = 0;
+          let skipped = 0;
+
+          for (const task of activeTasks.filter(t => t.status === "pending" && t.assigned_to && (load.get(t.assigned_to) ?? 0) > limit)) {
+            const target = agents
+              .filter((agent: any) => agent.id !== task.assigned_to)
+              .sort((a: any, b: any) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0))[0];
+            if (!target || (load.get(target.id) ?? 0) >= limit) {
+              skipped++;
+              continue;
+            }
+            updateTask(task.id, { assigned_to: target.id, version: task.version });
+            load.set(task.assigned_to!, (load.get(task.assigned_to!) ?? 1) - 1);
+            load.set(target.id, (load.get(target.id) ?? 0) + 1);
+            moved++;
+          }
+
+          return { content: [{ type: "text" as const, text: `Rebalanced: moved ${moved} task(s), ${skipped} skipped.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -174,7 +208,7 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
           const resolvedAgentId = agent_id ? resolveId(agent_id, "agents") : undefined;
           const tasks = notifyUpcomingDeadlines({ hours, project_id: resolvedProjectId, agent_id: resolvedAgentId });
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No deadlines approaching." }] };
-          const lines = tasks.map((t: any) => `${(t.short_id || t.id.slice(0,8))} ${t.title} due ${t.deadline}`);
+          const lines = tasks.map((t: any) => `${(t.short_id || t.id.slice(0,8))} ${t.title} due ${t.due_at}`);
           return { content: [{ type: "text" as const, text: `${tasks.length} task(s) due within ${hours}h:\n${lines.join("\n")}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -260,23 +294,21 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       "Get system health: task counts by status, active agents, project summary.",
       async () => {
         try {
-          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const { listProjects } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { countTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { listProjects } = require("../../db/projects.js") as typeof import("../../db/projects.js");
           const { listAgents } = require("../../db/agents.js") as typeof import("../../db/agents.js");
 
-          const [pending, inProgress, completed, cancelled] = await Promise.all([
-            Promise.resolve(listTasks({ status: "pending", limit: 1 }, undefined)),
-            Promise.resolve(listTasks({ status: "in_progress", limit: 1 }, undefined)),
-            Promise.resolve(listTasks({ status: "completed", limit: 1 }, undefined)),
-            Promise.resolve(listTasks({ status: "cancelled", limit: 1 }, undefined)),
-          ]);
+          const pending = countTasks({ status: "pending" });
+          const inProgress = countTasks({ status: "in_progress" });
+          const completed = countTasks({ status: "completed" });
+          const cancelled = countTasks({ status: "cancelled" });
 
-          const projects = listProjects({ limit: 100 });
-          const agents = listAgents({ limit: 100 });
+          const projects = listProjects();
+          const agents = listAgents();
 
           const lines = [
             `=== System Health ===`,
-            `Tasks: ${pending.total} pending | ${inProgress.total} in progress | ${completed.total} completed | ${cancelled.total} cancelled`,
+            `Tasks: ${pending} pending | ${inProgress} in progress | ${completed} completed | ${cancelled} cancelled`,
             `Projects: ${projects.length} total`,
             `Agents: ${agents.length} registered`,
           ];

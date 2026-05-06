@@ -62,6 +62,20 @@ export function listComments(taskId: string, db?: Database): TaskComment[] {
     .all(taskId) as TaskComment[];
 }
 
+export function updateComment(
+  id: string,
+  input: { content: string },
+  db?: Database,
+): TaskComment {
+  const d = db || getDatabase();
+  d.run("UPDATE task_comments SET content = ? WHERE id = ?", [input.content, id]);
+  const comment = getComment(id, d);
+  if (!comment) {
+    throw new Error(`Comment not found: ${id}`);
+  }
+  return comment;
+}
+
 export function deleteComment(id: string, db?: Database): boolean {
   const d = db || getDatabase();
   const result = d.run("DELETE FROM task_comments WHERE id = ?", [id]);

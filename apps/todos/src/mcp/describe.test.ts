@@ -19,12 +19,13 @@ const ALL_TOOLS = [
   "register_agent","list_agents","get_agent","rename_agent","delete_agent",
   "get_my_tasks","get_org_chart","set_reports_to",
   "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-  "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
+  "search_tasks","clone_task","move_task","get_next_task","claim_next_task",
+  "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
   "get_task_history","get_recent_activity",
   "create_webhook","list_webhooks","delete_webhook",
   "create_template","list_templates","create_task_from_template","delete_template",
   "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-  "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
+  "get_active_work","get_stale_tasks","get_status",
   "search_tools","describe_tools",
 ];
 
@@ -38,23 +39,25 @@ const DESCRIBE_TOOLS_KEYS = [
   "register_agent","list_agents","get_agent","rename_agent","delete_agent",
   "get_my_tasks","get_org_chart","set_reports_to",
   "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-  "search_tasks","sync","clone_task","move_task","get_next_task","claim_next_task",
+  "search_tasks","clone_task","move_task","get_next_task","claim_next_task",
+  "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
   "get_task_history","get_recent_activity",
   "create_webhook","list_webhooks","delete_webhook",
   "create_template","list_templates","create_task_from_template","delete_template",
   "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-  "get_active_work","get_tasks_changed_since","get_stale_tasks","get_status",
+  "get_active_work","get_stale_tasks","get_status",
   "search_tools","describe_tools",
 ];
 
 // Profile filtering logic (mirrors src/mcp/index.ts)
 const MINIMAL_TOOLS = new Set([
-  "claim_next_task", "complete_task", "fail_task", "get_status",
-  "get_task", "start_task", "add_comment", "get_next_task",
+  "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
+  "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
+  "get_tasks_changed_since", "get_health", "heartbeat", "release_agent",
 ]);
 
 const STANDARD_EXCLUDED = new Set([
-  "get_org_chart", "set_reports_to", "rename_agent", "delete_agent",
+  "rename_agent", "delete_agent", "unarchive_agent",
   "create_webhook", "list_webhooks", "delete_webhook",
   "create_template", "list_templates", "create_task_from_template", "delete_template",
   "approve_task",
@@ -95,17 +98,23 @@ describe("MCP meta tools", () => {
 });
 
 describe("TODOS_PROFILE filtering", () => {
-  it("minimal profile registers exactly 8 tools", () => {
+  it("minimal profile registers exactly 14 tools", () => {
     const registered = ALL_TOOLS.filter(n => shouldRegisterTool(n, "minimal"));
-    expect(registered).toHaveLength(8);
+    expect(registered).toHaveLength(14);
     expect(registered).toContain("claim_next_task");
     expect(registered).toContain("complete_task");
     expect(registered).toContain("fail_task");
     expect(registered).toContain("get_status");
+    expect(registered).toContain("get_context");
     expect(registered).toContain("get_task");
     expect(registered).toContain("start_task");
     expect(registered).toContain("add_comment");
     expect(registered).toContain("get_next_task");
+    expect(registered).toContain("bootstrap");
+    expect(registered).toContain("get_tasks_changed_since");
+    expect(registered).toContain("get_health");
+    expect(registered).toContain("heartbeat");
+    expect(registered).toContain("release_agent");
   });
 
   it("minimal profile excludes management tools", () => {
@@ -118,7 +127,7 @@ describe("TODOS_PROFILE filtering", () => {
 
   it("standard profile excludes org/webhook/template/approval tools", () => {
     for (const excluded of [
-      "get_org_chart", "set_reports_to", "rename_agent", "delete_agent",
+      "rename_agent", "delete_agent", "unarchive_agent",
       "create_webhook", "list_webhooks", "delete_webhook",
       "create_template", "list_templates", "create_task_from_template", "delete_template",
       "approve_task",

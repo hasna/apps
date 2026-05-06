@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import {
   getTask, updateTask, createTask, listTasks,
+  startTask, completeTask, setTaskStatus, setTaskPriority,
   addDependency, removeDependency, getTaskDependencies,
 } from "../../db/tasks.js";
 import {
@@ -21,9 +22,9 @@ import {
   createPlan, listPlans, getPlan, updatePlan, deletePlan,
 } from "../../db/plans.js";
 import {
-  addComment, listComments, deleteComment,
+  addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
-import { TaskNotFoundError } from "../../types/index.js";
+import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -36,6 +37,19 @@ interface TaskProjectContext {
 
 export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask } = ctx;
+
+  function versionFor(taskId: string, version?: number): number {
+    const current = getTask(taskId);
+    if (!current) throw new TaskNotFoundError(taskId);
+    if (version !== undefined && current.version !== version) {
+      throw new VersionConflictError(taskId, version, current.version);
+    }
+    return current.version;
+  }
+
+  function updateWithOptionalVersion(taskId: string, updates: Record<string, unknown>, version?: number): Task {
+    return updateTask(taskId, { ...updates, version: versionFor(taskId, version) } as Parameters<typeof updateTask>[1]);
+  }
 
   // === TASK STATE ===
 
@@ -50,7 +64,10 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ task_id, version }) => {
         try {
           const resolvedId = resolveId(task_id);
-          const task = updateTask(resolvedId, { status: "in_progress" }, version);
+          if (version !== undefined) versionFor(resolvedId, version);
+          const current = getTask(resolvedId);
+          if (!current) throw new TaskNotFoundError(resolvedId);
+          const task = startTask(resolvedId, current.assigned_to || current.agent_id || "mcp");
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -72,7 +89,10 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ task_id, confidence, completed_at, version }) => {
         try {
           const resolvedId = resolveId(task_id);
-          const task = updateTask(resolvedId, { status: "completed", confidence, completed_at }, version);
+          if (version !== undefined) versionFor(resolvedId, version);
+          const current = getTask(resolvedId);
+          if (!current) throw new TaskNotFoundError(resolvedId);
+          const task = completeTask(resolvedId, current.assigned_to || current.agent_id || undefined, undefined, { confidence, completed_at });
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -92,7 +112,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ task_id, version }) => {
         try {
           const resolvedId = resolveId(task_id);
-          const task = updateTask(resolvedId, { status: "cancelled" }, version);
+          const task = version === undefined
+            ? setTaskStatus(resolvedId, "cancelled")
+            : updateWithOptionalVersion(resolvedId, { status: "cancelled" }, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -114,7 +136,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(task_id);
           const resolvedAssignee = resolveId(new_assignee, "agents");
-          const task = updateTask(resolvedId, { assigned_to: resolvedAssignee }, version);
+          const task = updateWithOptionalVersion(resolvedId, { assigned_to: resolvedAssignee }, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -135,7 +157,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ task_id, deadline, version }) => {
         try {
           const resolvedId = resolveId(task_id);
-          const task = updateTask(resolvedId, { deadline }, version);
+          const task = updateWithOptionalVersion(resolvedId, { due_at: deadline }, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -150,13 +172,15 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "Set a task's priority.",
       {
         task_id: z.string().describe("Task ID"),
-        priority: z.enum(["low", "medium", "high", "urgent"]).describe("New priority"),
+        priority: z.enum(["low", "medium", "high", "critical"]).describe("New priority"),
         version: z.number().optional().describe("Expected version for optimistic locking"),
       },
       async ({ task_id, priority, version }) => {
         try {
           const resolvedId = resolveId(task_id);
-          const task = updateTask(resolvedId, { priority }, version);
+          const task = version === undefined
+            ? setTaskPriority(resolvedId, priority)
+            : updateWithOptionalVersion(resolvedId, { priority }, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -237,18 +261,18 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "Update multiple tasks at once. All tasks must pass the dependency check.",
       {
         task_ids: z.array(z.string()).describe("Array of task IDs to update"),
-        status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
-        priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional(),
         assigned_to: z.string().nullable().optional().describe("Agent ID or name, null to unassign"),
       },
       async ({ task_ids, status, priority, assigned_to }) => {
         try {
-          const { bulkUpdateTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { bulkUpdateTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = task_ids.map(resolveId);
           let resolvedAssignee: string | null | undefined = assigned_to;
           if (resolvedAssignee && typeof resolvedAssignee === "string") resolvedAssignee = resolveId(resolvedAssignee, "agents");
           const result = bulkUpdateTasks(resolved, { status, priority, assigned_to: resolvedAssignee });
-          return { content: [{ type: "text" as const, text: `${result.updated} task(s) updated, ${result.skipped} skipped (dependency check).` }] };
+          return { content: [{ type: "text" as const, text: `${result.updated} task(s) updated, ${result.failed.length} failed.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -264,8 +288,8 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         tasks: z.array(z.object({
           title: z.string(),
           description: z.string().optional(),
-          status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
-          priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+          status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+          priority: z.enum(["low", "medium", "high", "critical"]).optional(),
           project_id: z.string().optional(),
           task_list_id: z.string().optional(),
           assigned_to: z.string().optional(),
@@ -277,7 +301,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ tasks }) => {
         try {
-          const { bulkCreateTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { bulkCreateTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = tasks.map(t => {
             const r: Record<string, unknown> = { ...t };
             if (r.project_id) r.project_id = resolveId(r.project_id as string, "projects");
@@ -287,7 +311,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
             return r as Parameters<typeof bulkCreateTasks>[0][number];
           });
           const result = bulkCreateTasks(resolved);
-          return { content: [{ type: "text" as const, text: `${result.created} task(s) created, ${result.skipped} skipped (duplicate short_id).` }] };
+          return { content: [{ type: "text" as const, text: `${result.created.length} task(s) created.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -305,7 +329,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_ids, force }) => {
         try {
-          const { bulkDeleteTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { bulkDeleteTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = task_ids.map(resolveId);
           const result = bulkDeleteTasks(resolved, force);
           return { content: [{ type: "text" as const, text: `${result.deleted} task(s) deleted, ${result.skipped} skipped (has children).` }] };
@@ -373,7 +397,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           const resolvedId = resolveId(project_id, "projects");
           const project = getProject(resolvedId);
           if (!project) throw new TaskNotFoundError(`Project not found: ${project_id}`);
-          const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({ project_id: resolvedId, limit: 100 }, undefined) as Task[];
           const lines = [
             `ID:          ${project.id}`,
@@ -500,7 +524,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (!list) throw new TaskNotFoundError(`Task list not found: ${task_list_id}`);
           let tasks: Task[] = [];
           if (include_tasks) {
-            const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+            const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
             tasks = listTasks({ task_list_id: resolvedId, limit: 200 }, undefined) as Task[];
           }
           const lines = [
@@ -625,7 +649,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (!plan) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
           let tasks: Task[] = [];
           if (include_tasks) {
-            const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+            const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
             tasks = listTasks({ plan_id: resolvedId, limit: 200 }, undefined) as Task[];
           }
           const lines = [
@@ -740,7 +764,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const tag = getTag(tag_id);
           if (!tag) throw new TaskNotFoundError(`Tag not found: ${tag_id}`);
-          const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({ tags: [tag.name], limit: 100 }, undefined) as Task[];
           const lines = [
             `Tag: ${tag.name}${tag.color ? ` (${tag.color})` : ""}`,
@@ -846,7 +870,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const label = getLabel(label_id);
           if (!label) throw new TaskNotFoundError(`Label not found: ${label_id}`);
-          const { listTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({ tags: [label.name], limit: 100 }, undefined) as Task[];
           const lines = [
             `Label: ${label.name}${label.color ? ` (${label.color})` : ""}`,
@@ -916,7 +940,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const resolvedId = resolveId(task_id);
           const resolvedAuthor = author ? resolveId(author, "agents") : undefined;
-          const comment = addComment({ task_id: resolvedId, body, author: resolvedAuthor });
+          const comment = addComment({ task_id: resolvedId, content: body, agent_id: resolvedAuthor });
           return { content: [{ type: "text" as const, text: `Comment added to ${task_id.slice(0,8)}: ${body.slice(0, 50)}${body.length > 50 ? "..." : ""}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -937,7 +961,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           const resolvedId = resolveId(task_id);
           const comments = listComments(resolvedId);
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
-          const lines = comments.map(c => `[${c.author || "unknown"}] ${c.created_at?.slice(0, 16)}:\n  ${c.body}`);
+          const lines = comments.map(c => `[${c.agent_id || "unknown"}] ${c.created_at?.slice(0, 16)}:\n  ${c.content}`);
           return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -956,7 +980,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ comment_id, body }) => {
         try {
-          const comment = updateComment(comment_id, { body });
+          const comment = updateComment(comment_id, { content: body });
           return { content: [{ type: "text" as const, text: `Comment ${comment_id.slice(0,8)} updated.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -992,12 +1016,12 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       {
         query: z.string().describe("Search query"),
         project_id: z.string().optional().describe("Filter by project"),
-        status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
         limit: z.number().optional().describe("Max results (default: 20)"),
       },
       async ({ query, project_id, status, limit }) => {
         try {
-          const { searchTasks } = require("../db/tasks.js") as typeof import("../db/tasks.js");
+          const { searchTasks } = require("../../lib/search.js") as typeof import("../../lib/search.js");
           const resolved: Record<string, unknown> = { query, limit };
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           if (status) resolved.status = status;
@@ -1012,34 +1036,4 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
     );
   }
 
-  // === SYNC ===
-
-  if (shouldRegisterTool("sync")) {
-    server.tool(
-      "sync",
-      "Sync tasks from a GitHub PR or external source into the project.",
-      {
-        source: z.enum(["github_pr", "linear", "asana"]).describe("Source type"),
-        source_id: z.string().describe("PR number, Linear issue ID, or Asana task ID"),
-        project_id: z.string().optional().describe("Project ID to import into"),
-        options: z.record(z.unknown()).optional().describe("Source-specific options"),
-      },
-      async ({ source, source_id, project_id, options }) => {
-        try {
-          const { syncFromGithubPR, syncFromLinear, syncFromAsana } = require("../lib/sync.js") as typeof import("../lib/sync.js");
-          let result: any;
-          if (source === "github_pr") {
-            result = await syncFromGithubPR({ prNumber: parseInt(source_id), project_id: project_id ? resolveId(project_id, "projects") : undefined, ...options as any });
-          } else if (source === "linear") {
-            result = await syncFromLinear({ issueId: source_id, project_id: project_id ? resolveId(project_id, "projects") : undefined, ...options as any });
-          } else {
-            result = await syncFromAsana({ taskId: source_id, project_id: project_id ? resolveId(project_id, "projects") : undefined, ...options as any });
-          }
-          return { content: [{ type: "text" as const, text: `Synced from ${source}: ${result.task?.title || source_id}` }] };
-        } catch (e) {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
-      },
-    );
-  }
 }

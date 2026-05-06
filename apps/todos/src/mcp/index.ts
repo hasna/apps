@@ -18,7 +18,7 @@ import {
   DispatchNotFoundError,
 } from "../types/index.js";
 import type { Task } from "../types/index.js";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { registerDispatchTools } from "./tools/dispatch.js";
@@ -32,13 +32,20 @@ import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
+import { registerAgentTools } from "./tools/agents.js";
 
 function getMcpVersion(): string {
   try {
-    const __dir = dirname(fileURLToPath(import.meta.url));
-    const pkgPath = join(__dir, "..", "package.json");
-    return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
+    let dir = dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 4; i++) {
+      const pkgPath = join(dir, "package.json");
+      if (existsSync(pkgPath)) {
+        return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
+      }
+      dir = dirname(dir);
+    }
   } catch { return "0.0.0"; }
+  return "0.0.0";
 }
 
 const server = new McpServer({
@@ -53,7 +60,7 @@ const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
 const MINIMAL_TOOLS = new Set([
   "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
   "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
-  "get_tasks_changed_since", "heartbeat", "release_agent",
+  "get_tasks_changed_since", "get_health", "heartbeat", "release_agent",
 ]);
 
 const STANDARD_EXCLUDED = new Set([
@@ -229,6 +236,7 @@ registerTaskMetaTools(server, toolContext);
 registerTaskResources(server, toolContext);
 registerTaskRelTools(server, toolContext);
 registerCodeTools(server, toolContext);
+registerAgentTools(server, { ...toolContext, agentFocusMap });
 
 // === MACHINES ===
 
