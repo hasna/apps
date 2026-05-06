@@ -20,6 +20,7 @@ This repo is the OSS package `@hasna/shortlinks`.
 
 - Cloudflare helpers live under `shortlinks cloudflare`.
 - Domain purchasing/checking goes through the `domains` CLI from `@hasna/domains`.
+- Local host/proxy setup helpers live under `shortlinks local`.
 - Do not reference, install, or run removed `connect-*` packages.
 
 ## Verification

@@ -67,6 +67,17 @@ shortlinks serve --port 8787
 shortlinks doctor
 ```
 
+## Local Domain Setup
+
+Record a local mapping with the `machines` CLI and print the remaining hosts/proxy setup:
+
+```bash
+shortlinks local setup has.na --port 8787
+shortlinks local plan has.na --port 8787
+```
+
+The command emits the `/etc/hosts` line, a Caddy reverse-proxy snippet, and certificate paths. Writing `/etc/hosts` still requires sudo on macOS.
+
 ## Custom Domains
 
 Add as many domains as you need:

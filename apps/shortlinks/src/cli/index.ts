@@ -10,6 +10,7 @@ import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, upd
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
 import { runDomains } from "../domains-cli.js";
+import { createLocalSetupPlan, registerMachinesDns } from "../local.js";
 import { PG_MIGRATIONS } from "../pg-migrations.js";
 import type { Link } from "../types.js";
 
@@ -619,6 +620,58 @@ cloudCmd
         rds_host: config.rds?.host || null,
       };
       print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+const localCmd = program.command("local").description("Local domain setup helpers");
+
+localCmd
+  .command("plan <domain>")
+  .description("Render hosts and reverse-proxy setup for a local shortlink domain")
+  .option("--port <port>", "Local redirect server port", "8787")
+  .option("--target-host <host>", "Local target host", "127.0.0.1")
+  .option("-j, --json", "Output JSON")
+  .action((domain, opts) => {
+    try {
+      const plan = createLocalSetupPlan({
+        domain,
+        port: Number(opts.port),
+        targetHost: opts.targetHost,
+      });
+      print(plan, opts, () => console.log(JSON.stringify(plan, null, 2)));
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+localCmd
+  .command("setup <domain>")
+  .description("Record local domain mapping with machines and print remaining sudo-only setup")
+  .option("--port <port>", "Local redirect server port", "8787")
+  .option("--target-host <host>", "Local target host", "127.0.0.1")
+  .option("--skip-machines", "Do not call machines dns add")
+  .option("-j, --json", "Output JSON")
+  .action((domain, opts) => {
+    try {
+      const plan = createLocalSetupPlan({
+        domain,
+        port: Number(opts.port),
+        targetHost: opts.targetHost,
+      });
+      const machines = opts.skipMachines ? null : registerMachinesDns({
+        domain,
+        port: Number(opts.port),
+        targetHost: opts.targetHost,
+      });
+      const result = { plan, machines };
+      print(result, opts, () => {
+        if (machines && machines.status !== 0) {
+          console.error(chalk.yellow(machines.stderr.trim() || "machines dns add failed"));
+        }
+        console.log(JSON.stringify(result, null, 2));
+      });
     } catch (error) {
       handleError(error);
     }
