@@ -817,4 +817,25 @@ export const MIGRATIONS = [
   ALTER TABLE tasks ADD COLUMN total_steps INTEGER;
   INSERT OR IGNORE INTO _migrations (id) VALUES (48);
   `,
+  // Migration 49: Cycles — time-boxed iteration periods (like Linear.app cycles)
+  `
+  CREATE TABLE IF NOT EXISTS cycles (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    number INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    duration_weeks INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'archived')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cycles_project ON cycles(project_id);
+  CREATE INDEX IF NOT EXISTS idx_cycles_number ON cycles(number);
+  CREATE INDEX IF NOT EXISTS idx_cycles_status ON cycles(status);
+  CREATE INDEX IF NOT EXISTS idx_cycles_dates ON cycles(start_date, end_date);
+  ALTER TABLE tasks ADD COLUMN cycle_id TEXT REFERENCES cycles(id) ON DELETE SET NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_cycle ON tasks(cycle_id) WHERE cycle_id IS NOT NULL;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (49);
+  `,
 ];
