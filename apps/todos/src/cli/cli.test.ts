@@ -14,6 +14,31 @@ afterEach(() => {
 });
 
 describe("CLI integration", () => {
+  it("should print versions for standalone companion binaries without starting services", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const expectedVersion = JSON.parse(readFileSync(join(import.meta.dir, "../..", "package.json"), "utf-8")).version;
+
+    for (const entrypoint of ["src/mcp/index.ts", "src/server/index.ts"]) {
+      for (const flag of ["--version", "-V"]) {
+        const proc = Bun.spawn(["bun", "run", entrypoint, flag], {
+          cwd: import.meta.dir + "/../..",
+          env: { ...process.env, TODOS_DB_PATH: ":memory:", TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+        const exitCode = await proc.exited;
+
+        expect(exitCode).toBe(0);
+        expect(stdout.trim()).toBe(expectedVersion);
+        expect(stderr).not.toContain("Todos Dashboard running");
+        expect(stderr).not.toContain("MCP server error");
+      }
+    }
+  });
+
   it("should run add command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],

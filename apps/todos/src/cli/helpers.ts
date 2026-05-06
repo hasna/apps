@@ -1,21 +1,13 @@
 import chalk from "chalk";
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { Command } from "commander";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProjectByPath } from "../db/projects.js";
+import { getPackageVersion } from "../lib/package-version.js";
 import type { Project, Task } from "../types/index.js";
 
-export function getPackageVersion(): string {
-  try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
-    return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
+export { getPackageVersion };
 
 export function handleError(e: unknown): never {
   // Try to read program options — may not be available during early init

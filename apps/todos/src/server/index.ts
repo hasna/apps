@@ -6,9 +6,14 @@
  * If the default port is in use, automatically finds the next free port.
  */
 
+import { getPackageVersion } from "../lib/package-version.js";
 import { startServer } from "./serve.js";
 
 const DEFAULT_PORT = 19427;
+
+function hasVersionFlag(): boolean {
+  return process.argv.includes("--version") || process.argv.includes("-V");
+}
 
 function parsePort(): number {
   const portArg = process.argv.find((a) => a === "--port" || a.startsWith("--port="));
@@ -44,6 +49,10 @@ async function findFreePort(start: number): Promise<number> {
 }
 
 async function main() {
+  if (hasVersionFlag()) {
+    console.log(getPackageVersion());
+    return;
+  }
   const requestedPort = parsePort();
   const port = await findFreePort(requestedPort);
   if (port !== requestedPort) {

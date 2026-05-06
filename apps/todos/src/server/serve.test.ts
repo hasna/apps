@@ -10,6 +10,19 @@ let dbPath: string;
 
 const SERVER_HOOK_TIMEOUT_MS = 15_000;
 
+function reserveFreePort(start: number): number {
+  for (let candidate = start; candidate < start + 100; candidate++) {
+    try {
+      const server = Bun.serve({ port: candidate, fetch: () => new Response("") });
+      server.stop(true);
+      return candidate;
+    } catch {
+      // Try the next port in the test range.
+    }
+  }
+  throw new Error(`No free test port found starting at ${start}`);
+}
+
 function url(path: string): string {
   return `http://localhost:${port}${path}`;
 }
@@ -40,7 +53,7 @@ async function createTaskViaApi(
 }
 
 beforeAll(async () => {
-  port = 19400 + Math.floor(Math.random() * 100);
+  port = reserveFreePort(19400 + Math.floor(Math.random() * 100));
   tmpDir = await mkdtemp(join(tmpdir(), "todos-server-test-"));
   dbPath = join(tmpDir, "test.db");
 

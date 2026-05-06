@@ -18,9 +18,6 @@ import {
   DispatchNotFoundError,
 } from "../types/index.js";
 import type { Task } from "../types/index.js";
-import { existsSync, readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
 import { registerDispatchTools } from "./tools/dispatch.js";
 import { registerTaskCrudTools } from "./tools/task-crud.js";
 import { registerTaskProjectTools } from "./tools/task-project-tools.js";
@@ -33,19 +30,19 @@ import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
+import { getPackageVersion } from "../lib/package-version.js";
 
 function getMcpVersion(): string {
-  try {
-    let dir = dirname(fileURLToPath(import.meta.url));
-    for (let i = 0; i < 4; i++) {
-      const pkgPath = join(dir, "package.json");
-      if (existsSync(pkgPath)) {
-        return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
-      }
-      dir = dirname(dir);
-    }
-  } catch { return "0.0.0"; }
-  return "0.0.0";
+  return getPackageVersion(import.meta.url);
+}
+
+function hasVersionFlag(): boolean {
+  return process.argv.includes("--version") || process.argv.includes("-V");
+}
+
+if (hasVersionFlag()) {
+  console.log(getMcpVersion());
+  process.exit(0);
 }
 
 const server = new McpServer({
