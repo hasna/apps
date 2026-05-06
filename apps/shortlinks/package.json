@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shortlinks",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and @hasna cloud sync",
   "type": "module",
   "main": "dist/index.js",
@@ -34,8 +34,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
-    "prepublishOnly": "bun run test && bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/shortlinks 2>/dev/null || true"
+    "prepublishOnly": "bun run test && bun run build"
   },
   "keywords": [
     "shortlinks",
