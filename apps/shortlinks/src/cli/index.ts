@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { ShortlinksStore } from "../store.js";
+import { PgShortlinksStore } from "../pg-store.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
@@ -13,6 +14,8 @@ import { runDomains } from "../domains-cli.js";
 import { createLocalSetupPlan, registerMachinesDns } from "../local.js";
 import { PG_MIGRATIONS } from "../pg-migrations.js";
 import type { Link } from "../types.js";
+
+type RuntimeStore = ShortlinksStore | PgShortlinksStore;
 
 function getPackageVersion(): string {
   try {
@@ -65,6 +68,30 @@ async function withStoreAsync<T>(fn: (store: ShortlinksStore) => Promise<T>): Pr
   }
 }
 
+function storeMode(): "local" | "cloud" {
+  const opts = program.opts();
+  const value = String(opts.cloud ? "cloud" : opts.store || process.env.SHORTLINKS_STORE || "local").toLowerCase();
+  if (value !== "local" && value !== "cloud") throw new Error(`Unknown store mode: ${value}`);
+  return value;
+}
+
+async function withRuntimeStore<T>(fn: (store: RuntimeStore) => T | Promise<T>): Promise<T> {
+  if (storeMode() === "cloud") {
+    const store = await PgShortlinksStore.fromCloud("shortlinks");
+    try {
+      return await fn(store);
+    } finally {
+      await store.close();
+    }
+  }
+  const store = new ShortlinksStore(program.opts().db);
+  try {
+    return await fn(store);
+  } finally {
+    store.close();
+  }
+}
+
 function formatLink(link: Link): string {
   return `${chalk.green(link.short_url || `${link.hostname}/${link.slug}`)} ${chalk.dim("->")} ${link.destination_url}`;
 }
@@ -79,6 +106,8 @@ program
   .description("CLI-only shortlink manager with custom domains, click tracking, Cloudflare helpers, and cloud sync")
   .version(getPackageVersion())
   .option("--db <path>", "SQLite database path")
+  .option("--store <mode>", "Data store mode: cloud or local", process.env.SHORTLINKS_STORE || "local")
+  .option("--cloud", "Use the shortlinks PostgreSQL database directly")
   .option("-j, --json", "Output JSON for agents and scripts");
 
 program
@@ -87,13 +116,13 @@ program
   .option("--domain <hostname>", "Add a default shortlink domain")
   .option("--public-base-url <url>", "Public URL base for generated links")
   .option("-j, --json", "Output JSON")
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const result = withStore((store) => {
+      const result = await withRuntimeStore(async (store) => {
         const config = loadConfig();
         if (opts.publicBaseUrl) config.publicBaseUrl = opts.publicBaseUrl;
         if (opts.domain) {
-          const domain = store.addDomain({
+          const domain = await store.addDomain({
             hostname: opts.domain,
             provider: "manual",
             defaultDomain: true,
@@ -101,13 +130,14 @@ program
           config.defaultDomain = domain.hostname;
           config.publicBaseUrl = opts.publicBaseUrl || `https://${domain.hostname}`;
         }
-        saveConfig(config);
+        if (storeMode() === "local") saveConfig(config);
         return {
           data_dir: getDataDir(),
           config_path: getConfigPath(),
           db_path: getDatabasePath(program.opts().db),
+          store: storeMode(),
           config,
-          stats: store.totalStats(),
+          stats: await store.totalStats(),
         };
       });
       print(result, opts, () => {
@@ -177,9 +207,9 @@ domainCmd
   .option("--origin <url>", "Origin redirect server URL")
   .option("--notes <text>", "Notes")
   .option("-j, --json", "Output JSON")
-  .action((hostname, opts) => {
+  .action(async (hostname, opts) => {
     try {
-      const domain = withStore((store) => store.addDomain({
+      const domain = await withRuntimeStore((store) => store.addDomain({
         hostname,
         provider: opts.provider,
         defaultDomain: opts.default,
@@ -202,9 +232,9 @@ domainCmd
   .command("list")
   .description("List configured domains")
   .option("-j, --json", "Output JSON")
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const domains = withStore((store) => store.listDomains());
+      const domains = await withRuntimeStore((store) => store.listDomains());
       print(domains, opts, () => {
         if (domains.length === 0) {
           console.log(chalk.dim("No domains configured."));
@@ -224,9 +254,9 @@ domainCmd
   .command("get <hostname>")
   .description("Show a configured domain")
   .option("-j, --json", "Output JSON")
-  .action((hostname, opts) => {
+  .action(async (hostname, opts) => {
     try {
-      const domain = withStore((store) => store.getDomain(hostname));
+      const domain = await withRuntimeStore((store) => store.getDomain(hostname));
       if (!domain) throw new Error("Domain not found.");
       print(domain, opts, () => console.log(JSON.stringify(domain, null, 2)));
     } catch (error) {
@@ -246,8 +276,8 @@ domainCmd
   .option("-j, --json", "Output JSON")
   .action(async (hostname, opts) => {
     try {
-      const result = await withStoreAsync(async (store) => {
-        const domain = store.addDomain({
+      const result = await withRuntimeStore(async (store) => {
+        const domain = await store.addDomain({
           hostname,
           provider: opts.cloudflare ? "cloudflare" : "manual",
           defaultDomain: opts.default,
@@ -302,9 +332,9 @@ domainCmd
 
 const linkCmd = program.command("link").alias("links").description("Manage shortlinks");
 
-function createLinkAction(url: string, opts: any): void {
+async function createLinkAction(url: string, opts: any): Promise<void> {
   try {
-    const link = withStore((store) => store.createLink({
+    const link = await withRuntimeStore((store) => store.createLink({
       destinationUrl: url,
       domain: opts.domain,
       slug: opts.slug,
@@ -347,9 +377,9 @@ linkCmd
   .option("--active", "Only active links")
   .option("--limit <n>", "Maximum rows", "100")
   .option("-j, --json", "Output JSON")
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const links = withStore((store) => store.listLinks({
+      const links = await withRuntimeStore((store) => store.listLinks({
         domain: opts.domain,
         activeOnly: opts.active,
         limit: Number(opts.limit),
@@ -371,9 +401,9 @@ linkCmd
   .description("Show a shortlink")
   .option("--domain <hostname>", "Domain to use")
   .option("-j, --json", "Output JSON")
-  .action((slug, opts) => {
+  .action(async (slug, opts) => {
     try {
-      const link = withStore((store) => opts.domain ? store.getLink(opts.domain, slug) : store.getLink(slug));
+      const link = await withRuntimeStore((store) => opts.domain ? store.getLink(opts.domain, slug) : store.getLink(slug));
       if (!link) throw new Error("Link not found.");
       print(link, opts, () => console.log(JSON.stringify(link, null, 2)));
     } catch (error) {
@@ -386,9 +416,9 @@ linkCmd
   .description("Disable a shortlink")
   .option("--domain <hostname>", "Domain to use")
   .option("-j, --json", "Output JSON")
-  .action((slug, opts) => {
+  .action(async (slug, opts) => {
     try {
-      const link = withStore((store) => opts.domain ? store.setLinkActive(opts.domain, slug, false) : store.setLinkActive(slug, false));
+      const link = await withRuntimeStore((store) => opts.domain ? store.setLinkActive(opts.domain, slug, false) : store.setLinkActive(slug, false));
       print(link, opts, () => console.log(chalk.green(`Disabled ${link.short_url}`)));
     } catch (error) {
       handleError(error);
@@ -400,9 +430,9 @@ linkCmd
   .description("Enable a shortlink")
   .option("--domain <hostname>", "Domain to use")
   .option("-j, --json", "Output JSON")
-  .action((slug, opts) => {
+  .action(async (slug, opts) => {
     try {
-      const link = withStore((store) => opts.domain ? store.setLinkActive(opts.domain, slug, true) : store.setLinkActive(slug, true));
+      const link = await withRuntimeStore((store) => opts.domain ? store.setLinkActive(opts.domain, slug, true) : store.setLinkActive(slug, true));
       print(link, opts, () => console.log(chalk.green(`Enabled ${link.short_url}`)));
     } catch (error) {
       handleError(error);
@@ -414,9 +444,9 @@ linkCmd
   .description("Delete a shortlink")
   .option("--domain <hostname>", "Domain to use")
   .option("-j, --json", "Output JSON")
-  .action((slug, opts) => {
+  .action(async (slug, opts) => {
     try {
-      const link = withStore((store) => opts.domain ? store.deleteLink(opts.domain, slug) : store.deleteLink(slug));
+      const link = await withRuntimeStore((store) => opts.domain ? store.deleteLink(opts.domain, slug) : store.deleteLink(slug));
       print(link, opts, () => console.log(chalk.green(`Deleted ${link.short_url}`)));
     } catch (error) {
       handleError(error);
@@ -428,9 +458,9 @@ program
   .description("Resolve a slug to its destination without recording a click")
   .option("--domain <hostname>", "Domain to use")
   .option("-j, --json", "Output JSON")
-  .action((slug, opts) => {
+  .action(async (slug, opts) => {
     try {
-      const link = withStore((store) => opts.domain ? store.getLink(opts.domain, slug) : store.getLink(slug));
+      const link = await withRuntimeStore((store) => opts.domain ? store.getLink(opts.domain, slug) : store.getLink(slug));
       if (!link) throw new Error("Link not found.");
       print(link, opts, () => console.log(link.destination_url));
     } catch (error) {
@@ -443,9 +473,9 @@ program
   .description("Show overall stats or stats for a shortlink")
   .option("--domain <hostname>", "Domain to use")
   .option("-j, --json", "Output JSON")
-  .action((slug, opts) => {
+  .action(async (slug, opts) => {
     try {
-      const result = withStore((store) => {
+      const result = await withRuntimeStore((store) => {
         if (slug) return opts.domain ? store.getStats(opts.domain, slug) : store.getStats(slug);
         return store.totalStats();
       });
@@ -461,15 +491,21 @@ program
   .option("--host <host>", "Bind host", "127.0.0.1")
   .option("--port <port>", "Port", "8787")
   .option("--default-host <hostname>", "Fallback host if the request has no Host header")
-  .action((opts) => {
+  .option("--cloud", "Serve directly from the shortlinks PostgreSQL database")
+  .action(async (opts) => {
     try {
+      const store = opts.cloud || storeMode() === "cloud"
+        ? await PgShortlinksStore.fromCloud("shortlinks")
+        : undefined;
       const server = serveShortlinks({
+        store,
         dbPath: program.opts().db,
         host: opts.host,
         port: Number(opts.port),
         defaultHost: opts.defaultHost,
       });
-      console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port}`));
+      const mode = store ? "cloud" : "local";
+      console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port} (${mode})`));
     } catch (error) {
       handleError(error);
     }
@@ -681,11 +717,13 @@ program
   .command("doctor")
   .description("Check local shortlinks tooling and integration readiness")
   .option("-j, --json", "Output JSON")
-  .action((opts) => {
+  .action(async (opts) => {
     try {
-      const stats = withStore((store) => store.totalStats());
+      const mode = storeMode();
+      const stats = await withRuntimeStore((store) => store.totalStats());
       const data = {
         service: "shortlinks",
+        store: mode,
         data_dir: getDataDir(),
         config_path: getConfigPath(),
         db_path: getDatabasePath(program.opts().db),

@@ -64,9 +64,7 @@ RUNNER
 chmod 750 /usr/local/bin/shortlinks-env-exec
 chown root:shortlinks /usr/local/bin/shortlinks-env-exec
 
-su -s /bin/bash shortlinks -c '/usr/local/bin/shortlinks-env-exec shortlinks --json doctor'
-su -s /bin/bash shortlinks -c '/usr/local/bin/shortlinks-env-exec shortlinks --json config set default-domain has.na'
-su -s /bin/bash shortlinks -c '/usr/local/bin/shortlinks-env-exec shortlinks --json cloud pull --tables domains,links,clicks' || true
+su -s /bin/bash shortlinks -c 'PATH=/var/lib/shortlinks/.bun/bin:$PATH shortlinks --version'
 
 caddy_version="$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r '.tag_name // "v2.10.2"' | sed 's/^v//')"
 case "$(uname -m)" in
@@ -92,43 +90,14 @@ Group=shortlinks
 WorkingDirectory=/var/lib/shortlinks
 Environment=HOME=/var/lib/shortlinks
 Environment=PATH=/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin
-ExecStartPre=/usr/local/bin/shortlinks-env-exec shortlinks --json cloud pull --tables domains,links
-ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks serve --host 127.0.0.1 --port 8787 --default-host has.na
+Environment=SHORTLINKS_STORE=cloud
+ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks serve --cloud --host 127.0.0.1 --port 8787 --default-host has.na
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 SERVICE
-
-cat > /etc/systemd/system/shortlinks-sync.service <<'SERVICE'
-[Unit]
-Description=Sync shortlinks SQLite data with RDS
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=shortlinks
-Group=shortlinks
-WorkingDirectory=/var/lib/shortlinks
-Environment=HOME=/var/lib/shortlinks
-Environment=PATH=/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks --json cloud sync --tables domains,links,clicks
-SERVICE
-
-cat > /etc/systemd/system/shortlinks-sync.timer <<'TIMER'
-[Unit]
-Description=Run shortlinks cloud sync every minute
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=1min
-Unit=shortlinks-sync.service
-
-[Install]
-WantedBy=timers.target
-TIMER
 
 cat > /etc/systemd/system/caddy.service <<'SERVICE'
 [Unit]
@@ -162,7 +131,6 @@ has.na {
 CADDY
 
 systemctl daemon-reload
-systemctl enable shortlinks.service shortlinks-sync.timer caddy.service
+systemctl enable shortlinks.service caddy.service
 systemctl start shortlinks.service
-systemctl start shortlinks-sync.timer
 systemctl start caddy.service || true

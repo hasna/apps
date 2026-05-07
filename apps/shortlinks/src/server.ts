@@ -1,8 +1,14 @@
 import { ShortlinksStore } from "./store.js";
-import type { Link } from "./types.js";
+import type { ClickInput, Link } from "./types.js";
+
+export interface ShortlinksRuntimeStore {
+  totalStats(): { domains: number; links: number; clicks: number } | Promise<{ domains: number; links: number; clicks: number }>;
+  resolve(hostname: string, slug: string): Link | null | Promise<Link | null>;
+  recordClick(link: Link, input?: ClickInput): unknown | Promise<unknown>;
+}
 
 export interface ShortlinksHandlerOptions {
-  store?: ShortlinksStore;
+  store?: ShortlinksRuntimeStore;
   dbPath?: string;
   defaultHost?: string;
   redirectStatus?: 301 | 302 | 307 | 308;
@@ -38,7 +44,7 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
-      return json({ ok: true, service: "shortlinks", stats: store.totalStats() });
+      return json({ ok: true, service: "shortlinks", stats: await store.totalStats() });
     }
 
     if (url.pathname === "/" || url.pathname === "") {
@@ -58,7 +64,7 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
 
     let link: Link | null = null;
     try {
-      link = store.resolve(host, slug);
+      link = await store.resolve(host, slug);
     } catch {
       return json({ error: "Shortlink not found.", slug, host }, 404);
     }
@@ -66,7 +72,7 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
     if (!link.active) return json({ error: "Shortlink is disabled.", slug, host }, 410);
     if (isExpired(link)) return json({ error: "Shortlink is expired.", slug, host }, 410);
 
-    store.recordClick(link, {
+    await store.recordClick(link, {
       ip: getClientIp(request),
       userAgent: request.headers.get("user-agent"),
       referer: request.headers.get("referer"),

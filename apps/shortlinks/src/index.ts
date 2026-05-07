@@ -1,5 +1,6 @@
 export { ShortlinksDatabase, SQLITE_MIGRATIONS, makeId, now } from "./database.js";
 export { ShortlinksStore } from "./store.js";
+export { PgShortlinksStore } from "./pg-store.js";
 export { createShortlinksHandler, serveShortlinks } from "./server.js";
 export { createCloudflarePlan, generateWorkerScript, writeWorkerFiles, upsertCloudflareDnsRecord } from "./cloudflare.js";
 export { createLocalSetupPlan, registerMachinesDns } from "./local.js";

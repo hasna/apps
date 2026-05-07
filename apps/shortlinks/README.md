@@ -2,7 +2,7 @@
 
 CLI-only shortlink management for custom domains.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers, `@hasna/domains`, and `@hasna/cloud` sync.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers, `@hasna/domains`, and `@hasna/cloud` sync. Production serving can run directly against the shared RDS database with `--cloud`; local SQLite is only for explicit local/offline use.
 
 [![npm](https://img.shields.io/npm/v/@hasna/shortlinks)](https://www.npmjs.com/package/@hasna/shortlinks)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -64,6 +64,7 @@ shortlinks link enable home --domain has.na
 shortlinks stats home --domain has.na
 
 shortlinks serve --port 8787
+shortlinks serve --cloud --port 8787
 shortlinks doctor
 ```
 
@@ -137,15 +138,21 @@ shortlinks cloud sync
 ```
 
 The cloud database service name is `shortlinks`.
+Use direct RDS mode for production and live management:
+
+```bash
+shortlinks --cloud create https://example.com
+shortlinks --cloud link list
+shortlinks serve --cloud --host 127.0.0.1 --port 8787
+```
 
 ## AWS Origin
 
 For an apex domain that needs stable A records, `infra/aws-ec2-user-data.sh` bootstraps a small EC2 redirect origin with:
 
 - `@hasna/shortlinks` installed through Bun
-- local SQLite data synced with the `shortlinks` RDS database through `@hasna/cloud`
+- direct reads and click writes against the `shortlinks` RDS database through `@hasna/cloud`
 - Caddy terminating HTTPS and proxying to `shortlinks serve`
-- a systemd timer that syncs links and clicks every minute
 
 The script reads the RDS password from AWS Secrets Manager through the instance role; it does not contain secret values.
 

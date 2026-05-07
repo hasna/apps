@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shortlinks",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and @hasna cloud sync",
   "type": "module",
   "main": "dist/index.js",
@@ -31,7 +31,7 @@
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/cloud && bun build src/index.ts --outdir dist --target bun --external @hasna/cloud && bun build src/server.ts --outdir dist --target bun && bun build src/cloudflare.ts --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/cloud && bun build src/index.ts --outdir dist --target bun --external @hasna/cloud && bun build src/server.ts --outdir dist --target bun --external @hasna/cloud && bun build src/cloudflare.ts --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
