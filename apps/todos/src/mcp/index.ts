@@ -31,6 +31,7 @@ import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { getPackageVersion } from "../lib/package-version.js";
+import { installMcpTokenTelemetry, shouldRegisterToolForProfile } from "./token-utils.js";
 
 function getMcpVersion(): string {
   return getPackageVersion(import.meta.url);
@@ -49,29 +50,12 @@ const server = new McpServer({
   name: "todos",
   version: getMcpVersion(),
 });
+installMcpTokenTelemetry(server);
 
 // === PROFILE FILTERING ===
 
-const TODOS_PROFILE = (process.env["TODOS_PROFILE"] || "full").toLowerCase();
-
-const MINIMAL_TOOLS = new Set([
-  "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
-  "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
-  "get_tasks_changed_since", "get_health", "heartbeat", "release_agent",
-]);
-
-const STANDARD_EXCLUDED = new Set([
-  "rename_agent", "delete_agent", "unarchive_agent",
-  "create_webhook", "list_webhooks", "delete_webhook",
-  "create_template", "list_templates", "create_task_from_template", "delete_template", "update_template",
-  "init_templates", "preview_template", "export_template", "import_template", "template_history",
-  "approve_task",
-]);
-
 function shouldRegisterTool(name: string): boolean {
-  if (TODOS_PROFILE === "minimal") return MINIMAL_TOOLS.has(name);
-  if (TODOS_PROFILE === "standard") return !STANDARD_EXCLUDED.has(name);
-  return true; // "full" or any unknown value = all tools
+  return shouldRegisterToolForProfile(name);
 }
 
 // === FOCUS MODE ===

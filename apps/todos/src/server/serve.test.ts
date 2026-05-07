@@ -740,6 +740,17 @@ describe("Task lifecycle (end-to-end)", () => {
   });
 });
 
+describe("GET /api/tasks/:id field selectors", () => {
+  it("should return only requested fields for a single task", async () => {
+    const task = await createTaskViaApi({ title: "Field selector task", description: "Hidden unless requested" });
+    const res = await api("GET", `/api/tasks/${task.id}?fields=id,title,status`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(data).sort()).toEqual(["id", "status", "title"]);
+    expect(data.title).toBe("Field selector task");
+  });
+});
+
 describe("GET /api/tasks/:id/progress", () => {
   it("should return empty progress for task with no log entries", async () => {
     const task = await createTaskViaApi({ title: "No progress yet" });
@@ -749,6 +760,30 @@ describe("GET /api/tasks/:id/progress", () => {
     expect(data).toHaveProperty("count");
     expect(data.count).toBe(0);
     expect(Array.isArray(data.progress_entries)).toBe(true);
+  });
+
+  it("should roll up progress entries by default and allow full history", async () => {
+    const task = await createTaskViaApi({ title: "Progress rollup" });
+    for (let i = 0; i < 25; i += 1) {
+      const res = await api("POST", `/api/tasks/${task.id}/progress`, {
+        message: `Progress ${i}`,
+        pct_complete: i,
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const compactRes = await api("GET", `/api/tasks/${task.id}/progress`);
+    const compact = (await compactRes.json()) as { progress_entries: unknown[]; count: number; summary: { omitted: number; returned: number } };
+    expect(compact.count).toBe(25);
+    expect(compact.progress_entries).toHaveLength(20);
+    expect(compact.summary.omitted).toBe(5);
+    expect(compact.summary.returned).toBe(20);
+
+    const fullRes = await api("GET", `/api/tasks/${task.id}/progress?format=full`);
+    const full = (await fullRes.json()) as { progress_entries: unknown[]; count: number; summary: { omitted: number } };
+    expect(full.count).toBe(25);
+    expect(full.progress_entries).toHaveLength(25);
+    expect(full.summary.omitted).toBe(0);
   });
 
   it("should return 404 for non-existent task progress", async () => {

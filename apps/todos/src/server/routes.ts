@@ -32,6 +32,18 @@ import { listComments, logProgress } from "../db/comments.js";
 import type { Task } from "../types/index.js";
 import { join, resolve, sep } from "path";
 
+function parseFieldsParam(url: URL): string[] | undefined {
+  const fieldsParam = url.searchParams.get("fields");
+  return fieldsParam ? fieldsParam.split(",").map(f => f.trim()).filter(Boolean) : undefined;
+}
+
+function parseBoundedLimit(value: string | null, fallback: number, max: number): number {
+  if (!value) return fallback;
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+}
+
 // Re-export utilities from serve.ts
 export {
   json,
@@ -167,8 +179,7 @@ export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContex
   const agentId = url.searchParams.get("agent_id") || undefined;
   const limitParam = url.searchParams.get("limit");
   const offsetParam = url.searchParams.get("offset");
-  const fieldsParam = url.searchParams.get("fields");
-  const fields = fieldsParam ? fieldsParam.split(",").map(f => f.trim()).filter(Boolean) : undefined;
+  const fields = parseFieldsParam(url);
   const tasks = listTasks({
     status: status as Task["status"] | undefined,
     project_id: projectId,
@@ -271,8 +282,9 @@ export function handleTasksNext(_req: Request, url: URL, _ctx: RouteContext, jso
   try {
     const projectId = url.searchParams.get("project_id") || undefined;
     const agentId = url.searchParams.get("agent_id") || undefined;
+    const fields = parseFieldsParam(url);
     const task = getNextTask(agentId, projectId ? { project_id: projectId } : undefined);
-    return json({ task: task ? taskToSummary(task) : null });
+    return json({ task: task ? taskToSummary(task, fields) : null });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Failed" }, 500);
   }
@@ -292,8 +304,9 @@ export function handleTasksStale(_req: Request, url: URL, _ctx: RouteContext, js
   try {
     const projectId = url.searchParams.get("project_id") || undefined;
     const minutes = parseInt(url.searchParams.get("minutes") || "30", 10);
+    const fields = parseFieldsParam(url);
     const tasks = getStaleTasks(minutes, projectId ? { project_id: projectId } : undefined);
-    return json({ tasks: tasks.map(t => taskToSummary(t)), count: tasks.length });
+    return json({ tasks: tasks.map(t => taskToSummary(t, fields)), count: tasks.length });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Failed" }, 500);
   }
@@ -304,8 +317,9 @@ export function handleTasksChanged(_req: Request, url: URL, _ctx: RouteContext, 
     const since = url.searchParams.get("since");
     if (!since) return json({ error: "since parameter required (ISO date string)" }, 400);
     const projectId = url.searchParams.get("project_id") || undefined;
+    const fields = parseFieldsParam(url);
     const tasks = getTasksChangedSince(since, projectId ? { project_id: projectId } : undefined);
-    return json({ tasks: tasks.map(t => taskToSummary(t)), count: tasks.length, since });
+    return json({ tasks: tasks.map(t => taskToSummary(t, fields)), count: tasks.length, since });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Failed" }, 500);
   }
@@ -315,11 +329,12 @@ export function handleTasksContext(_req: Request, url: URL, _ctx: RouteContext, 
   const agentId = url.searchParams.get("agent_id") || undefined;
   const projectId = url.searchParams.get("project_id") || undefined;
   const format = url.searchParams.get("format") || "text";
+  const fields = parseFieldsParam(url);
   const filters = projectId ? { project_id: projectId } : undefined;
   const status = getStatus(filters, agentId);
   const next = getNextTask(agentId, filters);
   if (format === "json") {
-    return json({ status, next_task: next ? taskToSummary(next) : null });
+    return json({ status, next_task: next ? taskToSummary(next, fields) : null });
   }
   const lines: string[] = [];
   lines.push(`Tasks: ${status.pending} pending | ${status.in_progress} active | ${status.completed} done`);
@@ -341,14 +356,28 @@ export function handleTaskAttachments(id: string, _ctx: RouteContext, json: (dat
   return json({ task_id: id, short_id: task.short_id, attachment_ids: attachmentIds, count: attachmentIds.length, files_changed: evidence.files_changed, commit_hash: evidence.commit_hash, notes: evidence.notes });
 }
 
-export async function handleTaskProgress(id: string, req: Request, method: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response): Promise<Response | null> {
+export async function handleTaskProgress(id: string, req: Request, method: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, url?: URL): Promise<Response | null> {
   const task = getTask(id);
   if (!task) return json({ error: "Task not found" }, 404);
   if (method === "GET") {
     const all = listComments(id);
     const progress = all.filter((c: any) => c.type === "progress");
     const latest = progress[progress.length - 1] || null;
-    return json({ task_id: id, progress_entries: progress, latest, count: progress.length });
+    const format = url?.searchParams.get("format") || "compact";
+    const limit = parseBoundedLimit(url?.searchParams.get("limit") || null, 20, 200);
+    const progressEntries = format === "full" ? progress : progress.slice(-limit);
+    return json({
+      task_id: id,
+      progress_entries: progressEntries,
+      latest,
+      count: progress.length,
+      summary: {
+        total: progress.length,
+        returned: progressEntries.length,
+        omitted: Math.max(0, progress.length - progressEntries.length),
+        format,
+      },
+    });
   }
   if (method === "POST") {
     try {
@@ -363,10 +392,10 @@ export async function handleTaskProgress(id: string, req: Request, method: strin
   return null;
 }
 
-export function handleGetTask(id: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Response {
+export function handleGetTask(id: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown, url?: URL): Response {
   const task = getTask(id);
   if (!task) return json({ error: "Task not found" }, 404);
-  return json(taskToSummary(task));
+  return json(taskToSummary(task, url ? parseFieldsParam(url) : undefined));
 }
 
 export async function handlePatchTask(id: string, req: Request, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
@@ -630,8 +659,11 @@ export function handleActivity(_req: Request, url: URL, _ctx: RouteContext, json
   return json(getRecentActivity(limit));
 }
 
-export function handleTaskHistory(id: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
-  return json(getTaskHistory(id));
+export function handleTaskHistory(id: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, url?: URL): Response {
+  const history = getTaskHistory(id);
+  const format = url?.searchParams.get("format") || "compact";
+  const limit = parseBoundedLimit(url?.searchParams.get("limit") || null, 20, 500);
+  return json(format === "full" ? history : history.slice(0, limit));
 }
 
 export function handleListWebhooks(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {

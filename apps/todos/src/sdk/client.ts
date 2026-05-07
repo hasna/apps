@@ -71,10 +71,12 @@ import {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+type QueryValue = string | number | boolean | string[] | undefined;
+
+function buildQuery(params: Record<string, QueryValue>): string {
   const search = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined) search.set(k, String(v));
+    if (v !== undefined) search.set(k, Array.isArray(v) ? v.join(",") : String(v));
   }
   const s = search.toString();
   return s ? `?${s}` : "";
@@ -95,19 +97,19 @@ class TasksResource {
     limit?: number;
     offset?: number;
     cursor?: string;
-    fields?: string;
+    fields?: string | string[];
   }): Promise<TaskSummary[]> {
     return this.client._get<TaskSummary[]>("/api/tasks", buildQuery(options || {}));
   }
 
   /** Get a single task by ID */
-  async get(id: string): Promise<TaskSummary> {
-    return this.client._get<TaskSummary>(`/api/tasks/${id}`);
+  async get(id: string, options?: { fields?: string | string[] }): Promise<TaskSummary> {
+    return this.client._get<TaskSummary>(`/api/tasks/${id}`, buildQuery(options || {}));
   }
 
   /** Get task with full relations (subtasks, dependencies, comments, checklist) */
   async getWithRelations(id: string): Promise<Task> {
-    return this.client._get<Task>(`/api/tasks/${id}`);
+    return this.client._get<Task>(`/api/tasks/${id}`, buildQuery({ format: "full" }));
   }
 
   /** Create a new task */
@@ -155,13 +157,13 @@ class TasksResource {
   }
 
   /** Get progress entries for a task */
-  async getProgress(id: string): Promise<TaskProgressResponse> {
-    return this.client._get(`/api/tasks/${id}/progress`);
+  async getProgress(id: string, options?: { limit?: number; format?: "compact" | "full" }): Promise<TaskProgressResponse> {
+    return this.client._get(`/api/tasks/${id}/progress`, buildQuery(options || {}));
   }
 
   /** Get task history (audit log) */
-  async getHistory(id: string): Promise<TaskHistory[]> {
-    return this.client._get(`/api/tasks/${id}/history`);
+  async getHistory(id: string, options?: { limit?: number; format?: "compact" | "full" }): Promise<TaskHistory[]> {
+    return this.client._get(`/api/tasks/${id}/history`, buildQuery(options || {}));
   }
 
   /** Get task attachments */
@@ -175,7 +177,7 @@ class TasksResource {
   }
 
   /** Get next available task for an agent */
-  async next(options?: { project_id?: string; agent_id?: string }): Promise<TaskNextResponse> {
+  async next(options?: { project_id?: string; agent_id?: string; fields?: string | string[] }): Promise<TaskNextResponse> {
     return this.client._get("/api/tasks/next", buildQuery(options || {}));
   }
 
@@ -185,13 +187,13 @@ class TasksResource {
   }
 
   /** Get stale tasks (in_progress > N minutes) */
-  async stale(options?: { project_id?: string; minutes?: number }): Promise<TaskStaleResponse> {
+  async stale(options?: { project_id?: string; minutes?: number; fields?: string | string[] }): Promise<TaskStaleResponse> {
     return this.client._get("/api/tasks/stale", buildQuery(options || {}));
   }
 
   /** Get tasks changed since a timestamp */
-  async changedSince(since: string, projectId?: string): Promise<TaskChangedResponse> {
-    return this.client._get("/api/tasks/changed", buildQuery({ since, project_id: projectId }));
+  async changedSince(since: string, projectId?: string, options?: { fields?: string | string[] }): Promise<TaskChangedResponse> {
+    return this.client._get("/api/tasks/changed", buildQuery({ since, project_id: projectId, fields: options?.fields }));
   }
 
   /** Get task context (summary text or JSON for agent prompt injection) */
@@ -199,11 +201,13 @@ class TasksResource {
     agentId?: string;
     projectId?: string;
     format?: "text" | "compact" | "json";
+    fields?: string | string[];
   }): Promise<TaskContextResponse | string> {
     const q = buildQuery({
       agent_id: options?.agentId,
       project_id: options?.projectId,
       format: options?.format,
+      fields: options?.fields,
     });
     const url = `${this.client.baseUrl}/api/tasks/context${q}`;
     const res = await this.client._fetchRaw(url);
@@ -647,13 +651,13 @@ export class TodosClient {
   // ── Backward-compatible methods (match old TodosClient API) ──────────────
 
   /** @deprecated Use client.tasks.list() instead */
-  async listTasks(filter: { status?: string; project_id?: string; assigned_to?: string; limit?: number; offset?: number; session_id?: string; due_today?: boolean; overdue?: boolean } = {}): Promise<TaskSummary[]> {
+  async listTasks(filter: { status?: string; project_id?: string; assigned_to?: string; limit?: number; offset?: number; session_id?: string; due_today?: boolean; overdue?: boolean; fields?: string | string[] } = {}): Promise<TaskSummary[]> {
     return this.tasks.list(filter);
   }
 
   /** @deprecated Use client.tasks.get() instead */
-  async getTask(id: string): Promise<TaskSummary> {
-    return this.tasks.get(id);
+  async getTask(id: string, options?: { fields?: string | string[] }): Promise<TaskSummary> {
+    return this.tasks.get(id, options);
   }
 
   /** @deprecated Use client.tasks.create() instead */
@@ -728,8 +732,8 @@ export class TodosClient {
   }
 
   /** @deprecated Use client.tasks.getHistory() instead */
-  async getTaskHistory(id: string): Promise<any[]> {
-    return this.tasks.getHistory(id);
+  async getTaskHistory(id: string, options?: { limit?: number; format?: "compact" | "full" }): Promise<any[]> {
+    return this.tasks.getHistory(id, options);
   }
 
   /** @deprecated Use client.tasks.getAttachments() instead */
@@ -738,8 +742,8 @@ export class TodosClient {
   }
 
   /** @deprecated Use client.tasks.getProgress() instead */
-  async getTaskProgress(id: string): Promise<any> {
-    return this.tasks.getProgress(id);
+  async getTaskProgress(id: string, options?: { limit?: number; format?: "compact" | "full" }): Promise<any> {
+    return this.tasks.getProgress(id, options);
   }
 
   /** @deprecated Use client.tasks.subscribe() instead */

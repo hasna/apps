@@ -340,7 +340,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // /api/tasks/:id/progress — GET (read) and POST (log)
       const progressMatch = path.match(/^\/api\/tasks\/([^/]+)\/progress$/);
       if (progressMatch) {
-        const res = await handlers.handleTaskProgress(progressMatch[1]!, req, method, ctx, json);
+        const res = await handlers.handleTaskProgress(progressMatch[1]!, req, method, ctx, json, url);
         if (res !== null) return res;
       }
 
@@ -350,7 +350,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
         // GET /api/tasks/:id
         if (method === "GET") {
-          return handlers.handleGetTask(id, ctx, jsonWithCors, taskToSummary);
+          return handlers.handleGetTask(id, ctx, jsonWithCors, taskToSummary, url);
         }
 
         // PATCH /api/tasks/:id
@@ -486,7 +486,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // ── API: Task history ──
       const historyMatch = path.match(/^\/api\/tasks\/([^/]+)\/history$/);
       if (historyMatch && method === "GET") {
-        return handlers.handleTaskHistory(historyMatch[1]!, ctx, json);
+        return handlers.handleTaskHistory(historyMatch[1]!, ctx, json, url);
       }
 
       // ── API: Webhooks ──

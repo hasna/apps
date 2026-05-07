@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
+import { compactHandoff, compactJson, compactStatus, compactTask } from "../token-utils.js";
 
 interface TaskWorkflowContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -211,8 +212,10 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
         project_id: z.string().optional().describe("Filter by project"),
         task_list_id: z.string().optional().describe("Filter by task list"),
         explain_blocked: z.boolean().optional().describe("Include blocked task details"),
+        detail: z.enum(["compact", "full"]).optional().describe("Response detail (default: compact)"),
+        max_description_chars: z.number().optional().describe("Max task description chars in compact mode (default: 180)"),
       },
-      async ({ agent_id, project_id, task_list_id, explain_blocked }) => {
+      async ({ agent_id, project_id, task_list_id, explain_blocked, detail, max_description_chars }) => {
         try {
           const { getStatus, getNextTask, getOverdueTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { getLatestHandoff } = require("../../db/handoffs.js") as typeof import("../../db/handoffs.js");
@@ -223,16 +226,31 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
           const next_task = getNextTask(agent_id, filters);
           const overdue = getOverdueTasks(filters.project_id);
           const latest_handoff = getLatestHandoff(agent_id, filters.project_id);
+          const payload = {
+            status,
+            next_task,
+            overdue_count: overdue.length,
+            latest_handoff,
+            as_of: new Date().toISOString(),
+          };
+          if (detail === "full") {
+            return {
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify(payload, null, 2),
+              }],
+            };
+          }
           return {
             content: [{
               type: "text" as const,
-              text: JSON.stringify({
-                status,
-                next_task,
+              text: compactJson({
+                status: compactStatus(status),
+                next_task: next_task ? compactTask(next_task, max_description_chars || 180) : null,
                 overdue_count: overdue.length,
-                latest_handoff,
-                as_of: new Date().toISOString(),
-              }, null, 2),
+                latest_handoff: compactHandoff(latest_handoff),
+                as_of: payload.as_of,
+              }),
             }],
           };
         } catch (e) {

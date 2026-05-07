@@ -136,6 +136,12 @@ export interface TaskProgressResponse {
   progress_entries: TaskComment[];
   latest: TaskComment | null;
   count: number;
+  summary?: {
+    total: number;
+    returned: number;
+    omitted: number;
+    format: string;
+  };
 }
 
 export interface TaskAttachmentsResponse {

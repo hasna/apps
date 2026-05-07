@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
+import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
 
 interface TaskAdvContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -20,6 +21,27 @@ interface TaskAdvContext {
 export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask, formatTaskDetail } = ctx;
 
+  function getDependencyContext(taskId: string) {
+    const { getTaskDependencies, getTaskDependents, getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+    const upstream = getTaskDependencies(taskId).map((dep: any) => {
+      const dependency = getTask(dep.depends_on);
+      return {
+        direction: "upstream",
+        task_id: dep.depends_on,
+        status: dependency?.status || "unknown",
+      };
+    });
+    const downstream = getTaskDependents(taskId).map((dep: any) => {
+      const dependent = getTask(dep.task_id);
+      return {
+        direction: "downstream",
+        task_id: dep.task_id,
+        status: dependent?.status || "unknown",
+      };
+    });
+    return [...upstream, ...downstream];
+  }
+
   // === STATUS / CONTEXT ===
 
   if (shouldRegisterTool("get_status")) {
@@ -32,8 +54,11 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
         task_list_id: z.string().optional().describe("Filter summary by task list"),
         agent_id: z.string().optional().describe("Agent for next-task affinity"),
         explain_blocked: z.boolean().optional().describe("Include blocked task explanations in summary"),
+        detail: z.enum(["compact", "full"]).optional().describe("Response detail (default: compact)"),
+        comment_limit: z.number().optional().describe("Max recent comments for task status (default: 5)"),
+        file_limit: z.number().optional().describe("Max files for task status (default: 10)"),
       },
-      async ({ task_id, project_id, task_list_id, agent_id, explain_blocked }) => {
+      async ({ task_id, project_id, task_list_id, agent_id, explain_blocked, detail, comment_limit, file_limit }) => {
         try {
           if (!task_id) {
             const { getStatus } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
@@ -41,21 +66,51 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
             if (project_id) filters.project_id = resolveId(project_id, "projects");
             if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
             const status = getStatus(filters, agent_id, { explain_blocked });
-            return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] };
+            return { content: [{ type: "text" as const, text: detail === "full" ? JSON.stringify(status, null, 2) : compactJson(compactStatus(status)) }] };
           }
 
           const resolvedId = resolveId(task_id);
           const { getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const task = getTask(resolvedId);
           if (!task) throw new Error(`Task not found: ${task_id}`);
-          const { getTaskDependencies } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const { listTaskFiles } = require("../../db/task-files.js") as any;
           const [deps, comments, files] = await Promise.all([
-            Promise.resolve(getTaskDependencies(resolvedId, "both")),
+            Promise.resolve(getDependencyContext(resolvedId)),
             Promise.resolve(listComments(resolvedId)),
             Promise.resolve(listTaskFiles(resolvedId)),
           ]);
+          if (detail !== "full") {
+            const commentsShown = comments.slice(-(comment_limit || 5));
+            const filesShown = files.slice(0, file_limit || 10);
+            return {
+              content: [{
+                type: "text" as const,
+                text: compactJson({
+                  task: compactTask(task, 160),
+                  dependencies: {
+                    count: deps.length,
+                    items: deps.slice(0, 10).map((d: any) => ({ direction: d.direction, task_id: d.task_id, status: d.status })),
+                    omitted: Math.max(0, deps.length - 10),
+                  },
+                  comments: {
+                    count: comments.length,
+                    recent: commentsShown.map((c: any) => ({
+                      agent_id: c.agent_id || null,
+                      created_at: c.created_at,
+                      content: truncateText(c.content, 120),
+                    })),
+                    omitted: Math.max(0, comments.length - commentsShown.length),
+                  },
+                  files: {
+                    count: files.length,
+                    items: filesShown.map((f: any) => ({ status: f.status, path: f.path })),
+                    omitted: Math.max(0, files.length - filesShown.length),
+                  },
+                }),
+              }],
+            };
+          }
           const lines = [
             `Status: ${task.status} | Priority: ${task.priority}`,
             task.assigned_to ? `Assigned: ${task.assigned_to}` : "Unassigned",
@@ -79,30 +134,82 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
   if (shouldRegisterTool("task_context")) {
     server.tool(
       "task_context",
-      "Get full context for a task: details, dependencies, relationships, comments, files, commits, time logs, and watchers.",
+      "Get compact context for a task by default: details, dependencies, relationships, comments, files, commits, and watchers. Pass detail=full for all data.",
       {
         task_id: z.string().describe("Task ID"),
+        detail: z.enum(["compact", "full"]).optional().describe("Response detail (default: compact)"),
+        comment_limit: z.number().optional().describe("Max recent comments in compact mode (default: 5)"),
+        file_limit: z.number().optional().describe("Max files in compact mode (default: 10)"),
+        commit_limit: z.number().optional().describe("Max commits in compact mode (default: 10)"),
+        max_description_chars: z.number().optional().describe("Max description chars in compact mode (default: 240)"),
       },
-      async ({ task_id }) => {
+      async ({ task_id, detail, comment_limit, file_limit, commit_limit, max_description_chars }) => {
         try {
           const resolvedId = resolveId(task_id);
           const { getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const task = getTask(resolvedId);
           if (!task) throw new Error(`Task not found: ${task_id}`);
-          const { getTaskDependencies } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const { getTaskRelationships } = require("../../db/task-relationships.js") as typeof import("../../db/task-relationships.js");
           const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const { listTaskFiles } = require("../../db/task-files.js") as any;
           const { getTaskCommits } = require("../../db/task-commits.js") as typeof import("../../db/task-commits.js");
           const { getTaskWatchers } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const [deps, rels, comments, files, commits, watchers] = await Promise.all([
-            Promise.resolve(getTaskDependencies(resolvedId, "both")),
+            Promise.resolve(getDependencyContext(resolvedId)),
             Promise.resolve(getTaskRelationships(resolvedId)),
             Promise.resolve(listComments(resolvedId)),
             Promise.resolve(listTaskFiles(resolvedId)),
             Promise.resolve(getTaskCommits(resolvedId)),
             Promise.resolve(getTaskWatchers(resolvedId)),
           ]);
+          if (detail !== "full") {
+            const commentsShown = comments.slice(-(comment_limit || 5));
+            const filesShown = files.slice(0, file_limit || 10);
+            const commitsShown = commits.slice(0, commit_limit || 10);
+            return {
+              content: [{
+                type: "text" as const,
+                text: compactJson({
+                  task: compactTask(task, max_description_chars || 240),
+                  dependencies: {
+                    count: deps.length,
+                    items: deps.slice(0, 10).map((d: any) => ({ direction: d.direction, task_id: d.task_id, status: d.status })),
+                    omitted: Math.max(0, deps.length - 10),
+                  },
+                  relationships: {
+                    count: rels.length,
+                    items: rels.slice(0, 10).map((r: any) => ({
+                      source_task_id: r.source_task_id,
+                      relationship_type: r.relationship_type,
+                      target_task_id: r.target_task_id,
+                    })),
+                    omitted: Math.max(0, rels.length - 10),
+                  },
+                  comments: {
+                    count: comments.length,
+                    recent: commentsShown.map((c: any) => ({
+                      agent_id: c.agent_id || null,
+                      created_at: c.created_at,
+                      content: truncateText(c.content, 160),
+                    })),
+                    omitted: Math.max(0, comments.length - commentsShown.length),
+                  },
+                  files: {
+                    count: files.length,
+                    items: filesShown.map((f: any) => ({ status: f.status, path: f.path })),
+                    omitted: Math.max(0, files.length - filesShown.length),
+                  },
+                  commits: {
+                    count: commits.length,
+                    items: commitsShown.map((c: any) => ({ sha: c.sha, message: truncateText(c.message || "(no message)", 120) })),
+                    omitted: Math.max(0, commits.length - commitsShown.length),
+                  },
+                  watchers: { count: watchers.length },
+                  metadata_keys: task.metadata ? Object.keys(task.metadata) : [],
+                }),
+              }],
+            };
+          }
           const lines = [
             `== ${task.title} ====================`,
             `ID:       ${task.id}`,
@@ -292,16 +399,20 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
   if (shouldRegisterTool("get_comments")) {
     server.tool(
       "get_comments",
-      "Alias for list_comments.",
+      "List recent comments for a task. Compact by default; pass detail=full for all comment text.",
       {
         task_id: z.string().describe("Task ID"),
+        detail: z.enum(["compact", "full"]).optional().describe("Response detail (default: compact)"),
+        limit: z.number().optional().describe("Max recent comments in compact mode (default: 20)"),
       },
-      async ({ task_id }) => {
+      async ({ task_id, detail, limit }) => {
         try {
           const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const comments = listComments(resolveId(task_id));
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
-          const lines = comments.map(c => `[${c.agent_id || "?"}] ${c.created_at?.slice(0,16)}: ${c.content}`);
+          const shown = detail === "full" ? comments : comments.slice(-(limit || 20));
+          const lines = shown.map(c => `[${c.agent_id || "?"}] ${c.created_at?.slice(0,16)}: ${detail === "full" ? c.content : truncateText(c.content, 180)}`);
+          if (shown.length < comments.length) lines.unshift(`Showing ${shown.length} of ${comments.length} comments (${comments.length - shown.length} older omitted).`);
           return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

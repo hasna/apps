@@ -1,4 +1,5 @@
 import { describe, it, expect } from "bun:test";
+import { CORE_MCP_TOOLS, shouldRegisterToolForProfile } from "./token-utils.js";
 
 /**
  * Tests for the MCP meta tools: describe_tools and search_tools.
@@ -49,26 +50,6 @@ const DESCRIBE_TOOLS_KEYS = [
   "search_tools","describe_tools",
 ];
 
-// Profile filtering logic (mirrors src/mcp/index.ts)
-const MINIMAL_TOOLS = new Set([
-  "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
-  "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
-  "get_tasks_changed_since", "get_health", "heartbeat", "release_agent",
-]);
-
-const STANDARD_EXCLUDED = new Set([
-  "rename_agent", "delete_agent", "unarchive_agent",
-  "create_webhook", "list_webhooks", "delete_webhook",
-  "create_template", "list_templates", "create_task_from_template", "delete_template",
-  "approve_task",
-]);
-
-function shouldRegisterTool(name: string, profile: string): boolean {
-  if (profile === "minimal") return MINIMAL_TOOLS.has(name);
-  if (profile === "standard") return !STANDARD_EXCLUDED.has(name);
-  return true;
-}
-
 describe("MCP meta tools", () => {
   it("search_tools all array contains every tool", () => {
     // Verify no duplicates
@@ -98,12 +79,16 @@ describe("MCP meta tools", () => {
 });
 
 describe("TODOS_PROFILE filtering", () => {
-  it("minimal profile registers exactly 14 tools", () => {
-    const registered = ALL_TOOLS.filter(n => shouldRegisterTool(n, "minimal"));
-    expect(registered).toHaveLength(14);
+  it("minimal profile registers the compact core tool group", () => {
+    const registered = ALL_TOOLS.filter(n => shouldRegisterToolForProfile(n, "minimal"));
+    expect(registered.length).toBeGreaterThanOrEqual(14);
+    expect(registered.length).toBeLessThanOrEqual(CORE_MCP_TOOLS.size);
     expect(registered).toContain("claim_next_task");
     expect(registered).toContain("complete_task");
     expect(registered).toContain("fail_task");
+    expect(registered).toContain("create_task");
+    expect(registered).toContain("list_tasks");
+    expect(registered).toContain("register_agent");
     expect(registered).toContain("get_status");
     expect(registered).toContain("get_context");
     expect(registered).toContain("get_task");
@@ -118,21 +103,18 @@ describe("TODOS_PROFILE filtering", () => {
   });
 
   it("minimal profile excludes management tools", () => {
-    expect(shouldRegisterTool("create_task", "minimal")).toBe(false);
-    expect(shouldRegisterTool("list_tasks", "minimal")).toBe(false);
-    expect(shouldRegisterTool("delete_task", "minimal")).toBe(false);
-    expect(shouldRegisterTool("rename_agent", "minimal")).toBe(false);
-    expect(shouldRegisterTool("create_webhook", "minimal")).toBe(false);
+    expect(shouldRegisterToolForProfile("delete_task", "minimal")).toBe(false);
+    expect(shouldRegisterToolForProfile("rename_agent", "minimal")).toBe(false);
+    expect(shouldRegisterToolForProfile("create_webhook", "minimal")).toBe(false);
   });
 
-  it("standard profile excludes org/webhook/template/approval tools", () => {
+  it("standard profile excludes webhook/template/cloud-only tools", () => {
     for (const excluded of [
-      "rename_agent", "delete_agent", "unarchive_agent",
       "create_webhook", "list_webhooks", "delete_webhook",
       "create_template", "list_templates", "create_task_from_template", "delete_template",
-      "approve_task",
+      "todos_cloud_status",
     ]) {
-      expect(shouldRegisterTool(excluded, "standard")).toBe(false);
+      expect(shouldRegisterToolForProfile(excluded, "standard")).toBe(false);
     }
   });
 
@@ -141,24 +123,25 @@ describe("TODOS_PROFILE filtering", () => {
       "create_task", "list_tasks", "get_task", "update_task", "start_task",
       "complete_task", "fail_task", "claim_next_task", "get_status",
     ]) {
-      expect(shouldRegisterTool(included, "standard")).toBe(true);
+      expect(shouldRegisterToolForProfile(included, "standard")).toBe(true);
     }
   });
 
   it("full profile registers all tools", () => {
-    const registered = ALL_TOOLS.filter(n => shouldRegisterTool(n, "full"));
+    const registered = ALL_TOOLS.filter(n => shouldRegisterToolForProfile(n, "full"));
     expect(registered).toHaveLength(ALL_TOOLS.length);
   });
 
-  it("unknown profile defaults to full (all tools)", () => {
-    const registered = ALL_TOOLS.filter(n => shouldRegisterTool(n, "unknown_profile"));
-    expect(registered).toHaveLength(ALL_TOOLS.length);
+  it("unknown profile defaults to the compact core tools", () => {
+    const registered = ALL_TOOLS.filter(n => shouldRegisterToolForProfile(n, "unknown_profile"));
+    expect(registered).toContain("claim_next_task");
+    expect(registered).not.toContain("create_webhook");
   });
 
   it("standard profile registers more than minimal but less than full", () => {
-    const minimal = ALL_TOOLS.filter(n => shouldRegisterTool(n, "minimal")).length;
-    const standard = ALL_TOOLS.filter(n => shouldRegisterTool(n, "standard")).length;
-    const full = ALL_TOOLS.filter(n => shouldRegisterTool(n, "full")).length;
+    const minimal = ALL_TOOLS.filter(n => shouldRegisterToolForProfile(n, "minimal")).length;
+    const standard = ALL_TOOLS.filter(n => shouldRegisterToolForProfile(n, "standard")).length;
+    const full = ALL_TOOLS.filter(n => shouldRegisterToolForProfile(n, "full")).length;
     expect(minimal).toBeLessThan(standard);
     expect(standard).toBeLessThan(full);
   });

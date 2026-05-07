@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { createTask, listTasks, getTask, updateTask, deleteTask } from "../../db/tasks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
+import { compactJson, compactTask, truncateText } from "../token-utils.js";
 
 interface TaskCrudContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -116,16 +117,32 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
   if (shouldRegisterTool("get_task")) {
     server.tool(
       "get_task",
-      "Get full details for a task.",
+      "Get compact task details by default. Pass detail=full for the full multi-line view.",
       {
         task_id: z.string().describe("Task ID (full or short)"),
+        detail: z.enum(["compact", "full"]).optional().describe("Response detail (default: compact)"),
+        max_description_chars: z.number().optional().describe("Max description chars in compact mode (default: 240)"),
+        include_metadata: z.boolean().optional().describe("Include metadata in compact mode"),
       },
-      async ({ task_id }) => {
+      async ({ task_id, detail, max_description_chars, include_metadata }) => {
         try {
           const resolvedId = resolveId(task_id);
           const task = getTask(resolvedId);
           if (!task) throw new TaskNotFoundError(task_id);
           const focus = ctx.getAgentFocus(task.assigned_to || "");
+          if (detail !== "full") {
+            const compact = compactTask(task, max_description_chars || 240);
+            compact["version"] = task.version;
+            compact["created_at"] = task.created_at;
+            compact["focus"] = focus ? { agent_id: focus.agent_id, project_id: focus.project_id || null } : null;
+            if (include_metadata && task.metadata && Object.keys(task.metadata).length > 0) {
+              compact["metadata"] = task.metadata;
+            }
+            if (task.description && !compact["description"]) {
+              compact["description"] = truncateText(task.description, max_description_chars || 240);
+            }
+            return { content: [{ type: "text" as const, text: compactJson(compact) }] };
+          }
           const lines = [
             `ID:       ${task.id}`,
             `Short ID: ${task.short_id || "(none)"}`,

@@ -63,8 +63,8 @@ const tools = todosTools.map(t => ({
 - `client.myQueue()` — Get task queue sorted by priority
 
 ### Tasks
-- `client.listTasks(filters?)` — List with status/project/plan filters
-- `client.getTask(id)` — Get details
+- `client.listTasks(filters?)` — List with status/project/plan filters; pass `fields` to trim payloads
+- `client.getTask(id, { fields })` — Get details with optional field selection
 - `client.createTask({ title, ... })` — Create
 - `client.startTask(id)` — Claim and start
 - `client.completeTask(id, evidence?)` — Complete with optional evidence
@@ -83,7 +83,7 @@ const tools = todosTools.map(t => ({
 - `client.listTemplates()` / `createTemplate()` / `deleteTemplate()`
 - `client.stats()` — Dashboard statistics
 - `client.recentActivity()` — Audit log
-- `client.getTaskHistory(id)` — Task change history
+- `client.getTaskHistory(id, { limit, format })` — Task change history, compact and limited by default
 - `client.subscribeEvents(callback)` — Real-time SSE events
 
 ## License

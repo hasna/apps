@@ -54,18 +54,49 @@ export class TodosClient {
 
   // ── Tasks ───────────────────────────────────────────────────────────────
 
-  async listTasks(filters?: { status?: string; project_id?: string; plan_id?: string; limit?: number }): Promise<Task[]> {
+  private buildQuery(values: Record<string, string | number | boolean | string[] | undefined>): string {
     const params = new URLSearchParams();
-    if (filters?.status) params.set("status", filters.status);
-    if (filters?.project_id) params.set("project_id", filters.project_id);
-    if (filters?.plan_id) params.set("plan_id", filters.plan_id);
-    if (filters?.limit) params.set("limit", String(filters.limit));
+    for (const [key, value] of Object.entries(values)) {
+      if (value !== undefined) params.set(key, Array.isArray(value) ? value.join(",") : String(value));
+    }
     const qs = params.toString();
-    return this.get<Task[]>(`/api/tasks${qs ? `?${qs}` : ""}`);
+    return qs ? `?${qs}` : "";
   }
 
-  async getTask(id: string): Promise<Task> {
-    return this.get<Task>(`/api/tasks/${id}`);
+  async listTasks(filters?: { status?: string; project_id?: string; plan_id?: string; limit?: number; fields?: string | string[] }): Promise<Task[]> {
+    const qs = this.buildQuery({
+      status: filters?.status,
+      project_id: filters?.project_id,
+      plan_id: filters?.plan_id,
+      limit: filters?.limit,
+      fields: filters?.fields,
+    });
+    return this.get<Task[]>(`/api/tasks${qs}`);
+  }
+
+  async getTask(id: string, options?: { fields?: string | string[] }): Promise<Task> {
+    const qs = this.buildQuery({ fields: options?.fields });
+    return this.get<Task>(`/api/tasks/${id}${qs}`);
+  }
+
+  async getTaskHistory(id: string, options?: { limit?: number; format?: "compact" | "full" }): Promise<TaskHistory[]> {
+    const qs = this.buildQuery({ limit: options?.limit, format: options?.format });
+    return this.get<TaskHistory[]>(`/api/tasks/${id}/history${qs}`);
+  }
+
+  async getTaskProgress(id: string, options?: { limit?: number; format?: "compact" | "full" }): Promise<{
+    task_id: string;
+    progress_entries: unknown[];
+    latest: unknown | null;
+    count: number;
+    summary?: { total: number; returned: number; omitted: number; format: string };
+  }> {
+    const qs = this.buildQuery({ limit: options?.limit, format: options?.format });
+    return this.get(`/api/tasks/${id}/progress${qs}`);
+  }
+
+  async searchTasks(query: string): Promise<Task[]> {
+    return this.get<Task[]>(`/api/tasks?search=${encodeURIComponent(query)}`);
   }
 
   async createTask(input: {
@@ -102,14 +133,6 @@ export class TodosClient {
 
   async bulkTasks(ids: string[], action: "start" | "complete" | "delete"): Promise<BulkResult> {
     return this.post<BulkResult>("/api/tasks/bulk", { ids, action });
-  }
-
-  async getTaskHistory(id: string): Promise<TaskHistory[]> {
-    return this.get<TaskHistory[]>(`/api/tasks/${id}/history`);
-  }
-
-  async searchTasks(query: string): Promise<Task[]> {
-    return this.get<Task[]>(`/api/tasks?search=${encodeURIComponent(query)}`);
   }
 
   // ── Projects ────────────────────────────────────────────────────────────

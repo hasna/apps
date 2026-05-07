@@ -17,14 +17,22 @@ todos serve  # starts REST API + dashboard at http://localhost:19427
 
 ## MCP Integration (Recommended)
 
-With `TODOS_PROFILE=minimal`, only 8 tools load — 90% fewer tokens at session start:
+`TODOS_PROFILE` defaults to `minimal`, which loads the compact agent loop tools
+instead of every admin, cloud, template, and machine tool at session start:
 
 ```bash
 # In your Claude Code config or CLAUDE.md:
-TODOS_PROFILE=minimal    # 11 tools: claim, complete, fail, status, get_task, start, add_comment, get_next, get_context, get_health, get_next_task
-TODOS_PROFILE=standard   # ~50 tools (default)
+TODOS_PROFILE=minimal    # compact default: claim/create/list/get/start/complete/fail/status/context/agent heartbeat
+TODOS_PROFILE=standard   # task/project/resource/agent/metadata tools
+TODOS_PROFILE=agent      # core + task/project/resource tools
+TODOS_TOOL_GROUPS=cloud  # add one group to the selected profile
 TODOS_PROFILE=full       # all 65+ tools
 ```
+
+High-volume MCP tools are compact by default. Pass `detail: "full"` to
+`get_task`, `get_status`, `get_context`, `bootstrap`, or `task_context` when you
+need the larger payload. Set `TODOS_MCP_TOKEN_TELEMETRY=1` to append approximate
+response token counts for profiling.
 
 ## Recommended Agent Session Pattern
 
@@ -93,7 +101,7 @@ Events: `task.created`, `task.started`, `task.completed`, `task.failed`, `task.a
 - **Evidence on completion**: `todos done <id> --attach-ids <attachment-id>` (from @hasna/attachments)
 - **Session linking**: set `TODOS_URL` in sessions; `sessions show --tasks` surfaces task IDs
 - **Email notifications**: `todos webhook create --url <emails-webhook-url> --events task.assigned`
-- **Memory context**: Use `TODOS_PROFILE=minimal` + mementos `format=compact` for minimum context overhead
+- **Memory context**: Use the default `TODOS_PROFILE=minimal` + mementos `format=compact` for minimum context overhead
 
 ## Anti-patterns to Avoid
 

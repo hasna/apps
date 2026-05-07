@@ -241,8 +241,21 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, direction }) => {
         try {
-          const { getTaskDependencies } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const deps = getTaskDependencies(resolveId(task_id), direction);
+          const { getTaskDependencies, getTaskDependents, getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const resolvedId = resolveId(task_id);
+          const upstream = direction !== "downstream"
+            ? getTaskDependencies(resolvedId).map((dep: any) => {
+                const dependency = getTask(dep.depends_on);
+                return { direction: "upstream", task_id: dep.depends_on, status: dependency?.status || "unknown" };
+              })
+            : [];
+          const downstream = direction !== "upstream"
+            ? getTaskDependents(resolvedId).map((dep: any) => {
+                const dependent = getTask(dep.task_id);
+                return { direction: "downstream", task_id: dep.task_id, status: dependent?.status || "unknown" };
+              })
+            : [];
+          const deps = [...upstream, ...downstream];
           if (deps.length === 0) return { content: [{ type: "text" as const, text: "No dependencies." }] };
           const lines = deps.map((d: any) => `[${d.direction}] ${d.task_id.slice(0,8)} (${d.status})`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };

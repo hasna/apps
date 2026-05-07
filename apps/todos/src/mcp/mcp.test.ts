@@ -317,6 +317,29 @@ describe("MCP tool wrappers", () => {
     expect(getTask(task.id, db)!.status).toBe("in_progress");
   });
 
+  it("task detail tools are compact by default and expand on request", async () => {
+    const crudTools = captureTools(registerTaskCrudTools);
+    const advTools = captureTools(registerTaskAdvTools);
+    const task = createTask({
+      title: "Compact task via MCP",
+      description: "Long context ".repeat(40),
+    }, db);
+    addComment({ task_id: task.id, content: "Progress note ".repeat(30), type: "progress" }, db);
+
+    const compact = await callCapturedTool(crudTools, "get_task", { task_id: task.id, max_description_chars: 40 });
+    const compactPayload = JSON.parse(compact.content[0]!.text);
+    expect(compactPayload.title).toBe("Compact task via MCP");
+    expect(compactPayload.description.length).toBeLessThanOrEqual(40);
+
+    const full = await callCapturedTool(crudTools, "get_task", { task_id: task.id, detail: "full" });
+    expect(full.content[0]!.text).toContain("Long context");
+
+    const context = await callCapturedTool(advTools, "task_context", { task_id: task.id });
+    const contextPayload = JSON.parse(context.content[0]!.text);
+    expect(contextPayload.comments.count).toBe(1);
+    expect(contextPayload.comments.recent[0].content.length).toBeLessThan(180);
+  });
+
   it("agent tools register heartbeat and release agents", async () => {
     const tools = captureTools(registerAgentTools);
 
