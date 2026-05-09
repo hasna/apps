@@ -22,6 +22,7 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
+const AGENTS = ['claude', 'takumi', 'codex', 'gemini'] as const
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -65,6 +66,11 @@ async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
 
 function optionalString(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+function optionalAgent(value: unknown): Agent | null | undefined {
+  if (value == null || value === '') return null
+  return typeof value === 'string' && (AGENTS as readonly string[]).includes(value) ? value as Agent : undefined
 }
 
 function stringArray(value: unknown): string[] {
@@ -190,11 +196,13 @@ export function createHandler(db: Database) {
       const alertAtPercent = finiteNumber(body['alert_at_percent'] ?? 80)
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
       if (alertAtPercent == null || alertAtPercent <= 0 || alertAtPercent > 100) return err('alert_at_percent must be between 1 and 100')
+      const agent = optionalAgent(body['agent'])
+      if (agent === undefined) return err('agent must be one of: claude, takumi, codex, gemini')
       const now = new Date().toISOString()
       const budget = {
         id: randomUUID(),
         project_path: (body['project_path'] as string | null) ?? null,
-        agent: (body['agent'] as Agent | null) ?? null,
+        agent,
         period: normalizeBudgetPeriod(body['period']),
         limit_usd: limitUsd,
         alert_at_percent: alertAtPercent,
@@ -317,12 +325,14 @@ export function createHandler(db: Database) {
       if (!['day', 'week', 'month', 'year'].includes(String(period))) return err('period must be day, week, month, or year')
       const limitUsd = finiteNumber(body['limit_usd'])
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
+      const agent = optionalAgent(body['agent'])
+      if (agent === undefined) return err('agent must be one of: claude, takumi, codex, gemini')
       const now = new Date().toISOString()
       const goal = {
         id: randomUUID(),
         period: period as 'day' | 'week' | 'month' | 'year',
         project_path: optionalString(body['project_path']),
-        agent: optionalString(body['agent']),
+        agent,
         limit_usd: limitUsd,
         created_at: now,
         updated_at: now,

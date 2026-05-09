@@ -15,6 +15,7 @@ import { execSync } from 'child_process'
 import type { Period, Agent } from '../types/index.js'
 
 const program = new Command()
+const AGENTS = ['claude', 'takumi', 'codex', 'gemini'] as const
 
 program
   .name('economy')
@@ -119,6 +120,10 @@ function requireCliChoice<T extends string>(value: string | undefined, option: s
   const selected = value ?? allowed[0]!
   if ((allowed as readonly string[]).includes(selected)) return selected as T
   fail(`${option} must be one of: ${allowed.join(', ')}`)
+}
+
+function parseOptionalCliAgent(value: string | undefined): Agent | undefined {
+  return value == null ? undefined : requireCliChoice(value, '--agent', AGENTS)
 }
 
 function printTable(headers: string[], rows: string[][]): void {
@@ -322,11 +327,12 @@ program
   .option('--search <query>', 'Search by project name, session id prefix, or agent')
   .action(async (opts: { agent?: string; project?: string; machine?: string; limit?: string; format?: string; since?: string; search?: string }) => {
     const limit = parsePositiveCliInteger(opts.limit ?? '20', '--limit')
+    const agent = parseOptionalCliAgent(opts.agent)
     await autoSync()
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
     let sessions = querySessions(db, {
-      agent: opts.agent as Agent | undefined,
+      agent,
       project: opts.project,
       machine: opts.machine,
       limit,
@@ -371,9 +377,10 @@ program
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action((opts: { n?: string; agent?: string; since?: string }) => {
     const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
+    const agent = parseOptionalCliAgent(opts.agent)
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    let sessions = queryTopSessions(db, count, opts.agent)
+    let sessions = queryTopSessions(db, count, agent)
     if (sinceDate) sessions = sessions.filter(s => s.started_at >= sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
@@ -467,7 +474,7 @@ program
     const { watchCosts } = await import('./commands/watch.js')
     await watchCosts({
       interval: parsePositiveCliInteger(opts.interval ?? '10', '--interval'),
-      agent: opts.agent as Agent | undefined,
+      agent: parseOptionalCliAgent(opts.agent),
       notify: opts.notify ? parsePositiveCliNumber(opts.notify, '--notify') : undefined,
     })
   })
@@ -489,12 +496,13 @@ budgetCmd
     const alertAtPercent = parsePositiveCliNumber(opts.alert ?? '80', '--alert')
     if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
     const period = requireCliChoice(opts.period, '--period', ['daily', 'weekly', 'monthly'] as const)
+    const agent = parseOptionalCliAgent(opts.agent) ?? null
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertBudget(db, {
       id: randomUUID(),
       project_path: opts.project ?? null,
-      agent: opts.agent as Agent ?? null,
+      agent,
       period,
       limit_usd: limitUsd,
       alert_at_percent: alertAtPercent,
@@ -1207,13 +1215,14 @@ goalCmd
   .action((opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
     const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
     const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)
+    const agent = parseOptionalCliAgent(opts.agent) ?? null
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertGoal(db, {
       id: randomUUID(),
       period,
       project_path: opts.project ?? null,
-      agent: opts.agent as Agent ?? null,
+      agent,
       limit_usd: limitUsd,
       created_at: now,
       updated_at: now,

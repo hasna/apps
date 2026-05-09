@@ -214,11 +214,17 @@ describe('REST API server', () => {
   })
 
   it('POST /api/budgets rejects invalid numeric input', async () => {
-    const { status, data } = await req(handler, '/api/budgets', 'POST', {
+    let response = await req(handler, '/api/budgets', 'POST', {
       period: 'daily', limit_usd: 'not-a-number',
     })
-    expect(status).toBe(400)
-    expect((data as Record<string, unknown>)['error']).toBe('limit_usd must be a positive number')
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('limit_usd must be a positive number')
+
+    response = await req(handler, '/api/budgets', 'POST', {
+      period: 'daily', limit_usd: 10, agent: 'unknown',
+    })
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('agent must be one of: claude, takumi, codex, gemini')
   })
 
   it('POST /api/budgets normalizes day/week/month aliases', async () => {
@@ -380,6 +386,14 @@ describe('REST API server', () => {
     })
     expect(response.status).toBe(400)
     expect((response.data as Record<string, unknown>)['error']).toBe('period must be day, week, month, or year')
+
+    response = await req(handler, '/api/goals', 'POST', {
+      period: 'month',
+      limit_usd: 10,
+      agent: 'unknown',
+    })
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('agent must be one of: claude, takumi, codex, gemini')
   })
 
   it('GET /api/daily returns daily data', async () => {

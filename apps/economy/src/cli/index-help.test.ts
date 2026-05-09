@@ -55,6 +55,10 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['budget', 'set', '--limit', '10', '--period', 'quarterly'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--period must be one of: daily, weekly, monthly')
+
+    result = await runCli(['budget', 'set', '--limit', '10', '--agent', 'unknown'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini')
   })
 
   test('pricing set rejects invalid numeric values', async () => {
@@ -79,6 +83,10 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['goal', 'set', '--limit', '10', '--period', 'quarter'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--period must be one of: day, week, month, year')
+
+    result = await runCli(['goal', 'set', '--limit', '10', '--agent', 'unknown'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini')
   })
 
   test('operational commands reject invalid numeric options before running', async () => {
@@ -101,5 +109,9 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['sessions', '--limit', '1.5'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--limit must be an integer')
+
+    result = await runCli(['top', '--agent', 'unknown'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--agent must be one of: claude, takumi, codex, gemini')
   })
 })
