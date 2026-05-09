@@ -53,6 +53,11 @@ describe('getPricing', () => {
       outputPer1M: 1.50,
       cacheReadPer1M: 0.025,
     })
+    expect(getPricing('gemini-2.0-flash-lite')).toMatchObject({
+      inputPer1M: 0.075,
+      outputPer1M: 0.30,
+      cacheReadPer1M: 0,
+    })
     expect(getPricing('grok-4.20-0309-non-reasoning')).toMatchObject({
       inputPer1M: 1.25,
       outputPer1M: 2.50,
@@ -85,6 +90,7 @@ describe('getPricing', () => {
     expect(getPricing('gpt-5.4-pro-extra')).toMatchObject({ inputPer1M: 30.00, outputPer1M: 180.00 })
     expect(getPricing('gpt-5.4-mini-2026-01-01')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 4.50 })
     expect(getPricing('gemini-3.1-pro-preview-customtools')).toMatchObject({ inputPer1M: 2.00, outputPer1M: 12.00 })
+    expect(getPricing('gemini-2.0-flash-lite-001')).toMatchObject({ inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0 })
     expect(getPricing('grok-4-1-fast-reasoning-latest')).toMatchObject({ inputPer1M: 0.20, outputPer1M: 0.50 })
   })
 
@@ -104,6 +110,7 @@ describe('computeCost', () => {
     expect(computeCost('gemini-2.5-pro', 190_000, 10_000, 25_000)).toBeCloseTo(0.63125)
     expect(computeCost('gemini-3.1-pro-preview', 150_000, 10_000, 25_000)).toBeCloseTo(0.425)
     expect(computeCost('gemini-3.1-pro-preview', 190_000, 10_000, 25_000)).toBeCloseTo(0.95)
+    expect(computeCost('gemini-2.0-flash-lite', 100_000, 10_000, 50_000)).toBeCloseTo(0.0105)
   })
 
   it('uses OpenAI long-context pricing above 272k prompt tokens for 1.05M-context models', () => {
