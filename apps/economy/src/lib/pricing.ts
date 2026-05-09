@@ -71,6 +71,8 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'grok-4-1-fast':      { inputPer1M: 0.20,  outputPer1M: 0.50,  cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
   'grok-4-fast':        { inputPer1M: 0.20,  outputPer1M: 0.50,  cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
   'grok-4':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.75, cacheWritePer1M: 0 },
+  'grok-code-fast-1':   { inputPer1M: 0.20,  outputPer1M: 1.50,  cacheReadPer1M: 0.02, cacheWritePer1M: 0 },
+  'grok-code-fast':     { inputPer1M: 0.20,  outputPer1M: 1.50,  cacheReadPer1M: 0.02, cacheWritePer1M: 0 },
   'grok-3':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'glm-5.1':            { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
@@ -147,6 +149,42 @@ const OPENAI_PROMPT_TIERS: Record<string, PromptTier> = {
     inputMultiplier: 2,
     outputMultiplier: 1.5,
     cacheReadMultiplier: 2,
+  },
+}
+
+const XAI_PROMPT_TIERS: Record<string, PromptTier> = {
+  'grok-4.3': {
+    threshold: 200_000,
+    inputPer1M: 2.50,
+    outputPer1M: 5.00,
+    cacheReadPer1M: 0.40,
+  },
+  'grok-latest': {
+    threshold: 200_000,
+    inputPer1M: 2.50,
+    outputPer1M: 5.00,
+    cacheReadPer1M: 0.40,
+  },
+  'grok-4.20': {
+    threshold: 200_000,
+    inputPer1M: 2.50,
+    outputPer1M: 5.00,
+    cacheReadPer1M: 0.40,
+  },
+  'grok-4-1-fast': {
+    threshold: 128_000,
+    inputPer1M: 0.40,
+    outputPer1M: 1.00,
+  },
+  'grok-4-fast': {
+    threshold: 128_000,
+    inputPer1M: 0.40,
+    outputPer1M: 1.00,
+  },
+  'grok-4': {
+    threshold: 128_000,
+    inputPer1M: 6.00,
+    outputPer1M: 30.00,
   },
 }
 
@@ -334,7 +372,9 @@ function computeCostWithPricing(
 ): number {
   let effective = pricing
   const normalized = normalizeModelName(model)
-  const promptTier = bestPrefixMatch(normalized, Object.entries(GEMINI_PROMPT_TIERS)) ?? OPENAI_PROMPT_TIERS[normalized]
+  const promptTier = bestPrefixMatch(normalized, Object.entries(GEMINI_PROMPT_TIERS)) ??
+    bestPrefixMatch(normalized, Object.entries(XAI_PROMPT_TIERS)) ??
+    OPENAI_PROMPT_TIERS[normalized]
   if (promptTier) {
     const billablePromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens + cacheWrite1hTokens
     if (billablePromptTokens > promptTier.threshold) {

@@ -15,7 +15,7 @@ describe('normalizeModelName', () => {
 })
 
 describe('getPricing', () => {
-  it('has exact current seed rows for core Claude/OpenAI/Gemini models', () => {
+  it('has exact current seed rows for core provider models', () => {
     expect(getPricing('claude-3-5-haiku')).toMatchObject({
       inputPer1M: 0.80,
       outputPer1M: 4.00,
@@ -68,6 +68,11 @@ describe('getPricing', () => {
       outputPer1M: 0.50,
       cacheReadPer1M: 0.05,
     })
+    expect(getPricing('grok-code-fast-1')).toMatchObject({
+      inputPer1M: 0.20,
+      outputPer1M: 1.50,
+      cacheReadPer1M: 0.02,
+    })
   })
 
   it('returns pricing for every known default model', () => {
@@ -106,6 +111,15 @@ describe('computeCost', () => {
     expect(computeCost('gpt-5.5', 300_000, 10_000, 10_000)).toBeCloseTo(3.46)
     expect(computeCost('gpt-5.4-pro', 300_000, 10_000)).toBeCloseTo(20.7)
     expect(computeCost('gpt-5.4-mini', 300_000, 10_000, 10_000)).toBeCloseTo(0.27075)
+  })
+
+  it('uses xAI long-context pricing above provider thresholds', () => {
+    expect(computeCost('grok-4.3', 180_000, 10_000, 10_000)).toBeCloseTo(0.255)
+    expect(computeCost('grok-4.3', 190_000, 10_000, 20_000)).toBeCloseTo(0.533)
+    expect(computeCost('grok-4.20-0309-non-reasoning', 190_000, 10_000, 20_000)).toBeCloseTo(0.533)
+    expect(computeCost('grok-4-1-fast-reasoning-latest', 120_000, 10_000, 5_000)).toBeCloseTo(0.02925)
+    expect(computeCost('grok-4-1-fast-reasoning-latest', 130_000, 10_000, 5_000)).toBeCloseTo(0.06225)
+    expect(computeCost('grok-4', 130_000, 10_000, 5_000)).toBeCloseTo(1.08375)
   })
 
   it('returns 0 for unknown model or zero tokens', () => {
