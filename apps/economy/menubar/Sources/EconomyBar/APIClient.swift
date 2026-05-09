@@ -44,7 +44,8 @@ actor APIClient {
   }
 
   func isOnline() async -> Bool {
-    var req = URLRequest(url: URL(string: "\(base)/health")!)
+    guard let url = URL(string: "\(base)/health") else { return false }
+    var req = URLRequest(url: url)
     req.timeoutInterval = 1.5
     do {
       let (_, response) = try await session.data(for: req)
@@ -68,7 +69,7 @@ actor APIClient {
   }
 
   func fetchSessions(search: String, limit: Int) async throws -> [SessionStat] {
-    var components = URLComponents(string: "\(base)/api/sessions")!
+    guard var components = URLComponents(string: "\(base)/api/sessions") else { throw APIError.offline }
     var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
     let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmed.isEmpty {
@@ -80,7 +81,7 @@ actor APIClient {
   }
 
   func sync() async throws {
-    let url = URL(string: "\(base)/api/sync")!
+    guard let url = URL(string: "\(base)/api/sync") else { throw APIError.offline }
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -92,7 +93,7 @@ actor APIClient {
   }
 
   private func get<T: Decodable>(_ path: String) async throws -> T {
-    let url = URL(string: "\(base)\(path)")!
+    guard let url = URL(string: "\(base)\(path)") else { throw APIError.offline }
     return try await get(url)
   }
 

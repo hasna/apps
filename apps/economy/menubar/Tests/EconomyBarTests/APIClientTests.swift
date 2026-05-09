@@ -101,6 +101,28 @@ struct APIClientTests {
     #expect(await client.isOnline() == false)
   }
 
+  @Test func invalidBaseURLReportsOfflineInsteadOfCrashing() async {
+    defer { MockURLProtocol.handler = nil }
+    MockURLProtocol.handler = { _ in
+      Issue.record("Invalid URLs should not start a network request")
+      throw APIError.offline
+    }
+
+    let client = APIClient(baseURL: "http://%", session: makeSession())
+
+    #expect(await client.isOnline() == false)
+
+    var sawOffline = false
+    do {
+      _ = try await client.fetchSummary(period: "today")
+    } catch APIError.offline {
+      sawOffline = true
+    } catch {
+      sawOffline = false
+    }
+    #expect(sawOffline)
+  }
+
   @Test func serverStatusThrowsServerError() async throws {
     defer { MockURLProtocol.handler = nil }
     MockURLProtocol.handler = { request in
