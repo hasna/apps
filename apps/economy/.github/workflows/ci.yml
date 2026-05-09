@@ -36,6 +36,9 @@ jobs:
       - name: Dashboard lint
         working-directory: dashboard
         run: bun run lint
+      - name: Dashboard test
+        working-directory: dashboard
+        run: bun test
       - name: Build
         run: bun run build
       - name: SDK build
