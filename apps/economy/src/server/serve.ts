@@ -15,6 +15,8 @@ import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { randomUUID } from 'crypto'
+import { existsSync } from 'fs'
+import { resolve, sep } from 'path'
 import type { Period, Agent } from '../types/index.js'
 
 const CORS = {
@@ -23,6 +25,14 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 const AGENTS = ['claude', 'takumi', 'codex', 'gemini'] as const
+const DEFAULT_DASHBOARD_DIR = new URL('../../dashboard/dist', import.meta.url).pathname
+
+interface StartServerOptions {
+  db?: Database
+  dashboardDir?: string
+  hostname?: string
+  log?: (message: string) => void
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -75,6 +85,47 @@ function optionalAgent(value: unknown): Agent | null | undefined {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function dashboardPath(root: string, pathname: string): string | null {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return null
+  }
+
+  const relativePath = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '')
+  const rootPath = resolve(root)
+  const filePath = resolve(rootPath, relativePath)
+  return filePath === rootPath || filePath.startsWith(rootPath + sep) ? filePath : null
+}
+
+export function createServerFetch(apiHandler: (req: Request) => Promise<Response>, dashboardDir = DEFAULT_DASHBOARD_DIR) {
+  return async function fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url)
+
+    // API routes
+    if (url.pathname.startsWith('/api') || url.pathname === '/health') {
+      return apiHandler(req)
+    }
+
+    // Serve dashboard static files
+    if (existsSync(dashboardDir)) {
+      const filePath = dashboardPath(dashboardDir, url.pathname)
+      if (filePath && existsSync(filePath)) {
+        return new Response(Bun.file(filePath))
+      }
+
+      // SPA fallback — return index.html for any unmatched path
+      const indexPath = dashboardPath(dashboardDir, '/')
+      if (indexPath && existsSync(indexPath)) {
+        return new Response(Bun.file(indexPath))
+      }
+    }
+
+    return apiHandler(req)
+  }
 }
 
 /** Apply ?fields=f1,f2 filtering — reduces response size by 50-89% */
@@ -350,43 +401,18 @@ export function createHandler(db: Database) {
   }
 }
 
-export function startServer(port = 3456): void {
-  const db = openDatabase()
+export function startServer(port = 3456, options: StartServerOptions = {}): ReturnType<typeof Bun.serve> {
+  const db = options.db ?? openDatabase()
   ensurePricingSeeded(db)
   const apiHandler = createHandler(db)
-
-  // Also serve the built dashboard from dist/dashboard/ if it exists
-  const dashboardDir = new URL('../../dashboard/dist', import.meta.url).pathname
-
-  Bun.serve({
+  const hostname = options.hostname ?? '0.0.0.0'
+  const server = Bun.serve({
     port,
-    async fetch(req) {
-      const url = new URL(req.url)
-
-      // API routes
-      if (url.pathname.startsWith('/api') || url.pathname === '/health') {
-        return apiHandler(req)
-      }
-
-      // Serve dashboard static files
-      try {
-        const { existsSync } = await import('fs')
-        if (existsSync(dashboardDir)) {
-          let filePath = url.pathname === '/' ? '/index.html' : url.pathname
-          const fullPath = dashboardDir + filePath
-          if (existsSync(fullPath)) {
-            return new Response(Bun.file(fullPath))
-          }
-          // SPA fallback — return index.html for any unmatched path
-          const indexPath = dashboardDir + '/index.html'
-          if (existsSync(indexPath)) {
-            return new Response(Bun.file(indexPath))
-          }
-        }
-      } catch { /* ignore */ }
-
-      return apiHandler(req)
-    },
+    hostname,
+    fetch: createServerFetch(apiHandler, options.dashboardDir),
   })
-  console.log(`economy-serve listening on http://localhost:${port}`)
+  const address = `http://${hostname === '0.0.0.0' ? 'localhost' : hostname}:${server.port}`
+  const log = options.log ?? console.log
+  log(`economy-serve listening on ${address}`)
+  return server
 }

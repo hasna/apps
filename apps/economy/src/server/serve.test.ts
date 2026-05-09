@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily } from '../db/database.js'
-import { createHandler } from './serve.js'
+import { createHandler, createServerFetch, startServer } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
@@ -538,6 +538,57 @@ describe('REST API server', () => {
     const r = new Request('http://localhost:3456/health')
     const res = await handler(r)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+  })
+
+  it('serves dashboard assets, SPA fallback, and blocks path traversal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'economy-dashboard-static-'))
+    roots.push(root)
+    const dashboardDir = join(root, 'dist')
+    mkdirSync(join(dashboardDir, 'assets'), { recursive: true })
+    writeFileSync(join(dashboardDir, 'index.html'), '<html>dashboard shell</html>')
+    writeFileSync(join(dashboardDir, 'assets', 'app.js'), 'console.log("asset")')
+    writeFileSync(join(root, 'secret.txt'), 'should not leak')
+
+    const fetch = createServerFetch(async request => {
+      return new Response(JSON.stringify({ error: new URL(request.url).pathname }), { status: 404 })
+    }, dashboardDir)
+
+    let response = await fetch(new Request('http://localhost:3456/'))
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('dashboard shell')
+
+    response = await fetch(new Request('http://localhost:3456/assets/app.js'))
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('asset')
+
+    response = await fetch(new Request('http://localhost:3456/settings/budgets'))
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('dashboard shell')
+
+    response = await fetch(new Request('http://localhost:3456/%2e%2e%2fsecret.txt'))
+    expect(response.status).toBe(200)
+    expect(await response.text()).not.toContain('should not leak')
+  })
+
+  it('startServer returns a stoppable server bound to all interfaces', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'economy-start-server-'))
+    roots.push(root)
+    const server = startServer(0, {
+      db,
+      dashboardDir: join(root, 'missing-dashboard'),
+      log: () => {},
+    })
+
+    try {
+      expect(server.port).toBeGreaterThan(0)
+      expect(server.hostname).toBe('0.0.0.0')
+      const response = await fetch(`http://127.0.0.1:${server.port}/health`)
+      expect(response.status).toBe(200)
+      const payload = await response.json() as Record<string, Record<string, string>>
+      expect(payload['data']?.['status']).toBe('ok')
+    } finally {
+      server.stop(true)
+    }
   })
 
   it('GET /api/machines returns machine list', async () => {
