@@ -157,6 +157,7 @@ describe('EconomyClient', () => {
           cache_read_per_1m: 0,
           cache_write_per_1m: 0,
           cache_write_1h_per_1m: 0,
+          cache_storage_per_1m_hour: 4.5,
           updated_at: '2026-05-09T00:00:00.000Z',
         },
         '/api/goals': {
@@ -189,6 +190,7 @@ describe('EconomyClient', () => {
       model: 'custom-model',
       input_per_1m: 1,
       output_per_1m: 2,
+      cache_storage_per_1m_hour: 4.5,
     })
     const goal = await client.createGoal({
       period: 'week',
@@ -214,6 +216,7 @@ describe('EconomyClient', () => {
       model: 'custom-model',
       input_per_1m: 1,
       output_per_1m: 2,
+      cache_storage_per_1m_hour: 4.5,
     })
     expect(JSON.parse(String(calls[2]!.init?.body))).toEqual({
       period: 'week',
@@ -222,7 +225,7 @@ describe('EconomyClient', () => {
       agent: 'codex',
     })
     expect(budget).toMatchObject({ id: 'budget-1', percent_used: 4 })
-    expect(pricing).toMatchObject({ model: 'custom-model', input_per_1m: 1, updated_at: expect.any(String) })
+    expect(pricing).toMatchObject({ model: 'custom-model', input_per_1m: 1, cache_storage_per_1m_hour: 4.5, updated_at: expect.any(String) })
     expect(goal).toMatchObject({ id: 'goal-1', is_on_track: true, percent_used: 2 })
   })
 

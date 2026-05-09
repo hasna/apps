@@ -100,6 +100,7 @@ export interface ModelPricing {
   cacheReadPer1M: number
   cacheWritePer1M: number
   cacheWrite1hPer1M?: number
+  cacheStoragePer1MHour?: number
 }
 
 export interface SyncOptions {

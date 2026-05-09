@@ -131,6 +131,7 @@ describe("dashboard API client", () => {
       cache_read_per_1m: 0.1,
       cache_write_per_1m: 1.25,
       cache_write_1h_per_1m: 2,
+      cache_storage_per_1m_hour: 4.5,
     })
     const geminiSync = await api.syncSources("gemini")
     const allSync = await api.syncSources()
@@ -157,6 +158,7 @@ describe("dashboard API client", () => {
       cache_read_per_1m: 0.1,
       cache_write_per_1m: 1.25,
       cache_write_1h_per_1m: 2,
+      cache_storage_per_1m_hour: 4.5,
     })
     expect(JSON.parse(String(requests[2].init?.body))).toEqual({ sources: "gemini" })
     expect(JSON.parse(String(requests[3].init?.body))).toEqual({ sources: "all" })

@@ -65,6 +65,10 @@ describe('economy CLI mutation validation', () => {
     result = await runCli(['pricing', 'set', 'bad-model', '--input', '1', '--output', '2', '--cache-read', '-0.1'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--cache-read must be non-negative')
+
+    result = await runCli(['pricing', 'set', 'bad-model', '--input', '1', '--output', '2', '--cache-storage', '-0.1'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--cache-storage must be non-negative')
   })
 
   test('goal set rejects invalid limit and period values', async () => {

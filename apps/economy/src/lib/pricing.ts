@@ -1,6 +1,6 @@
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 import type { ModelPricing } from '../types/index.js'
-import { getModelPricing, seedModelPricing, upsertModelPricing } from '../db/database.js'
+import { deleteModelPricing, getModelPricing, seedModelPricing, upsertModelPricing } from '../db/database.js'
 
 // Default pricing seed data (USD per 1M tokens).
 // These are written to SQLite and can be edited via `economy pricing set`.
@@ -16,26 +16,21 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'claude-sonnet-4-5':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75,  cacheWrite1hPer1M: 6.00 },
   'claude-sonnet-4':    { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75,  cacheWrite1hPer1M: 6.00 },
   'claude-3-7-sonnet':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75,  cacheWrite1hPer1M: 6.00 },
-  'claude-3-5-sonnet':  { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75,  cacheWrite1hPer1M: 6.00 },
   'claude-haiku-4-5':   { inputPer1M: 1.00,  outputPer1M: 5.00,  cacheReadPer1M: 0.10,  cacheWritePer1M: 1.25,  cacheWrite1hPer1M: 2.00 },
   'claude-3-5-haiku':   { inputPer1M: 0.80,  outputPer1M: 4.00,  cacheReadPer1M: 0.08,  cacheWritePer1M: 1.00,  cacheWrite1hPer1M: 1.60 },
   'claude-3-opus':      { inputPer1M: 15.00, outputPer1M: 75.00, cacheReadPer1M: 1.50,  cacheWritePer1M: 18.75, cacheWrite1hPer1M: 30.00 },
-  'claude-3-sonnet':    { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.30,  cacheWritePer1M: 3.75,  cacheWrite1hPer1M: 6.00 },
   'claude-3-haiku':     { inputPer1M: 0.25,  outputPer1M: 1.25, cacheReadPer1M: 0.03,  cacheWritePer1M: 0.30,  cacheWrite1hPer1M: 0.50 },
 
   // Gemini standard text/image/video paid tier rates.
-  'gemini-3.1-pro-preview': { inputPer1M: 2.00, outputPer1M: 12.00, cacheReadPer1M: 0.20, cacheWritePer1M: 0 },
-  'gemini-3.1-pro':     { inputPer1M: 2.00,  outputPer1M: 12.00, cacheReadPer1M: 0.20,  cacheWritePer1M: 0 },
-  'gemini-3.1-flash-lite-preview': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0 },
-  'gemini-3.1-flash-lite': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0 },
-  'gemini-3-flash-preview': { inputPer1M: 0.50, outputPer1M: 3.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
-  'gemini-2.5-pro':     { inputPer1M: 1.25,  outputPer1M: 10.00, cacheReadPer1M: 0.125, cacheWritePer1M: 0 },
+  'gemini-3.1-pro-preview': { inputPer1M: 2.00, outputPer1M: 12.00, cacheReadPer1M: 0.20, cacheWritePer1M: 0, cacheStoragePer1MHour: 4.50 },
+  'gemini-3.1-flash-lite-preview': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
+  'gemini-3.1-flash-lite': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
+  'gemini-3-flash-preview': { inputPer1M: 0.50, outputPer1M: 3.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
+  'gemini-2.5-pro':     { inputPer1M: 1.25,  outputPer1M: 10.00, cacheReadPer1M: 0.125, cacheWritePer1M: 0, cacheStoragePer1MHour: 4.50 },
   'gemini-2.5-flash':   { inputPer1M: 0.30,  outputPer1M: 2.50,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0 },
   'gemini-2.5-flash-lite': { inputPer1M: 0.10, outputPer1M: 0.40, cacheReadPer1M: 0.01, cacheWritePer1M: 0 },
-  'gemini-2.0-flash':   { inputPer1M: 0.10,  outputPer1M: 0.40,  cacheReadPer1M: 0.025, cacheWritePer1M: 0 },
+  'gemini-2.0-flash':   { inputPer1M: 0.10,  outputPer1M: 0.40,  cacheReadPer1M: 0.025, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-2.0-flash-lite': { inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'gemini-1.5-pro':     { inputPer1M: 1.25,  outputPer1M: 5.00,  cacheReadPer1M: 0,     cacheWritePer1M: 0 },
-  'gemini-1.5-flash':   { inputPer1M: 0.075, outputPer1M: 0.30,  cacheReadPer1M: 0,     cacheWritePer1M: 0 },
 
   // OpenAI standard text token rates.
   'gpt-5.5':            { inputPer1M: 5.00,  outputPer1M: 30.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 0 },
@@ -45,7 +40,6 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gpt-5.4-mini':       { inputPer1M: 0.75,  outputPer1M: 4.50,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'gpt-5.4-nano':       { inputPer1M: 0.20,  outputPer1M: 1.25,  cacheReadPer1M: 0.02,  cacheWritePer1M: 0 },
   'gpt-5.3-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
-  'gpt-5.3-chat':       { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
   'gpt-5.2-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
   'gpt-5.2-chat-latest': { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
   'gpt-5.2':            { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
@@ -55,7 +49,7 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gpt-4o':             { inputPer1M: 2.50,  outputPer1M: 10.00, cacheReadPer1M: 1.25,  cacheWritePer1M: 0 },
   'gpt-4o-mini':        { inputPer1M: 0.15,  outputPer1M: 0.60,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'o1':                 { inputPer1M: 15.00, outputPer1M: 60.00, cacheReadPer1M: 7.50,  cacheWritePer1M: 0 },
-  'o1-mini':            { inputPer1M: 3.00,  outputPer1M: 12.00, cacheReadPer1M: 1.50,  cacheWritePer1M: 0 },
+  'o1-mini':            { inputPer1M: 1.10,  outputPer1M: 4.40,  cacheReadPer1M: 0.55,  cacheWritePer1M: 0 },
   'o3':                 { inputPer1M: 2.00,  outputPer1M: 8.00,  cacheReadPer1M: 0.50,  cacheWritePer1M: 0 },
   'o3-mini':            { inputPer1M: 1.10,  outputPer1M: 4.40,  cacheReadPer1M: 0.55,  cacheWritePer1M: 0 },
   'o4-mini':            { inputPer1M: 1.10,  outputPer1M: 4.40,  cacheReadPer1M: 0.275, cacheWritePer1M: 0 },
@@ -74,8 +68,8 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'grok-4':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.75, cacheWritePer1M: 0 },
   'grok-code-fast-1':   { inputPer1M: 0.20,  outputPer1M: 1.50,  cacheReadPer1M: 0.02, cacheWritePer1M: 0 },
   'grok-code-fast':     { inputPer1M: 0.20,  outputPer1M: 1.50,  cacheReadPer1M: 0.02, cacheWritePer1M: 0 },
-  'grok-3':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'grok-3':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.75, cacheWritePer1M: 0 },
+  'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0.07, cacheWritePer1M: 0 },
   'glm-5.1':            { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'glm-5':              { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 0.60,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
@@ -84,20 +78,46 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
 const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
   'claude-3-5-haiku': { inputPer1M: 1.00, outputPer1M: 5.00, cacheReadPer1M: 0.10, cacheWritePer1M: 1.25 },
   'claude-opus-4': { inputPer1M: 5.00, outputPer1M: 25.00, cacheReadPer1M: 0.50, cacheWritePer1M: 6.25 },
-  'gemini-3.1-pro': { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0.31, cacheWritePer1M: 0 },
   'gemini-2.5-pro': { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0.31, cacheWritePer1M: 0 },
   'gemini-2.5-flash': { inputPer1M: 0.15, outputPer1M: 0.60, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'gemini-2.0-flash': { inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'gpt-5-codex': { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-5-mini': { inputPer1M: 0.30, outputPer1M: 1.20, cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'gpt-5.2': { inputPer1M: 2.00, outputPer1M: 8.00, cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
-  'gpt-5.3-chat': { inputPer1M: 2.00, outputPer1M: 8.00, cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
+  'o1-mini': { inputPer1M: 3.00, outputPer1M: 12.00, cacheReadPer1M: 1.50, cacheWritePer1M: 0 },
+  'grok-3': { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'grok-3-mini': { inputPer1M: 0.30, outputPer1M: 0.50, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'o3': { inputPer1M: 10.00, outputPer1M: 40.00, cacheReadPer1M: 2.50, cacheWritePer1M: 0 },
 }
 
 const ADDITIONAL_LEGACY_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   'gemini-2.5-pro': [
     { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  ],
+}
+
+const REMOVED_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
+  'claude-3-5-sonnet': [
+    { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0.30, cacheWritePer1M: 3.75, cacheWrite1hPer1M: 6.00 },
+    { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0.30, cacheWritePer1M: 3.75, cacheWrite1hPer1M: 0 },
+  ],
+  'claude-3-sonnet': [
+    { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0.30, cacheWritePer1M: 3.75, cacheWrite1hPer1M: 6.00 },
+    { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0.30, cacheWritePer1M: 3.75, cacheWrite1hPer1M: 0 },
+  ],
+  'gemini-3.1-pro': [
+    { inputPer1M: 2.00, outputPer1M: 12.00, cacheReadPer1M: 0.20, cacheWritePer1M: 0 },
+    { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0.31, cacheWritePer1M: 0 },
+  ],
+  'gemini-1.5-pro': [
+    { inputPer1M: 1.25, outputPer1M: 5.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  ],
+  'gemini-1.5-flash': [
+    { inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  ],
+  'gpt-5.3-chat': [
+    { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
+    { inputPer1M: 2.00, outputPer1M: 8.00, cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
   ],
 }
 
@@ -118,12 +138,6 @@ const GEMINI_PROMPT_TIERS: Record<string, PromptTier> = {
     outputPer1M: 18.00,
     cacheReadPer1M: 0.40,
   },
-  'gemini-3.1-pro': {
-    threshold: 200_000,
-    inputPer1M: 4.00,
-    outputPer1M: 18.00,
-    cacheReadPer1M: 0.40,
-  },
   'gemini-2.5-pro': {
     threshold: 200_000,
     inputPer1M: 2.50,
@@ -134,12 +148,6 @@ const GEMINI_PROMPT_TIERS: Record<string, PromptTier> = {
 
 const OPENAI_PROMPT_TIERS: Record<string, PromptTier> = {
   'gpt-5.5': {
-    threshold: 272_000,
-    inputMultiplier: 2,
-    outputMultiplier: 1.5,
-    cacheReadMultiplier: 2,
-  },
-  'gpt-5.5-pro': {
     threshold: 272_000,
     inputMultiplier: 2,
     outputMultiplier: 1.5,
@@ -212,7 +220,7 @@ function bestPrefixMatch<T>(normalized: string, entries: Array<[string, T]>): T 
   let best: [string, T] | null = null
   for (const entry of entries) {
     const [key] = entry
-    if (!normalized.startsWith(key)) continue
+    if (normalized !== key && !normalized.startsWith(`${key}-`)) continue
     if (!best || key.length > best[0].length) best = entry
   }
   return best?.[1] ?? null
@@ -223,6 +231,8 @@ export function ensurePricingSeeded(db: Database): void {
   seedModelPricing(db, DEFAULT_PRICING)
   repairLegacySeededPricing(db)
   repairMissingDefaultCacheWrite1h(db)
+  repairMissingDefaultCacheStorage(db)
+  removeDeprecatedDefaultPricing(db)
 }
 
 function repairLegacySeededPricing(db: Database): void {
@@ -240,6 +250,7 @@ function repairLegacySeededPricing(db: Database): void {
       cache_read_per_1m: next.cacheReadPer1M,
       cache_write_per_1m: next.cacheWritePer1M,
       cache_write_1h_per_1m: next.cacheWrite1hPer1M ?? 0,
+      cache_storage_per_1m_hour: next.cacheStoragePer1MHour ?? 0,
       updated_at: now,
     })
   }
@@ -260,8 +271,39 @@ function repairMissingDefaultCacheWrite1h(db: Database): void {
       cache_read_per_1m: current.cache_read_per_1m,
       cache_write_per_1m: current.cache_write_per_1m,
       cache_write_1h_per_1m: next.cacheWrite1hPer1M,
+      cache_storage_per_1m_hour: current.cache_storage_per_1m_hour ?? next.cacheStoragePer1MHour ?? 0,
       updated_at: now,
     })
+  }
+}
+
+function repairMissingDefaultCacheStorage(db: Database): void {
+  const now = new Date().toISOString()
+  for (const [model, next] of Object.entries(DEFAULT_PRICING)) {
+    if (!next.cacheStoragePer1MHour) continue
+    const current = getModelPricing(db, model)
+    if (!current) continue
+    if ((current.cache_storage_per_1m_hour ?? 0) !== 0) continue
+    if (!sameBasePricing(current, next)) continue
+    upsertModelPricing(db, {
+      model,
+      input_per_1m: current.input_per_1m,
+      output_per_1m: current.output_per_1m,
+      cache_read_per_1m: current.cache_read_per_1m,
+      cache_write_per_1m: current.cache_write_per_1m,
+      cache_write_1h_per_1m: current.cache_write_1h_per_1m ?? next.cacheWrite1hPer1M ?? 0,
+      cache_storage_per_1m_hour: next.cacheStoragePer1MHour,
+      updated_at: now,
+    })
+  }
+}
+
+function removeDeprecatedDefaultPricing(db: Database): void {
+  for (const [model, removedRows] of Object.entries(REMOVED_DEFAULT_PRICING)) {
+    const current = getModelPricing(db, model)
+    if (!current) continue
+    if (!removedRows.some(row => samePricing(current, row))) continue
+    deleteModelPricing(db, model)
   }
 }
 
@@ -283,12 +325,14 @@ function samePricing(row: {
   cache_read_per_1m: number
   cache_write_per_1m: number
   cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
 }, pricing: ModelPricing): boolean {
   return row.input_per_1m === pricing.inputPer1M &&
     row.output_per_1m === pricing.outputPer1M &&
     row.cache_read_per_1m === pricing.cacheReadPer1M &&
     row.cache_write_per_1m === pricing.cacheWritePer1M &&
-    (row.cache_write_1h_per_1m ?? 0) === (pricing.cacheWrite1hPer1M ?? 0)
+    (row.cache_write_1h_per_1m ?? 0) === (pricing.cacheWrite1hPer1M ?? 0) &&
+    (row.cache_storage_per_1m_hour ?? 0) === (pricing.cacheStoragePer1MHour ?? 0)
 }
 
 // Look up pricing from DB, fallback to defaults for unknown models.
@@ -309,6 +353,7 @@ export function getPricingFromDb(db: Database, model: string): ModelPricing | nu
       cacheReadPer1M: row.cache_read_per_1m,
       cacheWritePer1M: row.cache_write_per_1m,
       cacheWrite1hPer1M,
+      cacheStoragePer1MHour: row.cache_storage_per_1m_hour ?? seeded?.cacheStoragePer1MHour ?? 0,
     }
   }
 
@@ -319,6 +364,7 @@ export function getPricingFromDb(db: Database, model: string): ModelPricing | nu
     cache_read_per_1m: number
     cache_write_per_1m: number
     cache_write_1h_per_1m?: number
+    cache_storage_per_1m_hour?: number
   }>
   const match = bestPrefixMatch(normalized, allRows.map(r => [r.model, r]))
   if (!match) return null
@@ -334,6 +380,7 @@ export function getPricingFromDb(db: Database, model: string): ModelPricing | nu
     cacheReadPer1M: match.cache_read_per_1m,
     cacheWritePer1M: match.cache_write_per_1m,
     cacheWrite1hPer1M,
+    cacheStoragePer1MHour: match.cache_storage_per_1m_hour ?? seeded?.cacheStoragePer1MHour ?? 0,
   }
 }
 
@@ -351,10 +398,11 @@ export function computeCost(
   cacheReadTokens = 0,
   cacheWriteTokens = 0,
   cacheWrite1hTokens = 0,
+  cacheStorageTokenHours = 0,
 ): number {
   const pricing = getPricing(model)
   if (!pricing) return 0
-  return computeCostWithPricing(model, pricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens)
+  return computeCostWithPricing(model, pricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens, cacheStorageTokenHours)
 }
 
 export function computeCostFromDb(
@@ -365,10 +413,11 @@ export function computeCostFromDb(
   cacheReadTokens = 0,
   cacheWriteTokens = 0,
   cacheWrite1hTokens = 0,
+  cacheStorageTokenHours = 0,
 ): number {
   const pricing = getPricingFromDb(db, model) ?? getPricing(model)
   if (!pricing) return 0
-  return computeCostWithPricing(model, pricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens)
+  return computeCostWithPricing(model, pricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens, cacheStorageTokenHours)
 }
 
 function computeCostWithPricing(
@@ -379,6 +428,7 @@ function computeCostWithPricing(
   cacheReadTokens: number,
   cacheWriteTokens: number,
   cacheWrite1hTokens: number,
+  cacheStorageTokenHours: number,
 ): number {
   let effective = pricing
   const normalized = normalizeModelName(model)
@@ -402,6 +452,7 @@ function computeCostWithPricing(
     outputTokens * effective.outputPer1M +
     cacheReadTokens * effective.cacheReadPer1M +
     cacheWriteTokens * effective.cacheWritePer1M +
-    cacheWrite1hTokens * (effective.cacheWrite1hPer1M ?? effective.cacheWritePer1M)
+    cacheWrite1hTokens * (effective.cacheWrite1hPer1M ?? effective.cacheWritePer1M) +
+    cacheStorageTokenHours * (effective.cacheStoragePer1MHour ?? 0)
   ) / 1_000_000
 }

@@ -74,6 +74,7 @@ export interface Pricing {
   cache_read_per_1m: number
   cache_write_per_1m: number
   cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
 }
 
 export interface BreakdownEntry {

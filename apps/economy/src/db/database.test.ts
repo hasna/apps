@@ -294,9 +294,10 @@ describe('budgets', () => {
 describe('model_pricing', () => {
   it('upserts and retrieves pricing', () => {
     const db = makeDb()
-    upsertModelPricing(db, { model: 'test-model', input_per_1m: 3, output_per_1m: 15, cache_read_per_1m: 0.3, cache_write_per_1m: 3.75, updated_at: NOW })
+    upsertModelPricing(db, { model: 'test-model', input_per_1m: 3, output_per_1m: 15, cache_read_per_1m: 0.3, cache_write_per_1m: 3.75, cache_storage_per_1m_hour: 4.5, updated_at: NOW })
     const p = getModelPricing(db, 'test-model')
     expect(p?.input_per_1m).toBe(3)
+    expect(p?.cache_storage_per_1m_hour).toBe(4.5)
   })
 
   it('lists all pricing', () => {

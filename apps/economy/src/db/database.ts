@@ -151,6 +151,7 @@ function initSchema(db: Database): void {
       cache_read_per_1m REAL NOT NULL DEFAULT 0,
       cache_write_per_1m REAL NOT NULL DEFAULT 0,
       cache_write_1h_per_1m REAL NOT NULL DEFAULT 0,
+      cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -194,6 +195,9 @@ function initSchema(db: Database): void {
   const pricingCols = db.prepare(`PRAGMA table_info(model_pricing)`).all() as Array<{ name: string }>
   if (!pricingCols.some(c => c.name === 'cache_write_1h_per_1m')) {
     db.exec(`ALTER TABLE model_pricing ADD COLUMN cache_write_1h_per_1m REAL NOT NULL DEFAULT 0`)
+  }
+  if (!pricingCols.some(c => c.name === 'cache_storage_per_1m_hour')) {
+    db.exec(`ALTER TABLE model_pricing ADD COLUMN cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0`)
   }
 
   // Create indexes that depend on machine_id (after migration)
@@ -663,15 +667,25 @@ export interface DbModelPricing {
   cache_read_per_1m: number
   cache_write_per_1m: number
   cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
   updated_at: string
 }
 
 export function upsertModelPricing(db: Database, p: DbModelPricing): void {
   db.prepare(`
     INSERT OR REPLACE INTO model_pricing
-      (model, input_per_1m, output_per_1m, cache_read_per_1m, cache_write_per_1m, cache_write_1h_per_1m, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(p.model, p.input_per_1m, p.output_per_1m, p.cache_read_per_1m, p.cache_write_per_1m, p.cache_write_1h_per_1m ?? 0, p.updated_at)
+      (model, input_per_1m, output_per_1m, cache_read_per_1m, cache_write_per_1m, cache_write_1h_per_1m, cache_storage_per_1m_hour, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    p.model,
+    p.input_per_1m,
+    p.output_per_1m,
+    p.cache_read_per_1m,
+    p.cache_write_per_1m,
+    p.cache_write_1h_per_1m ?? 0,
+    p.cache_storage_per_1m_hour ?? 0,
+    p.updated_at,
+  )
 }
 
 export function getModelPricing(db: Database, model: string): DbModelPricing | null {
@@ -686,7 +700,7 @@ export function deleteModelPricing(db: Database, model: string): void {
   db.prepare(`DELETE FROM model_pricing WHERE model = ?`).run(model)
 }
 
-export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number; cacheWrite1hPer1M?: number }>): void {
+export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number; cacheWrite1hPer1M?: number; cacheStoragePer1MHour?: number }>): void {
   const existing = new Set(
     (db.prepare(`SELECT model FROM model_pricing`).all() as Array<{ model: string }>).map(r => r.model)
   )
@@ -700,6 +714,7 @@ export function seedModelPricing(db: Database, defaults: Record<string, { inputP
       cache_read_per_1m: p.cacheReadPer1M,
       cache_write_per_1m: p.cacheWritePer1M,
       cache_write_1h_per_1m: p.cacheWrite1hPer1M ?? 0,
+      cache_storage_per_1m_hour: p.cacheStoragePer1MHour ?? 0,
       updated_at: now,
     })
   }

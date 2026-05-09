@@ -9,7 +9,7 @@ AI coding cost tracker for Claude Code, Takumi, Codex, and Gemini. It ships as a
 
 - Ingests local Claude Code, Takumi, Codex, and Gemini CLI usage.
 - Tracks sessions, requests, projects, machines, models, cache tokens, budgets, goals, and provider billing.
-- Seeds editable model pricing with input, output, cache-read, 5-minute cache-write, and 1-hour cache-write rates.
+- Seeds editable model pricing with input, output, cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates.
 - Handles tiered pricing such as Gemini long-prompt rates and OpenAI long-context rates.
 - Reconciles estimates against Anthropic, OpenAI, and Gemini billing sources.
 - Exposes cost data through CLI commands, an MCP server, REST endpoints, and a dashboard.
@@ -104,9 +104,10 @@ Default pricing is seeded into SQLite and can be edited locally:
 economy pricing list
 economy pricing set gpt-5.4 --input 2.50 --output 15 --cache-read 0.25
 economy pricing set claude-sonnet-4-6 --input 3 --output 15 --cache-read 0.30 --cache-write 3.75 --cache-write-1h 6
+economy pricing set gemini-3.1-pro-preview --input 2 --output 12 --cache-read 0.20 --cache-storage 4.50
 ```
 
-Pricing supports separate cache-read, 5-minute cache-write, and 1-hour cache-write rates. Custom user-edited rows are preserved when default pricing seeds are repaired or updated.
+Pricing supports separate cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates. Custom user-edited rows are preserved when default pricing seeds are repaired or updated.
 
 ## Billing
 

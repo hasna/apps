@@ -116,6 +116,7 @@ export interface ModelPricing {
   cache_read_per_1m: number
   cache_write_per_1m: number
   cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
   updated_at?: string
   // Deprecated aliases kept optional for older TypeScript consumers. The REST API returns snake_case fields.
   inputPer1M?: number
@@ -123,6 +124,7 @@ export interface ModelPricing {
   cacheReadPer1M?: number
   cacheWritePer1M?: number
   cacheWrite1hPer1M?: number
+  cacheStoragePer1MHour?: number
 }
 
 export interface CreatePricingInput {
@@ -132,6 +134,7 @@ export interface CreatePricingInput {
   cache_read_per_1m?: number
   cache_write_per_1m?: number
   cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
 }
 
 export interface CreateBudgetInput {

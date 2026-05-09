@@ -266,13 +266,14 @@ describe('REST API server', () => {
   it('POST /api/pricing creates/updates pricing', async () => {
     const { status, data } = await req(handler, '/api/pricing', 'POST', {
       model: 'new-model', input_per_1m: 5, output_per_1m: 20,
-      cache_read_per_1m: 0.5, cache_write_per_1m: 0, cache_write_1h_per_1m: 0,
+      cache_read_per_1m: 0.5, cache_write_per_1m: 0, cache_write_1h_per_1m: 0, cache_storage_per_1m_hour: 4.5,
     })
     expect(status).toBe(200)
     const pricing = (data as Record<string, unknown>)['data'] as Record<string, unknown>
     expect(pricing['model']).toBe('new-model')
     expect(pricing['input_per_1m']).toBe(5)
     expect(pricing['output_per_1m']).toBe(20)
+    expect(pricing['cache_storage_per_1m_hour']).toBe(4.5)
   })
 
   it('POST /api/pricing rejects invalid pricing payloads', async () => {
@@ -284,11 +285,17 @@ describe('REST API server', () => {
   })
 
   it('POST /api/pricing rejects negative or non-numeric rates', async () => {
-    const { status, data } = await req(handler, '/api/pricing', 'POST', {
+    let response = await req(handler, '/api/pricing', 'POST', {
       model: 'bad-model', input_per_1m: -1, output_per_1m: 20,
     })
-    expect(status).toBe(400)
-    expect((data as Record<string, unknown>)['error']).toBe('pricing values must be non-negative numbers')
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('pricing values must be non-negative numbers')
+
+    response = await req(handler, '/api/pricing', 'POST', {
+      model: 'bad-model', input_per_1m: 1, output_per_1m: 20, cache_storage_per_1m_hour: -0.1,
+    })
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('pricing values must be non-negative numbers')
   })
 
   it('POST /api/pricing rejects malformed JSON', async () => {

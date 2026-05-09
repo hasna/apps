@@ -741,13 +741,14 @@ pricingCmd
     const rows = listModelPricing(db)
     console.log()
     printTable(
-      ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'Out/1k'],
+      ['Model', 'Input/1M', 'Output/1M', 'CacheR/1M', 'CacheW/1M', 'CacheStorage/1M-h', 'Out/1k'],
       rows.map(r => [
         chalk.white(r.model),
         fmt(r.input_per_1m),
         fmt(r.output_per_1m),
         fmt(r.cache_read_per_1m),
         r.cache_write_1h_per_1m ? `${fmt(r.cache_write_per_1m)} / ${fmt(r.cache_write_1h_per_1m)}` : fmt(r.cache_write_per_1m),
+        fmt(r.cache_storage_per_1m_hour ?? 0),
         chalk.dim(fmt(r.output_per_1m / 1000)),
       ]),
     )
@@ -762,12 +763,14 @@ pricingCmd
   .option('--cache-read <usd>', 'Cache read price per 1M tokens', '0')
   .option('--cache-write <usd>', '5-minute cache write price per 1M tokens', '0')
   .option('--cache-write-1h <usd>', '1-hour cache write price per 1M tokens', '0')
-  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string }) => {
+  .option('--cache-storage <usd>', 'Context cache storage price per 1M token-hours', '0')
+  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string; cacheStorage?: string }) => {
     const input = parseNonNegativeCliNumber(opts.input, '--input')
     const output = parseNonNegativeCliNumber(opts.output, '--output')
     const cacheRead = parseNonNegativeCliNumber(opts.cacheRead ?? '0', '--cache-read')
     const cacheWrite = parseNonNegativeCliNumber(opts.cacheWrite ?? '0', '--cache-write')
     const cacheWrite1h = parseNonNegativeCliNumber(opts.cacheWrite1h ?? '0', '--cache-write-1h')
+    const cacheStorage = parseNonNegativeCliNumber(opts.cacheStorage ?? '0', '--cache-storage')
     const db = openDatabase()
     ensurePricingSeeded(db)
     upsertModelPricing(db, {
@@ -777,6 +780,7 @@ pricingCmd
       cache_read_per_1m: cacheRead,
       cache_write_per_1m: cacheWrite,
       cache_write_1h_per_1m: cacheWrite1h,
+      cache_storage_per_1m_hour: cacheStorage,
       updated_at: new Date().toISOString(),
     })
     console.log(chalk.green(`✓ Pricing updated for ${model}`))

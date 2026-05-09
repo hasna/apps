@@ -97,12 +97,14 @@ export const PG_MIGRATIONS: string[] = [
     cache_read_per_1m REAL NOT NULL DEFAULT 0,
     cache_write_per_1m REAL NOT NULL DEFAULT 0,
     cache_write_1h_per_1m REAL NOT NULL DEFAULT 0,
+    cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
 
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cache_create_5m_tokens INTEGER DEFAULT 0`,
   `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cache_create_1h_tokens INTEGER DEFAULT 0`,
   `ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cache_write_1h_per_1m REAL NOT NULL DEFAULT 0`,
+  `ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cache_storage_per_1m_hour REAL NOT NULL DEFAULT 0`,
 
   // Feedback table
   `CREATE TABLE IF NOT EXISTS feedback (

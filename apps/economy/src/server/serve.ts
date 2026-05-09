@@ -250,7 +250,8 @@ export function createHandler(db: Database) {
       const cacheRead = finiteNumber(body['cache_read_per_1m'] ?? 0)
       const cacheWrite = finiteNumber(body['cache_write_per_1m'] ?? 0)
       const cacheWrite1h = finiteNumber(body['cache_write_1h_per_1m'] ?? 0)
-      if ([input, output, cacheRead, cacheWrite, cacheWrite1h].some(v => v == null || v < 0)) {
+      const cacheStorage = finiteNumber(body['cache_storage_per_1m_hour'] ?? 0)
+      if ([input, output, cacheRead, cacheWrite, cacheWrite1h, cacheStorage].some(v => v == null || v < 0)) {
         return err('pricing values must be non-negative numbers')
       }
       const pricing = {
@@ -260,6 +261,7 @@ export function createHandler(db: Database) {
         cache_read_per_1m: cacheRead!,
         cache_write_per_1m: cacheWrite!,
         cache_write_1h_per_1m: cacheWrite1h!,
+        cache_storage_per_1m_hour: cacheStorage!,
         updated_at: new Date().toISOString(),
       }
       upsertModelPricing(db, pricing)
