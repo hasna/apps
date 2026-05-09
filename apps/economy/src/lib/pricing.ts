@@ -63,15 +63,15 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
 
   // Community/provider rows kept for user-configurable non-core tracking.
   // Provider-qualified rows keep router pricing separate from direct API pricing.
-  'qwen3.6-plus':       { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 },
-  'qwen3.6-flash':      { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 },
+  'qwen3.6-plus':       { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0,    cacheWritePer1M: 0.40625 },
+  'qwen3.6-flash':      { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0,    cacheWritePer1M: 0.3125 },
   'qwen3.6-35b-a3b':    { inputPer1M: 0.15,  outputPer1M: 1.00,  cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
-  'qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24,  cacheReadPer1M: 0.13, cacheWritePer1M: 1.30 },
+  'qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24,  cacheReadPer1M: 0,    cacheWritePer1M: 1.30 },
   'qwen3.6-27b':        { inputPer1M: 0.32,  outputPer1M: 3.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
-  'qwen/qwen3.6-plus':  { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 },
-  'qwen/qwen3.6-flash': { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 },
+  'qwen/qwen3.6-plus':  { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0,    cacheWritePer1M: 0.40625 },
+  'qwen/qwen3.6-flash': { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0,    cacheWritePer1M: 0.3125 },
   'qwen/qwen3.6-35b-a3b': { inputPer1M: 0.15, outputPer1M: 1.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
-  'qwen/qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0.13, cacheWritePer1M: 1.30 },
+  'qwen/qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
   'qwen/qwen3.6-27b':   { inputPer1M: 0.32,  outputPer1M: 3.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
   'minimax-m2.7':       { inputPer1M: 0.30,  outputPer1M: 1.20,  cacheReadPer1M: 0.06, cacheWritePer1M: 0.375 },
   'minimax-m2.7-highspeed': { inputPer1M: 0.60, outputPer1M: 2.40, cacheReadPer1M: 0.06, cacheWritePer1M: 0.375 },
@@ -127,24 +127,6 @@ const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
 const ADDITIONAL_LEGACY_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   'gemini-2.5-pro': [
     { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  ],
-  'qwen3.6-plus': [
-    { inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0, cacheWritePer1M: 0.40625 },
-  ],
-  'qwen3.6-flash': [
-    { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0, cacheWritePer1M: 0.3125 },
-  ],
-  'qwen3.6-max-preview': [
-    { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
-  ],
-  'qwen/qwen3.6-plus': [
-    { inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0, cacheWritePer1M: 0.40625 },
-  ],
-  'qwen/qwen3.6-flash': [
-    { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0, cacheWritePer1M: 0.3125 },
-  ],
-  'qwen/qwen3.6-max-preview': [
-    { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
   ],
 }
 
@@ -238,21 +220,21 @@ const QWEN_PROMPT_TIERS: Record<string, PromptTier> = {
     threshold: 256_000,
     inputPer1M: 2.00,
     outputPer1M: 6.00,
-    cacheReadPer1M: 0.20,
+    cacheReadPer1M: 0,
     cacheWritePer1M: 2.50,
   },
   'qwen3.6-flash': {
     threshold: 256_000,
     inputPer1M: 1.00,
     outputPer1M: 4.00,
-    cacheReadPer1M: 0.10,
+    cacheReadPer1M: 0,
     cacheWritePer1M: 1.25,
   },
   'qwen3.6-max-preview': {
     threshold: 128_000,
     inputPer1M: 2.00,
     outputPer1M: 12.00,
-    cacheReadPer1M: 0.20,
+    cacheReadPer1M: 0,
     cacheWritePer1M: 2.50,
   },
 }
