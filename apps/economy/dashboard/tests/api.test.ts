@@ -27,6 +27,38 @@ afterEach(() => {
 })
 
 describe("dashboard API client", () => {
+  test("maps read helpers to their REST endpoints", async () => {
+    await api.getSummary("week")
+    await api.getDaily()
+    await api.getDaily(7)
+    await api.getTop()
+    await api.getTop(3)
+    await api.getModels()
+    await api.getProjects()
+    await api.getBreakdown("project")
+    await api.getBudgets()
+    await api.getPricing()
+    await api.getBilling()
+    await api.getBilling("year")
+    await api.getGoals()
+
+    expect(requestPaths()).toEqual([
+      "/api/summary?period=week",
+      "/api/daily?days=30",
+      "/api/daily?days=7",
+      "/api/top?n=10",
+      "/api/top?n=3",
+      "/api/models",
+      "/api/projects",
+      "/api/breakdown?by=project",
+      "/api/budgets",
+      "/api/pricing",
+      "/api/billing?period=month",
+      "/api/billing?period=year",
+      "/api/goals",
+    ])
+  })
+
   test("builds session query filters without dropping machine-readable fields", async () => {
     await api.getSessions({
       agent: "codex",
@@ -48,11 +80,17 @@ describe("dashboard API client", () => {
 
   test("encodes path parameters for detail and delete endpoints", async () => {
     await api.getSessionRequests("session/with spaces")
+    await api.deleteBudget("budget/with spaces")
     await api.deletePricing("openai/gpt 5.5")
+    await api.deleteGoalApi("goal/with spaces")
 
     expect(new URL(requests[0].url).pathname).toBe("/api/sessions/session%2Fwith%20spaces/requests")
-    expect(new URL(requests[1].url).pathname).toBe("/api/pricing/openai%2Fgpt%205.5")
+    expect(new URL(requests[1].url).pathname).toBe("/api/budgets/budget%2Fwith%20spaces")
     expect(requests[1].init?.method).toBe("DELETE")
+    expect(new URL(requests[2].url).pathname).toBe("/api/pricing/openai%2Fgpt%205.5")
+    expect(requests[2].init?.method).toBe("DELETE")
+    expect(new URL(requests[3].url).pathname).toBe("/api/goals/goal%2Fwith%20spaces")
+    expect(requests[3].init?.method).toBe("DELETE")
   })
 
   test("posts billing sync providers including gemini", async () => {
@@ -64,6 +102,52 @@ describe("dashboard API client", () => {
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({
       days: 14,
       providers: ["anthropic", "openai", "gemini"],
+    })
+  })
+
+  test("posts budget, pricing, source sync, and goal payloads", async () => {
+    await api.createBudget({ project_path: "/workspace/open-economy", period: "weekly", limit_usd: 25, alert_at_percent: 70 })
+    await api.createPricing({
+      model: "custom-model",
+      input_per_1m: 1,
+      output_per_1m: 2,
+      cache_read_per_1m: 0.1,
+      cache_write_per_1m: 1.25,
+      cache_write_1h_per_1m: 2,
+    })
+    await api.syncSources("gemini")
+    await api.syncSources()
+    await api.createGoal({ period: "week", limit_usd: 50, project_path: "/workspace/open-economy", agent: "codex" })
+
+    expect(requestPaths()).toEqual([
+      "/api/budgets",
+      "/api/pricing",
+      "/api/sync",
+      "/api/sync",
+      "/api/goals",
+    ])
+    expect(requests.map((request) => request.init?.method)).toEqual(["POST", "POST", "POST", "POST", "POST"])
+    expect(JSON.parse(String(requests[0].init?.body))).toEqual({
+      project_path: "/workspace/open-economy",
+      period: "weekly",
+      limit_usd: 25,
+      alert_at_percent: 70,
+    })
+    expect(JSON.parse(String(requests[1].init?.body))).toEqual({
+      model: "custom-model",
+      input_per_1m: 1,
+      output_per_1m: 2,
+      cache_read_per_1m: 0.1,
+      cache_write_per_1m: 1.25,
+      cache_write_1h_per_1m: 2,
+    })
+    expect(JSON.parse(String(requests[2].init?.body))).toEqual({ sources: "gemini" })
+    expect(JSON.parse(String(requests[3].init?.body))).toEqual({ sources: "all" })
+    expect(JSON.parse(String(requests[4].init?.body))).toEqual({
+      period: "week",
+      limit_usd: 50,
+      project_path: "/workspace/open-economy",
+      agent: "codex",
     })
   })
 
@@ -80,5 +164,12 @@ function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
+  })
+}
+
+function requestPaths(): string[] {
+  return requests.map((request) => {
+    const url = new URL(request.url)
+    return `${url.pathname}${url.search}`
   })
 }

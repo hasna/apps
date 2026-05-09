@@ -160,7 +160,7 @@ export const createBudget = (body: {
   })
 
 export const deleteBudget = (id: string) =>
-  request<{ success: boolean }>(`/api/budgets/${id}`, { method: 'DELETE' })
+  request<{ success: boolean }>(`/api/budgets/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // Pricing
 export const getPricing = () =>
@@ -217,4 +217,4 @@ export const createGoal = (goal: { period: string; limit_usd: number; project_pa
   })
 
 export const deleteGoalApi = (id: string) =>
-  request<{ success: boolean }>(`/api/goals/${id}`, { method: 'DELETE' })
+  request<{ success: boolean }>(`/api/goals/${encodeURIComponent(id)}`, { method: 'DELETE' })
