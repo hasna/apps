@@ -1,17 +1,20 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
 
-async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function runCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const tempRoot = mkdtempSync(join(tmpdir(), 'economy-cli-test-'))
   tempRoots.push(tempRoot)
   const proc = Bun.spawn(['bun', 'run', 'src/cli/index.ts', ...args], {
     cwd: root,
-    env: { ...process.env, HASNA_ECONOMY_DB_PATH: join(tempRoot, 'economy.db') },
+    env: { ...process.env, HASNA_ECONOMY_DB_PATH: join(tempRoot, 'economy.db'), ...env },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -38,6 +41,46 @@ describe('economy CLI help', () => {
     expect(stdout).toContain('--openai')
     expect(stdout).toContain('--gemini')
     expect(stderr).toBe('')
+  })
+})
+
+describe('economy brains CLI', () => {
+  test('gather reports no examples and does not write output for an empty database', async () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), 'economy-cli-brains-output-'))
+    tempRoots.push(outputRoot)
+    const outputPath = join(outputRoot, 'training.jsonl')
+
+    const result = await runCli(['brains', 'gather', '--limit', '10', '--output', outputPath])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('No training examples found')
+    expect(result.stdout).toContain('Run: economy sync')
+    expect(result.stderr).toBe('')
+    expect(existsSync(outputPath)).toBe(false)
+  })
+
+  test('model set and clear honor HASNA_ECONOMY_CONFIG_PATH', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'economy-cli-model-config-'))
+    tempRoots.push(configRoot)
+    const configPath = join(configRoot, 'nested', 'config.json')
+    const env = { HASNA_ECONOMY_CONFIG_PATH: configPath }
+
+    let result = await runCli(['brains', 'model', 'set', 'ft:gpt-4o-mini:economy'], env)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Active model set to: ft:gpt-4o-mini:economy')
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toMatchObject({
+      activeModel: 'ft:gpt-4o-mini:economy',
+    })
+
+    result = await runCli(['brains', 'model'], env)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Active model:')
+    expect(result.stdout).toContain('ft:gpt-4o-mini:economy')
+
+    result = await runCli(['brains', 'model', 'clear'], env)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Active model cleared')
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).not.toHaveProperty('activeModel')
   })
 })
 
