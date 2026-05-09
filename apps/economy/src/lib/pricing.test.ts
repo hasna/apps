@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { normalizeModelName, getPricing, computeCost, DEFAULT_PRICING, ensurePricingSeeded } from './pricing.js'
+import { normalizeModelName, getPricing, getPricingFromDb, computeCost, DEFAULT_PRICING, ensurePricingSeeded } from './pricing.js'
 import { openDatabase, upsertModelPricing, getModelPricing } from '../db/database.js'
 
 describe('normalizeModelName', () => {
@@ -134,6 +134,64 @@ describe('getPricing', () => {
 
   it('treats explicit free model variants as zero-cost rows', () => {
     expect(getPricing('qwen/qwen3.6-plus-04-02:free')).toMatchObject({
+      inputPer1M: 0,
+      outputPer1M: 0,
+      cacheReadPer1M: 0,
+      cacheWritePer1M: 0,
+    })
+  })
+})
+
+describe('getPricingFromDb', () => {
+  it('reads exact DB pricing and backfills missing 1h cache write for current defaults', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'claude-sonnet-4-6',
+      input_per_1m: 3,
+      output_per_1m: 15,
+      cache_read_per_1m: 0.3,
+      cache_write_per_1m: 3.75,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2026-05-08T00:00:00.000Z',
+    })
+
+    expect(getPricingFromDb(db, 'anthropic/claude-sonnet-4-6-20260217')).toMatchObject({
+      inputPer1M: 3,
+      outputPer1M: 15,
+      cacheReadPer1M: 0.3,
+      cacheWritePer1M: 3.75,
+      cacheWrite1hPer1M: 6,
+    })
+  })
+
+  it('uses DB longest-prefix pricing for custom model families', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'local-model',
+      input_per_1m: 0.12,
+      output_per_1m: 0.34,
+      cache_read_per_1m: 0.05,
+      cache_write_per_1m: 0.06,
+      cache_write_1h_per_1m: 0.09,
+      cache_storage_per_1m_hour: 0.11,
+      updated_at: '2026-05-08T00:00:00.000Z',
+    })
+
+    expect(getPricingFromDb(db, 'local-model-large-20260509')).toMatchObject({
+      inputPer1M: 0.12,
+      outputPer1M: 0.34,
+      cacheReadPer1M: 0.05,
+      cacheWritePer1M: 0.06,
+      cacheWrite1hPer1M: 0.09,
+      cacheStoragePer1MHour: 0.11,
+    })
+  })
+
+  it('returns null for unknown DB models and zero for explicit free variants', () => {
+    const db = openDatabase(':memory:', true)
+
+    expect(getPricingFromDb(db, 'unknown-db-model')).toBeNull()
+    expect(getPricingFromDb(db, 'qwen/qwen3.6-plus-04-02:free')).toMatchObject({
       inputPer1M: 0,
       outputPer1M: 0,
       cacheReadPer1M: 0,
