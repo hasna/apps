@@ -35,4 +35,29 @@ describe('economy-serve entrypoint', () => {
     expect(stdout).toMatch(/^\d+\.\d+\.\d+$/)
     expect(stderr).toBe('')
   })
+
+  test('rejects invalid ports before binding', async () => {
+    const cases: Array<{ args: string[]; env?: Record<string, string>; message: string }> = [
+      { args: ['--port', '70000'], message: 'Invalid port: 70000' },
+      { args: ['--port', '1.5'], message: 'Invalid port: 1.5' },
+      { args: [], env: { ECONOMY_PORT: 'not-a-port' }, message: 'Invalid ECONOMY_PORT: not-a-port' },
+    ]
+
+    for (const c of cases) {
+      const proc = Bun.spawn(['bun', 'run', 'src/server/index.ts', ...c.args], {
+        cwd: new URL('../../', import.meta.url).pathname.replace(/\/$/, ''),
+        env: { ...process.env, ECONOMY_DB: ':memory:', ...c.env },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      const stdout = await new Response(proc.stdout).text()
+      const stderr = await new Response(proc.stderr).text()
+      const exitCode = await proc.exited
+
+      expect(exitCode).toBe(1)
+      expect(stdout).toBe('')
+      expect(stderr).toContain(c.message)
+    }
+  })
 })

@@ -16,18 +16,20 @@ Options:
 function resolvePort(argv: string[]): number {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if ((arg === '--port' || arg === '-p') && argv[i + 1]) {
-      const value = Number(argv[i + 1])
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new Error(`Invalid port: ${argv[i + 1]}`)
-      }
-      return value
+    if (arg === '--port' || arg === '-p') {
+      const raw = argv[i + 1]
+      if (!raw) throw new Error(`Invalid port: ${raw ?? ''}`)
+      return parsePort(raw, 'port')
     }
   }
 
-  const value = Number(process.env['ECONOMY_PORT'] ?? 3456)
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`Invalid ECONOMY_PORT: ${process.env['ECONOMY_PORT']}`)
+  return parsePort(process.env['ECONOMY_PORT'] ?? '3456', 'ECONOMY_PORT')
+}
+
+function parsePort(raw: string, label: string): number {
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`Invalid ${label}: ${raw}`)
   }
   return value
 }
