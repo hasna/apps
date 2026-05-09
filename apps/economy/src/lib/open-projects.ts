@@ -10,9 +10,18 @@ interface OpenProject {
   created_at: string
 }
 
-export async function syncOpenProjectsRegistry(db: Database): Promise<{ imported: number; skipped: number }> {
-  const { listProjects } = await import('@hasna/projects')
-  const projects = listProjects({ status: 'active', limit: 5000 }) as OpenProject[]
+type ListOpenProjects = (options: { status: 'active'; limit: number }) => OpenProject[]
+
+export async function syncOpenProjectsRegistry(
+  db: Database,
+  listActiveProjects?: ListOpenProjects,
+): Promise<{ imported: number; skipped: number }> {
+  let listProjects = listActiveProjects
+  if (!listProjects) {
+    const projectsApi = await import('@hasna/projects')
+    listProjects = projectsApi.listProjects as ListOpenProjects
+  }
+  const projects = listProjects({ status: 'active', limit: 5000 })
   let imported = 0
   let skipped = 0
 

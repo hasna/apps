@@ -39,4 +39,31 @@ describe('syncOpenProjectsRegistry', () => {
     expect(row?.name).toBe('Economy Fixture')
     expect(row?.description).toBe('fixture project')
   })
+
+  it('skips project registry rows that do not have paths', async () => {
+    const db = openDatabase(':memory:', true)
+    const result = await syncOpenProjectsRegistry(db, () => [
+      {
+        id: 'missing-path',
+        name: 'Missing Path',
+        description: null,
+        path: '',
+        tags: [],
+        created_at: '2026-05-09T00:00:00.000Z',
+      },
+      {
+        id: 'with-path',
+        name: 'With Path',
+        description: 'valid project',
+        path: projectDir,
+        tags: ['valid'],
+        created_at: '2026-05-09T00:00:00.000Z',
+      },
+    ])
+
+    expect(result).toEqual({ imported: 1, skipped: 1 })
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM projects`).get()).toEqual({ count: 1 })
+    const row = db.prepare(`SELECT * FROM projects WHERE id = ?`).get('with-path') as Record<string, string> | null
+    expect(row?.path).toBe(projectDir)
+  })
 })
