@@ -5,7 +5,7 @@ import { tmpdir, arch } from 'os'
 import { join } from 'path'
 
 const APP_PATH = '/Applications/Economy Bar.app'
-const REPO = 'hasna/open-economy'
+const REPO = 'hasna/economy'
 
 function getArch(): 'arm64' | 'x86_64' {
   return arch() === 'arm64' ? 'arm64' : 'x86_64'

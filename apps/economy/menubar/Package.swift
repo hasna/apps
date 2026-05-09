@@ -1,9 +1,9 @@
-// swift-tools-version:6.2
+// swift-tools-version:5.9
 import PackageDescription
 
 let package = Package(
   name: "EconomyBar",
-  platforms: [.macOS(.v26)],
+  platforms: [.macOS(.v14)],
   products: [
     .executable(name: "EconomyBar", targets: ["EconomyBar"])
   ],

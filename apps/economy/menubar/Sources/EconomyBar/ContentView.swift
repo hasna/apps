@@ -123,7 +123,7 @@ struct ContentView: View {
             Text("Sync")
           }
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
 
         Button(action: {
           if let url = URL(string: appState.apiBaseURL) {
@@ -135,14 +135,14 @@ struct ContentView: View {
             Text("Dashboard")
           }
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
 
         Spacer()
 
         Button(action: { NSApp.terminate(nil) }) {
           Text("Quit")
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 12)
