@@ -121,6 +121,14 @@ describe('REST API server', () => {
     expect((data as Record<string, unknown>)['error']).toBe('invalid billing provider')
   })
 
+  it('POST /api/billing/sync reports provider errors without failing the whole sync', async () => {
+    const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 7, providers: ['anthropic', 'gemini'] })
+    expect(status).toBe(200)
+    const result = (data as Record<string, unknown>)['data'] as Record<string, Record<string, string | number>>
+    expect(String(result['anthropic']?.['error'])).toContain('Missing Anthropic admin key')
+    expect(String(result['gemini']?.['skipped'])).toContain('Gemini billing export path')
+  })
+
   it('GET /api/projects returns project breakdown', async () => {
     const { status, data } = await req(handler, '/api/projects')
     expect(status).toBe(200)

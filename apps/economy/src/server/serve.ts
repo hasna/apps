@@ -141,14 +141,17 @@ export function createHandler(db: Database) {
       const allowedProviders = new Set(['anthropic', 'openai', 'gemini'])
       if (providers.some(provider => !allowedProviders.has(provider))) return err('invalid billing provider')
       const results: Record<string, unknown> = {}
-      try {
-        const { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } = await import('../ingest/billing.js')
-        if (providers.includes('anthropic')) results['anthropic'] = await syncAnthropicBilling(db, { days })
-        if (providers.includes('openai')) results['openai'] = await syncOpenAIBilling(db, { days })
-        if (providers.includes('gemini')) results['gemini'] = await syncGeminiBilling(db, { days })
-      } catch (e) {
-        return err(e instanceof Error ? e.message : String(e), 400)
+      const { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } = await import('../ingest/billing.js')
+      async function capture(provider: string, fn: () => Promise<unknown>): Promise<void> {
+        try {
+          results[provider] = await fn()
+        } catch (e) {
+          results[provider] = { error: e instanceof Error ? e.message : String(e) }
+        }
       }
+      if (providers.includes('anthropic')) await capture('anthropic', () => syncAnthropicBilling(db, { days }))
+      if (providers.includes('openai')) await capture('openai', () => syncOpenAIBilling(db, { days }))
+      if (providers.includes('gemini')) await capture('gemini', () => syncGeminiBilling(db, { days }))
       return ok(results)
     }
 
