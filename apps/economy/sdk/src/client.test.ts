@@ -262,11 +262,13 @@ describe('economyTools schemas', () => {
     const sessions = economyTools.find(t => t.name === 'economy_get_sessions')!
     const top = economyTools.find(t => t.name === 'economy_get_top_sessions')!
     const sync = economyTools.find(t => t.name === 'economy_sync')!
+    const pricing = economyTools.find(t => t.name === 'economy_get_pricing')!
 
     expect(sessions.parameters.properties.agent.enum).toContain('gemini')
     expect(sessions.parameters.properties.agent.enum).toContain('takumi')
     expect(top.parameters.properties.agent.enum).toContain('gemini')
     expect(top.parameters.properties.agent.enum).toContain('takumi')
     expect(sync.parameters.properties.sources.enum).toEqual(['all', 'claude', 'takumi', 'codex', 'gemini'])
+    expect(pricing.description).toContain('context-cache storage')
   })
 })

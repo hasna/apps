@@ -39,7 +39,7 @@ describe('economy-mcp stdio server', () => {
 
       const tools = await client.listTools(undefined, { timeout: 5_000 })
       const names = new Set(tools.tools.map((tool) => tool.name))
-      for (const expected of ['get_cost_summary', 'get_sessions', 'get_billing_summary', 'sync', 'describe_tools']) {
+      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'get_billing_summary', 'sync', 'describe_tools']) {
         expect(names.has(expected)).toBe(true)
       }
 
@@ -51,14 +51,24 @@ describe('economy-mcp stdio server', () => {
       expect(summary.content[0]?.type).toBe('text')
       expect(summary.content[0]?.type === 'text' ? summary.content[0].text : '').toContain('period: today')
 
+      const pricing = await client.callTool(
+        { name: 'get_pricing', arguments: {} },
+        undefined,
+        { timeout: 5_000 },
+      )
+      const pricingText = pricing.content[0]?.type === 'text' ? pricing.content[0].text : ''
+      expect(pricingText).toContain('gemini-3.1-pro-preview')
+      expect(pricingText).toContain('storage-h')
+
       const description = await client.callTool(
-        { name: 'describe_tools', arguments: { names: ['sync', 'get_billing_summary'] } },
+        { name: 'describe_tools', arguments: { names: ['sync', 'get_billing_summary', 'get_pricing'] } },
         undefined,
         { timeout: 5_000 },
       )
       const text = description.content[0]?.type === 'text' ? description.content[0].text : ''
       expect(text).toContain('sync: sources(all|claude|takumi|codex|gemini)')
       expect(text).toContain('get_billing_summary: period(today|yesterday|week|month|year|all)')
+      expect(text).toContain('get_pricing: no params -> model pricing rows')
     } finally {
       await client.close()
     }

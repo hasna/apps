@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary } from '../db/database.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary, listModelPricing } from '../db/database.js'
 import { PG_MIGRATIONS } from '../db/pg-migrations.js'
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
@@ -54,6 +54,7 @@ const TOOL_NAMES = [
   'get_model_breakdown',
   'get_project_breakdown',
   'get_budget_status',
+  'get_pricing',
   'get_daily',
   'get_billing_summary',
   'get_session_detail',
@@ -79,6 +80,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_model_breakdown: 'no params -> model, requests, tokens, cost',
   get_project_breakdown: 'no params -> project_name, sessions, cost',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
+  get_pricing: 'no params -> model pricing rows with input, output, cache read/write, and cache storage rates',
   get_daily: 'days(30) -> daily cost table grouped by date and agent',
   get_billing_summary: 'period(today|yesterday|week|month|year|all) -> actual provider billing totals',
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
@@ -235,6 +237,28 @@ server.tool(
       const pct = Number(budget['percent_used']).toFixed(1)
       const status = budget['is_over_limit'] ? 'OVER' : budget['is_over_alert'] ? 'ALERT' : 'OK'
       lines.push(`${scope.padEnd(21)}${String(budget['period']).padEnd(9)}${fmtUsd(Number(budget['current_spend_usd'])).padEnd(11)}${fmtUsd(Number(budget['limit_usd'])).padEnd(11)}${pct}%`.padEnd(49) + `  ${status}`)
+    }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'get_pricing',
+  'Editable model pricing rows. Includes input/output/cache rates and context-cache storage.',
+  {},
+  async () => {
+    const rows = listModelPricing(db)
+    const lines = ['model                          input    output   cache-r  cache-w  cache-1h storage-h']
+    for (const row of rows) {
+      lines.push(
+        `${row.model.slice(0, 30).padEnd(31)}` +
+        `${fmtUsd(row.input_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.output_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.cache_read_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.cache_write_per_1m).padEnd(9)}` +
+        `${fmtUsd(row.cache_write_1h_per_1m ?? 0).padEnd(9)}` +
+        `${fmtUsd(row.cache_storage_per_1m_hour ?? 0)}`,
+      )
     }
     return text(lines.join('\n'))
   },

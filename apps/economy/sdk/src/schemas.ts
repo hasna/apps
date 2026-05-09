@@ -16,6 +16,7 @@ export type EconomyToolName =
   | 'economy_get_model_breakdown'
   | 'economy_get_project_breakdown'
   | 'economy_get_budget_status'
+  | 'economy_get_pricing'
   | 'economy_get_billing_summary'
   | 'economy_sync'
 
@@ -67,6 +68,11 @@ export const economyTools = [
   {
     name: 'economy_get_budget_status',
     description: 'Get current budget status — spending vs limits, percent used, alert flags',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'economy_get_pricing',
+    description: 'List editable model pricing rows — input, output, cache read/write, one-hour cache write, and context-cache storage rates',
     parameters: { type: 'object', properties: {} },
   },
   {
