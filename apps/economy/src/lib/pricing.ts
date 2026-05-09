@@ -367,11 +367,19 @@ export function ensurePricingSeeded(db: Database): void {
 
 function repairLegacySeededPricing(db: Database): void {
   const now = new Date().toISOString()
-  for (const [model, legacy] of Object.entries(LEGACY_DEFAULT_PRICING)) {
+  const legacyModels = new Set([
+    ...Object.keys(LEGACY_DEFAULT_PRICING),
+    ...Object.keys(ADDITIONAL_LEGACY_DEFAULT_PRICING),
+  ])
+  for (const model of legacyModels) {
     const current = getModelPricing(db, model)
     const next = DEFAULT_PRICING[model]
     if (!current || !next) continue
-    const legacyRows = [legacy, ...(ADDITIONAL_LEGACY_DEFAULT_PRICING[model] ?? [])]
+    const legacy = LEGACY_DEFAULT_PRICING[model]
+    const legacyRows = [
+      ...(legacy ? [legacy] : []),
+      ...(ADDITIONAL_LEGACY_DEFAULT_PRICING[model] ?? []),
+    ]
     if (!legacyRows.some(row => samePricing(current, row))) continue
     upsertModelPricing(db, {
       model,
