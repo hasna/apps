@@ -69,6 +69,8 @@ Gemini settings:
 }
 ```
 
+The MCP server exposes read tools for summaries, sessions, machines, pricing, daily spend, budgets, goals, and provider billing. It also exposes mutation tools for budgets, pricing rows, and goals so Claude Code, Codex, and Gemini can manage Economy data through the same validated surface as the CLI and REST API.
+
 ## Ingest
 
 Run a full local ingest:
@@ -130,12 +132,16 @@ Gemini billing export files may be JSON arrays, JSON objects with `rows`, JSONL,
 
 ```bash
 economy budget set --period monthly --limit 50 --alert 80
+economy budget set --agent codex --period weekly --limit 25 --alert 70
 economy budget list
 economy goal set --period month --limit 40
+economy goal set --agent gemini --period week --limit 15
 economy goal list
 economy config set webhook-url https://example.com/economy-webhook
 economy config webhook-test
 ```
+
+Budgets and goals can be global, project-scoped with `--project`, agent-scoped with `--agent`, or both. Valid agent scopes are `claude`, `takumi`, `codex`, and `gemini`.
 
 Budget webhooks fire after sync when the alert threshold is crossed. Failed webhook deliveries are not marked as fired, so the next sync can retry them.
 
@@ -167,6 +173,8 @@ Common endpoints:
 - `GET /api/billing?period=month`
 - `POST /api/sync`
 - `POST /api/billing/sync`
+
+Budget and goal mutation endpoints validate agent scopes against `claude`, `takumi`, `codex`, and `gemini`.
 
 The server also serves the built dashboard when `dashboard/dist` is present.
 
