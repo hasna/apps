@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary, listModelPricing } from '../db/database.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary, listModelPricing, upsertModelPricing, deleteModelPricing } from '../db/database.js'
 import { PG_MIGRATIONS } from '../db/pg-migrations.js'
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
@@ -54,7 +54,11 @@ const TOOL_NAMES = [
   'get_model_breakdown',
   'get_project_breakdown',
   'get_budget_status',
+  'set_budget',
+  'remove_budget',
   'get_pricing',
+  'set_pricing',
+  'remove_pricing',
   'get_daily',
   'get_billing_summary',
   'get_session_detail',
@@ -80,7 +84,11 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_model_breakdown: 'no params -> model, requests, tokens, cost',
   get_project_breakdown: 'no params -> project_name, sessions, cost',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
+  set_budget: 'period(daily|weekly|monthly), limit_usd, project_path?, agent?, alert_at_percent? -> create budget',
+  remove_budget: 'id -> delete budget',
   get_pricing: 'no params -> model pricing rows with input, output, cache read/write, and cache storage rates',
+  set_pricing: 'model, input_per_1m, output_per_1m, cache_read_per_1m?, cache_write_per_1m?, cache_write_1h_per_1m?, cache_storage_per_1m_hour? -> create/update pricing',
+  remove_pricing: 'model -> delete pricing row',
   get_daily: 'days(30) -> daily cost table grouped by date and agent',
   get_billing_summary: 'period(today|yesterday|week|month|year|all) -> actual provider billing totals',
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
@@ -243,6 +251,43 @@ server.tool(
 )
 
 server.tool(
+  'set_budget',
+  'Create a spending budget. period: daily|weekly|monthly. limit_usd must be positive. alert_at_percent defaults to 80.',
+  {
+    period: z.enum(['daily', 'weekly', 'monthly']),
+    limit_usd: z.number().positive(),
+    project_path: z.string().optional(),
+    agent: z.enum(['claude', 'takumi', 'codex', 'gemini']).optional(),
+    alert_at_percent: z.number().positive().max(100).optional(),
+  },
+  async ({ period, limit_usd, project_path, agent, alert_at_percent }: { period: 'daily' | 'weekly' | 'monthly'; limit_usd: number; project_path?: string; agent?: Agent; alert_at_percent?: number }) => {
+    const now = new Date().toISOString()
+    const id = randomUUID()
+    upsertBudget(db, {
+      id,
+      project_path: project_path ?? null,
+      agent: agent ?? null,
+      period,
+      limit_usd,
+      alert_at_percent: alert_at_percent ?? 80,
+      created_at: now,
+      updated_at: now,
+    })
+    return text(`Budget set: ${id}`)
+  },
+)
+
+server.tool(
+  'remove_budget',
+  'Delete a budget by id.',
+  { id: z.string() },
+  async ({ id }: { id: string }) => {
+    deleteBudget(db, id)
+    return text('Budget removed.')
+  },
+)
+
+server.tool(
   'get_pricing',
   'Editable model pricing rows. Includes input/output/cache rates and context-cache storage.',
   {},
@@ -261,6 +306,45 @@ server.tool(
       )
     }
     return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'set_pricing',
+  'Create or update a model pricing row. Values are USD per 1M tokens except cache_storage_per_1m_hour.',
+  {
+    model: z.string().min(1),
+    input_per_1m: z.number().nonnegative(),
+    output_per_1m: z.number().nonnegative(),
+    cache_read_per_1m: z.number().nonnegative().optional(),
+    cache_write_per_1m: z.number().nonnegative().optional(),
+    cache_write_1h_per_1m: z.number().nonnegative().optional(),
+    cache_storage_per_1m_hour: z.number().nonnegative().optional(),
+  },
+  async (input: { model: string; input_per_1m: number; output_per_1m: number; cache_read_per_1m?: number; cache_write_per_1m?: number; cache_write_1h_per_1m?: number; cache_storage_per_1m_hour?: number }) => {
+    const model = input.model.trim()
+    if (!model) return textError('model is required')
+    upsertModelPricing(db, {
+      model,
+      input_per_1m: input.input_per_1m,
+      output_per_1m: input.output_per_1m,
+      cache_read_per_1m: input.cache_read_per_1m ?? 0,
+      cache_write_per_1m: input.cache_write_per_1m ?? 0,
+      cache_write_1h_per_1m: input.cache_write_1h_per_1m ?? 0,
+      cache_storage_per_1m_hour: input.cache_storage_per_1m_hour ?? 0,
+      updated_at: new Date().toISOString(),
+    })
+    return text(`Pricing set: ${model}`)
+  },
+)
+
+server.tool(
+  'remove_pricing',
+  'Delete a model pricing row by model id.',
+  { model: z.string() },
+  async ({ model }: { model: string }) => {
+    deleteModelPricing(db, model)
+    return text('Pricing removed.')
   },
 )
 
@@ -392,7 +476,7 @@ server.tool(
   'Create/update a spending goal. period(day|week|month|year), limit_usd, project_path?, agent?',
   {
     period: z.enum(['day', 'week', 'month', 'year']),
-    limit_usd: z.number().nonnegative(),
+    limit_usd: z.number().positive(),
     project_path: z.string().optional(),
     agent: z.string().optional(),
   },

@@ -263,9 +263,15 @@ describe('economyTools schemas', () => {
     const top = economyTools.find(t => t.name === 'economy_get_top_sessions')!
     const sync = economyTools.find(t => t.name === 'economy_sync')!
     const pricing = economyTools.find(t => t.name === 'economy_get_pricing')!
+    const setPricing = economyTools.find(t => t.name === 'economy_set_pricing')!
+    const removePricing = economyTools.find(t => t.name === 'economy_remove_pricing')!
+    const setBudget = economyTools.find(t => t.name === 'economy_set_budget')!
+    const removeBudget = economyTools.find(t => t.name === 'economy_remove_budget')!
     const detail = economyTools.find(t => t.name === 'economy_get_session_detail')!
     const daily = economyTools.find(t => t.name === 'economy_get_daily')!
     const goals = economyTools.find(t => t.name === 'economy_get_goals')!
+    const setGoal = economyTools.find(t => t.name === 'economy_set_goal')!
+    const removeGoal = economyTools.find(t => t.name === 'economy_remove_goal')!
     const machines = economyTools.find(t => t.name === 'economy_list_machines')!
 
     expect(sessions.parameters.properties.agent.enum).toContain('gemini')
@@ -276,9 +282,17 @@ describe('economyTools schemas', () => {
     expect(top.parameters.properties.agent.enum).toContain('takumi')
     expect(sync.parameters.properties.sources.enum).toEqual(['all', 'claude', 'takumi', 'codex', 'gemini'])
     expect(pricing.description).toContain('context-cache storage')
+    expect(setPricing.parameters.required).toEqual(['model', 'input_per_1m', 'output_per_1m'])
+    expect(removePricing.parameters.required).toEqual(['model'])
+    expect(setBudget.parameters.properties.period.enum).toEqual(['daily', 'weekly', 'monthly'])
+    expect(setBudget.parameters.required).toEqual(['period', 'limit_usd'])
+    expect(removeBudget.parameters.required).toEqual(['id'])
     expect(detail.parameters.required).toEqual(['session_id'])
     expect(daily.parameters.properties.days.type).toBe('number')
     expect(goals.parameters.properties).toEqual({})
+    expect(setGoal.parameters.properties.period.enum).toEqual(['day', 'week', 'month', 'year'])
+    expect(setGoal.parameters.required).toEqual(['period', 'limit_usd'])
+    expect(removeGoal.parameters.required).toEqual(['id'])
     expect(machines.parameters.properties).toEqual({})
   })
 })

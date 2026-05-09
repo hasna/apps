@@ -18,9 +18,15 @@ export type EconomyToolName =
   | 'economy_get_model_breakdown'
   | 'economy_get_project_breakdown'
   | 'economy_get_budget_status'
+  | 'economy_set_budget'
+  | 'economy_remove_budget'
   | 'economy_get_pricing'
+  | 'economy_set_pricing'
+  | 'economy_remove_pricing'
   | 'economy_get_daily'
   | 'economy_get_goals'
+  | 'economy_set_goal'
+  | 'economy_remove_goal'
   | 'economy_get_billing_summary'
   | 'economy_sync'
 
@@ -94,9 +100,63 @@ export const economyTools = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'economy_set_budget',
+    description: 'Create a spending budget for a period, optionally scoped to a project path or agent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['daily', 'weekly', 'monthly'], description: 'Budget period' },
+        limit_usd: { type: 'number', description: 'Budget limit in USD; must be positive' },
+        project_path: { type: 'string', description: 'Optional project path scope' },
+        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Optional agent scope' },
+        alert_at_percent: { type: 'number', description: 'Alert threshold percentage, 1-100; default 80' },
+      },
+      required: ['period', 'limit_usd'],
+    },
+  },
+  {
+    name: 'economy_remove_budget',
+    description: 'Delete a spending budget by id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Budget id' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'economy_get_pricing',
     description: 'List editable model pricing rows — input, output, cache read/write, one-hour cache write, and context-cache storage rates',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'economy_set_pricing',
+    description: 'Create or update an editable model pricing row.',
+    parameters: {
+      type: 'object',
+      properties: {
+        model: { type: 'string', description: 'Model id' },
+        input_per_1m: { type: 'number', description: 'Input token price per 1M tokens' },
+        output_per_1m: { type: 'number', description: 'Output token price per 1M tokens' },
+        cache_read_per_1m: { type: 'number', description: 'Cached input price per 1M tokens' },
+        cache_write_per_1m: { type: 'number', description: '5-minute cache write price per 1M tokens' },
+        cache_write_1h_per_1m: { type: 'number', description: '1-hour cache write price per 1M tokens' },
+        cache_storage_per_1m_hour: { type: 'number', description: 'Context-cache storage price per 1M token-hours' },
+      },
+      required: ['model', 'input_per_1m', 'output_per_1m'],
+    },
+  },
+  {
+    name: 'economy_remove_pricing',
+    description: 'Delete an editable model pricing row by model id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        model: { type: 'string', description: 'Model id' },
+      },
+      required: ['model'],
+    },
   },
   {
     name: 'economy_get_daily',
@@ -112,6 +172,31 @@ export const economyTools = [
     name: 'economy_get_goals',
     description: 'Get all spending goals with current progress and risk status.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'economy_set_goal',
+    description: 'Create a spending goal, optionally scoped to a project path or agent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Goal period' },
+        limit_usd: { type: 'number', description: 'Goal limit in USD; must be positive' },
+        project_path: { type: 'string', description: 'Optional project path scope' },
+        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Optional agent scope' },
+      },
+      required: ['period', 'limit_usd'],
+    },
+  },
+  {
+    name: 'economy_remove_goal',
+    description: 'Delete a spending goal by id.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Goal id' },
+      },
+      required: ['id'],
+    },
   },
   {
     name: 'economy_get_billing_summary',
