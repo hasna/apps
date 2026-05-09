@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertModelPricing, upsertBillingDaily } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily } from '../db/database.js'
 import { createHandler } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 
@@ -228,6 +228,27 @@ describe('REST API server', () => {
   it('DELETE /api/budgets/:id removes a budget', async () => {
     const { status } = await req(handler, '/api/budgets/bud-1', 'DELETE')
     expect(status).toBe(200)
+  })
+
+  it('DELETE path params decode encoded budget and goal ids', async () => {
+    upsertBudget(db, {
+      id: 'bud/with spaces', project_path: null, agent: null, period: 'monthly',
+      limit_usd: 100, alert_at_percent: 80, created_at: NOW, updated_at: NOW,
+    })
+    upsertGoal(db, {
+      id: 'goal/with spaces', project_path: null, agent: null, period: 'month',
+      limit_usd: 50, created_at: NOW, updated_at: NOW,
+    })
+
+    let response = await req(handler, `/api/budgets/${encodeURIComponent('bud/with spaces')}`, 'DELETE')
+    expect(response.status).toBe(200)
+    let row = db.prepare(`SELECT id FROM budgets WHERE id = ?`).get('bud/with spaces')
+    expect(row).toBeNull()
+
+    response = await req(handler, `/api/goals/${encodeURIComponent('goal/with spaces')}`, 'DELETE')
+    expect(response.status).toBe(200)
+    row = db.prepare(`SELECT id FROM goals WHERE id = ?`).get('goal/with spaces')
+    expect(row).toBeNull()
   })
 
   it('GET /api/pricing returns pricing', async () => {

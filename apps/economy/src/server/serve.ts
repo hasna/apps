@@ -205,7 +205,7 @@ export function createHandler(db: Database) {
     }
     const budgetMatch = path.match(/^\/api\/budgets\/(.+)$/)
     if (budgetMatch && method === 'DELETE') {
-      deleteBudget(db, budgetMatch[1]!)
+      deleteBudget(db, decodeURIComponent(budgetMatch[1]!))
       return ok({ ok: true })
     }
 
@@ -327,7 +327,7 @@ export function createHandler(db: Database) {
     }
     const goalMatch = path.match(/^\/api\/goals\/(.+)$/)
     if (goalMatch && method === 'DELETE') {
-      deleteGoal(db, goalMatch[1]!)
+      deleteGoal(db, decodeURIComponent(goalMatch[1]!))
       return ok({ ok: true })
     }
 
