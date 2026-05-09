@@ -138,6 +138,12 @@ const OPENAI_PROMPT_TIERS: Record<string, PromptTier> = {
     outputMultiplier: 1.5,
     cacheReadMultiplier: 2,
   },
+  'gpt-5.5-pro': {
+    threshold: 272_000,
+    inputMultiplier: 2,
+    outputMultiplier: 1.5,
+    cacheReadMultiplier: 2,
+  },
   'gpt-5.4-pro': {
     threshold: 272_000,
     inputMultiplier: 2,

@@ -109,6 +109,7 @@ describe('computeCost', () => {
   it('uses OpenAI long-context pricing above 272k prompt tokens for 1.05M-context models', () => {
     expect(computeCost('gpt-5.5', 250_000, 10_000, 10_000)).toBeCloseTo(1.555)
     expect(computeCost('gpt-5.5', 300_000, 10_000, 10_000)).toBeCloseTo(3.46)
+    expect(computeCost('gpt-5.5-pro', 300_000, 10_000)).toBeCloseTo(20.7)
     expect(computeCost('gpt-5.4-pro', 300_000, 10_000)).toBeCloseTo(20.7)
     expect(computeCost('gpt-5.4-mini', 300_000, 10_000, 10_000)).toBeCloseTo(0.27075)
   })
