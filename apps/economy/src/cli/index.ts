@@ -79,6 +79,36 @@ function fmtAgent(agent: string): string {
   return chalk.gray(agent)
 }
 
+function fail(message: string): never {
+  console.error(chalk.red(message))
+  process.exit(1)
+}
+
+function parseFiniteCliNumber(value: string | undefined, option: string): number {
+  if (value == null || value === '') fail(`${option} is required`)
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) fail(`${option} must be a number`)
+  return parsed
+}
+
+function parsePositiveCliNumber(value: string | undefined, option: string): number {
+  const parsed = parseFiniteCliNumber(value, option)
+  if (parsed <= 0) fail(`${option} must be greater than 0`)
+  return parsed
+}
+
+function parseNonNegativeCliNumber(value: string | undefined, option: string): number {
+  const parsed = parseFiniteCliNumber(value, option)
+  if (parsed < 0) fail(`${option} must be non-negative`)
+  return parsed
+}
+
+function requireCliChoice<T extends string>(value: string | undefined, option: string, allowed: readonly T[]): T {
+  const selected = value ?? allowed[0]!
+  if ((allowed as readonly string[]).includes(selected)) return selected as T
+  fail(`${option} must be one of: ${allowed.join(', ')}`)
+}
+
 function printTable(headers: string[], rows: string[][]): void {
   const widths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => (r[i] ?? '').replace(/\x1b\[[0-9;]*m/g, '').length)))
   const sep = widths.map(w => '─'.repeat(w + 2)).join('┼')
@@ -437,20 +467,23 @@ budgetCmd
   .option('--alert <percent>', 'Alert threshold %', '80')
   .option('--agent <agent>', 'Limit to agent (claude|takumi|codex|gemini)')
   .action((opts: { project?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
-    if (!opts.limit) { console.error(chalk.red('--limit is required')); process.exit(1) }
+    const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
+    const alertAtPercent = parsePositiveCliNumber(opts.alert ?? '80', '--alert')
+    if (alertAtPercent > 100) fail('--alert must be between 1 and 100')
+    const period = requireCliChoice(opts.period, '--period', ['daily', 'weekly', 'monthly'] as const)
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertBudget(db, {
       id: randomUUID(),
       project_path: opts.project ?? null,
       agent: opts.agent as Agent ?? null,
-      period: (opts.period ?? 'monthly') as 'daily' | 'weekly' | 'monthly',
-      limit_usd: Number(opts.limit),
-      alert_at_percent: Number(opts.alert ?? 80),
+      period,
+      limit_usd: limitUsd,
+      alert_at_percent: alertAtPercent,
       created_at: now,
       updated_at: now,
     })
-    console.log(chalk.green(`✓ Budget set: ${opts.project ?? 'global'} — ${opts.period} $${opts.limit}`))
+    console.log(chalk.green(`✓ Budget set: ${opts.project ?? 'global'} — ${period} $${limitUsd}`))
   })
 
 budgetCmd
@@ -712,16 +745,20 @@ pricingCmd
   .option('--cache-write <usd>', '5-minute cache write price per 1M tokens', '0')
   .option('--cache-write-1h <usd>', '1-hour cache write price per 1M tokens', '0')
   .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string }) => {
-    if (!opts.input || !opts.output) { console.error(chalk.red('--input and --output are required')); process.exit(1) }
+    const input = parseNonNegativeCliNumber(opts.input, '--input')
+    const output = parseNonNegativeCliNumber(opts.output, '--output')
+    const cacheRead = parseNonNegativeCliNumber(opts.cacheRead ?? '0', '--cache-read')
+    const cacheWrite = parseNonNegativeCliNumber(opts.cacheWrite ?? '0', '--cache-write')
+    const cacheWrite1h = parseNonNegativeCliNumber(opts.cacheWrite1h ?? '0', '--cache-write-1h')
     const db = openDatabase()
     ensurePricingSeeded(db)
     upsertModelPricing(db, {
       model,
-      input_per_1m: Number(opts.input),
-      output_per_1m: Number(opts.output),
-      cache_read_per_1m: Number(opts.cacheRead ?? 0),
-      cache_write_per_1m: Number(opts.cacheWrite ?? 0),
-      cache_write_1h_per_1m: Number(opts.cacheWrite1h ?? 0),
+      input_per_1m: input,
+      output_per_1m: output,
+      cache_read_per_1m: cacheRead,
+      cache_write_per_1m: cacheWrite,
+      cache_write_1h_per_1m: cacheWrite1h,
       updated_at: new Date().toISOString(),
     })
     console.log(chalk.green(`✓ Pricing updated for ${model}`))
@@ -1146,19 +1183,20 @@ goalCmd
   .option('--project <path>', 'Scope to project path')
   .option('--agent <agent>', 'Scope to agent')
   .action((opts: { period?: string; limit?: string; project?: string; agent?: string }) => {
-    if (!opts.limit) { console.error(chalk.red('--limit is required')); process.exit(1) }
+    const limitUsd = parsePositiveCliNumber(opts.limit, '--limit')
+    const period = requireCliChoice(opts.period, '--period', ['day', 'week', 'month', 'year'] as const)
     const db = openDatabase()
     const now = new Date().toISOString()
     upsertGoal(db, {
       id: randomUUID(),
-      period: (opts.period ?? 'month') as 'day' | 'week' | 'month' | 'year',
+      period,
       project_path: opts.project ?? null,
       agent: opts.agent as Agent ?? null,
-      limit_usd: Number(opts.limit),
+      limit_usd: limitUsd,
       created_at: now,
       updated_at: now,
     })
-    console.log(chalk.green(`✓ Goal set: ${opts.period ?? 'month'} $${opts.limit}${opts.project ? ` (${opts.project})` : ''}`))
+    console.log(chalk.green(`✓ Goal set: ${period} $${limitUsd}${opts.project ? ` (${opts.project})` : ''}`))
   })
 
 goalCmd
