@@ -10,7 +10,7 @@ import {
 function autoDetectProject(cwd: string, projects: Array<{path: string, name: string}>): { path: string; name: string } | undefined {
   return projects.find(p => cwd === p.path || cwd.startsWith(p.path + '/'))
 }
-import { computeCostFromDb } from '../lib/pricing.js'
+import { computeCostFromDb, normalizeModelName } from '../lib/pricing.js'
 import type { EconomySession, Agent } from '../types/index.js'
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects')
@@ -239,9 +239,19 @@ function applyClaudeModifiers(costUsd: number, model: string, usage: MessageUsag
   }
 
   const inferenceGeo = usage.inference_geo ?? entry.message?.inference_geo ?? entry.inference_geo
-  if (inferenceGeo && ['us', 'us-only', 'us_only'].includes(inferenceGeo)) {
+  if (inferenceGeo && ['us', 'us-only', 'us_only'].includes(inferenceGeo) && supportsClaudeDataResidencyPricing(model)) {
     multiplier *= 1.1
   }
 
   return costUsd * multiplier
+}
+
+function supportsClaudeDataResidencyPricing(model: string): boolean {
+  const normalized = normalizeModelName(model)
+  const match = normalized.match(/^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:-|$)/)
+  if (!match) return false
+
+  const major = Number(match[2])
+  const minor = match[3] ? Number(match[3]) : 0
+  return major > 4 || (major === 4 && minor >= 6)
 }

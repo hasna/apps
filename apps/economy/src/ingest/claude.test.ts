@@ -128,4 +128,53 @@ describe('ingestClaude', () => {
     const row = db.prepare(`SELECT cost_usd FROM requests WHERE source_request_id = ?`).get('req-fast-us-search') as { cost_usd: number }
     expect(row.cost_usd).toBeCloseTo(0.208)
   })
+
+  it('only applies Claude data residency pricing to supported model generations', async () => {
+    const projectDir = join(projectsDir, '-tmp-economy-claude-project')
+    mkdirSync(projectDir, { recursive: true })
+    const sessionId = '33333333-3333-4333-8333-333333333333'
+    writeFileSync(join(projectDir, `${sessionId}.jsonl`), jsonl(
+      {
+        type: 'assistant',
+        uuid: 'assistant-supported-residency',
+        requestId: 'req-supported-residency',
+        cwd: '/tmp/economy-claude-project',
+        sessionId,
+        timestamp: '2026-05-08T12:00:00.000Z',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6-20260217',
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 1000,
+            inference_geo: 'us-only',
+          },
+        },
+      },
+      {
+        type: 'assistant',
+        uuid: 'assistant-legacy-residency',
+        requestId: 'req-legacy-residency',
+        cwd: '/tmp/economy-claude-project',
+        sessionId,
+        timestamp: '2026-05-08T12:00:01.000Z',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4',
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 1000,
+            inference_geo: 'us',
+          },
+        },
+      },
+    ))
+
+    await ingestClaude(db, false, projectsDir)
+
+    const supported = db.prepare(`SELECT cost_usd FROM requests WHERE source_request_id = ?`).get('req-supported-residency') as { cost_usd: number }
+    const legacy = db.prepare(`SELECT cost_usd FROM requests WHERE source_request_id = ?`).get('req-legacy-residency') as { cost_usd: number }
+    expect(supported.cost_usd).toBeCloseTo(0.0198)
+    expect(legacy.cost_usd).toBeCloseTo(0.018)
+  })
 })
