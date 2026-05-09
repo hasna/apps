@@ -185,4 +185,20 @@ describe('syncGeminiBilling', () => {
     const summary = queryBillingSummary(db, 'all')
     expect(summary.by_provider.gemini).toBeCloseTo(4.25)
   })
+
+  it('parses escaped quotes in CSV billing exports', async () => {
+    const exportPath = join(root, 'gemini-billing-escaped-quotes.csv')
+    writeFileSync(exportPath, [
+      'date,"service.description","sku.description",cost_usd',
+      '2026-05-08,"Google ""AI""","Gemini ""API""",3.5',
+    ].join('\n'))
+    process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH'] = exportPath
+
+    const result = await syncGeminiBilling(db, { fromDate: '2026-05-01', toDate: '2026-05-09' })
+    expect(result.days).toBe(1)
+    expect(result.totalUsd).toBeCloseTo(3.5)
+
+    const summary = queryBillingSummary(db, 'all')
+    expect(summary.by_provider.gemini).toBeCloseTo(3.5)
+  })
 })
