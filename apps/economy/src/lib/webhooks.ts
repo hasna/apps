@@ -16,7 +16,7 @@ export async function checkAndFireWebhooks(db: Database): Promise<void> {
     const pctBucket = Math.floor(b.percent_used / 10) * 10
     if (lastFired === String(pctBucket)) continue // already fired at this threshold
 
-    await fireWebhook(url, {
+    const delivered = await fireWebhook(url, {
       event: 'budget_alert',
       budget_id: b.id,
       project: b.project_path ?? 'global',
@@ -25,17 +25,20 @@ export async function checkAndFireWebhooks(db: Database): Promise<void> {
       limit: b.limit_usd,
       percent: Math.round(b.percent_used * 10) / 10,
     })
-    setIngestState(db, 'webhook', key, String(pctBucket))
+    if (delivered) setIngestState(db, 'webhook', key, String(pctBucket))
   }
 }
 
-async function fireWebhook(url: string, payload: Record<string, unknown>): Promise<void> {
+async function fireWebhook(url: string, payload: Record<string, unknown>): Promise<boolean> {
   try {
-    await fetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(5000),
     })
-  } catch { /* silently ignore webhook failures */ }
+    return response.ok
+  } catch {
+    return false
+  }
 }
