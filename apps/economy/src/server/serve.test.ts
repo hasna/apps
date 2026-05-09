@@ -307,6 +307,21 @@ describe('REST API server', () => {
     expect(requests[0]?.['id']).toBe('req-1')
     expect(((response.data as Record<string, unknown>)['meta'] as Record<string, unknown>)['count']).toBe(1)
 
+    upsertSession(db, {
+      id: 'sess/with spaces', agent: 'codex', project_path: '/proj/encoded', project_name: 'encoded',
+      started_at: NOW, ended_at: null, total_cost_usd: 0.25, total_tokens: 100, request_count: 1,
+    })
+    upsertRequest(db, {
+      id: 'req-encoded', agent: 'codex', session_id: 'sess/with spaces', model: 'gpt-5-codex',
+      input_tokens: 50, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 0.25, duration_ms: 100, timestamp: NOW, source_request_id: 'src-encoded',
+    })
+
+    response = await req(handler, `/api/sessions/${encodeURIComponent('sess/with spaces')}/requests`)
+    expect(response.status).toBe(200)
+    const encodedRequests = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(encodedRequests[0]?.['id']).toBe('req-encoded')
+
     response = await req(handler, '/api/sessions/missing/requests')
     expect(response.status).toBe(404)
     expect((response.data as Record<string, unknown>)['error']).toBe('Session not found')

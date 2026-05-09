@@ -295,7 +295,7 @@ export function createHandler(db: Database) {
     // Session requests detail
     const sessionRequestsMatch = path.match(/^\/api\/sessions\/([^/]+)\/requests$/)
     if (sessionRequestsMatch && method === 'GET') {
-      const sessionId = sessionRequestsMatch[1]!
+      const sessionId = decodeURIComponent(sessionRequestsMatch[1]!)
       const session = db.prepare(`SELECT * FROM sessions WHERE id = ? OR id LIKE ?`).get(sessionId, `${sessionId}%`) as Record<string, unknown> | null
       if (!session) return err('Session not found', 404)
       const requests = db.prepare(`SELECT * FROM requests WHERE session_id = ? ORDER BY timestamp ASC`).all(session['id'] as string) as Array<Record<string, unknown>>
