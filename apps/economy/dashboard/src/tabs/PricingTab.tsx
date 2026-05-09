@@ -59,6 +59,16 @@ const columns: DataTableColumn<Pricing>[] = [
       </span>
     ),
   },
+  {
+    header: "1h Cache Write / 1M",
+    accessor: "cache_write_1h_per_1m",
+    sortable: true,
+    render: (val) => (
+      <span className="text-muted-foreground">
+        {val != null ? `$${(val as number).toFixed(4)}` : "\u2014"}
+      </span>
+    ),
+  },
 ];
 
 export function PricingTab() {
@@ -72,6 +82,7 @@ export function PricingTab() {
   const [outputPer1m, setOutputPer1m] = useState("");
   const [cacheReadPer1m, setCacheReadPer1m] = useState("");
   const [cacheWritePer1m, setCacheWritePer1m] = useState("");
+  const [cacheWrite1hPer1m, setCacheWrite1hPer1m] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [editingModel, setEditingModel] = useState<string | null>(null);
@@ -86,8 +97,9 @@ export function PricingTab() {
   }, []);
 
   useEffect(() => {
-    load();
-    intervalRef.current = setInterval(() => load(), 30000);
+    const run = () => load();
+    queueMicrotask(run);
+    intervalRef.current = setInterval(run, 30000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
@@ -108,6 +120,7 @@ export function PricingTab() {
     setOutputPer1m("");
     setCacheReadPer1m("");
     setCacheWritePer1m("");
+    setCacheWrite1hPer1m("");
     setFormError(null);
     setEditingModel(null);
     setDialogOpen(true);
@@ -119,6 +132,7 @@ export function PricingTab() {
     setOutputPer1m(String(p.output_per_1m ?? ""));
     setCacheReadPer1m(p.cache_read_per_1m != null ? String(p.cache_read_per_1m) : "");
     setCacheWritePer1m(p.cache_write_per_1m != null ? String(p.cache_write_per_1m) : "");
+    setCacheWrite1hPer1m(p.cache_write_1h_per_1m != null ? String(p.cache_write_1h_per_1m) : "");
     setFormError(null);
     setEditingModel(p.model);
     setDialogOpen(true);
@@ -139,6 +153,7 @@ export function PricingTab() {
         output_per_1m: Number(outputPer1m) || 0,
         cache_read_per_1m: Number(cacheReadPer1m) || 0,
         cache_write_per_1m: Number(cacheWritePer1m) || 0,
+        cache_write_1h_per_1m: Number(cacheWrite1hPer1m) || 0,
       });
       setDialogOpen(false);
       load();
@@ -259,6 +274,19 @@ export function PricingTab() {
                   placeholder="3.75"
                   value={cacheWritePer1m}
                   onChange={(e) => setCacheWritePer1m(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  1h Cache Write / 1M ($)
+                </label>
+                <Input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  placeholder="6.00"
+                  value={cacheWrite1hPer1m}
+                  onChange={(e) => setCacheWrite1hPer1m(e.target.value)}
                 />
               </div>
             </div>

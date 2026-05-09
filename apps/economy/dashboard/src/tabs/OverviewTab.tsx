@@ -58,18 +58,21 @@ interface ChartEntry {
   date: string;
   rawDate: string; // YYYY-MM-DD for spike comparison
   claude: number;
+  takumi: number;
   codex: number;
+  gemini: number;
 }
 
 function buildChartData(entries: DailyEntry[]): ChartEntry[] {
   const map = new Map<string, ChartEntry>();
   for (const e of entries) {
     const key = e.date;
-    if (!map.has(key)) map.set(key, { date: formatDate(key), rawDate: key, claude: 0, codex: 0 });
+    if (!map.has(key)) map.set(key, { date: formatDate(key), rawDate: key, claude: 0, takumi: 0, codex: 0, gemini: 0 });
     const row = map.get(key)!;
     if (e.agent === "claude") row.claude += e.cost_usd;
+    else if (e.agent === "takumi") row.takumi += e.cost_usd;
     else if (e.agent === "codex") row.codex += e.cost_usd;
-    else row.claude += e.cost_usd;
+    else if (e.agent === "gemini") row.gemini += e.cost_usd;
   }
   return Array.from(map.values()).sort((a, b) => a.rawDate.localeCompare(b.rawDate));
 }
@@ -92,6 +95,8 @@ function computeSpikes(daily: DailyEntry[]): { spikeDates: Set<string>; spikeCou
 const chartConfig: ChartConfig = {
   claude: { label: "Claude", color: "hsl(var(--chart-1, 221 83% 53%))" },
   codex: { label: "Codex", color: "hsl(var(--chart-2, 24 95% 53%))" },
+  gemini: { label: "Gemini", color: "hsl(var(--chart-3, 142 71% 45%))" },
+  takumi: { label: "Takumi", color: "hsl(var(--chart-4, 262 83% 58%))" },
 };
 
 export function OverviewTab() {
@@ -150,8 +155,9 @@ export function OverviewTab() {
   );
 
   useEffect(() => {
-    load();
-    intervalRef.current = setInterval(() => load(), 30000);
+    const run = () => load();
+    queueMicrotask(run);
+    intervalRef.current = setInterval(run, 30000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
@@ -343,6 +349,20 @@ export function OverviewTab() {
                     strokeWidth={2}
                     dot={false}
                   />
+                  <Line
+                    type="monotone"
+                    dataKey="gemini"
+                    stroke="var(--color-gemini)"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="takumi"
+                    stroke="var(--color-takumi)"
+                    strokeWidth={2}
+                    dot={false}
+                  />
                 </LineChart>
               ) : (
                 <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
@@ -367,6 +387,8 @@ export function OverviewTab() {
                     ))}
                   </Bar>
                   <Bar dataKey="codex" fill="var(--color-codex)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="gemini" fill="var(--color-gemini)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="takumi" fill="var(--color-takumi)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               )}
             </ChartContainer>

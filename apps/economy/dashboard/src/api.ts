@@ -73,10 +73,16 @@ export interface Pricing {
   output_per_1m: number
   cache_read_per_1m: number
   cache_write_per_1m: number
+  cache_write_1h_per_1m?: number
 }
 
 export interface BreakdownEntry {
   [key: string]: string | number
+}
+
+export interface BillingSummary {
+  total_usd: number
+  by_provider: Record<string, number>
 }
 
 // Summary
@@ -94,6 +100,8 @@ export interface SessionRequest {
   output_tokens: number
   cache_read_tokens: number
   cache_create_tokens: number
+  cache_create_5m_tokens?: number
+  cache_create_1h_tokens?: number
   cost_usd: number
   duration_ms: number
   timestamp: string
@@ -158,6 +166,15 @@ export const deleteBudget = (id: string) =>
 export const getPricing = () =>
   request<{ data: Pricing[] }>('/api/pricing')
 
+export const getBilling = (period: 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all' = 'month') =>
+  request<{ data: BillingSummary }>(`/api/billing?period=${period}`)
+
+export const syncBilling = (body: { days?: number; providers?: Array<'anthropic' | 'openai' | 'gemini'> }) =>
+  request<{ data: Record<string, unknown> }>('/api/billing/sync', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
 export const createPricing = (body: Pricing) =>
   request<{ data: Pricing }>('/api/pricing', {
     method: 'POST',
@@ -170,7 +187,7 @@ export const deletePricing = (model: string) =>
   })
 
 // Sync
-export const syncSources = (sources: 'all' | 'claude' | 'codex' | 'gemini' = 'all') =>
+export const syncSources = (sources: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini' = 'all') =>
   request<{ success: boolean }>('/api/sync', {
     method: 'POST',
     body: JSON.stringify({ sources }),

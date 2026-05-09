@@ -122,7 +122,10 @@ export function DataTable<T>({
     }
   };
 
-  const rowId = (row: T, index: number) => getRowId ? getRowId(row, index) : String(index);
+  const rowId = React.useCallback(
+    (row: T, index: number) => getRowId ? getRowId(row, index) : String(index),
+    [getRowId]
+  );
 
   // Filter (only if local search)
   const filtered = React.useMemo(() => {
@@ -192,7 +195,7 @@ export function DataTable<T>({
 
   const selectedRows = React.useMemo(() => {
     return pageData.filter((r, i) => selectedIds.has(rowId(r, page * pageSize + i)));
-  }, [pageData, selectedIds, page, pageSize]);
+  }, [pageData, selectedIds, page, pageSize, rowId]);
 
   const hasBulk = bulkActions && bulkActions.length > 0;
   const hasActions = actions && actions.length > 0;
