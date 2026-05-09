@@ -122,13 +122,13 @@ describe('getPricing', () => {
     expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({
       inputPer1M: 0.325,
       outputPer1M: 1.95,
-      cacheReadPer1M: 0,
+      cacheReadPer1M: 0.05,
       cacheWritePer1M: 0.40625,
     })
     expect(getPricing('qwen/qwen3.6-flash')).toMatchObject({
       inputPer1M: 0.25,
       outputPer1M: 1.50,
-      cacheReadPer1M: 0,
+      cacheReadPer1M: 0.025,
       cacheWritePer1M: 0.3125,
     })
     expect(getPricing('qwen/qwen3.6-35b-a3b')).toMatchObject({
@@ -139,7 +139,7 @@ describe('getPricing', () => {
     expect(getPricing('qwen/qwen3.6-max-preview')).toMatchObject({
       inputPer1M: 1.04,
       outputPer1M: 6.24,
-      cacheReadPer1M: 0,
+      cacheReadPer1M: 0.13,
       cacheWritePer1M: 1.30,
     })
     expect(getPricing('minimax-m2.7')).toMatchObject({
@@ -231,8 +231,8 @@ describe('getPricing', () => {
     expect(getPricing('grok-4-1-fast-reasoning-latest')).toMatchObject({ inputPer1M: 0.20, outputPer1M: 0.50 })
     expect(getPricing('kimi-k2.6-20260419')).toMatchObject({ inputPer1M: 0.95, outputPer1M: 4.00, cacheReadPer1M: 0.16 })
     expect(getPricing('moonshotai/kimi-k2.6-20260419')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.50, cacheReadPer1M: 0.15 })
-    expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({ inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0, cacheWritePer1M: 0.40625 })
-    expect(getPricing('qwen/qwen3.6-flash-20260420')).toMatchObject({ inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0, cacheWritePer1M: 0.3125 })
+    expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({ inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 })
+    expect(getPricing('qwen/qwen3.6-flash-20260420')).toMatchObject({ inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 })
     expect(getPricing('z-ai/glm-5.1-20260406')).toMatchObject({ inputPer1M: 1.05, outputPer1M: 3.50, cacheReadPer1M: 0.525 })
   })
 
@@ -398,9 +398,9 @@ describe('computeCost', () => {
 
   it('uses Qwen and MiniMax long-prompt tiers without crossing router/direct schemas', () => {
     expect(computeCost('qwen/qwen3.6-flash', 200_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.068375)
-    expect(computeCost('qwen/qwen3.6-flash', 300_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.3525)
-    expect(computeCost('qwen/qwen3.6-plus-04-02', 260_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.605)
-    expect(computeCost('qwen/qwen3.6-max-preview', 150_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.445)
+    expect(computeCost('qwen/qwen3.6-flash', 300_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.3535)
+    expect(computeCost('qwen/qwen3.6-plus-04-02', 260_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.607)
+    expect(computeCost('qwen/qwen3.6-max-preview', 150_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.447)
     expect(computeCost('minimax-m1', 150_000, 10_000)).toBeCloseTo(0.082)
     expect(computeCost('minimax-m1', 300_000, 10_000)).toBeCloseTo(0.412)
     expect(computeCost('minimax/minimax-m1', 300_000, 10_000)).toBeCloseTo(0.142)
@@ -557,37 +557,37 @@ describe('ensurePricingSeeded', () => {
     expect(getModelPricing(db, 'qwen3.6-plus')).toMatchObject({
       input_per_1m: 0.325,
       output_per_1m: 1.95,
-      cache_read_per_1m: 0,
+      cache_read_per_1m: 0.05,
       cache_write_per_1m: 0.40625,
     })
     expect(getModelPricing(db, 'qwen3.6-flash')).toMatchObject({
       input_per_1m: 0.25,
       output_per_1m: 1.50,
-      cache_read_per_1m: 0,
+      cache_read_per_1m: 0.025,
       cache_write_per_1m: 0.3125,
     })
     expect(getModelPricing(db, 'qwen3.6-max-preview')).toMatchObject({
       input_per_1m: 1.04,
       output_per_1m: 6.24,
-      cache_read_per_1m: 0,
+      cache_read_per_1m: 0.13,
       cache_write_per_1m: 1.30,
     })
     expect(getModelPricing(db, 'qwen/qwen3.6-plus')).toMatchObject({
       input_per_1m: 0.325,
       output_per_1m: 1.95,
-      cache_read_per_1m: 0,
+      cache_read_per_1m: 0.05,
       cache_write_per_1m: 0.40625,
     })
     expect(getModelPricing(db, 'qwen/qwen3.6-flash')).toMatchObject({
       input_per_1m: 0.25,
       output_per_1m: 1.50,
-      cache_read_per_1m: 0,
+      cache_read_per_1m: 0.025,
       cache_write_per_1m: 0.3125,
     })
     expect(getModelPricing(db, 'qwen/qwen3.6-max-preview')).toMatchObject({
       input_per_1m: 1.04,
       output_per_1m: 6.24,
-      cache_read_per_1m: 0,
+      cache_read_per_1m: 0.13,
       cache_write_per_1m: 1.30,
     })
     expect(getModelPricing(db, 'minimax-m2.7')).toMatchObject({
