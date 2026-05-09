@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Bun test, typecheck, build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install root dependencies
+        run: bun install
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: bun install
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: bun install
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Test
+        run: bun test
+      - name: SDK typecheck and test
+        working-directory: sdk
+        run: |
+          bun run typecheck
+          bun test
+      - name: Build
+        run: bun run build
+      - name: SDK build
+        working-directory: sdk
+        run: bun run build
+
+  menubar:
+    name: Menubar Swift build
+    runs-on: blacksmith-6vcpu-macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release binary
+        working-directory: menubar
+        run: swift build -c release
+      - name: Validate Info.plist
+        working-directory: menubar
+        run: plutil -lint Resources/Info.plist
