@@ -3,16 +3,22 @@ import type {
   Agent,
   CostSummary,
   Session,
+  SessionRequest,
   ModelBreakdown,
   ProjectBreakdown,
   BudgetStatus,
+  CreateBudgetInput,
   DailyPoint,
+  CreatePricingInput,
   ModelPricing,
   MachineInfo,
   BillingSummary,
   BillingSyncResult,
   SyncResult,
   SessionFilter,
+  CreateGoalInput,
+  GoalStatus,
+  MutationOk,
 } from './types.js'
 
 export interface EconomyClientOptions {
@@ -103,6 +109,10 @@ export class EconomyClient {
     return this.request<Session[]>(`/api/sessions${qs}`)
   }
 
+  async getSessionRequests(sessionId: string): Promise<SessionRequest[]> {
+    return this.request<SessionRequest[]>(`/api/sessions/${encodeURIComponent(sessionId)}/requests`)
+  }
+
   async getMachines(): Promise<MachineInfo[]> {
     return this.request<MachineInfo[]>('/api/machines')
   }
@@ -127,6 +137,19 @@ export class EconomyClient {
     return this.request<BudgetStatus[]>('/api/budgets')
   }
 
+  async createBudget(input: CreateBudgetInput): Promise<BudgetStatus> {
+    return this.request<BudgetStatus>('/api/budgets', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteBudget(id: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/budgets/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  }
+
   async getDaily(days?: number): Promise<DailyPoint[]> {
     const params = new URLSearchParams()
     if (days != null) params.set('days', String(days))
@@ -136,6 +159,36 @@ export class EconomyClient {
 
   async getPricing(): Promise<ModelPricing[]> {
     return this.request<ModelPricing[]>('/api/pricing')
+  }
+
+  async createPricing(input: CreatePricingInput): Promise<ModelPricing> {
+    return this.request<ModelPricing>('/api/pricing', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deletePricing(model: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/pricing/${encodeURIComponent(model)}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async getGoals(): Promise<GoalStatus[]> {
+    return this.request<GoalStatus[]>('/api/goals')
+  }
+
+  async createGoal(input: CreateGoalInput): Promise<GoalStatus> {
+    return this.request<GoalStatus>('/api/goals', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  async deleteGoal(id: string): Promise<MutationOk> {
+    return this.request<MutationOk>(`/api/goals/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
   }
 
   async getBilling(period?: Period): Promise<BillingSummary> {

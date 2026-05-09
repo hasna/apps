@@ -20,6 +20,8 @@ export interface EconomyRequest {
   machine_id?: string
 }
 
+export type SessionRequest = EconomyRequest
+
 export interface Session {
   id: string
   agent: Agent
@@ -109,17 +111,64 @@ export interface DailyPoint {
 
 export interface ModelPricing {
   model: string
-  inputPer1M: number
-  outputPer1M: number
-  cacheReadPer1M: number
-  cacheWritePer1M: number
+  input_per_1m: number
+  output_per_1m: number
+  cache_read_per_1m: number
+  cache_write_per_1m: number
+  cache_write_1h_per_1m?: number
+  updated_at?: string
+  // Deprecated aliases kept optional for older TypeScript consumers. The REST API returns snake_case fields.
+  inputPer1M?: number
+  outputPer1M?: number
+  cacheReadPer1M?: number
+  cacheWritePer1M?: number
   cacheWrite1hPer1M?: number
-  input_per_1m?: number
-  output_per_1m?: number
+}
+
+export interface CreatePricingInput {
+  model: string
+  input_per_1m: number
+  output_per_1m: number
   cache_read_per_1m?: number
   cache_write_per_1m?: number
   cache_write_1h_per_1m?: number
 }
+
+export interface CreateBudgetInput {
+  project_path?: string
+  agent?: Agent | string
+  period: 'daily' | 'weekly' | 'monthly'
+  limit_usd: number
+  alert_at_percent?: number
+}
+
+export interface CreateGoalInput {
+  period: 'day' | 'week' | 'month' | 'year'
+  limit_usd: number
+  project_path?: string
+  agent?: Agent | string
+}
+
+export interface GoalStatus {
+  id: string
+  period: 'day' | 'week' | 'month' | 'year'
+  project_path: string | null
+  agent: Agent | string | null
+  limit_usd: number
+  current_spend_usd: number
+  percent_used: number
+  is_on_track: boolean
+  is_at_risk: boolean
+  is_over: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface MutationOk {
+  ok: boolean
+}
+
+export type MutationResult = MutationOk
 
 export interface BillingSyncResult {
   anthropic?: unknown

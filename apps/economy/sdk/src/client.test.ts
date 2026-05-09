@@ -66,6 +66,7 @@ describe('EconomyClient', () => {
     await client.getBudgets()
     await client.getDaily(14)
     await client.getPricing()
+    await client.getGoals()
 
     expect(calls.map(call => call.url)).toEqual([
       'http://economy.test/api/top?n=3&agent=codex',
@@ -74,7 +75,30 @@ describe('EconomyClient', () => {
       'http://economy.test/api/budgets',
       'http://economy.test/api/daily?days=14',
       'http://economy.test/api/pricing',
+      'http://economy.test/api/goals',
     ])
+  })
+
+  it('encodes session detail and mutation identifiers', async () => {
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: init?.method === 'DELETE' ? { ok: true } : [], meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
+    await client.getSessionRequests('session/with spaces')
+    const budgetDelete = await client.deleteBudget('budget/with spaces')
+    const pricingDelete = await client.deletePricing('openai/gpt 5.5')
+    const goalDelete = await client.deleteGoal('goal/with spaces')
+
+    expect(calls.map(call => new URL(call.url).pathname)).toEqual([
+      '/api/sessions/session%2Fwith%20spaces/requests',
+      '/api/budgets/budget%2Fwith%20spaces',
+      '/api/pricing/openai%2Fgpt%205.5',
+      '/api/goals/goal%2Fwith%20spaces',
+    ])
+    expect(calls.slice(1).map(call => call.init?.method)).toEqual(['DELETE', 'DELETE', 'DELETE'])
+    expect([budgetDelete.ok, pricingDelete.ok, goalDelete.ok]).toEqual([true, true, true])
   })
 
   it('sync accepts all supported ingestion sources', async () => {
@@ -105,6 +129,101 @@ describe('EconomyClient', () => {
     expect(calls[1]!.url).toBe('http://economy.test/api/billing/sync')
     expect(calls[1]!.init?.method).toBe('POST')
     expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({ days: 7, providers: ['openai', 'gemini'] })
+  })
+
+  it('exposes budget, pricing, and goal mutation endpoints', async () => {
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      const path = new URL(String(url)).pathname
+      const responses: Record<string, unknown> = {
+        '/api/budgets': {
+          id: 'budget-1',
+          project_path: '/workspace/open-economy',
+          agent: 'codex',
+          period: 'weekly',
+          limit_usd: 25,
+          alert_at_percent: 70,
+          created_at: '2026-05-09T00:00:00.000Z',
+          updated_at: '2026-05-09T00:00:00.000Z',
+          current_spend_usd: 1,
+          percent_used: 4,
+          is_over_limit: false,
+          is_over_alert: false,
+        },
+        '/api/pricing': {
+          model: 'custom-model',
+          input_per_1m: 1,
+          output_per_1m: 2,
+          cache_read_per_1m: 0,
+          cache_write_per_1m: 0,
+          cache_write_1h_per_1m: 0,
+          updated_at: '2026-05-09T00:00:00.000Z',
+        },
+        '/api/goals': {
+          id: 'goal-1',
+          period: 'week',
+          project_path: '/workspace/open-economy',
+          agent: 'codex',
+          limit_usd: 50,
+          created_at: '2026-05-09T00:00:00.000Z',
+          updated_at: '2026-05-09T00:00:00.000Z',
+          current_spend_usd: 1,
+          percent_used: 2,
+          is_on_track: true,
+          is_at_risk: false,
+          is_over: false,
+        },
+      }
+      return mockJson({ data: responses[path], meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
+    const budget = await client.createBudget({
+      project_path: '/workspace/open-economy',
+      agent: 'codex',
+      period: 'weekly',
+      limit_usd: 25,
+      alert_at_percent: 70,
+    })
+    const pricing = await client.createPricing({
+      model: 'custom-model',
+      input_per_1m: 1,
+      output_per_1m: 2,
+    })
+    const goal = await client.createGoal({
+      period: 'week',
+      limit_usd: 50,
+      project_path: '/workspace/open-economy',
+      agent: 'codex',
+    })
+
+    expect(calls.map(call => call.url)).toEqual([
+      'http://economy.test/api/budgets',
+      'http://economy.test/api/pricing',
+      'http://economy.test/api/goals',
+    ])
+    expect(calls.map(call => call.init?.method)).toEqual(['POST', 'POST', 'POST'])
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({
+      project_path: '/workspace/open-economy',
+      agent: 'codex',
+      period: 'weekly',
+      limit_usd: 25,
+      alert_at_percent: 70,
+    })
+    expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({
+      model: 'custom-model',
+      input_per_1m: 1,
+      output_per_1m: 2,
+    })
+    expect(JSON.parse(String(calls[2]!.init?.body))).toEqual({
+      period: 'week',
+      limit_usd: 50,
+      project_path: '/workspace/open-economy',
+      agent: 'codex',
+    })
+    expect(budget).toMatchObject({ id: 'budget-1', percent_used: 4 })
+    expect(pricing).toMatchObject({ model: 'custom-model', input_per_1m: 1, updated_at: expect.any(String) })
+    expect(goal).toMatchObject({ id: 'goal-1', is_on_track: true, percent_used: 2 })
   })
 
   it('does not retry client errors', async () => {
