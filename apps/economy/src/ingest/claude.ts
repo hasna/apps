@@ -85,8 +85,9 @@ export async function ingestClaude(
 export async function ingestTakumi(
   db: Database,
   verbose = false,
+  projectsDir = TAKUMI_PROJECTS_DIR,
 ): Promise<{ files: number; requests: number; sessions: number }> {
-  return ingestJsonlProjects(db, TAKUMI_PROJECTS_DIR, 'takumi', verbose)
+  return ingestJsonlProjects(db, projectsDir, 'takumi', verbose)
 }
 
 export async function ingestJsonlProjects(

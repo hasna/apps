@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase } from '../db/database.js'
-import { ingestClaude } from './claude.js'
+import { ingestClaude, ingestJsonlProjects, ingestTakumi } from './claude.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 
 let db: Database
@@ -26,6 +26,53 @@ afterEach(() => {
 })
 
 describe('ingestClaude', () => {
+  it('returns zero counts and logs when the projects directory is missing in verbose mode', async () => {
+    const missingDir = join(root, 'missing-projects')
+    const logs: unknown[][] = []
+    const originalLog = console.log
+    console.log = (...args: unknown[]) => { logs.push(args) }
+    try {
+      const result = await ingestJsonlProjects(db, missingDir, 'claude', true)
+      expect(result).toEqual({ files: 0, requests: 0, sessions: 0 })
+      expect(logs[0]).toEqual(['claude projects dir not found:', missingDir])
+    } finally {
+      console.log = originalLog
+    }
+  })
+
+  it('ingests Takumi JSONL usage through the Takumi wrapper with an injected projects directory', async () => {
+    const projectDir = join(projectsDir, '-tmp-economy-takumi-project')
+    mkdirSync(projectDir, { recursive: true })
+    const sessionId = '44444444-4444-4444-8444-444444444444'
+    writeFileSync(join(projectDir, `${sessionId}.jsonl`), jsonl({
+      type: 'assistant',
+      uuid: 'takumi-assistant-1',
+      requestId: 'takumi-req-1',
+      cwd: '/tmp/economy-takumi-project',
+      sessionId,
+      timestamp: '2026-05-08T13:00:00.000Z',
+      message: {
+        role: 'assistant',
+        model: 'gpt-5-codex',
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 100,
+          cache_read_input_tokens: 200,
+        },
+      },
+    }))
+
+    const result = await ingestTakumi(db, false, projectsDir)
+    expect(result).toEqual({ files: 1, requests: 1, sessions: 1 })
+
+    const request = db.prepare(`SELECT * FROM requests WHERE source_request_id = ?`).get('takumi-req-1') as Record<string, number | string>
+    expect(request['agent']).toBe('takumi')
+    expect(request['session_id']).toBe(sessionId)
+    expect(request['model']).toBe('gpt-5-codex')
+    expect(request['cache_read_tokens']).toBe(200)
+    expect(Number(request['cost_usd'])).toBeCloseTo(0.002275)
+  })
+
   it('ingests real Claude JSONL usage with cache tiers, raw request ids, and rollups', async () => {
     const projectDir = join(projectsDir, '-tmp-economy-claude-project')
     mkdirSync(projectDir, { recursive: true })
