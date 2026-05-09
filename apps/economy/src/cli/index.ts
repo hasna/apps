@@ -6,7 +6,7 @@ import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions,
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
 import { ingestGemini } from '../ingest/gemini.js'
-import { syncAnthropicBilling, syncOpenAIBilling } from '../ingest/billing.js'
+import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { queryBillingSummary } from '../db/database.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
@@ -1386,20 +1386,21 @@ cloudCmd
 
 // ── billing ──────────────────────────────────────────────────────────────────
 
-const billingCmd = program.command('billing').description('Pull actual billing from provider admin APIs (ground truth)')
+const billingCmd = program.command('billing').description('Pull actual billing from provider billing sources (ground truth)')
 
 billingCmd
   .command('sync')
-  .description('Sync actual billing from Anthropic and OpenAI admin APIs')
+  .description('Sync actual billing from Anthropic, OpenAI, and Gemini billing sources')
   .option('--days <n>', 'Days of history to fetch', '31')
   .option('--anthropic', 'Only sync Anthropic')
   .option('--openai', 'Only sync OpenAI')
-  .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean }) => {
+  .option('--gemini', 'Only sync Gemini')
+  .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
     const db = openDatabase()
     const days = Number(opts.days ?? 31)
-    const doBoth = !opts.anthropic && !opts.openai
+    const doAll = !opts.anthropic && !opts.openai && !opts.gemini
 
-    if (opts.anthropic || doBoth) {
+    if (opts.anthropic || doAll) {
       process.stdout.write(chalk.cyan('→ Syncing Anthropic billing... '))
       try {
         const r = await syncAnthropicBilling(db, { days })
@@ -1408,11 +1409,24 @@ billingCmd
         console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
       }
     }
-    if (opts.openai || doBoth) {
+    if (opts.openai || doAll) {
       process.stdout.write(chalk.cyan('→ Syncing OpenAI billing... '))
       try {
         const r = await syncOpenAIBilling(db, { days })
         console.log(chalk.green(`✓ ${r.days} days, $${r.totalUsd.toFixed(2)}`))
+      } catch (e) {
+        console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
+    if (opts.gemini || doAll) {
+      process.stdout.write(chalk.cyan('→ Syncing Gemini billing... '))
+      try {
+        const r = await syncGeminiBilling(db, { days })
+        if (r.skipped) {
+          console.log(chalk.yellow(`skipped — ${r.skipped}`))
+        } else {
+          console.log(chalk.green(`✓ ${r.days} days, $${r.totalUsd.toFixed(2)}`))
+        }
       } catch (e) {
         console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
       }
