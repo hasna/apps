@@ -27,6 +27,19 @@ afterEach(() => {
 })
 
 describe('ingestGemini', () => {
+  it('returns zero counts and logs when configured Gemini dirs are missing in verbose mode', async () => {
+    const logs: unknown[][] = []
+    const originalLog = console.log
+    console.log = (...args: unknown[]) => { logs.push(args) }
+    try {
+      const result = await ingestGemini(db, true)
+      expect(result).toEqual({ sessions: 0, requests: 0 })
+      expect(logs[0]).toEqual(['Gemini tmp/history dirs not found:', tmpDir, historyDir])
+    } finally {
+      console.log = originalLog
+    }
+  })
+
   it('ingests Gemini chat usage as request rows and rolls sessions up', async () => {
     const projectDir = join(tmpDir, 'open-economy')
     const chatsDir = join(projectDir, 'chats')
@@ -117,5 +130,33 @@ describe('ingestGemini', () => {
     expect(row['cache_read_tokens']).toBe(50000)
     expect(row['output_tokens']).toBe(15000)
     expect(Number(row['cost_usd'])).toBeCloseTo(0.665)
+  })
+
+  it('continues when .project_root cannot be read', async () => {
+    const projectDir = join(tmpDir, 'unreadable-root')
+    const chatsDir = join(projectDir, 'chats')
+    mkdirSync(chatsDir, { recursive: true })
+    mkdirSync(join(projectDir, '.project_root'))
+    writeFileSync(join(chatsDir, 'session-c.json'), JSON.stringify({
+      sessionId: 'gemini-session-c',
+      model: 'gemini-2.5-flash-lite',
+      startTime: '2026-05-08T13:00:00.000Z',
+      messages: [{
+        id: 'msg-no-project-root',
+        timestamp: '2026-05-08T13:01:00.000Z',
+        usage: {
+          inputTokens: 1000,
+          outputTokens: 100,
+          totalTokens: 1100,
+        },
+      }],
+    }))
+
+    const result = await ingestGemini(db)
+    expect(result).toEqual({ sessions: 1, requests: 1 })
+
+    const session = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get('gemini-session-c') as Record<string, string | number>
+    expect(session['project_path']).toBe('')
+    expect(session['project_name']).toBe('')
   })
 })
