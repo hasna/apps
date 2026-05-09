@@ -182,16 +182,19 @@ const XAI_PROMPT_TIERS: Record<string, PromptTier> = {
     threshold: 128_000,
     inputPer1M: 0.40,
     outputPer1M: 1.00,
+    cacheReadPer1M: 0,
   },
   'grok-4-fast': {
     threshold: 128_000,
     inputPer1M: 0.40,
     outputPer1M: 1.00,
+    cacheReadPer1M: 0,
   },
   'grok-4': {
     threshold: 128_000,
     inputPer1M: 6.00,
     outputPer1M: 30.00,
+    cacheReadPer1M: 0,
   },
 }
 

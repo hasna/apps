@@ -126,8 +126,8 @@ describe('computeCost', () => {
     expect(computeCost('grok-4.3', 190_000, 10_000, 20_000)).toBeCloseTo(0.533)
     expect(computeCost('grok-4.20-0309-non-reasoning', 190_000, 10_000, 20_000)).toBeCloseTo(0.533)
     expect(computeCost('grok-4-1-fast-reasoning-latest', 120_000, 10_000, 5_000)).toBeCloseTo(0.02925)
-    expect(computeCost('grok-4-1-fast-reasoning-latest', 130_000, 10_000, 5_000)).toBeCloseTo(0.06225)
-    expect(computeCost('grok-4', 130_000, 10_000, 5_000)).toBeCloseTo(1.08375)
+    expect(computeCost('grok-4-1-fast-reasoning-latest', 130_000, 10_000, 5_000)).toBeCloseTo(0.062)
+    expect(computeCost('grok-4', 130_000, 10_000, 5_000)).toBeCloseTo(1.08)
   })
 
   it('returns 0 for unknown model or zero tokens', () => {
