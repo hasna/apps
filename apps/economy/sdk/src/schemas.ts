@@ -12,11 +12,15 @@
 export type EconomyToolName =
   | 'economy_get_summary'
   | 'economy_get_sessions'
+  | 'economy_get_session_detail'
   | 'economy_get_top_sessions'
+  | 'economy_list_machines'
   | 'economy_get_model_breakdown'
   | 'economy_get_project_breakdown'
   | 'economy_get_budget_status'
   | 'economy_get_pricing'
+  | 'economy_get_daily'
+  | 'economy_get_goals'
   | 'economy_get_billing_summary'
   | 'economy_sync'
 
@@ -28,6 +32,7 @@ export const economyTools = [
       type: 'object',
       properties: {
         period: { type: 'string', enum: ['today', 'yesterday', 'week', 'month', 'year', 'all'], description: 'Time period', default: 'today' },
+        machine: { type: 'string', description: 'Filter by machine/host id' },
       },
     },
   },
@@ -39,9 +44,22 @@ export const economyTools = [
       properties: {
         agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Filter by AI agent' },
         project: { type: 'string', description: 'Filter by project path (partial match)' },
+        machine: { type: 'string', description: 'Filter by machine/host id' },
+        search: { type: 'string', description: 'Search session id, agent, or project fields' },
         limit: { type: 'number', description: 'Max results (default 20)' },
         offset: { type: 'number', description: 'Pagination offset' },
       },
+    },
+  },
+  {
+    name: 'economy_get_session_detail',
+    description: 'Get per-request token and cost detail for one session by full id or prefix.',
+    parameters: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Session id or id prefix' },
+      },
+      required: ['session_id'],
     },
   },
   {
@@ -54,6 +72,11 @@ export const economyTools = [
         agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Filter by agent' },
       },
     },
+  },
+  {
+    name: 'economy_list_machines',
+    description: 'List machines that have synced cost data with session counts, request counts, spend, and last activity.',
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'economy_get_model_breakdown',
@@ -73,6 +96,21 @@ export const economyTools = [
   {
     name: 'economy_get_pricing',
     description: 'List editable model pricing rows — input, output, cache read/write, one-hour cache write, and context-cache storage rates',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'economy_get_daily',
+    description: 'Get daily cost data grouped by date and agent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: 'Number of recent days (default 30)' },
+      },
+    },
+  },
+  {
+    name: 'economy_get_goals',
+    description: 'Get all spending goals with current progress and risk status.',
     parameters: { type: 'object', properties: {} },
   },
   {

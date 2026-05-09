@@ -258,17 +258,27 @@ describe('EconomyClient', () => {
 })
 
 describe('economyTools schemas', () => {
-  it('advertise Gemini and Takumi wherever agent/source filters are available', () => {
+  it('advertise the SDK read surface and supported agent/source filters', () => {
     const sessions = economyTools.find(t => t.name === 'economy_get_sessions')!
     const top = economyTools.find(t => t.name === 'economy_get_top_sessions')!
     const sync = economyTools.find(t => t.name === 'economy_sync')!
     const pricing = economyTools.find(t => t.name === 'economy_get_pricing')!
+    const detail = economyTools.find(t => t.name === 'economy_get_session_detail')!
+    const daily = economyTools.find(t => t.name === 'economy_get_daily')!
+    const goals = economyTools.find(t => t.name === 'economy_get_goals')!
+    const machines = economyTools.find(t => t.name === 'economy_list_machines')!
 
     expect(sessions.parameters.properties.agent.enum).toContain('gemini')
     expect(sessions.parameters.properties.agent.enum).toContain('takumi')
+    expect(sessions.parameters.properties.machine.type).toBe('string')
+    expect(sessions.parameters.properties.search.type).toBe('string')
     expect(top.parameters.properties.agent.enum).toContain('gemini')
     expect(top.parameters.properties.agent.enum).toContain('takumi')
     expect(sync.parameters.properties.sources.enum).toEqual(['all', 'claude', 'takumi', 'codex', 'gemini'])
     expect(pricing.description).toContain('context-cache storage')
+    expect(detail.parameters.required).toEqual(['session_id'])
+    expect(daily.parameters.properties.days.type).toBe('number')
+    expect(goals.parameters.properties).toEqual({})
+    expect(machines.parameters.properties).toEqual({})
   })
 })
