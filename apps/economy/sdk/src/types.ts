@@ -139,7 +139,7 @@ export interface CreatePricingInput {
 
 export interface CreateBudgetInput {
   project_path?: string
-  agent?: Agent | string
+  agent?: Agent
   period: 'daily' | 'weekly' | 'monthly'
   limit_usd: number
   alert_at_percent?: number
@@ -149,14 +149,14 @@ export interface CreateGoalInput {
   period: 'day' | 'week' | 'month' | 'year'
   limit_usd: number
   project_path?: string
-  agent?: Agent | string
+  agent?: Agent
 }
 
 export interface GoalStatus {
   id: string
   period: 'day' | 'week' | 'month' | 'year'
   project_path: string | null
-  agent: Agent | string | null
+  agent: Agent | null
   limit_usd: number
   current_spend_usd: number
   percent_used: number
