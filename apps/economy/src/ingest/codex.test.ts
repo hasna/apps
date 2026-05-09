@@ -4,12 +4,13 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { Database as BunDatabase } from 'bun:sqlite'
 import { openDatabase } from '../db/database.js'
-import { ingestCodex } from './codex.js'
+import { ingestCodex, readCodexModel } from './codex.js'
 import { computeCost } from '../lib/pricing.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 
 let root: string
 let codexDbPath: string
+let configPath: string
 let rolloutPath: string
 let db: Database
 
@@ -17,13 +18,16 @@ beforeEach(() => {
   root = join(tmpdir(), `economy-codex-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   mkdirSync(root, { recursive: true })
   codexDbPath = join(root, 'state_5.sqlite')
+  configPath = join(root, 'config.toml')
   rolloutPath = join(root, 'rollout.jsonl')
   db = openDatabase(':memory:', true)
   process.env['HASNA_ECONOMY_CODEX_DB_PATH'] = codexDbPath
+  process.env['HASNA_ECONOMY_CODEX_CONFIG_PATH'] = configPath
 })
 
 afterEach(() => {
   delete process.env['HASNA_ECONOMY_CODEX_DB_PATH']
+  delete process.env['HASNA_ECONOMY_CODEX_CONFIG_PATH']
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -50,6 +54,26 @@ function writeCodexDb(tokensUsed = 1200, updatedAt = 2) {
   codexDb.close()
 }
 
+function writeLegacyCodexDb(tokensUsed = 1000) {
+  const codexDb = new BunDatabase(codexDbPath)
+  codexDb.exec(`
+    CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      cwd TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      title TEXT
+    )
+  `)
+  codexDb.prepare(`
+    INSERT INTO threads
+      (id, cwd, created_at, updated_at, tokens_used, title)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('legacy-thread', '/tmp/legacy-project', 1, 2, tokensUsed, 'Legacy thread')
+  codexDb.close()
+}
+
 function writeRollout(...usages: Array<Record<string, number> & { timestamp?: string }>) {
   writeFileSync(rolloutPath, usages.map((usage, index) => JSON.stringify({
     timestamp: usage.timestamp ?? `2026-05-08T10:00:0${index}.000Z`,
@@ -64,6 +88,18 @@ function writeRollout(...usages: Array<Record<string, number> & { timestamp?: st
 describe('ingestCodex', () => {
   it('computes current GPT-5 Codex cost from official text-token rates', () => {
     expect(computeCost('gpt-5-codex', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(11.375)
+  })
+
+  it('returns zero counts when the Codex SQLite database is missing', async () => {
+    const result = await ingestCodex(db)
+    expect(result).toEqual({ sessions: 0, requests: 0 })
+  })
+
+  it('reads the configured Codex model and falls back when config is absent', () => {
+    expect(readCodexModel()).toBe('gpt-5-codex')
+
+    writeFileSync(configPath, 'model = "gpt-5.4"\n')
+    expect(readCodexModel()).toBe('gpt-5.4')
   })
 
   it('ingests model identity and per-request token usage from Codex rollout token events', async () => {
@@ -91,6 +127,26 @@ describe('ingestCodex', () => {
     expect(session['request_count']).toBe(1)
     expect(session['total_tokens']).toBe(1200)
     expect(Number(session['total_cost_usd'])).toBeCloseTo(0.0092)
+  })
+
+  it('supports legacy thread schemas and falls back to aggregate token estimates', async () => {
+    writeFileSync(configPath, 'model = "gpt-5.4"\n')
+    writeLegacyCodexDb(1000)
+
+    const result = await ingestCodex(db)
+    expect(result).toEqual({ sessions: 1, requests: 1 })
+
+    const row = db.prepare(`SELECT * FROM requests WHERE agent = 'codex'`).get() as Record<string, number | string>
+    expect(row['model']).toBe('gpt-5.4')
+    expect(row['input_tokens']).toBe(600)
+    expect(row['output_tokens']).toBe(400)
+    expect(row['cache_read_tokens']).toBe(0)
+    expect(row['timestamp']).toBe('1970-01-01T00:00:01.000Z')
+
+    const session = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get('codex-legacy-thread') as Record<string, number | string>
+    expect(session['project_name']).toBe('legacy-project')
+    expect(session['request_count']).toBe(1)
+    expect(session['total_tokens']).toBe(1000)
   })
 
   it('reprocesses active Codex threads when updated_at or tokens change', async () => {
