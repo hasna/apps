@@ -40,6 +40,17 @@ async function req(handler: (r: Request) => Promise<Response>, path: string, met
   return { status: res.status, data: json }
 }
 
+async function rawReq(handler: (r: Request) => Promise<Response>, path: string, method: string, body: string): Promise<{ status: number; data: unknown }> {
+  const r = new Request(`http://localhost:3456${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  })
+  const res = await handler(r)
+  const json = await res.json() as unknown
+  return { status: res.status, data: json }
+}
+
 describe('REST API server', () => {
   let handler: (r: Request) => Promise<Response>
   let db: Database
@@ -171,6 +182,16 @@ describe('REST API server', () => {
     expect(afterDelete.some(project => project['path'] === '/workspace/new-project')).toBe(false)
   })
 
+  it('POST /api/project-registry rejects invalid payloads', async () => {
+    let response = await rawReq(handler, '/api/project-registry', 'POST', '{bad json')
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('invalid JSON body')
+
+    response = await req(handler, '/api/project-registry', 'POST', { name: 'Missing Path' })
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('path is required')
+  })
+
   it('GET /api/budgets returns budgets with status', async () => {
     const { status, data } = await req(handler, '/api/budgets')
     expect(status).toBe(200)
@@ -239,6 +260,12 @@ describe('REST API server', () => {
     expect((data as Record<string, unknown>)['error']).toBe('pricing values must be non-negative numbers')
   })
 
+  it('POST /api/pricing rejects malformed JSON', async () => {
+    const { status, data } = await rawReq(handler, '/api/pricing', 'POST', '{bad json')
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('invalid JSON body')
+  })
+
   it('DELETE /api/pricing/:model removes a pricing row', async () => {
     const { status } = await req(handler, '/api/pricing/claude-sonnet-4-6', 'DELETE')
     expect(status).toBe(200)
@@ -283,6 +310,22 @@ describe('REST API server', () => {
     response = await req(handler, '/api/goals')
     const afterDelete = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(afterDelete.some(goal => goal['id'] === id)).toBe(false)
+  })
+
+  it('POST /api/goals rejects invalid limit and period', async () => {
+    let response = await req(handler, '/api/goals', 'POST', {
+      period: 'month',
+      limit_usd: 'not-a-number',
+    })
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('limit_usd must be a positive number')
+
+    response = await req(handler, '/api/goals', 'POST', {
+      period: 'quarter',
+      limit_usd: 10,
+    })
+    expect(response.status).toBe(400)
+    expect((response.data as Record<string, unknown>)['error']).toBe('period must be day, week, month, or year')
   })
 
   it('GET /api/daily returns daily data', async () => {

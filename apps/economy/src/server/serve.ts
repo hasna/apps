@@ -58,6 +58,19 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
+  const body = await req.json().catch(() => null) as unknown
+  return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
 /** Apply ?fields=f1,f2 filtering — reduces response size by 50-89% */
 function applyFields<T extends Record<string, unknown>>(obj: T, fields?: string[]): Partial<T> {
   if (!fields || fields.length === 0) return obj
@@ -134,7 +147,7 @@ export function createHandler(db: Database) {
       return ok(queryBillingSummary(db, period))
     }
     if (path === '/api/billing/sync' && method === 'POST') {
-      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const body = await jsonBody(req) ?? {}
       const days = Number(body['days'] ?? 31)
       if (!Number.isFinite(days) || days <= 0 || days > 366) return err('days must be between 1 and 366')
       const providers = Array.isArray(body['providers']) ? body['providers'] as string[] : ['anthropic', 'openai', 'gemini']
@@ -171,7 +184,8 @@ export function createHandler(db: Database) {
       return ok(getBudgetStatuses(db))
     }
     if (path === '/api/budgets' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
       const limitUsd = finiteNumber(body['limit_usd'])
       const alertAtPercent = finiteNumber(body['alert_at_percent'] ?? 80)
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
@@ -200,15 +214,17 @@ export function createHandler(db: Database) {
       return ok(listProjects(db))
     }
     if (path === '/api/project-registry' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
       const { basename } = await import('path')
-      const projPath = body['path'] as string
+      const projPath = optionalString(body['path'])?.trim()
+      if (!projPath) return err('path is required')
       upsertProject(db, {
         id: randomUUID(),
         path: projPath,
-        name: (body['name'] as string | null) ?? basename(projPath),
-        description: (body['description'] as string | null) ?? null,
-        tags: (body['tags'] as string[] | null) ?? [],
+        name: optionalString(body['name']) ?? basename(projPath),
+        description: optionalString(body['description']),
+        tags: stringArray(body['tags']),
         created_at: new Date().toISOString(),
       })
       return ok({ ok: true })
@@ -224,7 +240,8 @@ export function createHandler(db: Database) {
       return ok(listModelPricing(db))
     }
     if (path === '/api/pricing' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
       const model = String(body['model'] ?? '').trim()
       if (!model) return err('model is required')
       const input = finiteNumber(body['input_per_1m'])
@@ -254,7 +271,7 @@ export function createHandler(db: Database) {
 
     // Sync trigger
     if (path === '/api/sync' && method === 'POST') {
-      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const body = await jsonBody(req) ?? {}
       const sources = (body['sources'] as string | null) ?? 'all'
       if (!['all', 'claude', 'takumi', 'codex', 'gemini'].includes(sources)) return err('invalid sync source')
       const results: Record<string, unknown> = {}
@@ -290,14 +307,19 @@ export function createHandler(db: Database) {
       return ok(getGoalStatuses(db))
     }
     if (path === '/api/goals' && method === 'POST') {
-      const body = await req.json() as Record<string, unknown>
+      const body = await jsonBody(req)
+      if (!body) return err('invalid JSON body')
+      const period = body['period'] ?? 'month'
+      if (!['day', 'week', 'month', 'year'].includes(String(period))) return err('period must be day, week, month, or year')
+      const limitUsd = finiteNumber(body['limit_usd'])
+      if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
       const now = new Date().toISOString()
       upsertGoal(db, {
         id: randomUUID(),
-        period: (body['period'] as 'day' | 'week' | 'month' | 'year') ?? 'month',
-        project_path: (body['project_path'] as string | null) ?? null,
-        agent: (body['agent'] as string | null) ?? null,
-        limit_usd: Number(body['limit_usd']),
+        period: period as 'day' | 'week' | 'month' | 'year',
+        project_path: optionalString(body['project_path']),
+        agent: optionalString(body['agent']),
+        limit_usd: limitUsd,
         created_at: now,
         updated_at: now,
       })
