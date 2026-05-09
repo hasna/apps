@@ -82,6 +82,13 @@ describe('REST API server', () => {
     expect(((response.data as Record<string, unknown>)['data'] as unknown[]).length).toBe(1)
   })
 
+  it('GET /api/sessions supports compact field selection', async () => {
+    const { status, data } = await req(handler, '/api/sessions?fields=id,total_cost_usd')
+    expect(status).toBe(200)
+    const sessions = (data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(sessions[0]).toEqual({ id: 'sess-1', total_cost_usd: 1.5 })
+  })
+
   it('GET /api/top returns top sessions', async () => {
     const { status, data } = await req(handler, '/api/top?n=5')
     expect(status).toBe(200)
@@ -133,6 +140,35 @@ describe('REST API server', () => {
     const { status, data } = await req(handler, '/api/projects')
     expect(status).toBe(200)
     expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
+  })
+
+  it('GET /api/breakdown returns model and project aliases', async () => {
+    let response = await req(handler, '/api/breakdown')
+    expect(response.status).toBe(200)
+    expect(Array.isArray((response.data as Record<string, unknown>)['data'])).toBe(true)
+
+    response = await req(handler, '/api/breakdown?by=project')
+    expect(response.status).toBe(200)
+    const projects = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(projects[0]?.['project_path']).toBe('/proj/a')
+  })
+
+  it('manages project registry records', async () => {
+    let response = await req(handler, '/api/project-registry', 'POST', {
+      path: '/workspace/new-project',
+      tags: ['sdk', 'dashboard'],
+    })
+    expect(response.status).toBe(200)
+
+    response = await req(handler, '/api/project-registry')
+    const projects = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(projects.some(project => project['path'] === '/workspace/new-project' && project['name'] === 'new-project')).toBe(true)
+
+    response = await req(handler, `/api/project-registry/${encodeURIComponent('/workspace/new-project')}`, 'DELETE')
+    expect(response.status).toBe(200)
+    response = await req(handler, '/api/project-registry')
+    const afterDelete = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(afterDelete.some(project => project['path'] === '/workspace/new-project')).toBe(false)
   })
 
   it('GET /api/budgets returns budgets with status', async () => {
@@ -195,10 +231,58 @@ describe('REST API server', () => {
     expect((data as Record<string, unknown>)['error']).toBe('model is required')
   })
 
+  it('POST /api/pricing rejects negative or non-numeric rates', async () => {
+    const { status, data } = await req(handler, '/api/pricing', 'POST', {
+      model: 'bad-model', input_per_1m: -1, output_per_1m: 20,
+    })
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('pricing values must be non-negative numbers')
+  })
+
+  it('DELETE /api/pricing/:model removes a pricing row', async () => {
+    const { status } = await req(handler, '/api/pricing/claude-sonnet-4-6', 'DELETE')
+    expect(status).toBe(200)
+    const row = db.prepare(`SELECT model FROM model_pricing WHERE model = ?`).get('claude-sonnet-4-6')
+    expect(row).toBeNull()
+  })
+
   it('POST /api/sync rejects invalid source', async () => {
     const { status, data } = await req(handler, '/api/sync', 'POST', { sources: 'bad-source' })
     expect(status).toBe(400)
     expect((data as Record<string, unknown>)['error']).toBe('invalid sync source')
+  })
+
+  it('GET /api/sessions/:id/requests returns request detail and 404s missing sessions', async () => {
+    let response = await req(handler, '/api/sessions/sess-1/requests')
+    expect(response.status).toBe(200)
+    const requests = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(requests[0]?.['id']).toBe('req-1')
+    expect(((response.data as Record<string, unknown>)['meta'] as Record<string, unknown>)['count']).toBe(1)
+
+    response = await req(handler, '/api/sessions/missing/requests')
+    expect(response.status).toBe(404)
+    expect((response.data as Record<string, unknown>)['error']).toBe('Session not found')
+  })
+
+  it('manages spending goals', async () => {
+    let response = await req(handler, '/api/goals', 'POST', {
+      period: 'month',
+      project_path: '/proj/a',
+      limit_usd: 25,
+    })
+    expect(response.status).toBe(200)
+
+    response = await req(handler, '/api/goals')
+    expect(response.status).toBe(200)
+    const goals = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(goals.some(goal => goal['project_path'] === '/proj/a' && goal['limit_usd'] === 25)).toBe(true)
+
+    const id = (db.prepare(`SELECT id FROM goals WHERE project_path = ?`).get('/proj/a') as { id: string }).id
+    response = await req(handler, `/api/goals/${id}`, 'DELETE')
+    expect(response.status).toBe(200)
+    response = await req(handler, '/api/goals')
+    const afterDelete = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
+    expect(afterDelete.some(goal => goal['id'] === id)).toBe(false)
   })
 
   it('GET /api/daily returns daily data', async () => {
