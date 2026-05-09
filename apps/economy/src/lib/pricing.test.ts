@@ -28,6 +28,16 @@ describe('getPricing', () => {
       outputPer1M: 30.00,
       cacheReadPer1M: 0.50,
     })
+    expect(getPricing('gpt-5.5-pro')).toMatchObject({
+      inputPer1M: 30.00,
+      outputPer1M: 180.00,
+      cacheReadPer1M: 0,
+    })
+    expect(getPricing('gpt-5.4-nano')).toMatchObject({
+      inputPer1M: 0.20,
+      outputPer1M: 1.25,
+      cacheReadPer1M: 0.02,
+    })
     expect(getPricing('gpt-5-codex')).toMatchObject({
       inputPer1M: 1.25,
       outputPer1M: 10.00,
@@ -78,6 +88,13 @@ describe('computeCost', () => {
     expect(computeCost('gemini-2.5-pro', 190_000, 10_000, 25_000)).toBeCloseTo(0.63125)
     expect(computeCost('gemini-3.1-pro-preview', 150_000, 10_000, 25_000)).toBeCloseTo(0.425)
     expect(computeCost('gemini-3.1-pro-preview', 190_000, 10_000, 25_000)).toBeCloseTo(0.95)
+  })
+
+  it('uses OpenAI long-context pricing above 272k prompt tokens for 1.05M-context models', () => {
+    expect(computeCost('gpt-5.5', 250_000, 10_000, 10_000)).toBeCloseTo(1.555)
+    expect(computeCost('gpt-5.5', 300_000, 10_000, 10_000)).toBeCloseTo(3.46)
+    expect(computeCost('gpt-5.4-pro', 300_000, 10_000)).toBeCloseTo(20.7)
+    expect(computeCost('gpt-5.4-mini', 300_000, 10_000, 10_000)).toBeCloseTo(0.27075)
   })
 
   it('returns 0 for unknown model or zero tokens', () => {

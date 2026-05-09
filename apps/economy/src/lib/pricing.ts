@@ -38,9 +38,11 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
 
   // OpenAI standard text token rates.
   'gpt-5.5':            { inputPer1M: 5.00,  outputPer1M: 30.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 0 },
+  'gpt-5.5-pro':        { inputPer1M: 30.00, outputPer1M: 180.00, cacheReadPer1M: 0,     cacheWritePer1M: 0 },
   'gpt-5.4':            { inputPer1M: 2.50,  outputPer1M: 15.00, cacheReadPer1M: 0.25,  cacheWritePer1M: 0 },
   'gpt-5.4-pro':        { inputPer1M: 30.00, outputPer1M: 180.00, cacheReadPer1M: 0,    cacheWritePer1M: 0 },
   'gpt-5.4-mini':       { inputPer1M: 0.75,  outputPer1M: 4.50,  cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
+  'gpt-5.4-nano':       { inputPer1M: 0.20,  outputPer1M: 1.25,  cacheReadPer1M: 0.02,  cacheWritePer1M: 0 },
   'gpt-5.3-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
   'gpt-5.3-chat':       { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
   'gpt-5.2-codex':      { inputPer1M: 1.75,  outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
@@ -92,18 +94,55 @@ const ADDITIONAL_LEGACY_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   ],
 }
 
-const GEMINI_PROMPT_TIERS: Record<string, { threshold: number; pricing: ModelPricing }> = {
+interface PromptTier {
+  threshold: number
+  inputPer1M?: number
+  outputPer1M?: number
+  cacheReadPer1M?: number
+  inputMultiplier?: number
+  outputMultiplier?: number
+  cacheReadMultiplier?: number
+}
+
+const GEMINI_PROMPT_TIERS: Record<string, PromptTier> = {
   'gemini-3.1-pro-preview': {
     threshold: 200_000,
-    pricing: { inputPer1M: 4.00, outputPer1M: 18.00, cacheReadPer1M: 0.40, cacheWritePer1M: 0 },
+    inputPer1M: 4.00,
+    outputPer1M: 18.00,
+    cacheReadPer1M: 0.40,
   },
   'gemini-3.1-pro': {
     threshold: 200_000,
-    pricing: { inputPer1M: 4.00, outputPer1M: 18.00, cacheReadPer1M: 0.40, cacheWritePer1M: 0 },
+    inputPer1M: 4.00,
+    outputPer1M: 18.00,
+    cacheReadPer1M: 0.40,
   },
   'gemini-2.5-pro': {
     threshold: 200_000,
-    pricing: { inputPer1M: 2.50, outputPer1M: 15.00, cacheReadPer1M: 0.25, cacheWritePer1M: 0 },
+    inputPer1M: 2.50,
+    outputPer1M: 15.00,
+    cacheReadPer1M: 0.25,
+  },
+}
+
+const OPENAI_PROMPT_TIERS: Record<string, PromptTier> = {
+  'gpt-5.5': {
+    threshold: 272_000,
+    inputMultiplier: 2,
+    outputMultiplier: 1.5,
+    cacheReadMultiplier: 2,
+  },
+  'gpt-5.4-pro': {
+    threshold: 272_000,
+    inputMultiplier: 2,
+    outputMultiplier: 1.5,
+    cacheReadMultiplier: 2,
+  },
+  'gpt-5.4': {
+    threshold: 272_000,
+    inputMultiplier: 2,
+    outputMultiplier: 1.5,
+    cacheReadMultiplier: 2,
   },
 }
 
@@ -291,13 +330,15 @@ function computeCostWithPricing(
 ): number {
   let effective = pricing
   const normalized = normalizeModelName(model)
-  const geminiTier = bestPrefixMatch(normalized, Object.entries(GEMINI_PROMPT_TIERS))
-  if (geminiTier) {
+  const promptTier = bestPrefixMatch(normalized, Object.entries(GEMINI_PROMPT_TIERS)) ?? OPENAI_PROMPT_TIERS[normalized]
+  if (promptTier) {
     const billablePromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens + cacheWrite1hTokens
-    if (billablePromptTokens > geminiTier.threshold) {
+    if (billablePromptTokens > promptTier.threshold) {
       effective = {
         ...pricing,
-        ...geminiTier.pricing,
+        inputPer1M: promptTier.inputPer1M ?? pricing.inputPer1M * (promptTier.inputMultiplier ?? 1),
+        outputPer1M: promptTier.outputPer1M ?? pricing.outputPer1M * (promptTier.outputMultiplier ?? 1),
+        cacheReadPer1M: promptTier.cacheReadPer1M ?? pricing.cacheReadPer1M * (promptTier.cacheReadMultiplier ?? 1),
       }
     }
   }
