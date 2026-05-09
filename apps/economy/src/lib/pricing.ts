@@ -31,6 +31,13 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gemini-2.5-flash-lite': { inputPer1M: 0.10, outputPer1M: 0.40, cacheReadPer1M: 0.01, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-2.0-flash':   { inputPer1M: 0.10,  outputPer1M: 0.40,  cacheReadPer1M: 0.025, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-2.0-flash-lite': { inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'google/gemini-3.1-pro-preview': { inputPer1M: 2.00, outputPer1M: 12.00, cacheReadPer1M: 0.20, cacheWritePer1M: 0.375 },
+  'google/gemini-3.1-flash-lite-preview': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0.08333333333333334 },
+  'google/gemini-3.1-flash-lite': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0.08333333333333334 },
+  'google/gemini-3-flash-preview': { inputPer1M: 0.50, outputPer1M: 3.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0.08333333333333334 },
+  'google/gemini-2.5-pro': { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0.125, cacheWritePer1M: 0.375 },
+  'google/gemini-2.5-flash': { inputPer1M: 0.30, outputPer1M: 2.50, cacheReadPer1M: 0.03, cacheWritePer1M: 0.08333333333333334 },
+  'google/gemini-2.5-flash-lite': { inputPer1M: 0.10, outputPer1M: 0.40, cacheReadPer1M: 0.01, cacheWritePer1M: 0.08333333333333334 },
 
   // OpenAI standard text token rates.
   'gpt-5.5':            { inputPer1M: 5.00,  outputPer1M: 30.00, cacheReadPer1M: 0.50,  cacheWritePer1M: 0 },
@@ -56,15 +63,15 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
 
   // Community/provider rows kept for user-configurable non-core tracking.
   // Provider-qualified rows keep router pricing separate from direct API pricing.
-  'qwen3.6-plus':       { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0,    cacheWritePer1M: 0.40625 },
-  'qwen3.6-flash':      { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0,    cacheWritePer1M: 0.3125 },
+  'qwen3.6-plus':       { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 },
+  'qwen3.6-flash':      { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 },
   'qwen3.6-35b-a3b':    { inputPer1M: 0.15,  outputPer1M: 1.00,  cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
-  'qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24,  cacheReadPer1M: 0,    cacheWritePer1M: 1.30 },
+  'qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24,  cacheReadPer1M: 0.13, cacheWritePer1M: 1.30 },
   'qwen3.6-27b':        { inputPer1M: 0.32,  outputPer1M: 3.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
-  'qwen/qwen3.6-plus':  { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0,    cacheWritePer1M: 0.40625 },
-  'qwen/qwen3.6-flash': { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0,    cacheWritePer1M: 0.3125 },
+  'qwen/qwen3.6-plus':  { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 },
+  'qwen/qwen3.6-flash': { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 },
   'qwen/qwen3.6-35b-a3b': { inputPer1M: 0.15, outputPer1M: 1.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
-  'qwen/qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
+  'qwen/qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0.13, cacheWritePer1M: 1.30 },
   'qwen/qwen3.6-27b':   { inputPer1M: 0.32,  outputPer1M: 3.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
   'minimax-m2.7':       { inputPer1M: 0.30,  outputPer1M: 1.20,  cacheReadPer1M: 0.06, cacheWritePer1M: 0.375 },
   'minimax-m2.7-highspeed': { inputPer1M: 0.60, outputPer1M: 2.40, cacheReadPer1M: 0.06, cacheWritePer1M: 0.375 },
@@ -88,6 +95,9 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'kimi-k2.6':          { inputPer1M: 0.95,  outputPer1M: 4.00,  cacheReadPer1M: 0.16, cacheWritePer1M: 0 },
   'kimi-k2.5':          { inputPer1M: 0.60,  outputPer1M: 3.00,  cacheReadPer1M: 0.10, cacheWritePer1M: 0 },
   'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 2.50,  cacheReadPer1M: 0.15, cacheWritePer1M: 0 },
+  'moonshotai/kimi-k2.6': { inputPer1M: 0.75, outputPer1M: 3.50, cacheReadPer1M: 0.15, cacheWritePer1M: 0 },
+  'moonshotai/kimi-k2.5': { inputPer1M: 0.44, outputPer1M: 2.00, cacheReadPer1M: 0.22, cacheWritePer1M: 0 },
+  'moonshotai/kimi-k2': { inputPer1M: 0.57, outputPer1M: 2.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
 }
 
 const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
@@ -117,6 +127,24 @@ const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
 const ADDITIONAL_LEGACY_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   'gemini-2.5-pro': [
     { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  ],
+  'qwen3.6-plus': [
+    { inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0, cacheWritePer1M: 0.40625 },
+  ],
+  'qwen3.6-flash': [
+    { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0, cacheWritePer1M: 0.3125 },
+  ],
+  'qwen3.6-max-preview': [
+    { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
+  ],
+  'qwen/qwen3.6-plus': [
+    { inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0, cacheWritePer1M: 0.40625 },
+  ],
+  'qwen/qwen3.6-flash': [
+    { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0, cacheWritePer1M: 0.3125 },
+  ],
+  'qwen/qwen3.6-max-preview': [
+    { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
   ],
 }
 
@@ -153,9 +181,11 @@ interface PromptTier {
   inputPer1M?: number
   outputPer1M?: number
   cacheReadPer1M?: number
+  cacheWritePer1M?: number
   inputMultiplier?: number
   outputMultiplier?: number
   cacheReadMultiplier?: number
+  cacheWriteMultiplier?: number
 }
 
 const FREE_PRICING: ModelPricing = {
@@ -189,11 +219,6 @@ const OPENAI_PROMPT_TIERS: Record<string, PromptTier> = {
     outputMultiplier: 1.5,
     cacheReadMultiplier: 2,
   },
-  'gpt-5.5-pro': {
-    threshold: 272_000,
-    inputMultiplier: 2,
-    outputMultiplier: 1.5,
-  },
   'gpt-5.4-pro': {
     threshold: 272_000,
     inputMultiplier: 2,
@@ -205,6 +230,40 @@ const OPENAI_PROMPT_TIERS: Record<string, PromptTier> = {
     inputMultiplier: 2,
     outputMultiplier: 1.5,
     cacheReadMultiplier: 2,
+  },
+}
+
+const QWEN_PROMPT_TIERS: Record<string, PromptTier> = {
+  'qwen3.6-plus': {
+    threshold: 256_000,
+    inputPer1M: 2.00,
+    outputPer1M: 6.00,
+    cacheReadPer1M: 0.20,
+    cacheWritePer1M: 2.50,
+  },
+  'qwen3.6-flash': {
+    threshold: 256_000,
+    inputPer1M: 1.00,
+    outputPer1M: 4.00,
+    cacheReadPer1M: 0.10,
+    cacheWritePer1M: 1.25,
+  },
+  'qwen3.6-max-preview': {
+    threshold: 128_000,
+    inputPer1M: 2.00,
+    outputPer1M: 12.00,
+    cacheReadPer1M: 0.20,
+    cacheWritePer1M: 2.50,
+  },
+}
+
+const MINIMAX_PROMPT_TIERS: Record<string, PromptTier> = {
+  'minimax/minimax-m1': {
+    threshold: Number.POSITIVE_INFINITY,
+  },
+  'minimax-m1': {
+    threshold: 200_000,
+    inputPer1M: 1.30,
   },
 }
 
@@ -503,8 +562,12 @@ function computeCostWithPricing(
   cacheWrite1hTokens: number,
   cacheStorageTokenHours: number,
 ): number {
+  if (isFreeModel(model)) return 0
+
   let effective = pricing
   const promptTier = bestModelMatch(model, Object.entries(GEMINI_PROMPT_TIERS)) ??
+    bestModelMatch(model, Object.entries(QWEN_PROMPT_TIERS)) ??
+    bestModelMatch(model, Object.entries(MINIMAX_PROMPT_TIERS)) ??
     bestModelMatch(model, Object.entries(XAI_PROMPT_TIERS)) ??
     exactModelMatch(model, Object.entries(OPENAI_PROMPT_TIERS))
   if (promptTier) {
@@ -515,6 +578,7 @@ function computeCostWithPricing(
         inputPer1M: promptTier.inputPer1M ?? pricing.inputPer1M * (promptTier.inputMultiplier ?? 1),
         outputPer1M: promptTier.outputPer1M ?? pricing.outputPer1M * (promptTier.outputMultiplier ?? 1),
         cacheReadPer1M: promptTier.cacheReadPer1M ?? pricing.cacheReadPer1M * (promptTier.cacheReadMultiplier ?? 1),
+        cacheWritePer1M: promptTier.cacheWritePer1M ?? pricing.cacheWritePer1M * (promptTier.cacheWriteMultiplier ?? 1),
       }
     }
   }

@@ -122,17 +122,25 @@ describe('getPricing', () => {
     expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({
       inputPer1M: 0.325,
       outputPer1M: 1.95,
+      cacheReadPer1M: 0.05,
       cacheWritePer1M: 0.40625,
     })
     expect(getPricing('qwen/qwen3.6-flash')).toMatchObject({
       inputPer1M: 0.25,
       outputPer1M: 1.50,
+      cacheReadPer1M: 0.025,
       cacheWritePer1M: 0.3125,
     })
     expect(getPricing('qwen/qwen3.6-35b-a3b')).toMatchObject({
       inputPer1M: 0.15,
       outputPer1M: 1.00,
       cacheReadPer1M: 0.05,
+    })
+    expect(getPricing('qwen/qwen3.6-max-preview')).toMatchObject({
+      inputPer1M: 1.04,
+      outputPer1M: 6.24,
+      cacheReadPer1M: 0.13,
+      cacheWritePer1M: 1.30,
     })
     expect(getPricing('minimax-m2.7')).toMatchObject({
       inputPer1M: 0.30,
@@ -156,6 +164,22 @@ describe('getPricing', () => {
       inputPer1M: 0.40,
       outputPer1M: 2.20,
     })
+    const googleGeminiPro = getPricing('google/gemini-2.5-pro')
+    expect(googleGeminiPro).toMatchObject({
+      inputPer1M: 1.25,
+      outputPer1M: 10.00,
+      cacheReadPer1M: 0.125,
+      cacheWritePer1M: 0.375,
+    })
+    expect(googleGeminiPro?.cacheStoragePer1MHour ?? 0).toBe(0)
+    const googleGeminiFlash = getPricing('google/gemini-2.5-flash')
+    expect(googleGeminiFlash).toMatchObject({
+      inputPer1M: 0.30,
+      outputPer1M: 2.50,
+      cacheReadPer1M: 0.03,
+      cacheWritePer1M: 0.08333333333333334,
+    })
+    expect(googleGeminiFlash?.cacheStoragePer1MHour ?? 0).toBe(0)
     expect(getPricing('glm-5.1')).toMatchObject({
       inputPer1M: 1.40,
       outputPer1M: 4.40,
@@ -176,6 +200,21 @@ describe('getPricing', () => {
       outputPer1M: 1.92,
       cacheReadPer1M: 0.12,
     })
+    expect(getPricing('moonshotai/kimi-k2.6')).toMatchObject({
+      inputPer1M: 0.75,
+      outputPer1M: 3.50,
+      cacheReadPer1M: 0.15,
+    })
+    expect(getPricing('moonshotai/kimi-k2.5')).toMatchObject({
+      inputPer1M: 0.44,
+      outputPer1M: 2.00,
+      cacheReadPer1M: 0.22,
+    })
+    expect(getPricing('moonshotai/kimi-k2')).toMatchObject({
+      inputPer1M: 0.57,
+      outputPer1M: 2.30,
+      cacheReadPer1M: 0,
+    })
   })
 
   it('returns pricing for every known default model', () => {
@@ -191,8 +230,9 @@ describe('getPricing', () => {
     expect(getPricing('gemini-2.0-flash-lite-001')).toMatchObject({ inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0 })
     expect(getPricing('grok-4-1-fast-reasoning-latest')).toMatchObject({ inputPer1M: 0.20, outputPer1M: 0.50 })
     expect(getPricing('kimi-k2.6-20260419')).toMatchObject({ inputPer1M: 0.95, outputPer1M: 4.00, cacheReadPer1M: 0.16 })
-    expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({ inputPer1M: 0.325, outputPer1M: 1.95, cacheWritePer1M: 0.40625 })
-    expect(getPricing('qwen/qwen3.6-flash-20260420')).toMatchObject({ inputPer1M: 0.25, outputPer1M: 1.50, cacheWritePer1M: 0.3125 })
+    expect(getPricing('moonshotai/kimi-k2.6-20260419')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.50, cacheReadPer1M: 0.15 })
+    expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({ inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 })
+    expect(getPricing('qwen/qwen3.6-flash-20260420')).toMatchObject({ inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 })
     expect(getPricing('z-ai/glm-5.1-20260406')).toMatchObject({ inputPer1M: 1.05, outputPer1M: 3.50, cacheReadPer1M: 0.525 })
   })
 
@@ -300,6 +340,30 @@ describe('getPricingFromDb', () => {
       cacheReadPer1M: 0.06,
       cacheWritePer1M: 0.375,
     })
+    expect(getPricingFromDb(db, 'moonshotai/kimi-k2.6')).toMatchObject({
+      inputPer1M: 0.75,
+      outputPer1M: 3.50,
+      cacheReadPer1M: 0.15,
+    })
+    expect(getPricingFromDb(db, 'kimi-k2.6')).toMatchObject({
+      inputPer1M: 0.95,
+      outputPer1M: 4.00,
+      cacheReadPer1M: 0.16,
+    })
+    expect(getPricingFromDb(db, 'google/gemini-2.5-pro')).toMatchObject({
+      inputPer1M: 1.25,
+      outputPer1M: 10.00,
+      cacheReadPer1M: 0.125,
+      cacheWritePer1M: 0.375,
+      cacheStoragePer1MHour: 0,
+    })
+    expect(getPricingFromDb(db, 'gemini-2.5-pro')).toMatchObject({
+      inputPer1M: 1.25,
+      outputPer1M: 10.00,
+      cacheReadPer1M: 0.125,
+      cacheWritePer1M: 0,
+      cacheStoragePer1MHour: 4.5,
+    })
   })
 })
 
@@ -327,9 +391,19 @@ describe('computeCost', () => {
   it('uses OpenAI long-context pricing above 272k prompt tokens for 1.05M-context models', () => {
     expect(computeCost('gpt-5.5', 250_000, 10_000, 10_000)).toBeCloseTo(1.555)
     expect(computeCost('gpt-5.5', 300_000, 10_000, 10_000)).toBeCloseTo(3.46)
-    expect(computeCost('gpt-5.5-pro', 300_000, 10_000)).toBeCloseTo(20.7)
+    expect(computeCost('gpt-5.5-pro', 300_000, 10_000)).toBeCloseTo(10.8)
     expect(computeCost('gpt-5.4-pro', 300_000, 10_000)).toBeCloseTo(20.7)
     expect(computeCost('gpt-5.4-mini', 300_000, 10_000, 10_000)).toBeCloseTo(0.27075)
+  })
+
+  it('uses Qwen and MiniMax long-prompt tiers without crossing router/direct schemas', () => {
+    expect(computeCost('qwen/qwen3.6-flash', 200_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.068375)
+    expect(computeCost('qwen/qwen3.6-flash', 300_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.3535)
+    expect(computeCost('qwen/qwen3.6-plus-04-02', 260_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.607)
+    expect(computeCost('qwen/qwen3.6-max-preview', 150_000, 10_000, 10_000, 10_000)).toBeCloseTo(0.447)
+    expect(computeCost('minimax-m1', 150_000, 10_000)).toBeCloseTo(0.082)
+    expect(computeCost('minimax-m1', 300_000, 10_000)).toBeCloseTo(0.412)
+    expect(computeCost('minimax/minimax-m1', 300_000, 10_000)).toBeCloseTo(0.142)
   })
 
   it('uses xAI long-context pricing above provider thresholds', () => {
@@ -352,6 +426,10 @@ describe('computeCost', () => {
     expect(computeCost('z-ai/glm-5.1', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(5.075)
     expect(computeCost('minimax-m2.7', 1_000_000, 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(1.935)
     expect(computeCost('minimax/minimax-m2.7', 1_000_000, 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(1.499)
+    expect(computeCost('kimi-k2.6', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(5.11)
+    expect(computeCost('moonshotai/kimi-k2.6', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(4.4)
+    expect(computeCost('gemini-2.5-pro', 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0, 1_000_000)).toBeCloseTo(22.25)
+    expect(computeCost('google/gemini-2.5-pro', 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0, 1_000_000)).toBeCloseTo(18.125)
   })
 })
 
