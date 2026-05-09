@@ -55,11 +55,22 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'o4-mini':            { inputPer1M: 1.10,  outputPer1M: 4.40,  cacheReadPer1M: 0.275, cacheWritePer1M: 0 },
 
   // Community/provider rows kept for user-configurable non-core tracking.
-  'qwen3.6-plus':       { inputPer1M: 0.80,  outputPer1M: 2.00,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'qwen3.6':            { inputPer1M: 0.30,  outputPer1M: 0.60,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'minimax-m2.7':       { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'minimax-m2.7-highspeed': { inputPer1M: 0.70, outputPer1M: 0.70, cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'minimax-m1':         { inputPer1M: 0.20,  outputPer1M: 1.10,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  // Provider-qualified rows keep router pricing separate from direct API pricing.
+  'qwen3.6-plus':       { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0,    cacheWritePer1M: 0.40625 },
+  'qwen3.6-flash':      { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0,    cacheWritePer1M: 0.3125 },
+  'qwen3.6-35b-a3b':    { inputPer1M: 0.15,  outputPer1M: 1.00,  cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
+  'qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24,  cacheReadPer1M: 0,    cacheWritePer1M: 1.30 },
+  'qwen3.6-27b':        { inputPer1M: 0.32,  outputPer1M: 3.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
+  'qwen/qwen3.6-plus':  { inputPer1M: 0.325, outputPer1M: 1.95,  cacheReadPer1M: 0,    cacheWritePer1M: 0.40625 },
+  'qwen/qwen3.6-flash': { inputPer1M: 0.25,  outputPer1M: 1.50,  cacheReadPer1M: 0,    cacheWritePer1M: 0.3125 },
+  'qwen/qwen3.6-35b-a3b': { inputPer1M: 0.15, outputPer1M: 1.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
+  'qwen/qwen3.6-max-preview': { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0, cacheWritePer1M: 1.30 },
+  'qwen/qwen3.6-27b':   { inputPer1M: 0.32,  outputPer1M: 3.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
+  'minimax-m2.7':       { inputPer1M: 0.30,  outputPer1M: 1.20,  cacheReadPer1M: 0.06, cacheWritePer1M: 0.375 },
+  'minimax-m2.7-highspeed': { inputPer1M: 0.60, outputPer1M: 2.40, cacheReadPer1M: 0.06, cacheWritePer1M: 0.375 },
+  'minimax/minimax-m2.7': { inputPer1M: 0.299, outputPer1M: 1.20, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'minimax-m1':         { inputPer1M: 0.40,  outputPer1M: 2.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
+  'minimax/minimax-m1': { inputPer1M: 0.40,  outputPer1M: 2.20,  cacheReadPer1M: 0,    cacheWritePer1M: 0 },
   'grok-4.3':           { inputPer1M: 1.25,  outputPer1M: 2.50,  cacheReadPer1M: 0.20, cacheWritePer1M: 0 },
   'grok-latest':        { inputPer1M: 1.25,  outputPer1M: 2.50,  cacheReadPer1M: 0.20, cacheWritePer1M: 0 },
   'grok-4.20':          { inputPer1M: 1.25,  outputPer1M: 2.50,  cacheReadPer1M: 0.20, cacheWritePer1M: 0 },
@@ -70,8 +81,10 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'grok-code-fast':     { inputPer1M: 0.20,  outputPer1M: 1.50,  cacheReadPer1M: 0.02, cacheWritePer1M: 0 },
   'grok-3':             { inputPer1M: 3.00,  outputPer1M: 15.00, cacheReadPer1M: 0.75, cacheWritePer1M: 0 },
   'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0.07, cacheWritePer1M: 0 },
-  'glm-5.1':            { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'glm-5':              { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'glm-5.1':            { inputPer1M: 1.40,  outputPer1M: 4.40,  cacheReadPer1M: 0.26,  cacheWritePer1M: 0 },
+  'glm-5':              { inputPer1M: 1.00,  outputPer1M: 3.20,  cacheReadPer1M: 0.20,  cacheWritePer1M: 0 },
+  'z-ai/glm-5.1':       { inputPer1M: 1.05,  outputPer1M: 3.50,  cacheReadPer1M: 0.525, cacheWritePer1M: 0 },
+  'z-ai/glm-5':         { inputPer1M: 0.60,  outputPer1M: 1.92,  cacheReadPer1M: 0.12,  cacheWritePer1M: 0 },
   'kimi-k2.6':          { inputPer1M: 0.95,  outputPer1M: 4.00,  cacheReadPer1M: 0.16, cacheWritePer1M: 0 },
   'kimi-k2.5':          { inputPer1M: 0.60,  outputPer1M: 3.00,  cacheReadPer1M: 0.10, cacheWritePer1M: 0 },
   'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 2.50,  cacheReadPer1M: 0.15, cacheWritePer1M: 0 },
@@ -91,6 +104,12 @@ const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
   'o1-mini': { inputPer1M: 3.00, outputPer1M: 12.00, cacheReadPer1M: 1.50, cacheWritePer1M: 0 },
   'grok-3': { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'grok-3-mini': { inputPer1M: 0.30, outputPer1M: 0.50, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'qwen3.6-plus': { inputPer1M: 0.80, outputPer1M: 2.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'minimax-m2.7': { inputPer1M: 0.70, outputPer1M: 0.70, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'minimax-m2.7-highspeed': { inputPer1M: 0.70, outputPer1M: 0.70, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'minimax-m1': { inputPer1M: 0.20, outputPer1M: 1.10, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'glm-5.1': { inputPer1M: 0.70, outputPer1M: 0.70, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'glm-5': { inputPer1M: 0.70, outputPer1M: 0.70, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'kimi-k2': { inputPer1M: 0.60, outputPer1M: 0.60, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'o3': { inputPer1M: 10.00, outputPer1M: 40.00, cacheReadPer1M: 2.50, cacheWritePer1M: 0 },
 }
@@ -123,6 +142,9 @@ const REMOVED_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   'gpt-5.3-chat': [
     { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.175, cacheWritePer1M: 0 },
     { inputPer1M: 2.00, outputPer1M: 8.00, cacheReadPer1M: 0.50, cacheWritePer1M: 0 },
+  ],
+  'qwen3.6': [
+    { inputPer1M: 0.30, outputPer1M: 0.60, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   ],
 }
 
@@ -235,6 +257,20 @@ export function normalizeModelName(raw: string): string {
     .replace(/-\d{4}-\d{2}-\d{2}$/, '')
 }
 
+function normalizeModelNamePreservingProvider(raw: string): string {
+  return raw.trim().toLowerCase()
+    .replace(/^models\//, '')
+    .replace(/:.+$/, '')
+    .replace(/-\d{8}$/, '')
+    .replace(/-\d{4}-\d{2}-\d{2}$/, '')
+}
+
+function modelLookupKeys(raw: string): string[] {
+  const withProvider = normalizeModelNamePreservingProvider(raw)
+  const withoutProvider = normalizeModelName(raw)
+  return withProvider === withoutProvider ? [withoutProvider] : [withProvider, withoutProvider]
+}
+
 function bestPrefixMatch<T>(normalized: string, entries: Array<[string, T]>): T | null {
   let best: [string, T] | null = null
   for (const entry of entries) {
@@ -243,6 +279,22 @@ function bestPrefixMatch<T>(normalized: string, entries: Array<[string, T]>): T 
     if (!best || key.length > best[0].length) best = entry
   }
   return best?.[1] ?? null
+}
+
+function bestModelMatch<T>(model: string, entries: Array<[string, T]>): T | null {
+  for (const key of modelLookupKeys(model)) {
+    const match = bestPrefixMatch(key, entries)
+    if (match) return match
+  }
+  return null
+}
+
+function exactModelMatch<T>(model: string, entries: Array<[string, T]>): T | null {
+  for (const key of modelLookupKeys(model)) {
+    const match = entries.find(([entryKey]) => entryKey === key)
+    if (match) return match[1]
+  }
+  return null
 }
 
 // Ensure default prices are seeded into the DB.
@@ -357,24 +409,10 @@ function samePricing(row: {
 // Look up pricing from DB, fallback to defaults for unknown models.
 export function getPricingFromDb(db: Database, model: string): ModelPricing | null {
   if (isFreeModel(model)) return FREE_PRICING
-  const normalized = normalizeModelName(model)
 
-  const row = getModelPricing(db, normalized)
-  if (row) {
-    const seeded = DEFAULT_PRICING[normalized]
-    const cacheWrite1hPer1M = seeded?.cacheWrite1hPer1M &&
-      (row.cache_write_1h_per_1m ?? 0) === 0 &&
-      sameBasePricing(row, seeded)
-      ? seeded.cacheWrite1hPer1M
-      : (row.cache_write_1h_per_1m ?? 0)
-    return {
-      inputPer1M: row.input_per_1m,
-      outputPer1M: row.output_per_1m,
-      cacheReadPer1M: row.cache_read_per_1m,
-      cacheWritePer1M: row.cache_write_per_1m,
-      cacheWrite1hPer1M,
-      cacheStoragePer1MHour: row.cache_storage_per_1m_hour ?? seeded?.cacheStoragePer1MHour ?? 0,
-    }
+  for (const key of modelLookupKeys(model)) {
+    const row = getModelPricing(db, key)
+    if (row) return modelPricingFromDbRow(row)
   }
 
   const allRows = db.prepare(`SELECT * FROM model_pricing`).all() as Array<{
@@ -386,30 +424,40 @@ export function getPricingFromDb(db: Database, model: string): ModelPricing | nu
     cache_write_1h_per_1m?: number
     cache_storage_per_1m_hour?: number
   }>
-  const match = bestPrefixMatch(normalized, allRows.map(r => [r.model, r]))
+  const match = bestModelMatch(model, allRows.map(r => [r.model, r]))
   if (!match) return null
-  const seeded = DEFAULT_PRICING[match.model]
+  return modelPricingFromDbRow(match)
+}
+
+function modelPricingFromDbRow(row: {
+  model: string
+  input_per_1m: number
+  output_per_1m: number
+  cache_read_per_1m: number
+  cache_write_per_1m: number
+  cache_write_1h_per_1m?: number
+  cache_storage_per_1m_hour?: number
+}): ModelPricing {
+  const seeded = DEFAULT_PRICING[row.model]
   const cacheWrite1hPer1M = seeded?.cacheWrite1hPer1M &&
-    (match.cache_write_1h_per_1m ?? 0) === 0 &&
-    sameBasePricing(match, seeded)
+    (row.cache_write_1h_per_1m ?? 0) === 0 &&
+    sameBasePricing(row, seeded)
     ? seeded.cacheWrite1hPer1M
-    : (match.cache_write_1h_per_1m ?? 0)
+    : (row.cache_write_1h_per_1m ?? 0)
   return {
-    inputPer1M: match.input_per_1m,
-    outputPer1M: match.output_per_1m,
-    cacheReadPer1M: match.cache_read_per_1m,
-    cacheWritePer1M: match.cache_write_per_1m,
+    inputPer1M: row.input_per_1m,
+    outputPer1M: row.output_per_1m,
+    cacheReadPer1M: row.cache_read_per_1m,
+    cacheWritePer1M: row.cache_write_per_1m,
     cacheWrite1hPer1M,
-    cacheStoragePer1MHour: match.cache_storage_per_1m_hour ?? seeded?.cacheStoragePer1MHour ?? 0,
+    cacheStoragePer1MHour: row.cache_storage_per_1m_hour ?? seeded?.cacheStoragePer1MHour ?? 0,
   }
 }
 
 // Stateless fallback (no DB) - used in tests and SDK.
 export function getPricing(model: string): ModelPricing | null {
   if (isFreeModel(model)) return FREE_PRICING
-  const normalized = normalizeModelName(model)
-  if (DEFAULT_PRICING[normalized]) return DEFAULT_PRICING[normalized] ?? null
-  return bestPrefixMatch(normalized, Object.entries(DEFAULT_PRICING))
+  return bestModelMatch(model, Object.entries(DEFAULT_PRICING))
 }
 
 function isFreeModel(model: string): boolean {
@@ -456,10 +504,9 @@ function computeCostWithPricing(
   cacheStorageTokenHours: number,
 ): number {
   let effective = pricing
-  const normalized = normalizeModelName(model)
-  const promptTier = bestPrefixMatch(normalized, Object.entries(GEMINI_PROMPT_TIERS)) ??
-    bestPrefixMatch(normalized, Object.entries(XAI_PROMPT_TIERS)) ??
-    OPENAI_PROMPT_TIERS[normalized]
+  const promptTier = bestModelMatch(model, Object.entries(GEMINI_PROMPT_TIERS)) ??
+    bestModelMatch(model, Object.entries(XAI_PROMPT_TIERS)) ??
+    exactModelMatch(model, Object.entries(OPENAI_PROMPT_TIERS))
   if (promptTier) {
     const billablePromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens + cacheWrite1hTokens
     if (billablePromptTokens > promptTier.threshold) {

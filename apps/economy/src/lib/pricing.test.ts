@@ -118,6 +118,66 @@ describe('getPricing', () => {
     })
   })
 
+  it('has exact current seed rows for community and provider-routed models', () => {
+    expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({
+      inputPer1M: 0.325,
+      outputPer1M: 1.95,
+      cacheWritePer1M: 0.40625,
+    })
+    expect(getPricing('qwen/qwen3.6-flash')).toMatchObject({
+      inputPer1M: 0.25,
+      outputPer1M: 1.50,
+      cacheWritePer1M: 0.3125,
+    })
+    expect(getPricing('qwen/qwen3.6-35b-a3b')).toMatchObject({
+      inputPer1M: 0.15,
+      outputPer1M: 1.00,
+      cacheReadPer1M: 0.05,
+    })
+    expect(getPricing('minimax-m2.7')).toMatchObject({
+      inputPer1M: 0.30,
+      outputPer1M: 1.20,
+      cacheReadPer1M: 0.06,
+      cacheWritePer1M: 0.375,
+    })
+    expect(getPricing('minimax/minimax-m2.7')).toMatchObject({
+      inputPer1M: 0.299,
+      outputPer1M: 1.20,
+      cacheReadPer1M: 0,
+      cacheWritePer1M: 0,
+    })
+    expect(getPricing('minimax-m2.7-highspeed')).toMatchObject({
+      inputPer1M: 0.60,
+      outputPer1M: 2.40,
+      cacheReadPer1M: 0.06,
+      cacheWritePer1M: 0.375,
+    })
+    expect(getPricing('minimax/minimax-m1')).toMatchObject({
+      inputPer1M: 0.40,
+      outputPer1M: 2.20,
+    })
+    expect(getPricing('glm-5.1')).toMatchObject({
+      inputPer1M: 1.40,
+      outputPer1M: 4.40,
+      cacheReadPer1M: 0.26,
+    })
+    expect(getPricing('z-ai/glm-5.1')).toMatchObject({
+      inputPer1M: 1.05,
+      outputPer1M: 3.50,
+      cacheReadPer1M: 0.525,
+    })
+    expect(getPricing('glm-5')).toMatchObject({
+      inputPer1M: 1.00,
+      outputPer1M: 3.20,
+      cacheReadPer1M: 0.20,
+    })
+    expect(getPricing('z-ai/glm-5')).toMatchObject({
+      inputPer1M: 0.60,
+      outputPer1M: 1.92,
+      cacheReadPer1M: 0.12,
+    })
+  })
+
   it('returns pricing for every known default model', () => {
     for (const model of Object.keys(DEFAULT_PRICING)) {
       expect(getPricing(model), model).not.toBeNull()
@@ -131,10 +191,14 @@ describe('getPricing', () => {
     expect(getPricing('gemini-2.0-flash-lite-001')).toMatchObject({ inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0 })
     expect(getPricing('grok-4-1-fast-reasoning-latest')).toMatchObject({ inputPer1M: 0.20, outputPer1M: 0.50 })
     expect(getPricing('kimi-k2.6-20260419')).toMatchObject({ inputPer1M: 0.95, outputPer1M: 4.00, cacheReadPer1M: 0.16 })
+    expect(getPricing('qwen/qwen3.6-plus-04-02')).toMatchObject({ inputPer1M: 0.325, outputPer1M: 1.95, cacheWritePer1M: 0.40625 })
+    expect(getPricing('qwen/qwen3.6-flash-20260420')).toMatchObject({ inputPer1M: 0.25, outputPer1M: 1.50, cacheWritePer1M: 0.3125 })
+    expect(getPricing('z-ai/glm-5.1-20260406')).toMatchObject({ inputPer1M: 1.05, outputPer1M: 3.50, cacheReadPer1M: 0.525 })
   })
 
   it('returns null for unknown models', () => {
     expect(getPricing('unknown-model-xyz')).toBeNull()
+    expect(getPricing('qwen3.6')).toBeNull()
     expect(getPricing('claude-3-5-sonnet')).toBeNull()
     expect(getPricing('claude-3-sonnet')).toBeNull()
     expect(getPricing('gemini-3.1-pro')).toBeNull()
@@ -209,6 +273,34 @@ describe('getPricingFromDb', () => {
       cacheWritePer1M: 0,
     })
   })
+
+  it('prefers provider-qualified DB pricing before unqualified fallback rows', () => {
+    const db = openDatabase(':memory:', true)
+    ensurePricingSeeded(db)
+
+    expect(getPricingFromDb(db, 'z-ai/glm-5.1')).toMatchObject({
+      inputPer1M: 1.05,
+      outputPer1M: 3.50,
+      cacheReadPer1M: 0.525,
+    })
+    expect(getPricingFromDb(db, 'glm-5.1')).toMatchObject({
+      inputPer1M: 1.40,
+      outputPer1M: 4.40,
+      cacheReadPer1M: 0.26,
+    })
+    expect(getPricingFromDb(db, 'minimax/minimax-m2.7')).toMatchObject({
+      inputPer1M: 0.299,
+      outputPer1M: 1.20,
+      cacheReadPer1M: 0,
+      cacheWritePer1M: 0,
+    })
+    expect(getPricingFromDb(db, 'minimax-m2.7')).toMatchObject({
+      inputPer1M: 0.30,
+      outputPer1M: 1.20,
+      cacheReadPer1M: 0.06,
+      cacheWritePer1M: 0.375,
+    })
+  })
 })
 
 describe('computeCost', () => {
@@ -253,6 +345,13 @@ describe('computeCost', () => {
     expect(computeCost('unknown-xyz', 100_000, 50_000)).toBe(0)
     expect(computeCost('claude-sonnet-4-6', 0, 0)).toBe(0)
     expect(computeCost('qwen/qwen3.6-plus-04-02:free', 1_000_000, 1_000_000, 1_000_000)).toBe(0)
+  })
+
+  it('keeps direct-provider and router pricing schemas separate', () => {
+    expect(computeCost('glm-5.1', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(6.06)
+    expect(computeCost('z-ai/glm-5.1', 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(5.075)
+    expect(computeCost('minimax-m2.7', 1_000_000, 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(1.935)
+    expect(computeCost('minimax/minimax-m2.7', 1_000_000, 1_000_000, 1_000_000, 1_000_000)).toBeCloseTo(1.499)
   })
 })
 
@@ -343,6 +442,71 @@ describe('ensurePricingSeeded', () => {
     expect(row?.input_per_1m).toBe(0.60)
     expect(row?.output_per_1m).toBe(2.50)
     expect(row?.cache_read_per_1m).toBe(0.15)
+  })
+
+  it('repairs stale community provider defaults and removes broad Qwen family rows', () => {
+    const db = openDatabase(':memory:', true)
+    const staleRows = [
+      ['qwen3.6-plus', 0.80, 2.00, 0, 0],
+      ['qwen3.6', 0.30, 0.60, 0, 0],
+      ['minimax-m2.7', 0.70, 0.70, 0, 0],
+      ['minimax-m2.7-highspeed', 0.70, 0.70, 0, 0],
+      ['minimax-m1', 0.20, 1.10, 0, 0],
+      ['glm-5.1', 0.70, 0.70, 0, 0],
+      ['glm-5', 0.70, 0.70, 0, 0],
+    ] as const
+
+    for (const [model, input, output, cacheRead, cacheWrite] of staleRows) {
+      upsertModelPricing(db, {
+        model,
+        input_per_1m: input,
+        output_per_1m: output,
+        cache_read_per_1m: cacheRead,
+        cache_write_per_1m: cacheWrite,
+        cache_write_1h_per_1m: 0,
+        updated_at: '2026-05-08T00:00:00.000Z',
+      })
+    }
+
+    ensurePricingSeeded(db)
+
+    expect(getModelPricing(db, 'qwen3.6')).toBeNull()
+    expect(getModelPricing(db, 'qwen3.6-plus')).toMatchObject({
+      input_per_1m: 0.325,
+      output_per_1m: 1.95,
+      cache_write_per_1m: 0.40625,
+    })
+    expect(getModelPricing(db, 'minimax-m2.7')).toMatchObject({
+      input_per_1m: 0.30,
+      output_per_1m: 1.20,
+      cache_read_per_1m: 0.06,
+      cache_write_per_1m: 0.375,
+    })
+    expect(getModelPricing(db, 'minimax-m2.7-highspeed')).toMatchObject({
+      input_per_1m: 0.60,
+      output_per_1m: 2.40,
+      cache_read_per_1m: 0.06,
+      cache_write_per_1m: 0.375,
+    })
+    expect(getModelPricing(db, 'minimax-m1')).toMatchObject({
+      input_per_1m: 0.40,
+      output_per_1m: 2.20,
+    })
+    expect(getModelPricing(db, 'glm-5.1')).toMatchObject({
+      input_per_1m: 1.40,
+      output_per_1m: 4.40,
+      cache_read_per_1m: 0.26,
+    })
+    expect(getModelPricing(db, 'glm-5')).toMatchObject({
+      input_per_1m: 1.00,
+      output_per_1m: 3.20,
+      cache_read_per_1m: 0.20,
+    })
+    expect(getPricingFromDb(db, 'qwen/qwen3.6-flash')).toMatchObject({
+      inputPer1M: 0.25,
+      outputPer1M: 1.50,
+      cacheWritePer1M: 0.3125,
+    })
   })
 
   it('repairs default rows that were seeded before 1h cache write pricing existed', () => {
