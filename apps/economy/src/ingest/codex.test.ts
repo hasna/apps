@@ -100,6 +100,10 @@ describe('ingestCodex', () => {
 
     writeFileSync(configPath, 'model = "gpt-5.4"\n')
     expect(readCodexModel()).toBe('gpt-5.4')
+
+    rmSync(configPath)
+    mkdirSync(configPath)
+    expect(readCodexModel()).toBe('gpt-5-codex')
   })
 
   it('ingests model identity and per-request token usage from Codex rollout token events', async () => {

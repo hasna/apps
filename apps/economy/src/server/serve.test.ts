@@ -246,13 +246,13 @@ describe('REST API server', () => {
   })
 
   it('POST /api/budgets normalizes day/week/month aliases', async () => {
-    const { status } = await req(handler, '/api/budgets', 'POST', {
-      period: 'month', limit_usd: 15,
-    })
-    expect(status).toBe(200)
+    for (const [period, normalized] of [['day', 'daily'], ['week', 'weekly'], ['month', 'monthly']] as const) {
+      const { status, data } = await req(handler, '/api/budgets', 'POST', { period, limit_usd: 15 })
+      expect(status).toBe(200)
 
-    const latest = db.prepare(`SELECT period FROM budgets ORDER BY created_at DESC LIMIT 1`).get() as { period: string } | null
-    expect(latest?.period).toBe('monthly')
+      const budget = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+      expect(budget['period']).toBe(normalized)
+    }
   })
 
   it('DELETE /api/budgets/:id removes a budget', async () => {
@@ -568,6 +568,26 @@ describe('REST API server', () => {
     response = await fetch(new Request('http://localhost:3456/%2e%2e%2fsecret.txt'))
     expect(response.status).toBe(200)
     expect(await response.text()).not.toContain('should not leak')
+
+    response = await fetch(new Request('http://localhost:3456/%E0%A4%A'))
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('dashboard shell')
+  })
+
+  it('delegates non-API routes to the API handler when dashboard assets are missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'economy-missing-dashboard-'))
+    roots.push(root)
+    const fetch = createServerFetch(async request => {
+      return new Response(JSON.stringify({ path: new URL(request.url).pathname }), {
+        status: 418,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }, join(root, 'missing-dashboard'))
+
+    const response = await fetch(new Request('http://localhost:3456/settings/budgets'))
+
+    expect(response.status).toBe(418)
+    expect(await response.json()).toEqual({ path: '/settings/budgets' })
   })
 
   it('startServer returns a stoppable server bound to all interfaces', async () => {
