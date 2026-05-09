@@ -1,9 +1,20 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertGoal, upsertModelPricing, upsertBillingDaily } from '../db/database.js'
 import { createHandler } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
+import { Database as BunDatabase } from 'bun:sqlite'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 const NOW = new Date().toISOString()
+const roots: string[] = []
+const SYNC_ENV_KEYS = [
+  'HASNA_ECONOMY_CODEX_DB_PATH',
+  'HASNA_ECONOMY_CODEX_CONFIG_PATH',
+  'HASNA_ECONOMY_GEMINI_TMP_DIR',
+  'HASNA_ECONOMY_GEMINI_HISTORY_DIR',
+] as const
 
 function makeDb(): Database {
   return openDatabase(':memory:', true)
@@ -59,6 +70,13 @@ describe('REST API server', () => {
     db = makeDb()
     seedData(db)
     handler = createHandler(db)
+  })
+
+  afterEach(() => {
+    for (const key of SYNC_ENV_KEYS) delete process.env[key]
+    for (const root of roots.splice(0)) {
+      if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('GET /health returns ok', async () => {
@@ -321,6 +339,107 @@ describe('REST API server', () => {
     const { status, data } = await req(handler, '/api/sync', 'POST', { sources: 'bad-source' })
     expect(status).toBe(400)
     expect((data as Record<string, unknown>)['error']).toBe('invalid sync source')
+  })
+
+  it('POST /api/sync runs Codex ingestion through the REST handler', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'economy-rest-codex-sync-'))
+    roots.push(root)
+    const codexDbPath = join(root, 'state_5.sqlite')
+    const rolloutPath = join(root, 'rollout.jsonl')
+    process.env['HASNA_ECONOMY_CODEX_DB_PATH'] = codexDbPath
+    process.env['HASNA_ECONOMY_CODEX_CONFIG_PATH'] = join(root, 'config.toml')
+
+    writeFileSync(rolloutPath, JSON.stringify({
+      timestamp: '2026-05-08T10:00:00.000Z',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: {
+            input_tokens: 1000,
+            cached_input_tokens: 250,
+            output_tokens: 500,
+            total_tokens: 1500,
+          },
+        },
+      },
+    }) + '\n')
+
+    const codexDb = new BunDatabase(codexDbPath)
+    codexDb.exec(`
+      CREATE TABLE threads (
+        id TEXT PRIMARY KEY,
+        rollout_path TEXT,
+        cwd TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
+        title TEXT,
+        model_provider TEXT,
+        model TEXT
+      )
+    `)
+    codexDb.prepare(`
+      INSERT INTO threads
+        (id, rollout_path, cwd, created_at, updated_at, tokens_used, title, model_provider, model)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('rest-thread', rolloutPath, '/tmp/rest-codex-project', 1715162400, 1715162401, 1500, 'REST thread', 'openai', 'gpt-5-codex')
+    codexDb.close()
+
+    const { status, data } = await req(handler, '/api/sync', 'POST', { sources: 'codex' })
+
+    expect(status).toBe(200)
+    const result = (data as Record<string, unknown>)['data'] as Record<string, Record<string, number>>
+    expect(result['codex']).toEqual({ sessions: 1, requests: 1 })
+    const session = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get('codex-rest-thread') as Record<string, unknown> | null
+    const request = db.prepare(`SELECT * FROM requests WHERE session_id = ?`).get('codex-rest-thread') as Record<string, unknown> | null
+    expect(session?.['agent']).toBe('codex')
+    expect(request?.['model']).toBe('gpt-5-codex')
+    expect(request?.['cache_read_tokens']).toBe(250)
+  })
+
+  it('POST /api/sync runs Gemini ingestion through the REST handler', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'economy-rest-gemini-sync-'))
+    roots.push(root)
+    const tmpRoot = join(root, 'tmp')
+    const historyRoot = join(root, 'history')
+    const projectDir = join(historyRoot, 'rest-project')
+    const chatsDir = join(projectDir, 'chats')
+    mkdirSync(chatsDir, { recursive: true })
+    process.env['HASNA_ECONOMY_GEMINI_TMP_DIR'] = tmpRoot
+    process.env['HASNA_ECONOMY_GEMINI_HISTORY_DIR'] = historyRoot
+
+    writeFileSync(join(projectDir, '.project_root'), '/tmp/rest-gemini-project')
+    writeFileSync(join(chatsDir, 'chat.json'), JSON.stringify({
+      sessionId: 'gemini-rest-session',
+      model: 'gemini-2.5-flash',
+      startTime: '2026-05-08T11:00:00.000Z',
+      lastUpdated: '2026-05-08T11:00:10.000Z',
+      messages: [{
+        id: 'msg-1',
+        timestamp: '2026-05-08T11:00:01.000Z',
+        usageMetadata: {
+          promptTokenCount: 1200,
+          cachedContentTokenCount: 200,
+          candidatesTokenCount: 400,
+          thoughtsTokenCount: 50,
+          totalTokenCount: 1650,
+        },
+        response: { modelVersion: 'gemini-2.5-flash' },
+      }],
+    }))
+
+    const { status, data } = await req(handler, '/api/sync', 'POST', { sources: 'gemini' })
+
+    expect(status).toBe(200)
+    const result = (data as Record<string, unknown>)['data'] as Record<string, Record<string, number>>
+    expect(result['gemini']).toEqual({ sessions: 1, requests: 1 })
+    const session = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get('gemini-rest-session') as Record<string, unknown> | null
+    const request = db.prepare(`SELECT * FROM requests WHERE session_id = ?`).get('gemini-rest-session') as Record<string, unknown> | null
+    expect(session?.['project_path']).toBe('/tmp/rest-gemini-project')
+    expect(request?.['model']).toBe('gemini-2.5-flash')
+    expect(request?.['input_tokens']).toBe(1000)
+    expect(request?.['cache_read_tokens']).toBe(200)
+    expect(request?.['output_tokens']).toBe(450)
   })
 
   it('GET /api/sessions/:id/requests returns request detail and 404s missing sessions', async () => {
