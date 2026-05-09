@@ -13,11 +13,15 @@ actor APIClient {
   private var base: String
   private let session: URLSession
 
-  init() {
-    base = Self.storedBaseURL()
-    let config = URLSessionConfiguration.default
-    config.timeoutIntervalForRequest = 5
-    session = URLSession(configuration: config)
+  init(baseURL: String? = nil, session injectedSession: URLSession? = nil) {
+    base = Self.normalizeBaseURL(baseURL ?? UserDefaults.standard.string(forKey: Self.defaultsKey) ?? Self.defaultBaseURL)
+    if let injectedSession {
+      session = injectedSession
+    } else {
+      let config = URLSessionConfiguration.default
+      config.timeoutIntervalForRequest = 5
+      session = URLSession(configuration: config)
+    }
   }
 
   static func storedBaseURL() -> String {

@@ -47,6 +47,9 @@ jobs:
     runs-on: blacksmith-6vcpu-macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Run tests
+        working-directory: menubar
+        run: swift test
       - name: Build release binary
         working-directory: menubar
         run: swift build -c release

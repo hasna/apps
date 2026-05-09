@@ -11,6 +11,11 @@ let package = Package(
     .executableTarget(
       name: "EconomyBar",
       path: "Sources/EconomyBar"
+    ),
+    .testTarget(
+      name: "EconomyBarTests",
+      dependencies: ["EconomyBar"],
+      path: "Tests/EconomyBarTests"
     )
   ]
 )
