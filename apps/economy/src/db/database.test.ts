@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import {
-  openDatabase, upsertRequest, upsertSession, rollupSession,
+  openDatabase, getDataDir, getDbPath, upsertRequest, upsertSession, rollupSession,
   querySummary, querySessions, queryTopSessions,
   queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown,
   queryRequestsSince, getIngestState, setIngestState,
@@ -9,6 +9,9 @@ import {
   upsertModelPricing, getModelPricing, listModelPricing, deleteModelPricing,
   seedModelPricing, listMachines, getMachineId,
 } from './database.js'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { dirname, join } from 'path'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
 function makeDb() {
@@ -17,6 +20,24 @@ function makeDb() {
 
 const NOW = new Date().toISOString()
 const TODAY = NOW.substring(0, 10)
+const tempRoots: string[] = []
+
+function tempRoot(prefix: string): string {
+  const root = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  tempRoots.push(root)
+  return root
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name]
+  else process.env[name] = value
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+  }
+})
 
 function sampleRequest(overrides: Partial<EconomyRequest> = {}): EconomyRequest {
   return {
@@ -64,6 +85,65 @@ describe('openDatabase', () => {
     expect(names).toContain('projects')
     expect(names).toContain('ingest_state')
     expect(names).toContain('model_pricing')
+  })
+
+  it('migrates legacy ~/.economy files into ~/.hasna/economy', () => {
+    const originalHome = process.env['HOME']
+    const originalUserProfile = process.env['USERPROFILE']
+    const root = tempRoot('economy-data-dir-test')
+    const legacyDir = join(root, '.economy')
+    mkdirSync(legacyDir, { recursive: true })
+    writeFileSync(join(legacyDir, 'economy.db'), 'legacy')
+
+    try {
+      process.env['HOME'] = root
+      delete process.env['USERPROFILE']
+
+      const dataDir = getDataDir()
+
+      expect(dataDir).toBe(join(root, '.hasna', 'economy'))
+      expect(readFileSync(join(dataDir, 'economy.db'), 'utf-8')).toBe('legacy')
+    } finally {
+      restoreEnv('HOME', originalHome)
+      restoreEnv('USERPROFILE', originalUserProfile)
+    }
+  })
+
+  it('resolves database path env vars before the default data dir', () => {
+    const originalHome = process.env['HOME']
+    const originalUserProfile = process.env['USERPROFILE']
+    const originalHasnaDb = process.env['HASNA_ECONOMY_DB_PATH']
+    const originalEconomyDb = process.env['ECONOMY_DB']
+    const root = tempRoot('economy-db-path-test')
+
+    try {
+      process.env['HOME'] = root
+      delete process.env['USERPROFILE']
+      process.env['HASNA_ECONOMY_DB_PATH'] = '/tmp/hasna-economy.db'
+      process.env['ECONOMY_DB'] = '/tmp/economy.db'
+      expect(getDbPath()).toBe('/tmp/hasna-economy.db')
+
+      delete process.env['HASNA_ECONOMY_DB_PATH']
+      expect(getDbPath()).toBe('/tmp/economy.db')
+
+      delete process.env['ECONOMY_DB']
+      expect(getDbPath()).toBe(join(root, '.hasna', 'economy', 'economy.db'))
+    } finally {
+      restoreEnv('HOME', originalHome)
+      restoreEnv('USERPROFILE', originalUserProfile)
+      restoreEnv('HASNA_ECONOMY_DB_PATH', originalHasnaDb)
+      restoreEnv('ECONOMY_DB', originalEconomyDb)
+    }
+  })
+
+  it('creates parent directories for file-backed databases', () => {
+    const root = tempRoot('economy-file-db-test')
+    const dbPath = join(root, 'nested', 'data', 'economy.db')
+
+    openDatabase(dbPath, true)
+
+    expect(existsSync(dirname(dbPath))).toBe(true)
+    expect(existsSync(dbPath)).toBe(true)
   })
 })
 
