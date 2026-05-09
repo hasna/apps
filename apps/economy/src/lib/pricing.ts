@@ -72,6 +72,8 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0.07, cacheWritePer1M: 0 },
   'glm-5.1':            { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'glm-5':              { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'kimi-k2.6':          { inputPer1M: 0.95,  outputPer1M: 4.00,  cacheReadPer1M: 0.16, cacheWritePer1M: 0 },
+  'kimi-k2.5':          { inputPer1M: 0.60,  outputPer1M: 3.00,  cacheReadPer1M: 0.10, cacheWritePer1M: 0 },
   'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 2.50,  cacheReadPer1M: 0.15, cacheWritePer1M: 0 },
 }
 

@@ -101,6 +101,16 @@ describe('getPricing', () => {
       outputPer1M: 0.50,
       cacheReadPer1M: 0.07,
     })
+    expect(getPricing('kimi-k2.6')).toMatchObject({
+      inputPer1M: 0.95,
+      outputPer1M: 4.00,
+      cacheReadPer1M: 0.16,
+    })
+    expect(getPricing('kimi-k2.5')).toMatchObject({
+      inputPer1M: 0.60,
+      outputPer1M: 3.00,
+      cacheReadPer1M: 0.10,
+    })
     expect(getPricing('kimi-k2')).toMatchObject({
       inputPer1M: 0.60,
       outputPer1M: 2.50,
@@ -120,6 +130,7 @@ describe('getPricing', () => {
     expect(getPricing('gemini-3.1-pro-preview-customtools')).toMatchObject({ inputPer1M: 2.00, outputPer1M: 12.00 })
     expect(getPricing('gemini-2.0-flash-lite-001')).toMatchObject({ inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0 })
     expect(getPricing('grok-4-1-fast-reasoning-latest')).toMatchObject({ inputPer1M: 0.20, outputPer1M: 0.50 })
+    expect(getPricing('kimi-k2.6-20260419')).toMatchObject({ inputPer1M: 0.95, outputPer1M: 4.00, cacheReadPer1M: 0.16 })
   })
 
   it('returns null for unknown models', () => {
