@@ -17,6 +17,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
+  delete process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -51,6 +52,23 @@ describe('syncGeminiBilling', () => {
     const result = await syncGeminiBilling(db)
     expect(result.days).toBe(0)
     expect(result.totalUsd).toBe(0)
-    expect(result.skipped).toContain('Gemini billing export path')
+    expect(result.skipped).toContain('HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH')
+    expect(result.skipped).toContain('HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH')
+    expect(result.skipped).toContain('GEMINI_BILLING_EXPORT_PATH')
+  })
+
+  it('supports the legacy HASNAXYZ Gemini billing export env alias', async () => {
+    const exportPath = join(root, 'gemini-billing-legacy.jsonl')
+    writeFileSync(exportPath, JSON.stringify({
+      date: '2026-05-08',
+      service: 'Google AI',
+      sku: 'Gemini API',
+      amount: 2.5,
+    }))
+    process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH'] = exportPath
+
+    const result = await syncGeminiBilling(db, { fromDate: '2026-05-01', toDate: '2026-05-09' })
+    expect(result.days).toBe(1)
+    expect(result.totalUsd).toBeCloseTo(2.5)
   })
 })

@@ -16,6 +16,7 @@ function getOpenAIAdminKey(): string | null {
 
 function getGeminiBillingExportPath(): string | null {
   return process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
+    ?? process.env['HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH']
     ?? process.env['GEMINI_BILLING_EXPORT_PATH']
     ?? null
 }
@@ -219,7 +220,7 @@ export async function syncGeminiBilling(
     return {
       days: 0,
       totalUsd: 0,
-      skipped: 'Missing Gemini billing export path (HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH)',
+      skipped: 'Missing Gemini billing export path (HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH, HASNAXYZ_ECONOMY_GEMINI_BILLING_EXPORT_PATH, or GEMINI_BILLING_EXPORT_PATH)',
     }
   }
 
