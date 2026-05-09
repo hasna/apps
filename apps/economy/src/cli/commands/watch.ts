@@ -4,6 +4,7 @@ import { ingestClaude, ingestTakumi } from '../../ingest/claude.js'
 import { ingestCodex } from '../../ingest/codex.js'
 import { ingestGemini } from '../../ingest/gemini.js'
 import type { Agent } from '../../types/index.js'
+import { sendNotification } from './notification.js'
 
 interface WatchOptions {
   interval: number
@@ -13,13 +14,6 @@ interface WatchOptions {
 
 function fmt(usd: number): string {
   return chalk.green(`$${usd.toFixed(4)}`)
-}
-
-function notify(title: string, body: string): void {
-  try {
-    const { execSync } = require('child_process') as typeof import('child_process')
-    execSync(`osascript -e 'display notification "${body.replace(/'/g, '')}" with title "${title.replace(/'/g, '')}"'`, { stdio: 'ignore' })
-  } catch { /* non-macOS */ }
 }
 
 function renderHeader(todayUsd: number, weekUsd: number): void {
@@ -82,7 +76,7 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
 
       // Notify on large cost
       if (req.cost_usd > 1.0) {
-        notify('economy: high cost', `$${req.cost_usd.toFixed(2)} on ${req.model}`)
+        sendNotification('economy: high cost', `$${req.cost_usd.toFixed(2)} on ${req.model}`)
       }
 
       // --notify threshold tracking
@@ -91,10 +85,7 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
         const crossedThresholds = Math.floor(sessionCumulativeCost / opts.notify)
         if (crossedThresholds > notifyThresholdFired) {
           notifyThresholdFired = crossedThresholds
-          const { execSync } = require('child_process') as typeof import('child_process')
-          try {
-            execSync(`osascript -e 'display notification "Economy: $${sessionCumulativeCost.toFixed(2)} spent this session" with title "Cost Alert"'`)
-          } catch { /* non-macOS */ }
+          sendNotification('Cost Alert', `Economy: $${sessionCumulativeCost.toFixed(2)} spent this session`)
         }
       }
     }
