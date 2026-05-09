@@ -19,6 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  delete process.env['ECONOMY_URL']
 })
 
 describe('EconomyClient', () => {
@@ -37,6 +38,43 @@ describe('EconomyClient', () => {
     expect(url.searchParams.get('machine')).toBe('spark02')
     expect(url.searchParams.get('search')).toBe('open-economy')
     expect(url.searchParams.get('limit')).toBe('5')
+  })
+
+  it('uses ECONOMY_URL when constructed from the environment', async () => {
+    process.env['ECONOMY_URL'] = 'http://economy.env'
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = EconomyClient.fromEnv()
+    await client.getMachines()
+
+    expect(calls[0]!.url).toBe('http://economy.env/api/machines')
+  })
+
+  it('maps read helpers to their REST API endpoints', async () => {
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
+    await client.getTopSessions(3, 'codex')
+    await client.getModelBreakdown()
+    await client.getProjectBreakdown()
+    await client.getBudgets()
+    await client.getDaily(14)
+    await client.getPricing()
+
+    expect(calls.map(call => call.url)).toEqual([
+      'http://economy.test/api/top?n=3&agent=codex',
+      'http://economy.test/api/models',
+      'http://economy.test/api/projects',
+      'http://economy.test/api/budgets',
+      'http://economy.test/api/daily?days=14',
+      'http://economy.test/api/pricing',
+    ])
   })
 
   it('sync accepts all supported ingestion sources', async () => {
@@ -78,6 +116,22 @@ describe('EconomyClient', () => {
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 3, retryDelayMs: 1 })
     await expect(client.getSummary('today')).rejects.toThrow('HTTP 400')
     expect(calls.length).toBe(1)
+  })
+
+  it('retries server errors and returns the later successful response', async () => {
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      if (calls.length === 1) return new Response('temporary failure', { status: 503 })
+      return mockJson({ data: { total_usd: 1, requests: 2, tokens: 3, sessions: 4, period: 'today' }, meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 2, retryDelayMs: 1 })
+    const summary = await client.getSummary('today', 'spark02')
+
+    expect(summary.total_usd).toBe(1)
+    expect(calls.length).toBe(2)
+    expect(calls[0]!.url).toBe('http://economy.test/api/summary?period=today&machine=spark02')
+    expect(calls[1]!.url).toBe('http://economy.test/api/summary?period=today&machine=spark02')
   })
 })
 
