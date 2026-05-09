@@ -128,6 +128,24 @@ const ADDITIONAL_LEGACY_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   'gemini-2.5-pro': [
     { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   ],
+  'qwen3.6-plus': [
+    { inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 },
+  ],
+  'qwen3.6-flash': [
+    { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 },
+  ],
+  'qwen3.6-max-preview': [
+    { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0.13, cacheWritePer1M: 1.30 },
+  ],
+  'qwen/qwen3.6-plus': [
+    { inputPer1M: 0.325, outputPer1M: 1.95, cacheReadPer1M: 0.05, cacheWritePer1M: 0.40625 },
+  ],
+  'qwen/qwen3.6-flash': [
+    { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0.3125 },
+  ],
+  'qwen/qwen3.6-max-preview': [
+    { inputPer1M: 1.04, outputPer1M: 6.24, cacheReadPer1M: 0.13, cacheWritePer1M: 1.30 },
+  ],
 }
 
 const REMOVED_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
