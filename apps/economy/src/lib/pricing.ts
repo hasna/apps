@@ -27,8 +27,8 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gemini-3.1-flash-lite': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-3-flash-preview': { inputPer1M: 0.50, outputPer1M: 3.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-2.5-pro':     { inputPer1M: 1.25,  outputPer1M: 10.00, cacheReadPer1M: 0.125, cacheWritePer1M: 0, cacheStoragePer1MHour: 4.50 },
-  'gemini-2.5-flash':   { inputPer1M: 0.30,  outputPer1M: 2.50,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0 },
-  'gemini-2.5-flash-lite': { inputPer1M: 0.10, outputPer1M: 0.40, cacheReadPer1M: 0.01, cacheWritePer1M: 0 },
+  'gemini-2.5-flash':   { inputPer1M: 0.30,  outputPer1M: 2.50,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
+  'gemini-2.5-flash-lite': { inputPer1M: 0.10, outputPer1M: 0.40, cacheReadPer1M: 0.01, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-2.0-flash':   { inputPer1M: 0.10,  outputPer1M: 0.40,  cacheReadPer1M: 0.025, cacheWritePer1M: 0, cacheStoragePer1MHour: 1.00 },
   'gemini-2.0-flash-lite': { inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
 

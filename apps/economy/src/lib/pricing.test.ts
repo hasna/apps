@@ -52,6 +52,13 @@ describe('getPricing', () => {
       inputPer1M: 0.30,
       outputPer1M: 2.50,
       cacheReadPer1M: 0.03,
+      cacheStoragePer1MHour: 1.00,
+    })
+    expect(getPricing('gemini-2.5-flash-lite')).toMatchObject({
+      inputPer1M: 0.10,
+      outputPer1M: 0.40,
+      cacheReadPer1M: 0.01,
+      cacheStoragePer1MHour: 1.00,
     })
     expect(getPricing('gemini-3.1-flash-lite')).toMatchObject({
       inputPer1M: 0.25,
@@ -138,6 +145,8 @@ describe('computeCost', () => {
   it('accounts for Gemini context cache storage token-hours when provided', () => {
     expect(computeCost('gemini-3.1-pro-preview', 0, 0, 0, 0, 0, 1_000_000)).toBeCloseTo(4.50)
     expect(computeCost('gemini-3.1-flash-lite', 0, 0, 0, 0, 0, 1_000_000)).toBeCloseTo(1.00)
+    expect(computeCost('gemini-2.5-flash', 0, 0, 0, 0, 0, 1_000_000)).toBeCloseTo(1.00)
+    expect(computeCost('gemini-2.5-flash-lite', 0, 0, 0, 0, 0, 1_000_000)).toBeCloseTo(1.00)
   })
 
   it('uses OpenAI long-context pricing above 272k prompt tokens for 1.05M-context models', () => {
@@ -251,21 +260,31 @@ describe('ensurePricingSeeded', () => {
 
   it('repairs current Gemini default rows missing storage pricing', () => {
     const db = openDatabase(':memory:', true)
-    upsertModelPricing(db, {
-      model: 'gemini-3.1-pro-preview',
-      input_per_1m: 2,
-      output_per_1m: 12,
-      cache_read_per_1m: 0.2,
-      cache_write_per_1m: 0,
-      cache_write_1h_per_1m: 0,
-      cache_storage_per_1m_hour: 0,
-      updated_at: '2026-05-08T00:00:00.000Z',
-    })
+    const rows = [
+      ['gemini-3.1-pro-preview', 2, 12, 0.2, 4.5],
+      ['gemini-2.5-flash', 0.3, 2.5, 0.03, 1],
+      ['gemini-2.5-flash-lite', 0.1, 0.4, 0.01, 1],
+    ] as const
+
+    for (const [model, input, output, cacheRead] of rows) {
+      upsertModelPricing(db, {
+        model,
+        input_per_1m: input,
+        output_per_1m: output,
+        cache_read_per_1m: cacheRead,
+        cache_write_per_1m: 0,
+        cache_write_1h_per_1m: 0,
+        cache_storage_per_1m_hour: 0,
+        updated_at: '2026-05-08T00:00:00.000Z',
+      })
+    }
 
     ensurePricingSeeded(db)
 
-    const row = getModelPricing(db, 'gemini-3.1-pro-preview')
-    expect(row?.cache_storage_per_1m_hour).toBe(4.5)
+    for (const [model, , , , storage] of rows) {
+      const row = getModelPricing(db, model)
+      expect(row?.cache_storage_per_1m_hour).toBe(storage)
+    }
   })
 
   it('removes deprecated default rows that no longer have current provider pricing', () => {
