@@ -76,4 +76,26 @@ describe('economy CLI mutation validation', () => {
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('--period must be one of: day, week, month, year')
   })
+
+  test('operational commands reject invalid numeric options before running', async () => {
+    let result = await runCli(['serve', '--port', 'not-a-port'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--port must be a number')
+
+    result = await runCli(['dashboard', '--port', '70000'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--port must be between 1 and 65535')
+
+    result = await runCli(['billing', 'sync', '--days', '367'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--days must be between 1 and 366')
+
+    result = await runCli(['top', '-n', '0'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('-n must be greater than 0')
+
+    result = await runCli(['sessions', '--limit', '1.5'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('--limit must be an integer')
+  })
 })

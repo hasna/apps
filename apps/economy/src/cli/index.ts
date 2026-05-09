@@ -97,10 +97,22 @@ function parsePositiveCliNumber(value: string | undefined, option: string): numb
   return parsed
 }
 
+function parsePositiveCliInteger(value: string | undefined, option: string): number {
+  const parsed = parsePositiveCliNumber(value, option)
+  if (!Number.isInteger(parsed)) fail(`${option} must be an integer`)
+  return parsed
+}
+
 function parseNonNegativeCliNumber(value: string | undefined, option: string): number {
   const parsed = parseFiniteCliNumber(value, option)
   if (parsed < 0) fail(`${option} must be non-negative`)
   return parsed
+}
+
+function parseCliPort(value: string | undefined, option: string): number {
+  const port = parsePositiveCliInteger(value, option)
+  if (port > 65535) fail(`${option} must be between 1 and 65535`)
+  return port
 }
 
 function requireCliChoice<T extends string>(value: string | undefined, option: string, allowed: readonly T[]): T {
@@ -309,6 +321,7 @@ program
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .option('--search <query>', 'Search by project name, session id prefix, or agent')
   .action(async (opts: { agent?: string; project?: string; machine?: string; limit?: string; format?: string; since?: string; search?: string }) => {
+    const limit = parsePositiveCliInteger(opts.limit ?? '20', '--limit')
     await autoSync()
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
@@ -316,7 +329,7 @@ program
       agent: opts.agent as Agent | undefined,
       project: opts.project,
       machine: opts.machine,
-      limit: Number(opts.limit ?? 20),
+      limit,
       since: sinceDate,
       search: opts.search,
     })
@@ -357,9 +370,10 @@ program
   .option('--agent <agent>', 'Filter by agent')
   .option('--since <date>', 'Filter sessions since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .action((opts: { n?: string; agent?: string; since?: string }) => {
+    const count = parsePositiveCliInteger(opts.n ?? '10', '-n')
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    let sessions = queryTopSessions(db, Number(opts.n ?? 10), opts.agent)
+    let sessions = queryTopSessions(db, count, opts.agent)
     if (sinceDate) sessions = sessions.filter(s => s.started_at >= sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
@@ -451,7 +465,11 @@ program
   .option('--notify <amount>', 'Fire macOS notification when cumulative cost crosses this USD threshold')
   .action(async (opts: { interval?: string; agent?: string; notify?: string }) => {
     const { watchCosts } = await import('./commands/watch.js')
-    await watchCosts({ interval: Number(opts.interval ?? 10), agent: opts.agent as Agent | undefined, notify: opts.notify ? Number(opts.notify) : undefined })
+    await watchCosts({
+      interval: parsePositiveCliInteger(opts.interval ?? '10', '--interval'),
+      agent: opts.agent as Agent | undefined,
+      notify: opts.notify ? parsePositiveCliNumber(opts.notify, '--notify') : undefined,
+    })
   })
 
 // ── budget ────────────────────────────────────────────────────────────────────
@@ -780,7 +798,7 @@ program
   .description('Start the REST API server')
   .option('-p, --port <port>', 'Port', '3456')
   .action(async (opts: { port?: string }) => {
-    const port = Number(opts.port ?? 3456)
+    const port = parseCliPort(opts.port ?? '3456', '--port')
     const { startServer } = await import('../server/serve.js')
     startServer(port)
   })
@@ -792,7 +810,7 @@ program
   .description('Open the web dashboard (auto-starts server if not running)')
   .option('-p, --port <port>', 'Server port', '3456')
   .action(async (opts: { port?: string }) => {
-    const port = Number(opts.port ?? 3456)
+    const port = parseCliPort(opts.port ?? '3456', '--port')
     const url = `http://localhost:${port}`
 
     // Check if server is already running
@@ -1434,8 +1452,9 @@ billingCmd
   .option('--openai', 'Only sync OpenAI')
   .option('--gemini', 'Only sync Gemini')
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
+    const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
+    if (days > 366) fail('--days must be between 1 and 366')
     const db = openDatabase()
-    const days = Number(opts.days ?? 31)
     const doAll = !opts.anthropic && !opts.openai && !opts.gemini
 
     if (opts.anthropic || doAll) {
