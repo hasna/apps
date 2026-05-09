@@ -201,10 +201,16 @@ describe('REST API server', () => {
   })
 
   it('POST /api/budgets creates a budget', async () => {
-    const { status } = await req(handler, '/api/budgets', 'POST', {
+    const { status, data } = await req(handler, '/api/budgets', 'POST', {
       period: 'daily', limit_usd: 10, alert_at_percent: 70,
     })
     expect(status).toBe(200)
+    const budget = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(budget['id']).toBeString()
+    expect(budget['period']).toBe('daily')
+    expect(budget['limit_usd']).toBe(10)
+    expect(budget['current_spend_usd']).toBeNumber()
+    expect(budget['percent_used']).toBeNumber()
   })
 
   it('POST /api/budgets rejects invalid numeric input', async () => {
@@ -258,11 +264,15 @@ describe('REST API server', () => {
   })
 
   it('POST /api/pricing creates/updates pricing', async () => {
-    const { status } = await req(handler, '/api/pricing', 'POST', {
+    const { status, data } = await req(handler, '/api/pricing', 'POST', {
       model: 'new-model', input_per_1m: 5, output_per_1m: 20,
       cache_read_per_1m: 0.5, cache_write_per_1m: 0, cache_write_1h_per_1m: 0,
     })
     expect(status).toBe(200)
+    const pricing = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(pricing['model']).toBe('new-model')
+    expect(pricing['input_per_1m']).toBe(5)
+    expect(pricing['output_per_1m']).toBe(20)
   })
 
   it('POST /api/pricing rejects invalid pricing payloads', async () => {
@@ -339,6 +349,7 @@ describe('REST API server', () => {
     expect(response.status).toBe(200)
     const goals = (response.data as Record<string, unknown>)['data'] as Array<Record<string, unknown>>
     expect(goals.some(goal => goal['project_path'] === '/proj/a' && goal['limit_usd'] === 25)).toBe(true)
+    expect(goals.some(goal => goal['project_path'] === '/proj/a' && typeof goal['percent_used'] === 'number')).toBe(true)
 
     const id = (db.prepare(`SELECT id FROM goals WHERE project_path = ?`).get('/proj/a') as { id: string }).id
     response = await req(handler, `/api/goals/${id}`, 'DELETE')

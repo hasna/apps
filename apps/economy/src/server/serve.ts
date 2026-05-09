@@ -191,7 +191,7 @@ export function createHandler(db: Database) {
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
       if (alertAtPercent == null || alertAtPercent <= 0 || alertAtPercent > 100) return err('alert_at_percent must be between 1 and 100')
       const now = new Date().toISOString()
-      upsertBudget(db, {
+      const budget = {
         id: randomUUID(),
         project_path: (body['project_path'] as string | null) ?? null,
         agent: (body['agent'] as Agent | null) ?? null,
@@ -200,8 +200,9 @@ export function createHandler(db: Database) {
         alert_at_percent: alertAtPercent,
         created_at: now,
         updated_at: now,
-      })
-      return ok({ ok: true })
+      }
+      upsertBudget(db, budget)
+      return ok(getBudgetStatuses(db).find(b => b.id === budget.id) ?? budget)
     }
     const budgetMatch = path.match(/^\/api\/budgets\/(.+)$/)
     if (budgetMatch && method === 'DELETE') {
@@ -252,7 +253,7 @@ export function createHandler(db: Database) {
       if ([input, output, cacheRead, cacheWrite, cacheWrite1h].some(v => v == null || v < 0)) {
         return err('pricing values must be non-negative numbers')
       }
-      upsertModelPricing(db, {
+      const pricing = {
         model,
         input_per_1m: input!,
         output_per_1m: output!,
@@ -260,8 +261,9 @@ export function createHandler(db: Database) {
         cache_write_per_1m: cacheWrite!,
         cache_write_1h_per_1m: cacheWrite1h!,
         updated_at: new Date().toISOString(),
-      })
-      return ok({ ok: true })
+      }
+      upsertModelPricing(db, pricing)
+      return ok(pricing)
     }
     const pricingMatch = path.match(/^\/api\/pricing\/(.+)$/)
     if (pricingMatch && method === 'DELETE') {
@@ -314,7 +316,7 @@ export function createHandler(db: Database) {
       const limitUsd = finiteNumber(body['limit_usd'])
       if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
       const now = new Date().toISOString()
-      upsertGoal(db, {
+      const goal = {
         id: randomUUID(),
         period: period as 'day' | 'week' | 'month' | 'year',
         project_path: optionalString(body['project_path']),
@@ -322,8 +324,9 @@ export function createHandler(db: Database) {
         limit_usd: limitUsd,
         created_at: now,
         updated_at: now,
-      })
-      return ok({ ok: true })
+      }
+      upsertGoal(db, goal)
+      return ok(getGoalStatuses(db).find(g => g.id === goal.id) ?? goal)
     }
     const goalMatch = path.match(/^\/api\/goals\/(.+)$/)
     if (goalMatch && method === 'DELETE') {
