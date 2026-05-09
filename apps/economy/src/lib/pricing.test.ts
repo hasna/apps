@@ -38,6 +38,11 @@ describe('getPricing', () => {
       outputPer1M: 2.50,
       cacheReadPer1M: 0.03,
     })
+    expect(getPricing('gemini-3.1-flash-lite')).toMatchObject({
+      inputPer1M: 0.25,
+      outputPer1M: 1.50,
+      cacheReadPer1M: 0.025,
+    })
     expect(getPricing('grok-4.20-0309-non-reasoning')).toMatchObject({
       inputPer1M: 1.25,
       outputPer1M: 2.50,
@@ -68,9 +73,11 @@ describe('computeCost', () => {
     expect(cost).toBeCloseTo(28.05)
   })
 
-  it('uses Gemini 2.5 Pro long-prompt pricing above 200k prompt tokens', () => {
+  it('uses Gemini Pro long-prompt pricing above 200k prompt tokens', () => {
     expect(computeCost('gemini-2.5-pro', 150_000, 10_000, 25_000)).toBeCloseTo(0.290625)
     expect(computeCost('gemini-2.5-pro', 190_000, 10_000, 25_000)).toBeCloseTo(0.63125)
+    expect(computeCost('gemini-3.1-pro-preview', 150_000, 10_000, 25_000)).toBeCloseTo(0.425)
+    expect(computeCost('gemini-3.1-pro-preview', 190_000, 10_000, 25_000)).toBeCloseTo(0.95)
   })
 
   it('returns 0 for unknown model or zero tokens', () => {

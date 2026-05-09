@@ -26,6 +26,8 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   // Gemini standard text/image/video paid tier rates.
   'gemini-3.1-pro-preview': { inputPer1M: 2.00, outputPer1M: 12.00, cacheReadPer1M: 0.20, cacheWritePer1M: 0 },
   'gemini-3.1-pro':     { inputPer1M: 2.00,  outputPer1M: 12.00, cacheReadPer1M: 0.20,  cacheWritePer1M: 0 },
+  'gemini-3.1-flash-lite-preview': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0 },
+  'gemini-3.1-flash-lite': { inputPer1M: 0.25, outputPer1M: 1.50, cacheReadPer1M: 0.025, cacheWritePer1M: 0 },
   'gemini-3-flash-preview': { inputPer1M: 0.50, outputPer1M: 3.00, cacheReadPer1M: 0.05, cacheWritePer1M: 0 },
   'gemini-2.5-pro':     { inputPer1M: 1.25,  outputPer1M: 10.00, cacheReadPer1M: 0.125, cacheWritePer1M: 0 },
   'gemini-2.5-flash':   { inputPer1M: 0.30,  outputPer1M: 2.50,  cacheReadPer1M: 0.03,  cacheWritePer1M: 0 },
@@ -88,6 +90,21 @@ const ADDITIONAL_LEGACY_DEFAULT_PRICING: Record<string, ModelPricing[]> = {
   'gemini-2.5-pro': [
     { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   ],
+}
+
+const GEMINI_PROMPT_TIERS: Record<string, { threshold: number; pricing: ModelPricing }> = {
+  'gemini-3.1-pro-preview': {
+    threshold: 200_000,
+    pricing: { inputPer1M: 4.00, outputPer1M: 18.00, cacheReadPer1M: 0.40, cacheWritePer1M: 0 },
+  },
+  'gemini-3.1-pro': {
+    threshold: 200_000,
+    pricing: { inputPer1M: 4.00, outputPer1M: 18.00, cacheReadPer1M: 0.40, cacheWritePer1M: 0 },
+  },
+  'gemini-2.5-pro': {
+    threshold: 200_000,
+    pricing: { inputPer1M: 2.50, outputPer1M: 15.00, cacheReadPer1M: 0.25, cacheWritePer1M: 0 },
+  },
 }
 
 // Normalize raw model names: strip provider prefixes and date suffixes like -20251101.
@@ -274,14 +291,13 @@ function computeCostWithPricing(
 ): number {
   let effective = pricing
   const normalized = normalizeModelName(model)
-  if (normalized.startsWith('gemini-2.5-pro')) {
+  const geminiTier = bestPrefixMatch(normalized, Object.entries(GEMINI_PROMPT_TIERS))
+  if (geminiTier) {
     const billablePromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens + cacheWrite1hTokens
-    if (billablePromptTokens > 200_000) {
+    if (billablePromptTokens > geminiTier.threshold) {
       effective = {
         ...pricing,
-        inputPer1M: 2.50,
-        outputPer1M: 15.00,
-        cacheReadPer1M: 0.25,
+        ...geminiTier.pricing,
       }
     }
   }
