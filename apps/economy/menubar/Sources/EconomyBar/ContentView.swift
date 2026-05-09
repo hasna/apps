@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
   @EnvironmentObject var appState: AppState
   @Environment(\.openURL) private var openURL
+  @State private var draftAPIBaseURL: String = ""
 
   private var lastUpdatedText: String {
     guard let date = appState.lastUpdated else { return "Never" }
@@ -22,10 +23,35 @@ struct ContentView: View {
         Text(lastUpdatedText)
           .font(.caption)
           .foregroundStyle(.secondary)
+
+        Button(action: toggleServerEditor) {
+          Image(systemName: "slider.horizontal.3")
+        }
+        .buttonStyle(.borderless)
+        .help("Server URL")
       }
       .padding(.horizontal, 16)
       .padding(.top, 14)
       .padding(.bottom, 12)
+
+      if appState.isEditingServer {
+        HStack(spacing: 8) {
+          TextField("Server URL", text: $draftAPIBaseURL)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(saveServerURL)
+
+          Button("Save", action: saveServerURL)
+            .buttonStyle(.borderedProminent)
+
+          Button("Cancel") {
+            draftAPIBaseURL = appState.apiBaseURL
+            appState.cancelServerEditing()
+          }
+          .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+      }
 
       Divider()
 
@@ -148,5 +174,20 @@ struct ContentView: View {
       .padding(.vertical, 12)
     }
     .frame(width: 360)
+    .onAppear {
+      draftAPIBaseURL = appState.apiBaseURL
+    }
+    .onChange(of: appState.apiBaseURL) { _, newValue in
+      draftAPIBaseURL = newValue
+    }
+  }
+
+  private func toggleServerEditor() {
+    draftAPIBaseURL = appState.apiBaseURL
+    appState.toggleServerEditor()
+  }
+
+  private func saveServerURL() {
+    appState.saveAPIBaseURL(draftAPIBaseURL)
   }
 }

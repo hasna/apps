@@ -10,6 +10,23 @@ struct APIClientTests {
     #expect(APIClient.normalizeBaseURL("   ") == APIClient.defaultBaseURL)
   }
 
+  @Test func setBaseURLNormalizesAndPersists() async {
+    let previous = UserDefaults.standard.string(forKey: APIClient.defaultsKey)
+    defer {
+      if let previous {
+        UserDefaults.standard.set(previous, forKey: APIClient.defaultsKey)
+      } else {
+        UserDefaults.standard.removeObject(forKey: APIClient.defaultsKey)
+      }
+    }
+
+    let client = APIClient(baseURL: APIClient.defaultBaseURL, session: makeSession())
+    let normalized = await client.setBaseURL(" economy.test:4567/ ")
+
+    #expect(normalized == "http://economy.test:4567")
+    #expect(APIClient.storedBaseURL() == "http://economy.test:4567")
+  }
+
   @Test func fetchSessionsEncodesSearchAndDecodesWrappedResponse() async throws {
     defer { MockURLProtocol.handler = nil }
     var capturedRequest: URLRequest?
