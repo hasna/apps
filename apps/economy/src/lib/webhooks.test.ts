@@ -169,6 +169,31 @@ describe('checkAndFireWebhooks', () => {
     expect(getIngestState(db, 'webhook', 'webhook-budget-budget-1-monthly')).toBe('70')
   })
 
+  it('retries when webhook delivery throws before receiving a response', async () => {
+    let shouldThrow = true
+    let attempts = 0
+    globalThis.fetch = (async () => {
+      attempts += 1
+      if (shouldThrow) throw new Error('network unavailable')
+      return new Response(null, { status: 204 })
+    }) as typeof fetch
+
+    const db = openDatabase(':memory:', true)
+    upsertBudget(db, budget())
+    seedSpend(db, 0.75)
+
+    await checkAndFireWebhooks(db)
+
+    expect(attempts).toBe(1)
+    expect(getIngestState(db, 'webhook', 'webhook-budget-budget-1-monthly')).toBeNull()
+
+    shouldThrow = false
+    await checkAndFireWebhooks(db)
+
+    expect(attempts).toBe(2)
+    expect(getIngestState(db, 'webhook', 'webhook-budget-budget-1-monthly')).toBe('70')
+  })
+
   it('does not call fetch when webhook-url is not configured', async () => {
     let attempts = 0
     globalThis.fetch = (async () => {
