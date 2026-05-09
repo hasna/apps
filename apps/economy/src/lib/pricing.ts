@@ -83,6 +83,8 @@ const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
   'gemini-2.5-pro': { inputPer1M: 1.25, outputPer1M: 10.00, cacheReadPer1M: 0.31, cacheWritePer1M: 0 },
   'gemini-2.5-flash': { inputPer1M: 0.15, outputPer1M: 0.60, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'gemini-2.0-flash': { inputPer1M: 0.075, outputPer1M: 0.30, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'gpt-5.3-codex': { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
+  'gpt-5.2-codex': { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-5-codex': { inputPer1M: 1.75, outputPer1M: 14.00, cacheReadPer1M: 0.44, cacheWritePer1M: 0 },
   'gpt-5-mini': { inputPer1M: 0.30, outputPer1M: 1.20, cacheReadPer1M: 0.075, cacheWritePer1M: 0 },
   'gpt-5.2': { inputPer1M: 2.00, outputPer1M: 8.00, cacheReadPer1M: 0.50, cacheWritePer1M: 0 },

@@ -281,6 +281,24 @@ describe('ensurePricingSeeded', () => {
   it('repairs stale OpenAI and xAI cached-input defaults', () => {
     const db = openDatabase(':memory:', true)
     upsertModelPricing(db, {
+      model: 'gpt-5.3-codex',
+      input_per_1m: 1.75,
+      output_per_1m: 14,
+      cache_read_per_1m: 0.44,
+      cache_write_per_1m: 0,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    })
+    upsertModelPricing(db, {
+      model: 'gpt-5.2-codex',
+      input_per_1m: 1.75,
+      output_per_1m: 14,
+      cache_read_per_1m: 0.44,
+      cache_write_per_1m: 0,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    })
+    upsertModelPricing(db, {
       model: 'o1-mini',
       input_per_1m: 3,
       output_per_1m: 12,
@@ -301,6 +319,8 @@ describe('ensurePricingSeeded', () => {
 
     ensurePricingSeeded(db)
 
+    expect(getModelPricing(db, 'gpt-5.3-codex')?.cache_read_per_1m).toBe(0.175)
+    expect(getModelPricing(db, 'gpt-5.2-codex')?.cache_read_per_1m).toBe(0.175)
     expect(getModelPricing(db, 'o1-mini')?.cache_read_per_1m).toBe(0.55)
     expect(getModelPricing(db, 'grok-3')?.cache_read_per_1m).toBe(0.75)
   })
