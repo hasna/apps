@@ -79,10 +79,15 @@ describe("dashboard API client", () => {
   })
 
   test("encodes path parameters for detail and delete endpoints", async () => {
+    fetchHandler = (input, init) => {
+      if (init?.method === "DELETE") return jsonResponse({ data: { ok: true } })
+      return jsonResponse({ data: [] })
+    }
+
     await api.getSessionRequests("session/with spaces")
-    await api.deleteBudget("budget/with spaces")
-    await api.deletePricing("openai/gpt 5.5")
-    await api.deleteGoalApi("goal/with spaces")
+    const budgetDelete = await api.deleteBudget("budget/with spaces")
+    const pricingDelete = await api.deletePricing("openai/gpt 5.5")
+    const goalDelete = await api.deleteGoalApi("goal/with spaces")
 
     expect(new URL(requests[0].url).pathname).toBe("/api/sessions/session%2Fwith%20spaces/requests")
     expect(new URL(requests[1].url).pathname).toBe("/api/budgets/budget%2Fwith%20spaces")
@@ -91,6 +96,9 @@ describe("dashboard API client", () => {
     expect(requests[2].init?.method).toBe("DELETE")
     expect(new URL(requests[3].url).pathname).toBe("/api/goals/goal%2Fwith%20spaces")
     expect(requests[3].init?.method).toBe("DELETE")
+    expect(budgetDelete.data.ok).toBe(true)
+    expect(pricingDelete.data.ok).toBe(true)
+    expect(goalDelete.data.ok).toBe(true)
   })
 
   test("posts billing sync providers including gemini", async () => {
@@ -106,6 +114,15 @@ describe("dashboard API client", () => {
   })
 
   test("posts budget, pricing, source sync, and goal payloads", async () => {
+    fetchHandler = (input) => {
+      const path = new URL(String(input)).pathname
+      if (path === "/api/sync") return jsonResponse({ data: { gemini: { sessions: 1 } } })
+      if (path === "/api/budgets") return jsonResponse({ data: { id: "budget-1" } })
+      if (path === "/api/pricing") return jsonResponse({ data: { model: "custom-model" } })
+      if (path === "/api/goals") return jsonResponse({ data: { id: "goal-1" } })
+      return jsonResponse({ data: {} })
+    }
+
     await api.createBudget({ project_path: "/workspace/open-economy", period: "weekly", limit_usd: 25, alert_at_percent: 70 })
     await api.createPricing({
       model: "custom-model",
@@ -115,8 +132,8 @@ describe("dashboard API client", () => {
       cache_write_per_1m: 1.25,
       cache_write_1h_per_1m: 2,
     })
-    await api.syncSources("gemini")
-    await api.syncSources()
+    const geminiSync = await api.syncSources("gemini")
+    const allSync = await api.syncSources()
     await api.createGoal({ period: "week", limit_usd: 50, project_path: "/workspace/open-economy", agent: "codex" })
 
     expect(requestPaths()).toEqual([
@@ -143,6 +160,8 @@ describe("dashboard API client", () => {
     })
     expect(JSON.parse(String(requests[2].init?.body))).toEqual({ sources: "gemini" })
     expect(JSON.parse(String(requests[3].init?.body))).toEqual({ sources: "all" })
+    expect(geminiSync.data).toEqual({ gemini: { sessions: 1 } })
+    expect(allSync.data).toEqual({ gemini: { sessions: 1 } })
     expect(JSON.parse(String(requests[4].init?.body))).toEqual({
       period: "week",
       limit_usd: 50,

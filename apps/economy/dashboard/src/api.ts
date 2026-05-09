@@ -85,6 +85,10 @@ export interface BillingSummary {
   by_provider: Record<string, number>
 }
 
+export interface MutationOk {
+  ok: boolean
+}
+
 // Summary
 export const getSummary = (period: 'today' | 'week' | 'month' | 'all') =>
   request<{ data: Summary }>(`/api/summary?period=${period}`)
@@ -160,7 +164,7 @@ export const createBudget = (body: {
   })
 
 export const deleteBudget = (id: string) =>
-  request<{ success: boolean }>(`/api/budgets/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  request<{ data: MutationOk }>(`/api/budgets/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // Pricing
 export const getPricing = () =>
@@ -182,13 +186,13 @@ export const createPricing = (body: Pricing) =>
   })
 
 export const deletePricing = (model: string) =>
-  request<{ success: boolean }>(`/api/pricing/${encodeURIComponent(model)}`, {
+  request<{ data: MutationOk }>(`/api/pricing/${encodeURIComponent(model)}`, {
     method: 'DELETE',
   })
 
 // Sync
 export const syncSources = (sources: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini' = 'all') =>
-  request<{ success: boolean }>('/api/sync', {
+  request<{ data: Record<string, unknown> }>('/api/sync', {
     method: 'POST',
     body: JSON.stringify({ sources }),
   })
@@ -217,4 +221,4 @@ export const createGoal = (goal: { period: string; limit_usd: number; project_pa
   })
 
 export const deleteGoalApi = (id: string) =>
-  request<{ success: boolean }>(`/api/goals/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  request<{ data: MutationOk }>(`/api/goals/${encodeURIComponent(id)}`, { method: 'DELETE' })
