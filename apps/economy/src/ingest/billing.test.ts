@@ -169,4 +169,20 @@ describe('syncGeminiBilling', () => {
     expect(result.days).toBe(1)
     expect(result.totalUsd).toBeCloseTo(2.5)
   })
+
+  it('parses quoted CSV billing exports with commas in text fields', async () => {
+    const exportPath = join(root, 'gemini-billing.csv')
+    writeFileSync(exportPath, [
+      'date,"service.description","sku.description",cost_usd',
+      '2026-05-08,"Google AI, Gemini","Gemini API, cached input",4.25',
+    ].join('\n'))
+    process.env['HASNA_ECONOMY_GEMINI_BILLING_EXPORT_PATH'] = exportPath
+
+    const result = await syncGeminiBilling(db, { fromDate: '2026-05-01', toDate: '2026-05-09' })
+    expect(result.days).toBe(1)
+    expect(result.totalUsd).toBeCloseTo(4.25)
+
+    const summary = queryBillingSummary(db, 'all')
+    expect(summary.by_provider.gemini).toBeCloseTo(4.25)
+  })
 })
