@@ -16,26 +16,27 @@ export type EconomyToolName =
   | 'economy_get_model_breakdown'
   | 'economy_get_project_breakdown'
   | 'economy_get_budget_status'
+  | 'economy_get_billing_summary'
   | 'economy_sync'
 
 export const economyTools = [
   {
     name: 'economy_get_summary',
-    description: 'Get total AI coding cost summary for a time period (today, week, month, all). Returns total USD, session count, request count, token count, and a human-readable summary sentence.',
+    description: 'Get total AI coding cost summary for a time period. Returns total USD, session count, request count, token count, and a human-readable summary sentence.',
     parameters: {
       type: 'object',
       properties: {
-        period: { type: 'string', enum: ['today', 'week', 'month', 'all'], description: 'Time period', default: 'today' },
+        period: { type: 'string', enum: ['today', 'yesterday', 'week', 'month', 'year', 'all'], description: 'Time period', default: 'today' },
       },
     },
   },
   {
     name: 'economy_get_sessions',
-    description: 'List coding sessions with cost data. Each session represents one Claude Code or Codex CLI interaction.',
+    description: 'List coding sessions with cost data from Claude Code, Takumi, Codex, or Gemini.',
     parameters: {
       type: 'object',
       properties: {
-        agent: { type: 'string', enum: ['claude', 'codex'], description: 'Filter by AI agent' },
+        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Filter by AI agent' },
         project: { type: 'string', description: 'Filter by project path (partial match)' },
         limit: { type: 'number', description: 'Max results (default 20)' },
         offset: { type: 'number', description: 'Pagination offset' },
@@ -49,7 +50,7 @@ export const economyTools = [
       type: 'object',
       properties: {
         n: { type: 'number', description: 'Number of sessions (default 10)' },
-        agent: { type: 'string', enum: ['claude', 'codex'], description: 'Filter by agent' },
+        agent: { type: 'string', enum: ['claude', 'takumi', 'codex', 'gemini'], description: 'Filter by agent' },
       },
     },
   },
@@ -69,12 +70,22 @@ export const economyTools = [
     parameters: { type: 'object', properties: {} },
   },
   {
-    name: 'economy_sync',
-    description: 'Trigger cost data ingestion from Claude Code telemetry and/or Codex sessions',
+    name: 'economy_get_billing_summary',
+    description: 'Get ground-truth provider billing totals imported from admin APIs',
     parameters: {
       type: 'object',
       properties: {
-        sources: { type: 'string', enum: ['all', 'claude', 'codex'], description: 'Which sources to sync (default: all)' },
+        period: { type: 'string', enum: ['today', 'yesterday', 'week', 'month', 'year', 'all'], description: 'Time period', default: 'month' },
+      },
+    },
+  },
+  {
+    name: 'economy_sync',
+    description: 'Trigger cost data ingestion from Claude Code, Takumi, Codex, and Gemini sessions',
+    parameters: {
+      type: 'object',
+      properties: {
+        sources: { type: 'string', enum: ['all', 'claude', 'takumi', 'codex', 'gemini'], description: 'Which sources to sync (default: all)' },
       },
     },
   },

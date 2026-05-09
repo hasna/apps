@@ -11,6 +11,8 @@ export interface EconomyRequest {
   output_tokens: number
   cache_read_tokens: number
   cache_create_tokens: number
+  cache_create_5m_tokens?: number
+  cache_create_1h_tokens?: number
   cost_usd: number
   duration_ms: number
   timestamp: string
@@ -97,11 +99,14 @@ export interface ModelPricing {
   outputPer1M: number
   cacheReadPer1M: number
   cacheWritePer1M: number
+  cacheWrite1hPer1M?: number
 }
 
 export interface SyncOptions {
   claude?: boolean
   codex?: boolean
+  gemini?: boolean
+  takumi?: boolean
   verbose?: boolean
 }
 

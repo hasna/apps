@@ -25,14 +25,27 @@ interface MessageUsage {
     ephemeral_5m_input_tokens?: number
     ephemeral_1h_input_tokens?: number
   }
+  speed?: string
+  inference_geo?: string
+  server_tool_use?: {
+    web_search_requests?: number
+  }
 }
 
 interface SessionLine {
   type?: string
+  uuid?: string
+  requestId?: string
+  request_id?: string
+  speed?: string
+  inference_geo?: string
   message?: {
+    id?: string
     role?: string
     model?: string
     usage?: MessageUsage
+    speed?: string
+    inference_geo?: string
   }
   sessionId?: string
   timestamp?: string
@@ -64,9 +77,9 @@ function collectJsonlFiles(projectDir: string): string[] {
 export async function ingestClaude(
   db: Database,
   verbose = false,
-  _telemetryDir?: string,
+  projectsDir = CLAUDE_PROJECTS_DIR,
 ): Promise<{ files: number; requests: number; sessions: number }> {
-  return ingestJsonlProjects(db, CLAUDE_PROJECTS_DIR, 'claude', verbose)
+  return ingestJsonlProjects(db, projectsDir, 'claude', verbose)
 }
 
 export async function ingestTakumi(
@@ -76,7 +89,7 @@ export async function ingestTakumi(
   return ingestJsonlProjects(db, TAKUMI_PROJECTS_DIR, 'takumi', verbose)
 }
 
-async function ingestJsonlProjects(
+export async function ingestJsonlProjects(
   db: Database,
   projectsDir: string,
   agentName: Agent,
@@ -142,15 +155,23 @@ async function ingestJsonlProjects(
 
         const inputTokens = usage.input_tokens ?? 0
         const outputTokens = usage.output_tokens ?? 0
-        const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0
+        const cacheWrite5mTokens = usage.cache_creation?.ephemeral_5m_input_tokens ?? usage.cache_creation_input_tokens ?? 0
+        const cacheWrite1hTokens = usage.cache_creation?.ephemeral_1h_input_tokens ?? 0
+        const cacheWriteTokens = cacheWrite5mTokens + cacheWrite1hTokens
         const cacheReadTokens = usage.cache_read_input_tokens ?? 0
         const timestamp = entry.timestamp ?? new Date().toISOString()
 
         // Skip entries with zero tokens (no actual LLM call)
-        if (inputTokens + outputTokens + cacheWriteTokens === 0) continue
+        if (inputTokens + outputTokens + cacheWriteTokens + cacheReadTokens === 0) continue
 
-        const costUsd = computeCostFromDb(db, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)
-        const reqId = `${agentName}-${sessionId}-${timestamp}`
+        let costUsd = computeCostFromDb(db, model, inputTokens, outputTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens)
+        costUsd = applyClaudeModifiers(costUsd, model, usage, entry)
+        const serverToolUse = usage.server_tool_use
+        if (serverToolUse?.web_search_requests) {
+          costUsd += serverToolUse.web_search_requests * 0.01
+        }
+        const sourceRequestId = entry.requestId ?? entry.request_id ?? entry.message.id ?? entry.uuid ?? `${sessionId}-${timestamp}`
+        const reqId = `${agentName}-${sourceRequestId}`
 
         upsertRequest(db, {
           id: reqId,
@@ -161,10 +182,12 @@ async function ingestJsonlProjects(
           output_tokens: outputTokens,
           cache_read_tokens: cacheReadTokens,
           cache_create_tokens: cacheWriteTokens,
+          cache_create_5m_tokens: cacheWrite5mTokens,
+          cache_create_1h_tokens: cacheWrite1hTokens,
           cost_usd: costUsd,
           duration_ms: 0,
           timestamp,
-          source_request_id: reqId,
+          source_request_id: sourceRequestId,
           machine_id: machineId,
         })
 
@@ -206,4 +229,19 @@ async function ingestJsonlProjects(
   }
 
   return { files: totalFiles, requests: totalRequests, sessions: touchedSessions.size }
+}
+
+function applyClaudeModifiers(costUsd: number, model: string, usage: MessageUsage, entry: SessionLine): number {
+  let multiplier = 1
+  const speed = usage.speed ?? entry.message?.speed ?? entry.speed
+  if (speed === 'fast' && model.includes('opus-4-6')) {
+    multiplier *= 6
+  }
+
+  const inferenceGeo = usage.inference_geo ?? entry.message?.inference_geo ?? entry.inference_geo
+  if (inferenceGeo && ['us', 'us-only', 'us_only'].includes(inferenceGeo)) {
+    multiplier *= 1.1
+  }
+
+  return costUsd * multiplier
 }

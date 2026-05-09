@@ -1,92 +1,159 @@
 import { describe, it, expect } from 'bun:test'
-import { normalizeModelName, getPricing, computeCost, DEFAULT_PRICING } from './pricing.js'
+import { normalizeModelName, getPricing, computeCost, DEFAULT_PRICING, ensurePricingSeeded } from './pricing.js'
+import { openDatabase, upsertModelPricing, getModelPricing } from '../db/database.js'
 
 describe('normalizeModelName', () => {
-  it('strips 8-digit date suffix', () => {
+  it('strips date suffixes, provider prefixes, and lowercases', () => {
     expect(normalizeModelName('claude-sonnet-4-6-20251101')).toBe('claude-sonnet-4-6')
-  })
-
-  it('strips ISO date suffix', () => {
     expect(normalizeModelName('claude-opus-4-6-2025-11-01')).toBe('claude-opus-4-6')
-  })
-
-  it('lowercases the model name', () => {
     expect(normalizeModelName('Claude-Sonnet-4-6')).toBe('claude-sonnet-4-6')
-  })
-
-  it('leaves clean names unchanged', () => {
-    expect(normalizeModelName('claude-haiku-4-5')).toBe('claude-haiku-4-5')
+    expect(normalizeModelName('models/gemini-2.5-flash')).toBe('gemini-2.5-flash')
+    expect(normalizeModelName('openai/gpt-5-codex')).toBe('gpt-5-codex')
+    expect(normalizeModelName('xai/grok-4.20-0309-non-reasoning')).toBe('grok-4.20-0309-non-reasoning')
+    expect(normalizeModelName('qwen/qwen3.6-plus-04-02:free')).toBe('qwen3.6-plus-04-02')
   })
 })
 
 describe('getPricing', () => {
-  it('returns pricing for all known Claude models', () => {
-    const claudeModels = Object.keys(DEFAULT_PRICING).filter(k => k.startsWith('claude'))
-    for (const model of claudeModels) {
-      expect(getPricing(model)).not.toBeNull()
+  it('has exact current seed rows for core Claude/OpenAI/Gemini models', () => {
+    expect(getPricing('claude-3-5-haiku')).toMatchObject({
+      inputPer1M: 0.80,
+      outputPer1M: 4.00,
+      cacheReadPer1M: 0.08,
+      cacheWritePer1M: 1.00,
+      cacheWrite1hPer1M: 1.60,
+    })
+    expect(getPricing('gpt-5.5')).toMatchObject({
+      inputPer1M: 5.00,
+      outputPer1M: 30.00,
+      cacheReadPer1M: 0.50,
+    })
+    expect(getPricing('gpt-5-codex')).toMatchObject({
+      inputPer1M: 1.25,
+      outputPer1M: 10.00,
+      cacheReadPer1M: 0.125,
+    })
+    expect(getPricing('gemini-2.5-flash')).toMatchObject({
+      inputPer1M: 0.30,
+      outputPer1M: 2.50,
+      cacheReadPer1M: 0.03,
+    })
+    expect(getPricing('grok-4.20-0309-non-reasoning')).toMatchObject({
+      inputPer1M: 1.25,
+      outputPer1M: 2.50,
+      cacheReadPer1M: 0.20,
+    })
+  })
+
+  it('returns pricing for every known default model', () => {
+    for (const model of Object.keys(DEFAULT_PRICING)) {
+      expect(getPricing(model), model).not.toBeNull()
     }
   })
 
-  it('returns pricing for all known Codex/OpenAI models', () => {
-    const openaiModels = Object.keys(DEFAULT_PRICING).filter(k => k.startsWith('gpt') || k.startsWith('o'))
-    for (const model of openaiModels) {
-      expect(getPricing(model)).not.toBeNull()
-    }
+  it('uses the longest prefix match for overlapping model names', () => {
+    expect(getPricing('gpt-5.4-pro-extra')).toMatchObject({ inputPer1M: 30.00, outputPer1M: 180.00 })
+    expect(getPricing('gpt-5.4-mini-2026-01-01')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 4.50 })
+    expect(getPricing('gemini-3.1-pro-preview-customtools')).toMatchObject({ inputPer1M: 2.00, outputPer1M: 12.00 })
   })
 
   it('returns null for unknown models', () => {
     expect(getPricing('unknown-model-xyz')).toBeNull()
   })
-
-  it('handles model names with date suffixes', () => {
-    expect(getPricing('claude-sonnet-4-6-20251101')).not.toBeNull()
-  })
-
-  it('matches prefix for versioned models', () => {
-    const p = getPricing('claude-opus-4-6-extra-suffix')
-    expect(p).not.toBeNull()
-  })
-
-  it('returned pricing has all required fields', () => {
-    const p = getPricing('claude-sonnet-4-6')
-    expect(p).not.toBeNull()
-    expect(typeof p!.inputPer1M).toBe('number')
-    expect(typeof p!.outputPer1M).toBe('number')
-    expect(typeof p!.cacheReadPer1M).toBe('number')
-    expect(typeof p!.cacheWritePer1M).toBe('number')
-  })
 })
 
 describe('computeCost', () => {
-  it('computes cost for input + output tokens', () => {
-    // claude-sonnet-4-6: $3/1M input, $15/1M output
-    const cost = computeCost('claude-sonnet-4-6', 1_000_000, 1_000_000)
-    expect(cost).toBeCloseTo(18.0)
+  it('computes input, output, cache read, 5m cache write, and 1h cache write', () => {
+    const cost = computeCost('claude-sonnet-4-6', 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000)
+    expect(cost).toBeCloseTo(28.05)
   })
 
-  it('includes cache read tokens', () => {
-    // cache read = $0.30/1M
-    const cost = computeCost('claude-sonnet-4-6', 0, 0, 1_000_000, 0)
-    expect(cost).toBeCloseTo(0.30)
+  it('uses Gemini 2.5 Pro long-prompt pricing above 200k prompt tokens', () => {
+    expect(computeCost('gemini-2.5-pro', 150_000, 10_000, 25_000)).toBeCloseTo(0.290625)
+    expect(computeCost('gemini-2.5-pro', 190_000, 10_000, 25_000)).toBeCloseTo(0.63125)
   })
 
-  it('includes cache write tokens', () => {
-    // cache write = $3.75/1M
-    const cost = computeCost('claude-sonnet-4-6', 0, 0, 0, 1_000_000)
-    expect(cost).toBeCloseTo(3.75)
-  })
-
-  it('returns 0 for unknown model', () => {
+  it('returns 0 for unknown model or zero tokens', () => {
     expect(computeCost('unknown-xyz', 100_000, 50_000)).toBe(0)
-  })
-
-  it('returns 0 for zero tokens', () => {
     expect(computeCost('claude-sonnet-4-6', 0, 0)).toBe(0)
   })
+})
 
-  it('computes small token amounts correctly', () => {
-    // 1000 input tokens at $3/1M = $0.000003
-    const cost = computeCost('claude-sonnet-4-6', 1000, 0)
-    expect(cost).toBeCloseTo(0.000003)
+describe('ensurePricingSeeded', () => {
+  it('updates stale default rows and preserves the 1h cache write column', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'gpt-5-codex',
+      input_per_1m: 1.75,
+      output_per_1m: 14,
+      cache_read_per_1m: 0.44,
+      cache_write_per_1m: 0,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2025-01-01T00:00:00.000Z',
+    })
+
+    ensurePricingSeeded(db)
+
+    const row = getModelPricing(db, 'gpt-5-codex')
+    expect(row?.input_per_1m).toBe(1.25)
+    expect(row?.output_per_1m).toBe(10)
+    expect(row?.cache_read_per_1m).toBe(0.125)
+    expect(row?.cache_write_1h_per_1m).toBe(0)
+  })
+
+  it('repairs default rows that were seeded before 1h cache write pricing existed', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'claude-sonnet-4-6',
+      input_per_1m: 3,
+      output_per_1m: 15,
+      cache_read_per_1m: 0.3,
+      cache_write_per_1m: 3.75,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2026-05-08T00:00:00.000Z',
+    })
+
+    ensurePricingSeeded(db)
+
+    const row = getModelPricing(db, 'claude-sonnet-4-6')
+    expect(row?.cache_write_1h_per_1m).toBe(6)
+  })
+
+  it('repairs stale Gemini cache-read defaults', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'gemini-2.5-pro',
+      input_per_1m: 1.25,
+      output_per_1m: 10,
+      cache_read_per_1m: 0,
+      cache_write_per_1m: 0,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2026-05-08T00:00:00.000Z',
+    })
+
+    ensurePricingSeeded(db)
+
+    const row = getModelPricing(db, 'gemini-2.5-pro')
+    expect(row?.cache_read_per_1m).toBe(0.125)
+  })
+
+  it('does not overwrite custom user-edited pricing rows', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'gpt-5-codex',
+      input_per_1m: 9,
+      output_per_1m: 99,
+      cache_read_per_1m: 3,
+      cache_write_per_1m: 0,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2026-05-08T00:00:00.000Z',
+    })
+
+    ensurePricingSeeded(db)
+
+    const row = getModelPricing(db, 'gpt-5-codex')
+    expect(row?.input_per_1m).toBe(9)
+    expect(row?.output_per_1m).toBe(99)
+    expect(row?.cache_read_per_1m).toBe(3)
   })
 })

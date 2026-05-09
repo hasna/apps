@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertModelPricing } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession, upsertBudget, upsertModelPricing, upsertBillingDaily } from '../db/database.js'
 import { createHandler } from './serve.js'
 import type { SqliteAdapter as Database } from '@hasna/cloud'
 
@@ -94,6 +94,33 @@ describe('REST API server', () => {
     expect(Array.isArray((data as Record<string, unknown>)['data'])).toBe(true)
   })
 
+  it('GET /api/billing returns provider billing totals', async () => {
+    upsertBillingDaily(db, {
+      date: NOW.substring(0, 10),
+      provider: 'openai',
+      description: 'codex',
+      cost_usd: 12.34,
+      updated_at: NOW,
+    })
+    const { status, data } = await req(handler, '/api/billing?period=all')
+    expect(status).toBe(200)
+    const d = (data as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(d['total_usd']).toBeCloseTo(12.34)
+    expect((d['by_provider'] as Record<string, number>)['openai']).toBeCloseTo(12.34)
+  })
+
+  it('POST /api/billing/sync validates days', async () => {
+    const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 0 })
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('days must be between 1 and 366')
+  })
+
+  it('POST /api/billing/sync validates providers', async () => {
+    const { status, data } = await req(handler, '/api/billing/sync', 'POST', { days: 7, providers: ['unknown'] })
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('invalid billing provider')
+  })
+
   it('GET /api/projects returns project breakdown', async () => {
     const { status, data } = await req(handler, '/api/projects')
     expect(status).toBe(200)
@@ -113,6 +140,14 @@ describe('REST API server', () => {
       period: 'daily', limit_usd: 10, alert_at_percent: 70,
     })
     expect(status).toBe(200)
+  })
+
+  it('POST /api/budgets rejects invalid numeric input', async () => {
+    const { status, data } = await req(handler, '/api/budgets', 'POST', {
+      period: 'daily', limit_usd: 'not-a-number',
+    })
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('limit_usd must be a positive number')
   })
 
   it('POST /api/budgets normalizes day/week/month aliases', async () => {
@@ -139,9 +174,23 @@ describe('REST API server', () => {
   it('POST /api/pricing creates/updates pricing', async () => {
     const { status } = await req(handler, '/api/pricing', 'POST', {
       model: 'new-model', input_per_1m: 5, output_per_1m: 20,
-      cache_read_per_1m: 0.5, cache_write_per_1m: 0,
+      cache_read_per_1m: 0.5, cache_write_per_1m: 0, cache_write_1h_per_1m: 0,
     })
     expect(status).toBe(200)
+  })
+
+  it('POST /api/pricing rejects invalid pricing payloads', async () => {
+    const { status, data } = await req(handler, '/api/pricing', 'POST', {
+      model: '', input_per_1m: -1, output_per_1m: 20,
+    })
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('model is required')
+  })
+
+  it('POST /api/sync rejects invalid source', async () => {
+    const { status, data } = await req(handler, '/api/sync', 'POST', { sources: 'bad-source' })
+    expect(status).toBe(400)
+    expect((data as Record<string, unknown>)['error']).toBe('invalid sync source')
   })
 
   it('GET /api/daily returns daily data', async () => {

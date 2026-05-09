@@ -7,6 +7,7 @@ import {
   listModelPricing, upsertModelPricing, deleteModelPricing,
   upsertGoal, deleteGoal, getGoalStatuses,
   listMachines, getMachineId,
+  queryBillingSummary,
   openDatabase,
 } from '../db/database.js'
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
@@ -50,6 +51,11 @@ function normalizeBudgetPeriod(value: unknown): 'daily' | 'weekly' | 'monthly' {
     default:
       return 'monthly'
   }
+}
+
+function finiteNumber(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
 /** Apply ?fields=f1,f2 filtering — reduces response size by 50-89% */
@@ -122,6 +128,30 @@ export function createHandler(db: Database) {
       return ok(queryModelBreakdown(db))
     }
 
+    // Ground-truth provider billing imported from admin APIs.
+    if (path === '/api/billing' && method === 'GET') {
+      const period = (url.searchParams.get('period') ?? 'month') as Period
+      return ok(queryBillingSummary(db, period))
+    }
+    if (path === '/api/billing/sync' && method === 'POST') {
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const days = Number(body['days'] ?? 31)
+      if (!Number.isFinite(days) || days <= 0 || days > 366) return err('days must be between 1 and 366')
+      const providers = Array.isArray(body['providers']) ? body['providers'] as string[] : ['anthropic', 'openai', 'gemini']
+      const allowedProviders = new Set(['anthropic', 'openai', 'gemini'])
+      if (providers.some(provider => !allowedProviders.has(provider))) return err('invalid billing provider')
+      const results: Record<string, unknown> = {}
+      try {
+        const { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } = await import('../ingest/billing.js')
+        if (providers.includes('anthropic')) results['anthropic'] = await syncAnthropicBilling(db, { days })
+        if (providers.includes('openai')) results['openai'] = await syncOpenAIBilling(db, { days })
+        if (providers.includes('gemini')) results['gemini'] = await syncGeminiBilling(db, { days })
+      } catch (e) {
+        return err(e instanceof Error ? e.message : String(e), 400)
+      }
+      return ok(results)
+    }
+
     // Project breakdown
     if (path === '/api/projects' && method === 'GET') {
       return ok(queryProjectBreakdown(db))
@@ -139,14 +169,18 @@ export function createHandler(db: Database) {
     }
     if (path === '/api/budgets' && method === 'POST') {
       const body = await req.json() as Record<string, unknown>
+      const limitUsd = finiteNumber(body['limit_usd'])
+      const alertAtPercent = finiteNumber(body['alert_at_percent'] ?? 80)
+      if (limitUsd == null || limitUsd <= 0) return err('limit_usd must be a positive number')
+      if (alertAtPercent == null || alertAtPercent <= 0 || alertAtPercent > 100) return err('alert_at_percent must be between 1 and 100')
       const now = new Date().toISOString()
       upsertBudget(db, {
         id: randomUUID(),
         project_path: (body['project_path'] as string | null) ?? null,
         agent: (body['agent'] as Agent | null) ?? null,
         period: normalizeBudgetPeriod(body['period']),
-        limit_usd: Number(body['limit_usd']),
-        alert_at_percent: Number(body['alert_at_percent'] ?? 80),
+        limit_usd: limitUsd,
+        alert_at_percent: alertAtPercent,
         created_at: now,
         updated_at: now,
       })
@@ -188,12 +222,23 @@ export function createHandler(db: Database) {
     }
     if (path === '/api/pricing' && method === 'POST') {
       const body = await req.json() as Record<string, unknown>
+      const model = String(body['model'] ?? '').trim()
+      if (!model) return err('model is required')
+      const input = finiteNumber(body['input_per_1m'])
+      const output = finiteNumber(body['output_per_1m'])
+      const cacheRead = finiteNumber(body['cache_read_per_1m'] ?? 0)
+      const cacheWrite = finiteNumber(body['cache_write_per_1m'] ?? 0)
+      const cacheWrite1h = finiteNumber(body['cache_write_1h_per_1m'] ?? 0)
+      if ([input, output, cacheRead, cacheWrite, cacheWrite1h].some(v => v == null || v < 0)) {
+        return err('pricing values must be non-negative numbers')
+      }
       upsertModelPricing(db, {
-        model: body['model'] as string,
-        input_per_1m: Number(body['input_per_1m']),
-        output_per_1m: Number(body['output_per_1m']),
-        cache_read_per_1m: Number(body['cache_read_per_1m'] ?? 0),
-        cache_write_per_1m: Number(body['cache_write_per_1m'] ?? 0),
+        model,
+        input_per_1m: input!,
+        output_per_1m: output!,
+        cache_read_per_1m: cacheRead!,
+        cache_write_per_1m: cacheWrite!,
+        cache_write_1h_per_1m: cacheWrite1h!,
         updated_at: new Date().toISOString(),
       })
       return ok({ ok: true })
@@ -208,11 +253,22 @@ export function createHandler(db: Database) {
     if (path === '/api/sync' && method === 'POST') {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const sources = (body['sources'] as string | null) ?? 'all'
+      if (!['all', 'claude', 'takumi', 'codex', 'gemini'].includes(sources)) return err('invalid sync source')
       const results: Record<string, unknown> = {}
+      if (sources === 'all') {
+        try {
+          const { syncOpenProjectsRegistry } = await import('../lib/open-projects.js')
+          results['projects'] = await syncOpenProjectsRegistry(db)
+        } catch { /* open-projects registry sync is optional */ }
+      }
       if (sources === 'all' || sources === 'claude') results['claude'] = await ingestClaude(db)
       if (sources === 'all' || sources === 'takumi') results['takumi'] = await ingestTakumi(db)
       if (sources === 'all' || sources === 'codex') results['codex'] = await ingestCodex(db)
       if (sources === 'all' || sources === 'gemini') results['gemini'] = await ingestGemini(db)
+      try {
+        const { checkAndFireWebhooks } = await import('../lib/webhooks.js')
+        await checkAndFireWebhooks(db)
+      } catch { /* webhooks are optional */ }
       return ok(results)
     }
 

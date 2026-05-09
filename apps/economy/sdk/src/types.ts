@@ -1,6 +1,6 @@
 export type Agent = 'claude' | 'codex' | 'gemini' | 'takumi'
 
-export type Period = 'today' | 'week' | 'month' | 'all'
+export type Period = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'all'
 
 export interface EconomyRequest {
   id: string
@@ -11,6 +11,8 @@ export interface EconomyRequest {
   output_tokens: number
   cache_read_tokens: number
   cache_create_tokens: number
+  cache_create_5m_tokens?: number
+  cache_create_1h_tokens?: number
   cost_usd: number
   duration_ms: number
   timestamp: string
@@ -37,6 +39,11 @@ export interface MachineInfo {
   requests: number
   total_cost_usd: number
   last_active: string
+}
+
+export interface BillingSummary {
+  total_usd: number
+  by_provider: Record<string, number>
 }
 
 export interface EconomyProject {
@@ -106,11 +113,26 @@ export interface ModelPricing {
   outputPer1M: number
   cacheReadPer1M: number
   cacheWritePer1M: number
+  cacheWrite1hPer1M?: number
+  input_per_1m?: number
+  output_per_1m?: number
+  cache_read_per_1m?: number
+  cache_write_per_1m?: number
+  cache_write_1h_per_1m?: number
+}
+
+export interface BillingSyncResult {
+  anthropic?: unknown
+  openai?: unknown
+  gemini?: unknown
+  [key: string]: unknown
 }
 
 export interface SyncResult {
   claude?: unknown
+  takumi?: unknown
   codex?: unknown
+  gemini?: unknown
   [key: string]: unknown
 }
 
@@ -121,4 +143,5 @@ export interface SessionFilter {
   limit?: number
   offset?: number
   since?: string
+  search?: string
 }

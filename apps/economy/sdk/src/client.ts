@@ -9,6 +9,8 @@ import type {
   DailyPoint,
   ModelPricing,
   MachineInfo,
+  BillingSummary,
+  BillingSyncResult,
   SyncResult,
   SessionFilter,
 } from './types.js'
@@ -93,6 +95,7 @@ export class EconomyClient {
     if (filter?.agent) params.set('agent', filter.agent)
     if (filter?.project) params.set('project', filter.project)
     if (filter?.machine) params.set('machine', filter.machine)
+    if (filter?.search) params.set('search', filter.search)
     if (filter?.limit != null) params.set('limit', String(filter.limit))
     if (filter?.offset != null) params.set('offset', String(filter.offset))
     if (filter?.since) params.set('since', filter.since)
@@ -135,7 +138,21 @@ export class EconomyClient {
     return this.request<ModelPricing[]>('/api/pricing')
   }
 
-  async sync(sources?: 'all' | 'claude' | 'codex'): Promise<SyncResult> {
+  async getBilling(period?: Period): Promise<BillingSummary> {
+    const params = new URLSearchParams()
+    if (period) params.set('period', period)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return this.request<BillingSummary>(`/api/billing${qs}`)
+  }
+
+  async syncBilling(opts?: { days?: number; providers?: Array<'anthropic' | 'openai' | 'gemini'> }): Promise<BillingSyncResult> {
+    return this.request<BillingSyncResult>('/api/billing/sync', {
+      method: 'POST',
+      body: JSON.stringify(opts ?? {}),
+    })
+  }
+
+  async sync(sources?: 'all' | 'claude' | 'takumi' | 'codex' | 'gemini'): Promise<SyncResult> {
     return this.request<SyncResult>('/api/sync', {
       method: 'POST',
       body: JSON.stringify({ sources: sources ?? 'all' }),

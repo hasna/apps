@@ -78,6 +78,8 @@ function initSchema(db: Database): void {
       output_tokens INTEGER DEFAULT 0,
       cache_read_tokens INTEGER DEFAULT 0,
       cache_create_tokens INTEGER DEFAULT 0,
+      cache_create_5m_tokens INTEGER DEFAULT 0,
+      cache_create_1h_tokens INTEGER DEFAULT 0,
       cost_usd REAL NOT NULL DEFAULT 0,
       duration_ms INTEGER DEFAULT 0,
       timestamp TEXT NOT NULL,
@@ -148,6 +150,7 @@ function initSchema(db: Database): void {
       output_per_1m REAL NOT NULL DEFAULT 0,
       cache_read_per_1m REAL NOT NULL DEFAULT 0,
       cache_write_per_1m REAL NOT NULL DEFAULT 0,
+      cache_write_1h_per_1m REAL NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -179,6 +182,18 @@ function initSchema(db: Database): void {
   if (!cols.some(c => c.name === 'machine_id')) {
     db.exec(`ALTER TABLE requests ADD COLUMN machine_id TEXT DEFAULT ''`)
     db.exec(`ALTER TABLE sessions ADD COLUMN machine_id TEXT DEFAULT ''`)
+  }
+  if (!cols.some(c => c.name === 'cache_create_5m_tokens')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN cache_create_5m_tokens INTEGER DEFAULT 0`)
+    db.exec(`UPDATE requests SET cache_create_5m_tokens = cache_create_tokens WHERE cache_create_5m_tokens = 0`)
+  }
+  if (!cols.some(c => c.name === 'cache_create_1h_tokens')) {
+    db.exec(`ALTER TABLE requests ADD COLUMN cache_create_1h_tokens INTEGER DEFAULT 0`)
+  }
+
+  const pricingCols = db.prepare(`PRAGMA table_info(model_pricing)`).all() as Array<{ name: string }>
+  if (!pricingCols.some(c => c.name === 'cache_write_1h_per_1m')) {
+    db.exec(`ALTER TABLE model_pricing ADD COLUMN cache_write_1h_per_1m REAL NOT NULL DEFAULT 0`)
   }
 
   // Create indexes that depend on machine_id (after migration)
@@ -216,13 +231,17 @@ export function upsertRequest(db: Database, req: EconomyRequest): void {
   db.prepare(`
     INSERT OR REPLACE INTO requests
       (id, agent, session_id, model, input_tokens, output_tokens,
-       cache_read_tokens, cache_create_tokens, cost_usd, duration_ms,
-       timestamp, source_request_id, machine_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       cache_read_tokens, cache_create_tokens, cache_create_5m_tokens,
+       cache_create_1h_tokens, cost_usd, duration_ms, timestamp,
+       source_request_id, machine_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.id, req.agent, req.session_id, req.model,
     req.input_tokens, req.output_tokens, req.cache_read_tokens,
-    req.cache_create_tokens, req.cost_usd, req.duration_ms,
+    req.cache_create_tokens,
+    req.cache_create_5m_tokens ?? req.cache_create_tokens,
+    req.cache_create_1h_tokens ?? 0,
+    req.cost_usd, req.duration_ms,
     req.timestamp, req.source_request_id, req.machine_id ?? '',
   )
 }
@@ -643,15 +662,16 @@ export interface DbModelPricing {
   output_per_1m: number
   cache_read_per_1m: number
   cache_write_per_1m: number
+  cache_write_1h_per_1m?: number
   updated_at: string
 }
 
 export function upsertModelPricing(db: Database, p: DbModelPricing): void {
   db.prepare(`
     INSERT OR REPLACE INTO model_pricing
-      (model, input_per_1m, output_per_1m, cache_read_per_1m, cache_write_per_1m, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(p.model, p.input_per_1m, p.output_per_1m, p.cache_read_per_1m, p.cache_write_per_1m, p.updated_at)
+      (model, input_per_1m, output_per_1m, cache_read_per_1m, cache_write_per_1m, cache_write_1h_per_1m, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(p.model, p.input_per_1m, p.output_per_1m, p.cache_read_per_1m, p.cache_write_per_1m, p.cache_write_1h_per_1m ?? 0, p.updated_at)
 }
 
 export function getModelPricing(db: Database, model: string): DbModelPricing | null {
@@ -666,7 +686,7 @@ export function deleteModelPricing(db: Database, model: string): void {
   db.prepare(`DELETE FROM model_pricing WHERE model = ?`).run(model)
 }
 
-export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number }>): void {
+export function seedModelPricing(db: Database, defaults: Record<string, { inputPer1M: number; outputPer1M: number; cacheReadPer1M: number; cacheWritePer1M: number; cacheWrite1hPer1M?: number }>): void {
   const existing = new Set(
     (db.prepare(`SELECT model FROM model_pricing`).all() as Array<{ model: string }>).map(r => r.model)
   )
@@ -679,6 +699,7 @@ export function seedModelPricing(db: Database, defaults: Record<string, { inputP
       output_per_1m: p.outputPer1M,
       cache_read_per_1m: p.cacheReadPer1M,
       cache_write_per_1m: p.cacheWritePer1M,
+      cache_write_1h_per_1m: p.cacheWrite1hPer1M ?? 0,
       updated_at: now,
     })
   }

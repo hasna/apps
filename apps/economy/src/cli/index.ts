@@ -18,7 +18,7 @@ const program = new Command()
 
 program
   .name('economy')
-  .description('AI coding cost tracker — Claude Code, Codex, and Gemini')
+  .description('AI coding cost tracker — Claude Code, Takumi, Codex, and Gemini')
   .version(packageMetadata.version)
 
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
@@ -69,6 +69,14 @@ function fmtTokens(n: number): string {
 
 function fmtCount(n: number): string {
   return n.toLocaleString('en-US')
+}
+
+function fmtAgent(agent: string): string {
+  if (agent === 'claude') return chalk.blue('claude')
+  if (agent === 'codex') return chalk.yellow('codex')
+  if (agent === 'gemini') return chalk.green('gemini')
+  if (agent === 'takumi') return chalk.magenta('takumi')
+  return chalk.gray(agent)
 }
 
 function printTable(headers: string[], rows: string[][]): void {
@@ -164,7 +172,7 @@ program.action(async () => {
 
 program
   .command('sync')
-  .description('Ingest cost data from Claude Code, Codex, and Gemini')
+  .description('Ingest cost data from Claude Code, Takumi, Codex, and Gemini')
   .option('--claude', 'Only ingest Claude Code telemetry')
   .option('--takumi', 'Only ingest Takumi sessions')
   .option('--codex', 'Only ingest Codex sessions')
@@ -176,11 +184,20 @@ program
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
     const db = openDatabase()
     ensurePricingSeeded(db)
+    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini
+    if (!anySpecific || opts.verbose) {
+      try {
+        const { syncOpenProjectsRegistry } = await import('../lib/open-projects.js')
+        const p = await syncOpenProjectsRegistry(db)
+        if (opts.verbose) console.log(chalk.dim(`Synced open-projects registry: ${p.imported} imported, ${p.skipped} skipped`))
+      } catch (e) {
+        if (opts.verbose) console.log(chalk.dim(`open-projects registry sync skipped: ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
     if (opts.force) {
-      db.exec(`DELETE FROM ingest_state WHERE source = 'claude'`)
+      db.exec(`DELETE FROM ingest_state WHERE source IN ('claude', 'takumi', 'codex', 'gemini')`)
       if (opts.verbose) console.log(chalk.dim('Cleared ingest cache'))
     }
-    const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini
     const doClaude = opts.claude || !anySpecific
     const doTakumi = opts.takumi || !anySpecific
     const doCodex = opts.codex || !anySpecific
@@ -215,10 +232,11 @@ program
     // Recalculate zero-cost requests
     if (opts.recalculate) {
       const { computeCostFromDb } = await import('../lib/pricing.js')
-      const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number }>
+      const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, cache_create_5m_tokens, cache_create_1h_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number; cache_create_5m_tokens?: number; cache_create_1h_tokens?: number }>
       let fixed = 0
       for (const r of zeroRows) {
-        const cost = computeCostFromDb(db, r.model, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_create_tokens)
+        const cache5m = r.cache_create_5m_tokens ?? r.cache_create_tokens
+        const cost = computeCostFromDb(db, r.model, r.input_tokens, r.output_tokens, r.cache_read_tokens, cache5m, r.cache_create_1h_tokens ?? 0)
         if (cost > 0) {
           db.prepare(`UPDATE requests SET cost_usd = ? WHERE id = ?`).run(cost, r.id)
           fixed++
@@ -253,7 +271,7 @@ program.command('month').description('Cost summary for this month').action(async
 program
   .command('sessions')
   .description('List coding sessions with costs')
-  .option('--agent <agent>', 'Filter by agent (claude|codex)')
+  .option('--agent <agent>', 'Filter by agent (claude|takumi|codex|gemini)')
   .option('--project <path>', 'Filter by project path')
   .option('--machine <id>', 'Filter by machine hostname (e.g. spark01, apple01)')
   .option('--limit <n>', 'Number of sessions', '20')
@@ -289,7 +307,7 @@ program
       ['Session ID', 'Agent', 'Project', 'Cost', 'Tokens', 'Requests', 'Started'],
       sessions.map(s => [
         chalk.dim(s.id.substring(0, 12)),
-        s.agent === 'claude' ? chalk.blue('claude') : chalk.yellow('codex'),
+        fmtAgent(s.agent),
         chalk.white(s.project_name || chalk.dim('unknown')),
         fmt(s.total_cost_usd),
         chalk.cyan(fmtTokens(s.total_tokens)),
@@ -323,7 +341,7 @@ program
       sessions.map((s, i) => [
         chalk.dim(String(i + 1)),
         chalk.white(s.project_name || chalk.dim('unknown')),
-        s.agent === 'claude' ? chalk.blue('claude') : chalk.yellow('codex'),
+        fmtAgent(s.agent),
         fmt(s.total_cost_usd),
         chalk.cyan(fmtTokens(s.total_tokens)),
         chalk.dim(s.started_at.substring(0, 16)),
@@ -383,7 +401,7 @@ program
         ['Model', 'Agent', 'Requests', 'Tokens', 'Cost'],
         rows.map(r => [
           chalk.white(r.model),
-          r.agent === 'claude' ? chalk.blue('claude') : chalk.yellow('codex'),
+          fmtAgent(r.agent),
           String(r.requests),
           chalk.cyan(fmtTokens(r.total_tokens)),
           fmt(r.cost_usd),
@@ -417,7 +435,7 @@ budgetCmd
   .option('--period <period>', 'Period: daily|weekly|monthly', 'monthly')
   .option('--limit <usd>', 'Budget limit in USD')
   .option('--alert <percent>', 'Alert threshold %', '80')
-  .option('--agent <agent>', 'Limit to agent (claude|codex)')
+  .option('--agent <agent>', 'Limit to agent (claude|takumi|codex|gemini)')
   .action((opts: { project?: string; period?: string; limit?: string; alert?: string; agent?: string }) => {
     if (!opts.limit) { console.error(chalk.red('--limit is required')); process.exit(1) }
     const db = openDatabase()
@@ -678,7 +696,7 @@ pricingCmd
         fmt(r.input_per_1m),
         fmt(r.output_per_1m),
         fmt(r.cache_read_per_1m),
-        fmt(r.cache_write_per_1m),
+        r.cache_write_1h_per_1m ? `${fmt(r.cache_write_per_1m)} / ${fmt(r.cache_write_1h_per_1m)}` : fmt(r.cache_write_per_1m),
         chalk.dim(fmt(r.output_per_1m / 1000)),
       ]),
     )
@@ -691,8 +709,9 @@ pricingCmd
   .option('--input <usd>', 'Input price per 1M tokens')
   .option('--output <usd>', 'Output price per 1M tokens')
   .option('--cache-read <usd>', 'Cache read price per 1M tokens', '0')
-  .option('--cache-write <usd>', 'Cache write price per 1M tokens', '0')
-  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string }) => {
+  .option('--cache-write <usd>', '5-minute cache write price per 1M tokens', '0')
+  .option('--cache-write-1h <usd>', '1-hour cache write price per 1M tokens', '0')
+  .action((model: string, opts: { input?: string; output?: string; cacheRead?: string; cacheWrite?: string; cacheWrite1h?: string }) => {
     if (!opts.input || !opts.output) { console.error(chalk.red('--input and --output are required')); process.exit(1) }
     const db = openDatabase()
     ensurePricingSeeded(db)
@@ -702,6 +721,7 @@ pricingCmd
       output_per_1m: Number(opts.output),
       cache_read_per_1m: Number(opts.cacheRead ?? 0),
       cache_write_per_1m: Number(opts.cacheWrite ?? 0),
+      cache_write_1h_per_1m: Number(opts.cacheWrite1h ?? 0),
       updated_at: new Date().toISOString(),
     })
     console.log(chalk.green(`✓ Pricing updated for ${model}`))
@@ -790,9 +810,10 @@ program
   .description('Show MCP server install commands')
   .option('--claude', 'Install into Claude Code')
   .option('--codex', 'Install into Codex')
+  .option('--gemini', 'Install into Gemini CLI')
   .option('--all', 'Install into all agents')
-  .action(async (opts: { claude?: boolean; codex?: boolean; all?: boolean }) => {
-    const doAll = opts.all || (!opts.claude && !opts.codex)
+  .action(async (opts: { claude?: boolean; codex?: boolean; gemini?: boolean; all?: boolean }) => {
+    const doAll = opts.all || (!opts.claude && !opts.codex && !opts.gemini)
     if (opts.claude || doAll) {
       console.log(chalk.bold.cyan('\nClaude Code:'))
       console.log(chalk.white('  claude mcp add --transport stdio --scope user economy -- economy-mcp'))
@@ -800,6 +821,10 @@ program
     if (opts.codex || doAll) {
       console.log(chalk.bold.yellow('\nCodex (~/.codex/config.toml):'))
       console.log(chalk.white('  [mcp_servers.economy]\n  command = "economy-mcp"\n  args = []'))
+    }
+    if (opts.gemini || doAll) {
+      console.log(chalk.bold.green('\nGemini (~/.gemini/settings.json):'))
+      console.log(chalk.white('  "mcpServers": { "economy": { "command": "economy-mcp", "args": [] } }'))
     }
     console.log()
   })
@@ -1238,7 +1263,7 @@ program
 const CLOUD_RDS_HOST = 'hasnaxyz-prod-opensource.c4limg0qgqvk.us-east-1.rds.amazonaws.com'
 const CLOUD_RDS_USER = 'hasna_admin'
 const CLOUD_RDS_DB = 'economy'
-const CLOUD_TABLES = ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing']
+const CLOUD_TABLES = ['requests', 'sessions', 'projects', 'budgets', 'goals', 'model_pricing', 'billing_daily']
 
 async function getCloudPassword(): Promise<string> {
   if (process.env['ECONOMY_PG_PASSWORD']) return process.env['ECONOMY_PG_PASSWORD']

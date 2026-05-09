@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerCloudTools } from '@hasna/cloud'
 import { z } from 'zod'
-import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId } from '../db/database.js'
+import { openDatabase, getDbPath, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, queryBillingSummary } from '../db/database.js'
 import { PG_MIGRATIONS } from '../db/pg-migrations.js'
 import { ingestClaude, ingestTakumi } from '../ingest/claude.js'
 import { ingestCodex } from '../ingest/codex.js'
@@ -55,6 +55,7 @@ const TOOL_NAMES = [
   'get_project_breakdown',
   'get_budget_status',
   'get_daily',
+  'get_billing_summary',
   'get_session_detail',
   'sync',
   'search_tools',
@@ -72,15 +73,16 @@ const TOOL_NAMES = [
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_cost_summary: 'period(today|week|month|year|all), machine?(hostname) -> {total_usd, sessions, requests, tokens, summary}',
-  get_sessions: 'agent(claude|codex|gemini), project(partial), machine?(hostname), limit(20) -> compact session table',
-  get_top_sessions: 'n(10), agent(claude|codex|gemini) -> top sessions by cost',
+  get_sessions: 'agent(claude|takumi|codex|gemini), project(partial), machine?(hostname), limit(20) -> compact session table',
+  get_top_sessions: 'n(10), agent(claude|takumi|codex|gemini) -> top sessions by cost',
   list_machines: 'no params -> machine_id, sessions, requests, cost, last_active',
   get_model_breakdown: 'no params -> model, requests, tokens, cost',
   get_project_breakdown: 'no params -> project_name, sessions, cost',
   get_budget_status: 'no params -> budget limits, current spend, percent_used, is_over_alert',
   get_daily: 'days(30) -> daily cost table grouped by date and agent',
+  get_billing_summary: 'period(today|yesterday|week|month|year|all) -> actual provider billing totals',
   get_session_detail: 'session_id(prefix ok) -> per-request breakdown with model, tokens, cost',
-  sync: 'sources(all|claude|codex|gemini) -> ingest latest cost data',
+  sync: 'sources(all|claude|takumi|codex|gemini) -> ingest latest cost data',
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
   get_goals: 'no params -> goal progress summary',
@@ -244,22 +246,38 @@ server.tool(
   { days: z.number().int().positive().max(365).optional() },
   async ({ days }: { days?: number }) => {
     const rows = queryDailyBreakdown(db, days ?? 30) as Array<Record<string, unknown>>
-    const byDate = new Map<string, { claude: number; codex: number; gemini: number }>()
+    const byDate = new Map<string, { claude: number; takumi: number; codex: number; gemini: number }>()
 
     for (const row of rows) {
       const date = String(row['date'])
-      const entry = byDate.get(date) ?? { claude: 0, codex: 0, gemini: 0 }
+      const entry = byDate.get(date) ?? { claude: 0, takumi: 0, codex: 0, gemini: 0 }
       if (row['agent'] === 'claude') entry.claude += Number(row['cost_usd'])
+      else if (row['agent'] === 'takumi') entry.takumi += Number(row['cost_usd'])
       else if (row['agent'] === 'codex') entry.codex += Number(row['cost_usd'])
       else if (row['agent'] === 'gemini') entry.gemini += Number(row['cost_usd'])
       byDate.set(date, entry)
     }
 
-    const lines = ['date        claude     codex      gemini     total']
+    const lines = ['date        claude     takumi     codex      gemini     total']
     for (const [date, costs] of [...byDate.entries()].sort()) {
-      const total = costs.claude + costs.codex + costs.gemini
-      lines.push(`${date}  ${fmtUsd(costs.claude).padEnd(11)}${fmtUsd(costs.codex).padEnd(11)}${fmtUsd(costs.gemini).padEnd(11)}${fmtUsd(total)}`)
+      const total = costs.claude + costs.takumi + costs.codex + costs.gemini
+      lines.push(`${date}  ${fmtUsd(costs.claude).padEnd(11)}${fmtUsd(costs.takumi).padEnd(11)}${fmtUsd(costs.codex).padEnd(11)}${fmtUsd(costs.gemini).padEnd(11)}${fmtUsd(total)}`)
     }
+    return text(lines.join('\n'))
+  },
+)
+
+server.tool(
+  'get_billing_summary',
+  'Actual provider billing totals from admin API sync. Params: period(today|yesterday|week|month|year|all)',
+  { period: z.enum(['today', 'yesterday', 'week', 'month', 'year', 'all']).optional() },
+  async ({ period }: { period?: Period }) => {
+    const summary = queryBillingSummary(db, period ?? 'month')
+    const lines = ['provider    billed']
+    for (const [provider, cost] of Object.entries(summary.by_provider)) {
+      lines.push(`${provider.padEnd(11)}${fmtUsd(cost)}`)
+    }
+    lines.push(`total       ${fmtUsd(summary.total_usd)}`)
     return text(lines.join('\n'))
   },
 )
@@ -278,11 +296,20 @@ server.tool(
       `agent: ${session['agent']}  project: ${session['project_name'] || '—'}`,
       `cost: ${fmtUsd(Number(session['total_cost_usd']))}  tokens: ${fmtTok(Number(session['total_tokens']))}  requests: ${session['request_count']}`,
       '',
-      'time      model                  input    output   cost',
+      'time      model                  input    output   cache-r  cache-5m cache-1h cost',
     ]
 
     for (const request of requests) {
-      lines.push(`${String(request['timestamp']).slice(11, 19)}  ${String(request['model']).slice(0, 22).padEnd(23)}${fmtTok(Number(request['input_tokens'])).padEnd(9)}${fmtTok(Number(request['output_tokens'])).padEnd(9)}${fmtUsd(Number(request['cost_usd']))}`)
+      lines.push(
+        `${String(request['timestamp']).slice(11, 19)}  ` +
+        `${String(request['model']).slice(0, 22).padEnd(23)}` +
+        `${fmtTok(Number(request['input_tokens'])).padEnd(9)}` +
+        `${fmtTok(Number(request['output_tokens'])).padEnd(9)}` +
+        `${fmtTok(Number(request['cache_read_tokens'])).padEnd(9)}` +
+        `${fmtTok(Number(request['cache_create_5m_tokens'] ?? request['cache_create_tokens'] ?? 0)).padEnd(9)}` +
+        `${fmtTok(Number(request['cache_create_1h_tokens'] ?? 0)).padEnd(9)}` +
+        `${fmtUsd(Number(request['cost_usd']))}`,
+      )
     }
     return text(lines.join('\n'))
   },
@@ -306,11 +333,11 @@ server.tool(
     }
     if (selected === 'all' || selected === 'codex') {
       const result = await ingestCodex(db) as Record<string, number>
-      parts.push(`codex: ${result['sessions']} sessions`)
+      parts.push(`codex: ${result['sessions']} sessions, ${result['requests']} requests`)
     }
     if (selected === 'all' || selected === 'gemini') {
       const result = await ingestGemini(db) as Record<string, number>
-      parts.push(`gemini: ${result['sessions']} sessions`)
+      parts.push(`gemini: ${result['sessions']} sessions, ${result['requests']} requests`)
     }
 
     return text(parts.join('\n') || 'done')

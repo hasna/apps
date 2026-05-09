@@ -1,7 +1,8 @@
 import chalk from 'chalk'
 import { openDatabase, querySummary, queryRequestsSince } from '../../db/database.js'
-import { ingestClaude } from '../../ingest/claude.js'
+import { ingestClaude, ingestTakumi } from '../../ingest/claude.js'
 import { ingestCodex } from '../../ingest/codex.js'
+import { ingestGemini } from '../../ingest/gemini.js'
 import type { Agent } from '../../types/index.js'
 
 interface WatchOptions {
@@ -31,6 +32,14 @@ function renderHeader(todayUsd: number, weekUsd: number): void {
   console.log(chalk.dim('  ─────────────────────────────────────────'))
 }
 
+function agentLabel(agent: string): string {
+  if (agent === 'claude') return chalk.blue('[claude]')
+  if (agent === 'codex') return chalk.yellow('[codex] ')
+  if (agent === 'gemini') return chalk.green('[gemini]')
+  if (agent === 'takumi') return chalk.magenta('[takumi]')
+  return chalk.gray(`[${agent.slice(0, 6).padEnd(6)}]`)
+}
+
 export async function watchCosts(opts: WatchOptions): Promise<void> {
   const db = openDatabase()
   let lastCheck = new Date(Date.now() - opts.interval * 1000).toISOString()
@@ -53,7 +62,9 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
 
     // Incremental ingest
     await ingestClaude(db)
+    await ingestTakumi(db)
     await ingestCodex(db)
+    await ingestGemini(db)
 
     // Get new requests since last check
     const newRequests = queryRequestsSince(db, lastCheck)
@@ -62,11 +73,10 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
     for (const req of newRequests) {
       if (opts.agent && req.agent !== opts.agent) continue
 
-      const agentLabel = req.agent === 'claude' ? chalk.blue('[claude]') : chalk.yellow('[codex] ')
       const tokens = req.input_tokens + req.output_tokens
       const tokStr = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
 
-      const line = `  ${agentLabel}  ${fmt(req.cost_usd).padEnd(14)}${req.model.substring(0, 24).padEnd(26)}${tokStr.padEnd(10)}${req.session_id.substring(0, 12)}`
+      const line = `  ${agentLabel(req.agent)}  ${fmt(req.cost_usd).padEnd(14)}${req.model.substring(0, 24).padEnd(26)}${tokStr.padEnd(10)}${req.session_id.substring(0, 12)}`
       lines.push(line)
       if (lines.length > MAX_LINES) lines.shift()
 

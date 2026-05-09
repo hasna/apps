@@ -15,6 +15,8 @@ export const PG_MIGRATIONS: string[] = [
     output_tokens INTEGER DEFAULT 0,
     cache_read_tokens INTEGER DEFAULT 0,
     cache_create_tokens INTEGER DEFAULT 0,
+    cache_create_5m_tokens INTEGER DEFAULT 0,
+    cache_create_1h_tokens INTEGER DEFAULT 0,
     cost_usd REAL NOT NULL DEFAULT 0,
     duration_ms INTEGER DEFAULT 0,
     timestamp TEXT NOT NULL,
@@ -94,8 +96,13 @@ export const PG_MIGRATIONS: string[] = [
     output_per_1m REAL NOT NULL DEFAULT 0,
     cache_read_per_1m REAL NOT NULL DEFAULT 0,
     cache_write_per_1m REAL NOT NULL DEFAULT 0,
+    cache_write_1h_per_1m REAL NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cache_create_5m_tokens INTEGER DEFAULT 0`,
+  `ALTER TABLE requests ADD COLUMN IF NOT EXISTS cache_create_1h_tokens INTEGER DEFAULT 0`,
+  `ALTER TABLE model_pricing ADD COLUMN IF NOT EXISTS cache_write_1h_per_1m REAL NOT NULL DEFAULT 0`,
 
   // Feedback table
   `CREATE TABLE IF NOT EXISTS feedback (
@@ -107,4 +114,15 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  `CREATE TABLE IF NOT EXISTS billing_daily (
+    date TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    cost_usd REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (date, provider, description)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_billing_date ON billing_daily(date)`,
+  `CREATE INDEX IF NOT EXISTS idx_billing_provider ON billing_daily(provider)`,
 ];
