@@ -72,7 +72,7 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   'grok-3-mini':        { inputPer1M: 0.30,  outputPer1M: 0.50,  cacheReadPer1M: 0.07, cacheWritePer1M: 0 },
   'glm-5.1':            { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'glm-5':              { inputPer1M: 0.70,  outputPer1M: 0.70,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
-  'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 0.60,  cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'kimi-k2':            { inputPer1M: 0.60,  outputPer1M: 2.50,  cacheReadPer1M: 0.15, cacheWritePer1M: 0 },
 }
 
 const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
@@ -87,6 +87,7 @@ const LEGACY_DEFAULT_PRICING: Record<string, ModelPricing> = {
   'o1-mini': { inputPer1M: 3.00, outputPer1M: 12.00, cacheReadPer1M: 1.50, cacheWritePer1M: 0 },
   'grok-3': { inputPer1M: 3.00, outputPer1M: 15.00, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'grok-3-mini': { inputPer1M: 0.30, outputPer1M: 0.50, cacheReadPer1M: 0, cacheWritePer1M: 0 },
+  'kimi-k2': { inputPer1M: 0.60, outputPer1M: 0.60, cacheReadPer1M: 0, cacheWritePer1M: 0 },
   'o3': { inputPer1M: 10.00, outputPer1M: 40.00, cacheReadPer1M: 2.50, cacheWritePer1M: 0 },
 }
 
@@ -129,6 +130,15 @@ interface PromptTier {
   inputMultiplier?: number
   outputMultiplier?: number
   cacheReadMultiplier?: number
+}
+
+const FREE_PRICING: ModelPricing = {
+  inputPer1M: 0,
+  outputPer1M: 0,
+  cacheReadPer1M: 0,
+  cacheWritePer1M: 0,
+  cacheWrite1hPer1M: 0,
+  cacheStoragePer1MHour: 0,
 }
 
 const GEMINI_PROMPT_TIERS: Record<string, PromptTier> = {
@@ -342,6 +352,7 @@ function samePricing(row: {
 
 // Look up pricing from DB, fallback to defaults for unknown models.
 export function getPricingFromDb(db: Database, model: string): ModelPricing | null {
+  if (isFreeModel(model)) return FREE_PRICING
   const normalized = normalizeModelName(model)
 
   const row = getModelPricing(db, normalized)
@@ -391,9 +402,14 @@ export function getPricingFromDb(db: Database, model: string): ModelPricing | nu
 
 // Stateless fallback (no DB) - used in tests and SDK.
 export function getPricing(model: string): ModelPricing | null {
+  if (isFreeModel(model)) return FREE_PRICING
   const normalized = normalizeModelName(model)
   if (DEFAULT_PRICING[normalized]) return DEFAULT_PRICING[normalized] ?? null
   return bestPrefixMatch(normalized, Object.entries(DEFAULT_PRICING))
+}
+
+function isFreeModel(model: string): boolean {
+  return model.trim().toLowerCase().endsWith(':free')
 }
 
 export function computeCost(

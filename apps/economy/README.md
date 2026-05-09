@@ -111,6 +111,8 @@ economy pricing set gemini-3.1-pro-preview --input 2 --output 12 --cache-read 0.
 
 Pricing supports separate cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates. Custom user-edited rows are preserved when default pricing seeds are repaired or updated.
 
+OpenRouter-style model IDs ending in `:free` are treated as zero-cost variants even when their base model has a paid default row.
+
 ## Billing
 
 Estimated costs can be reconciled with provider billing:

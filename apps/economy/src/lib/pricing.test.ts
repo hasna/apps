@@ -101,6 +101,11 @@ describe('getPricing', () => {
       outputPer1M: 0.50,
       cacheReadPer1M: 0.07,
     })
+    expect(getPricing('kimi-k2')).toMatchObject({
+      inputPer1M: 0.60,
+      outputPer1M: 2.50,
+      cacheReadPer1M: 0.15,
+    })
   })
 
   it('returns pricing for every known default model', () => {
@@ -125,6 +130,15 @@ describe('getPricing', () => {
     expect(getPricing('gemini-1.5-pro')).toBeNull()
     expect(getPricing('gemini-1.5-flash')).toBeNull()
     expect(getPricing('gpt-5.3-chat')).toBeNull()
+  })
+
+  it('treats explicit free model variants as zero-cost rows', () => {
+    expect(getPricing('qwen/qwen3.6-plus-04-02:free')).toMatchObject({
+      inputPer1M: 0,
+      outputPer1M: 0,
+      cacheReadPer1M: 0,
+      cacheWritePer1M: 0,
+    })
   })
 })
 
@@ -169,6 +183,7 @@ describe('computeCost', () => {
   it('returns 0 for unknown model or zero tokens', () => {
     expect(computeCost('unknown-xyz', 100_000, 50_000)).toBe(0)
     expect(computeCost('claude-sonnet-4-6', 0, 0)).toBe(0)
+    expect(computeCost('qwen/qwen3.6-plus-04-02:free', 1_000_000, 1_000_000, 1_000_000)).toBe(0)
   })
 })
 
@@ -219,6 +234,26 @@ describe('ensurePricingSeeded', () => {
 
     expect(getModelPricing(db, 'o1-mini')?.cache_read_per_1m).toBe(0.55)
     expect(getModelPricing(db, 'grok-3')?.cache_read_per_1m).toBe(0.75)
+  })
+
+  it('repairs stale Kimi K2 default pricing', () => {
+    const db = openDatabase(':memory:', true)
+    upsertModelPricing(db, {
+      model: 'kimi-k2',
+      input_per_1m: 0.60,
+      output_per_1m: 0.60,
+      cache_read_per_1m: 0,
+      cache_write_per_1m: 0,
+      cache_write_1h_per_1m: 0,
+      updated_at: '2026-05-08T00:00:00.000Z',
+    })
+
+    ensurePricingSeeded(db)
+
+    const row = getModelPricing(db, 'kimi-k2')
+    expect(row?.input_per_1m).toBe(0.60)
+    expect(row?.output_per_1m).toBe(2.50)
+    expect(row?.cache_read_per_1m).toBe(0.15)
   })
 
   it('repairs default rows that were seeded before 1h cache write pricing existed', () => {
