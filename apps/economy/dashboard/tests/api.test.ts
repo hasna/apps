@@ -123,7 +123,7 @@ describe("dashboard API client", () => {
       return jsonResponse({ data: {} })
     }
 
-    await api.createBudget({ project_path: "/workspace/open-economy", period: "weekly", limit_usd: 25, alert_at_percent: 70 })
+    await api.createBudget({ project_path: "/workspace/open-economy", agent: "takumi", period: "weekly", limit_usd: 25, alert_at_percent: 70 })
     await api.createPricing({
       model: "custom-model",
       input_per_1m: 1,
@@ -147,6 +147,7 @@ describe("dashboard API client", () => {
     expect(requests.map((request) => request.init?.method)).toEqual(["POST", "POST", "POST", "POST", "POST"])
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({
       project_path: "/workspace/open-economy",
+      agent: "takumi",
       period: "weekly",
       limit_usd: 25,
       alert_at_percent: 70,

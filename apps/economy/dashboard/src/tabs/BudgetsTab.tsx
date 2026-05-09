@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { FormEvent } from "react";
 import { getBudgets, createBudget, deleteBudget } from "../api";
-import type { Budget } from "../api";
+import type { Agent, Budget } from "../api";
 import { PlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,12 @@ const columns: DataTableColumn<Budget>[] = [
     render: (val) => <span className="font-medium">{(val as string) || "Global"}</span>,
   },
   {
+    header: "Agent",
+    accessor: "agent",
+    sortable: true,
+    render: (val) => <span className="capitalize">{(val as string | null) || "All"}</span>,
+  },
+  {
     header: "Period",
     accessor: "period",
     sortable: true,
@@ -79,6 +85,7 @@ export function BudgetsTab() {
   const [error, setError] = useState<string | null>(null);
 
   const [projectPath, setProjectPath] = useState("");
+  const [agent, setAgent] = useState<Agent | "">("");
   const [period, setPeriod] = useState<Budget["period"]>("monthly");
   const [limitUsd, setLimitUsd] = useState("");
   const [alertAt, setAlertAt] = useState("80");
@@ -123,11 +130,13 @@ export function BudgetsTab() {
     try {
       await createBudget({
         project_path: projectPath || undefined,
+        agent: agent || undefined,
         period,
         limit_usd: Number(limitUsd),
         alert_at_percent: Number(alertAt),
       });
       setProjectPath("");
+      setAgent("");
       setLimitUsd("");
       load();
     } catch (e) {
@@ -143,6 +152,7 @@ export function BudgetsTab() {
       icon: <PencilIcon className="size-4" />,
       onClick: (row) => {
         setProjectPath(row.project_path || "");
+        setAgent(row.agent || "");
         setPeriod(row.period);
         setLimitUsd(String(row.limit_usd));
       },
@@ -183,7 +193,7 @@ export function BudgetsTab() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleAdd} className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <div className="space-y-1.5 lg:col-span-2">
                 <label className="text-xs font-medium text-muted-foreground">
                   Project Path (optional)
@@ -194,6 +204,20 @@ export function BudgetsTab() {
                   value={projectPath}
                   onChange={(e) => setProjectPath(e.target.value)}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Agent</label>
+                <select
+                  value={agent}
+                  onChange={(e) => setAgent(e.target.value as Agent | "")}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="">All agents</option>
+                  <option value="claude">Claude</option>
+                  <option value="takumi">Takumi</option>
+                  <option value="codex">Codex</option>
+                  <option value="gemini">Gemini</option>
+                </select>
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Period</label>

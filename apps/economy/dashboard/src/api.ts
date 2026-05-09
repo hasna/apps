@@ -1,5 +1,7 @@
 const API_BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3456'
 
+export type Agent = 'claude' | 'takumi' | 'codex' | 'gemini'
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`
   const res = await fetch(url, {
@@ -58,6 +60,7 @@ export interface ProjectStat {
 export interface Budget {
   id: string
   project_path: string | null
+  agent: Agent | null
   period: "daily" | "weekly" | "monthly"
   limit_usd: number
   alert_at_percent: number
@@ -155,6 +158,7 @@ export const getBudgets = () =>
 
 export const createBudget = (body: {
   project_path?: string
+  agent?: Agent
   period: "daily" | "weekly" | "monthly"
   limit_usd: number
   alert_at_percent?: number
@@ -203,7 +207,7 @@ export interface GoalStatus {
   id: string
   period: 'day' | 'week' | 'month' | 'year'
   project_path: string | null
-  agent: string | null
+  agent: Agent | null
   limit_usd: number
   current_spend_usd: number
   percent_used: number
@@ -215,7 +219,7 @@ export interface GoalStatus {
 export const getGoals = () =>
   request<{ data: GoalStatus[] }>('/api/goals')
 
-export const createGoal = (goal: { period: string; limit_usd: number; project_path?: string; agent?: string }) =>
+export const createGoal = (goal: { period: string; limit_usd: number; project_path?: string; agent?: Agent }) =>
   request<{ data: GoalStatus }>('/api/goals', {
     method: 'POST',
     body: JSON.stringify(goal),
