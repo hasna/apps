@@ -58,6 +58,16 @@ describe('getPricing', () => {
       outputPer1M: 2.50,
       cacheReadPer1M: 0.20,
     })
+    expect(getPricing('grok-4.3')).toMatchObject({
+      inputPer1M: 1.25,
+      outputPer1M: 2.50,
+      cacheReadPer1M: 0.20,
+    })
+    expect(getPricing('grok-4-1-fast-non-reasoning')).toMatchObject({
+      inputPer1M: 0.20,
+      outputPer1M: 0.50,
+      cacheReadPer1M: 0.05,
+    })
   })
 
   it('returns pricing for every known default model', () => {
@@ -70,6 +80,7 @@ describe('getPricing', () => {
     expect(getPricing('gpt-5.4-pro-extra')).toMatchObject({ inputPer1M: 30.00, outputPer1M: 180.00 })
     expect(getPricing('gpt-5.4-mini-2026-01-01')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 4.50 })
     expect(getPricing('gemini-3.1-pro-preview-customtools')).toMatchObject({ inputPer1M: 2.00, outputPer1M: 12.00 })
+    expect(getPricing('grok-4-1-fast-reasoning-latest')).toMatchObject({ inputPer1M: 0.20, outputPer1M: 0.50 })
   })
 
   it('returns null for unknown models', () => {
