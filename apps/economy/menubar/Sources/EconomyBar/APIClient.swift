@@ -46,7 +46,13 @@ actor APIClient {
   func isOnline() async -> Bool {
     var req = URLRequest(url: URL(string: "\(base)/health")!)
     req.timeoutInterval = 1.5
-    return (try? await session.data(for: req)) != nil
+    do {
+      let (_, response) = try await session.data(for: req)
+      guard let http = response as? HTTPURLResponse else { return false }
+      return (200..<300).contains(http.statusCode)
+    } catch {
+      return false
+    }
   }
 
   func fetchSummary(period: String) async throws -> CostSummary {

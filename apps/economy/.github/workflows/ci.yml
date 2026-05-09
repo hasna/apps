@@ -48,6 +48,8 @@ jobs:
   menubar:
     name: Menubar Swift build
     runs-on: blacksmith-6vcpu-macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - name: Run tests

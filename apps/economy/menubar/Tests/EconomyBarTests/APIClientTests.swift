@@ -1,20 +1,17 @@
 import Foundation
-import XCTest
+import Testing
 @testable import EconomyBar
 
-final class APIClientTests: XCTestCase {
-  override func tearDown() {
-    MockURLProtocol.handler = nil
-    super.tearDown()
+@Suite(.serialized)
+struct APIClientTests {
+  @Test func normalizeBaseURL() {
+    #expect(APIClient.normalizeBaseURL(" economy.local:3456/ ") == "http://economy.local:3456")
+    #expect(APIClient.normalizeBaseURL("https://economy.local/api/") == "https://economy.local/api")
+    #expect(APIClient.normalizeBaseURL("   ") == APIClient.defaultBaseURL)
   }
 
-  func testNormalizeBaseURL() {
-    XCTAssertEqual(APIClient.normalizeBaseURL(" economy.local:3456/ "), "http://economy.local:3456")
-    XCTAssertEqual(APIClient.normalizeBaseURL("https://economy.local/api/"), "https://economy.local/api")
-    XCTAssertEqual(APIClient.normalizeBaseURL("   "), APIClient.defaultBaseURL)
-  }
-
-  func testFetchSessionsEncodesSearchAndDecodesWrappedResponse() async throws {
+  @Test func fetchSessionsEncodesSearchAndDecodesWrappedResponse() async throws {
+    defer { MockURLProtocol.handler = nil }
     var capturedRequest: URLRequest?
     MockURLProtocol.handler = { request in
       capturedRequest = request
@@ -47,19 +44,48 @@ final class APIClientTests: XCTestCase {
     let client = APIClient(baseURL: "https://economy.test/", session: makeSession())
     let sessions = try await client.fetchSessions(search: " codex project ", limit: 10)
 
-    XCTAssertEqual(sessions.count, 1)
-    XCTAssertEqual(sessions[0].agent, "codex")
-    XCTAssertEqual(sessions[0].displayProject, "open-economy")
+    #expect(sessions.count == 1)
+    #expect(sessions[0].agent == "codex")
+    #expect(sessions[0].displayProject == "open-economy")
 
-    let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(capturedRequest?.url), resolvingAgainstBaseURL: false))
-    XCTAssertEqual(components.scheme, "https")
-    XCTAssertEqual(components.host, "economy.test")
-    XCTAssertEqual(components.path, "/api/sessions")
-    XCTAssertEqual(components.queryItems?.first(where: { $0.name == "limit" })?.value, "10")
-    XCTAssertEqual(components.queryItems?.first(where: { $0.name == "search" })?.value, "codex project")
+    let requestURL = try #require(capturedRequest?.url)
+    let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+    #expect(components.scheme == "https")
+    #expect(components.host == "economy.test")
+    #expect(components.path == "/api/sessions")
+    #expect(components.queryItems?.first(where: { $0.name == "limit" })?.value == "10")
+    #expect(components.queryItems?.first(where: { $0.name == "search" })?.value == "codex project")
   }
 
-  func testServerStatusThrowsServerError() async throws {
+  @Test func isOnlineRequiresSuccessfulHTTPStatus() async {
+    defer { MockURLProtocol.handler = nil }
+    let client = APIClient(baseURL: "http://economy.test", session: makeSession())
+
+    MockURLProtocol.handler = { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"]
+      )!
+      return (response, Data(#"{"data":{"status":"ok"}}"#.utf8))
+    }
+    #expect(await client.isOnline())
+
+    MockURLProtocol.handler = { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 503,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"]
+      )!
+      return (response, Data(#"{"error":"unavailable"}"#.utf8))
+    }
+    #expect(await client.isOnline() == false)
+  }
+
+  @Test func serverStatusThrowsServerError() async throws {
+    defer { MockURLProtocol.handler = nil }
     MockURLProtocol.handler = { request in
       let response = HTTPURLResponse(
         url: request.url!,
@@ -72,17 +98,19 @@ final class APIClientTests: XCTestCase {
 
     let client = APIClient(baseURL: "http://economy.test", session: makeSession())
 
+    var sawServerError = false
     do {
       _ = try await client.fetchSummary(period: "today")
-      XCTFail("Expected serverError")
     } catch APIError.serverError(let statusCode) {
-      XCTAssertEqual(statusCode, 503)
+      #expect(statusCode == 503)
+      sawServerError = true
     } catch {
-      XCTFail("Unexpected error: \(error)")
+      sawServerError = false
     }
+    #expect(sawServerError)
   }
 
-  func testModelDisplayFallbacks() {
+  @Test func modelDisplayFallbacks() {
     let namedProject = ProjectStat(
       project_path: "/workspace/hasna/open-economy",
       project_name: "Economy",
@@ -90,7 +118,7 @@ final class APIClientTests: XCTestCase {
       cost_usd: 12.5,
       last_active: nil
     )
-    XCTAssertEqual(namedProject.displayName, "Economy")
+    #expect(namedProject.displayName == "Economy")
 
     let pathProject = ProjectStat(
       project_path: "/workspace/hasna/open-economy",
@@ -99,7 +127,7 @@ final class APIClientTests: XCTestCase {
       cost_usd: 12.5,
       last_active: nil
     )
-    XCTAssertEqual(pathProject.displayName, "open-economy")
+    #expect(pathProject.displayName == "open-economy")
 
     let session = SessionStat(
       id: "session-abcdef1234567890",
@@ -112,9 +140,9 @@ final class APIClientTests: XCTestCase {
       started_at: "not-a-date",
       ended_at: nil
     )
-    XCTAssertEqual(session.displayProject, "open-economy")
-    XCTAssertEqual(session.shortId, "session-abcd")
-    XCTAssertEqual(session.startedAtLabel, "not-a-date")
+    #expect(session.displayProject == "open-economy")
+    #expect(session.shortId == "session-abcd")
+    #expect(session.startedAtLabel == "not-a-date")
   }
 
   private func makeSession() -> URLSession {
@@ -125,7 +153,7 @@ final class APIClientTests: XCTestCase {
 }
 
 final class MockURLProtocol: URLProtocol {
-  static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+  nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
   override class func canInit(with request: URLRequest) -> Bool {
     true
