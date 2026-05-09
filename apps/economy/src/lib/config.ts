@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { getDataDir } from '../db/database.js'
 
 function getConfigPath(): string {
@@ -37,7 +37,7 @@ export function loadConfig(): EconomyConfig {
 
 export function saveConfig(config: EconomyConfig): void {
   const configPath = getConfigPath()
-  const dir = configPath.substring(0, configPath.lastIndexOf('/'))
+  const dir = dirname(configPath)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
 }

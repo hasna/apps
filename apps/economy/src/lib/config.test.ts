@@ -6,6 +6,7 @@ import { getConfigValue, loadConfig, saveConfig, setConfigValue } from './config
 
 let root: string
 let configPath: string
+const originalCwd = process.cwd()
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'economy-config-test-'))
@@ -14,6 +15,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  process.chdir(originalCwd)
   delete process.env['HASNA_ECONOMY_CONFIG_PATH']
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
@@ -52,6 +54,16 @@ describe('config', () => {
       'sync-interval': 15,
       'alert-thresholds': [50, 90],
     })
+  })
+
+  it('supports relative config override paths without an explicit directory', () => {
+    process.chdir(root)
+    process.env['HASNA_ECONOMY_CONFIG_PATH'] = 'config.json'
+
+    setConfigValue('port', '7890')
+
+    expect(existsSync(join(root, 'config.json'))).toBe(true)
+    expect(getConfigValue('port')).toBe(7890)
   })
 
   it('sets and parses config values from CLI strings', () => {
