@@ -14,6 +14,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "import": "./dist/registry.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js"
     }
   },
   "files": [
@@ -23,7 +39,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/logs && bun build src/index.ts --outdir dist --target bun --external @hasna/logs && tsc --emitDeclarationOnly --outDir dist",
+    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/logs && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/logs && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts --outdir dist --target bun --external @hasna/logs && tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

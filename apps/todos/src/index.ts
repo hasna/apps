@@ -13,6 +13,47 @@ export type {
   TodosCapabilityStability,
 } from "./capabilities.js";
 
+// Stable integration contracts
+export { TODOS_CONTRACTS, TODOS_API_ROUTES, TODOS_ERROR_CODES, createContractsManifest } from "./contracts.js";
+export type {
+  CreateContractsManifestOptions,
+  TodosApiRouteContract,
+  TodosContractPackageSource,
+  TodosContractsManifest,
+  TodosContractStability,
+  TodosErrorContract,
+  TodosHttpMethod,
+  TodosJsonSchema,
+} from "./contracts.js";
+
+// Side-effect-free MCP metadata
+export {
+  CORE_MCP_TOOLS,
+  MCP_PROFILE_GROUPS,
+  MCP_TOOL_GROUPS,
+  TODOS_MCP_MANIFEST,
+  createMcpManifest,
+  getMcpToolNames,
+  shouldRegisterToolForProfile,
+} from "./mcp.js";
+export type {
+  CreateMcpManifestOptions,
+  GetMcpToolNamesOptions,
+  TodosMcpManifest,
+  TodosMcpPackageSource,
+  TodosMcpStability,
+  TodosMcpToolContract,
+} from "./mcp.js";
+
+// Package registry manifest
+export { TODOS_PACKAGE_EXPORTS, TODOS_REGISTRY, createTodosRegistry } from "./registry.js";
+export type {
+  CreateTodosRegistryOptions,
+  TodosPackageExportContract,
+  TodosPackageSource,
+  TodosRegistry,
+} from "./registry.js";
+
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 
