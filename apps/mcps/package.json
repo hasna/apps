@@ -3,12 +3,20 @@
   "version": "0.0.12",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/mcps.git"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./mcp": {
+      "import": "./dist/mcp/index.js",
+      "types": "./dist/mcp/index.d.ts"
     }
   },
   "bin": {
@@ -23,7 +31,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun run build:dashboard && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun run scripts/fix-shebangs.ts && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run build:dashboard && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun run scripts/fix-shebangs.ts && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/mcp/index.ts --outdir ./dist/mcp --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "dev": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",

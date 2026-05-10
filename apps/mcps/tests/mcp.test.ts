@@ -2,14 +2,10 @@ import { describe, it, expect, beforeEach, afterAll } from "bun:test";
 import "./setup";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
-import { addServer, listServers, getServer, removeServer } from "../src/lib/registry";
+import { readFileSync } from "fs";
+import { addServer, getServer } from "../src/lib/registry";
 import { getDb, closeDb } from "../src/lib/db";
-
-// We can't import the module-level `server` from mcp/index.ts without
-// triggering auto-run logic. Instead we re-create the tool registrations
-// using the same pattern. This tests the tool handler logic end-to-end.
+import { createMcpServer, listTools, tools } from "../src/mcp/index";
 
 function clearDb() {
   const db = getDb();
@@ -17,61 +13,8 @@ function clearDb() {
   db.exec("DELETE FROM servers");
 }
 
-function createMcpServer() {
-  const server = new McpServer({ name: "mcps-test", version: "0.0.1" });
-
-  server.tool("list_servers", "List all registered MCP servers", {}, async () => {
-    const servers = listServers();
-    return { content: [{ type: "text", text: JSON.stringify(servers, null, 2) }] };
-  });
-
-  server.tool(
-    "add_server",
-    "Register a new MCP server",
-    {
-      command: z.string(),
-      args: z.array(z.string()).optional(),
-      name: z.string().optional(),
-      description: z.string().optional(),
-    },
-    async ({ command, args, name, description }) => {
-      const entry = addServer({ command, args: args || [], name, description });
-      return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
-    }
-  );
-
-  server.tool(
-    "remove_server",
-    "Remove a registered MCP server",
-    { id: z.string() },
-    async ({ id }) => {
-      const existing = getServer(id);
-      if (!existing) {
-        return { content: [{ type: "text", text: `Server "${id}" not found.` }], isError: true };
-      }
-      removeServer(id);
-      return { content: [{ type: "text", text: `Removed server: ${existing.name} [${id}]` }] };
-    }
-  );
-
-  server.tool(
-    "get_server_info",
-    "Get server info",
-    { id: z.string() },
-    async ({ id }) => {
-      const entry = getServer(id);
-      if (!entry) {
-        return { content: [{ type: "text", text: `Server "${id}" not found.` }], isError: true };
-      }
-      return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
-    }
-  );
-
-  return server;
-}
-
 async function createClientServer() {
-  const server = createMcpServer();
+  const server = createMcpServer({ name: "mcps-test", version: "0.0.1", cloudTools: false });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.1" });
   await server.connect(serverTransport);
@@ -181,5 +124,33 @@ describe("MCP server tools", () => {
     expect(toolNames).toContain("remove_server");
     expect(toolNames).toContain("get_server_info");
     await client.close();
+  });
+
+  it("exports package-mode tool definitions without starting stdio", async () => {
+    const listed = await listTools();
+    const toolNames = listed.map((tool) => tool.name);
+    expect(toolNames).toContain("list_servers");
+    expect(toolNames).toContain("call_upstream_tool");
+    expect(tools.map((tool) => tool.name)).toContain("list_servers");
+
+    const addServerTool = listed.find((tool) => tool.name === "add_server");
+    expect(addServerTool?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        command: { type: "string" },
+      },
+      required: ["command"],
+      additionalProperties: false,
+    });
+    expect(JSON.stringify(addServerTool?.inputSchema)).not.toContain("_def");
+    expect(addServerTool?.paramsSchema?.command).toBeDefined();
+  });
+
+  it("declares the importable MCP package export", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+    expect(pkg.exports["./mcp"]).toEqual({
+      import: "./dist/mcp/index.js",
+      types: "./dist/mcp/index.d.ts",
+    });
   });
 });
