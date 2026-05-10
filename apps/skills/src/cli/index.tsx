@@ -68,4 +68,7 @@ registerCreateSync(program);
 const { registerSchedule } = await import("./commands/schedule.js");
 registerSchedule(program);
 
+const { registerFeedback } = await import("./commands/feedback.js");
+registerFeedback(program);
+
 program.parse();

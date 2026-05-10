@@ -4,7 +4,7 @@
  * Skill Installer Module
  *
  * Universal installer for skills to integrate with AI code assistants
- * Usage: skill-[name] install [claude|codex|windsurf|cursor]
+ * Usage: skills run [name] -- install [claude|codex|windsurf|cursor]
  */
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';

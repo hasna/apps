@@ -5,7 +5,7 @@ import { join } from 'node:path';
  * Standard skill data directory structure
  *
  * ~/.skills/
- * └── skill-[name]/
+ * └── [name]/
  *     ├── exports/     # Output data, results, artifacts
  *     ├── logs/        # Execution logs, debug info
  *     ├── cache/       # Temporary cached data

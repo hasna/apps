@@ -81,8 +81,8 @@ export function registerCreateSync(parent: Command) {
 }
 
 function handleCreate(name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) {
-  const bare = name.replace(/^skill-/, "");
-  const dirName = `skill-${bare}`;
+  const bare = name.trim();
+  const dirName = bare;
   const baseDir = options.global ? join(homedir(), ".hasna", "skills", "custom") : join(process.cwd(), ".skills", "custom-skills");
   const skillDir = join(baseDir, dirName);
 
@@ -101,7 +101,7 @@ function handleCreate(name: string, options: { category: string; description?: s
     `# ${displayName}`, "", description, "", "## Usage", "", "```bash", `${bare} --help`, "```", "",
   ].join("\n"));
   writeFileSync(join(skillDir, "src", "index.ts"), [`#!/usr/bin/env bun`, `/**`, ` * ${displayName} — ${description}`, ` */`, "", `console.log("${displayName}");`, ""].join("\n"));
-  writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: `skill-${bare}`, version: "0.1.0", description, bin: { [bare]: "./src/index.ts" }, scripts: { dev: `bun src/index.ts` }, dependencies: {} }, null, 2) + "\n");
+  writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: bare, version: "0.1.0", description, bin: { [bare]: "./src/index.ts" }, scripts: { dev: `bun src/index.ts` }, dependencies: {} }, null, 2) + "\n");
   writeFileSync(join(skillDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "bundler", strict: true, outDir: "dist" }, include: ["src/**/*.ts"] }, null, 2) + "\n");
 
   clearRegistryCache();
@@ -131,7 +131,7 @@ function handleSync(options: { to?: string; from?: string; register: boolean; sc
     const found: Array<{ name: string; path: string; inRegistry: boolean }> = [];
     for (const entry of readdirSync(agentDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const bare = entry.name.replace(/^skill-/, "");
+      const bare = entry.name;
       found.push({ name: bare, path: join(agentDir, entry.name), inRegistry: registryNames.has(bare) });
     }
     const unknown = found.filter((s) => !s.inRegistry);
@@ -142,7 +142,7 @@ function handleSync(options: { to?: string; from?: string; register: boolean; sc
       for (const s of unknown) {
         const srcSkillMd = join(s.path, "SKILL.md");
         if (!existsSync(srcSkillMd)) continue;
-        const destDir = join(globalSkillsDir, `skill-${s.name}`);
+        const destDir = join(globalSkillsDir, s.name);
         if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
         writeFileSync(join(destDir, "SKILL.md"), readFileSync(srcSkillMd, "utf-8"));
         registered.push(s.name);

@@ -10,10 +10,9 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { join, dirname } from "path";
-import { homedir } from "os";
-import { SqliteAdapter as Database, registerCloudTools } from "@hasna/cloud";
+import { existsSync, readdirSync, statSync } from "fs";
+import { join } from "path";
+import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 import pkg from "../../package.json" with { type: "json" };
 import {
@@ -56,6 +55,7 @@ import {
   setScheduleEnabled,
   getDueSchedules,
 } from "../lib/scheduler.js";
+import { saveFeedback, type FeedbackCategory } from "../lib/feedback.js";
 
 const server = new McpServer({
   name: "skills",
@@ -474,7 +474,7 @@ server.registerTool("whoami", {
       try {
         skillCount = readdirSync(agentSkillsPath).filter((f) => {
           const full = join(agentSkillsPath, f);
-          return f.startsWith("skill-") && statSync(full).isDirectory();
+          return !f.startsWith(".") && statSync(full).isDirectory();
         }).length;
       } catch {}
     }
@@ -734,27 +734,14 @@ server.tool(
   }
 );
 
-function getFeedbackDb(): Database {
-  const home = homedir();
-  const dbPath = join(home, ".hasna", "skills", "skills.db");
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const db = new Database(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
-  return db;
-}
-
 server.tool(
   "send_feedback",
   "Send feedback about this service",
-  { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
-  async (params: { message: string; email?: string; category?: string }) => {
+  { message: z.string(), email: z.string().optional(), agent: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
+  async (params: { message: string; email?: string; agent?: string; category?: FeedbackCategory }) => {
     try {
-      const db = getFeedbackDb();
-      db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [params.message, params.email || null, params.category || "general", pkg.version]);
-      db.close();
-      return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+      const result = saveFeedback({ ...params, version: pkg.version });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: String(e) }], isError: true };
     }

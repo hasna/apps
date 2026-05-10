@@ -82,7 +82,7 @@ function handleDoctor(options: { json: boolean }) {
 async function handleTest(skillArg: string | undefined, options: { json: boolean }) {
   let skillNames: string[];
   if (skillArg) {
-    const registryName = skillArg.startsWith("skill-") ? skillArg.replace("skill-", "") : skillArg;
+    const registryName = skillArg;
     if (!getSkill(registryName)) {
       if (options.json) { console.log(JSON.stringify({ error: `Skill '${skillArg}' not found` })); }
       else console.error(chalk.red(`Skill '${skillArg}' not found`));
@@ -171,7 +171,7 @@ function handleWhoami(options: { json: boolean }) {
     const agentSkillsPath = getAgentSkillsDir(agent, "global");
     const exists = existsSync(agentSkillsPath);
     let skillCount = 0;
-    if (exists) try { skillCount = readdirSync(agentSkillsPath).filter((f) => f.startsWith("skill-") && statSync(join(agentSkillsPath, f)).isDirectory()).length; } catch {}
+    if (exists) try { skillCount = readdirSync(agentSkillsPath).filter((f) => !f.startsWith(".") && statSync(join(agentSkillsPath, f)).isDirectory()).length; } catch {}
     agentConfigs.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
   }
   const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");

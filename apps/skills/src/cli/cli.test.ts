@@ -1,4 +1,6 @@
 import { describe, test, expect } from "bun:test";
+import { existsSync, mkdtempSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import pkg from "../../package.json" with { type: "json" };
 import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
@@ -8,11 +10,11 @@ const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
 const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
 const SLOW_TEST_TIMEOUT = 15000;
 
-async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function runCli(args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+    env: { ...process.env, NO_COLOR: "1", SKILLS_TEST_MODE: "1", ...env },
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
@@ -1283,6 +1285,7 @@ describe("CLI", () => {
       expect(stdout).toContain("validate");
       expect(stdout).toContain("diff");
       expect(stdout).toContain("schedule");
+      expect(stdout).toContain("feedback");
     });
 
     test("zsh completion includes all current top-level commands", async () => {
@@ -1298,6 +1301,29 @@ describe("CLI", () => {
       expect(stdout).toContain("'validate:validate command'");
       expect(stdout).toContain("'diff:diff command'");
       expect(stdout).toContain("'schedule:schedule command'");
+      expect(stdout).toContain("'feedback:feedback command'");
+    });
+  });
+
+  describe("feedback", () => {
+    test("saves local agent feedback as JSON", async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "skills-feedback-"));
+      const dbPath = join(tempDir, "feedback.db");
+      const { stdout, exitCode } = await runCli(
+        ["feedback", "install path looks good", "--agent", "Octavia", "--category", "feature", "--json"],
+        { SKILLS_FEEDBACK_DB_PATH: dbPath },
+      );
+
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data).toMatchObject({ saved: true, category: "feature", path: dbPath });
+      expect(existsSync(dbPath)).toBe(true);
+    });
+
+    test("rejects invalid feedback categories", async () => {
+      const { stdout, exitCode } = await runCli(["feedback", "bad category", "--category", "other", "--json"]);
+      expect(exitCode).not.toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({ saved: false });
     });
   });
 });

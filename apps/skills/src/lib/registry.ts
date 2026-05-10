@@ -1657,7 +1657,7 @@ function discoverSkillsInDir(dir: string): SkillMeta[] {
       try { content = readFileSync(skillMdPath, "utf-8"); } catch { continue; }
       const fm = parseSkillMdFrontmatter(content);
       if (!fm?.name) continue;
-      const name = fm.name.replace(/^skill-/, "");
+      const name = fm.name;
       result.push({
         name,
         displayName: fm.displayName || name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
