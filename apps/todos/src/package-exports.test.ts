@@ -37,6 +37,10 @@ const expectedExports = {
     types: "./dist/contracts.d.ts",
     import: "./dist/contracts.js",
   },
+  "./remote": {
+    types: "./dist/remote.d.ts",
+    import: "./dist/remote.js",
+  },
 };
 
 describe("package subpath exports", () => {

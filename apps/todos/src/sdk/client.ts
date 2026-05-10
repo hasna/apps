@@ -68,6 +68,7 @@ import {
   TodosRateLimitError,
   TodosTimeoutError,
 } from "./types.js";
+import { getRemoteApiConfig, normalizeApiUrl } from "../lib/config.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -472,10 +473,13 @@ export class TodosClient {
   readonly templates: TemplatesResource;
 
   constructor(options: TodosClientOptions = {}) {
-    this.baseUrl = options.baseUrl || process.env["TODOS_URL"] || "http://localhost:19427";
-    this.baseUrl = this.baseUrl.replace(/\/+$/, ""); // strip trailing slash
+    const remoteConfig = getRemoteApiConfig();
+    this.baseUrl = normalizeApiUrl(options.baseUrl)
+      || remoteConfig.apiUrl
+      || normalizeApiUrl(process.env["TODOS_URL"])
+      || "http://localhost:19427";
     this.timeout = options.timeout ?? 10000;
-    this.apiKey = options.apiKey || process.env["TODOS_API_KEY"] || null;
+    this.apiKey = options.apiKey || remoteConfig.apiKey;
     this.maxRetries = options.maxRetries ?? 0;
     this.retryDelay = options.retryDelay ?? 1000;
 

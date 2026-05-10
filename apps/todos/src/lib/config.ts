@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { HOME, readJsonFile } from "./sync-utils.js";
+import { dirname, join } from "node:path";
+import { HOME, ensureDir, readJsonFile, writeJsonFile } from "./sync-utils.js";
+
+export type TodosMode = "local" | "remote";
 
 export interface AgentConfig {
   task_list_id?: string;
@@ -25,6 +27,12 @@ export interface ProjectOverrideConfig {
 }
 
 export interface TodosConfig {
+  /** Explicit mode. Defaults to local unless apiUrl/TODOS_API_URL is set. */
+  mode?: TodosMode;
+  /** Hosted compatible API URL used by remote CLI/SDK mode. */
+  apiUrl?: string;
+  /** API key for remote API mode. Prefer TODOS_API_KEY for shared machines. */
+  apiKey?: string;
   sync_agents?: string[] | string;
   task_list_id?: string;
   agent_tasks_dir?: string;
@@ -49,7 +57,7 @@ function getTodosGlobalDir(): string {
   return newDir;
 }
 
-function getConfigPath(): string {
+export function getConfigPath(): string {
   return join(getTodosGlobalDir(), "config.json");
 }
 let cached: TodosConfig | null = null;
@@ -74,6 +82,68 @@ export function loadConfig(): TodosConfig {
   }
   cached = config;
   return cached;
+}
+
+export function saveConfig(config: TodosConfig): TodosConfig {
+  const configPath = getConfigPath();
+  ensureDir(dirname(configPath));
+  writeJsonFile(configPath, config);
+  cached = config;
+  return config;
+}
+
+export function updateConfig(patch: Partial<TodosConfig>): TodosConfig {
+  return saveConfig({ ...loadConfig(), ...patch });
+}
+
+export function normalizeApiUrl(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeMode(value: unknown): TodosMode | null {
+  return value === "local" || value === "remote" ? value : null;
+}
+
+export interface RemoteApiConfig {
+  mode: TodosMode;
+  apiUrl: string | null;
+  apiKey: string | null;
+  source: {
+    mode: "env" | "config" | "derived";
+    apiUrl: "TODOS_API_URL" | "TODOS_URL" | "config" | "none";
+    apiKey: "TODOS_API_KEY" | "config" | "none";
+  };
+}
+
+export function getRemoteApiConfig(env: NodeJS.ProcessEnv = process.env): RemoteApiConfig {
+  const config = loadConfig();
+  const envApiUrl = normalizeApiUrl(env["TODOS_API_URL"]);
+  const legacyEnvUrl = normalizeApiUrl(env["TODOS_URL"]);
+  const configApiUrl = normalizeApiUrl(config.apiUrl);
+  const apiUrl = envApiUrl ?? legacyEnvUrl ?? configApiUrl;
+
+  const envMode = normalizeMode(env["TODOS_MODE"]);
+  const configMode = normalizeMode(config.mode);
+  const mode = envMode ?? configMode ?? (apiUrl ? "remote" : "local");
+
+  const apiKey = env["TODOS_API_KEY"] || config.apiKey || null;
+
+  return {
+    mode,
+    apiUrl: mode === "remote" ? apiUrl : null,
+    apiKey,
+    source: {
+      mode: envMode ? "env" : configMode ? "config" : "derived",
+      apiUrl: envApiUrl ? "TODOS_API_URL" : legacyEnvUrl ? "TODOS_URL" : configApiUrl ? "config" : "none",
+      apiKey: env["TODOS_API_KEY"] ? "TODOS_API_KEY" : config.apiKey ? "config" : "none",
+    },
+  };
+}
+
+export function isRemoteMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return getRemoteApiConfig(env).mode === "remote";
 }
 
 export function getSyncAgentsFromConfig(): string[] | null {

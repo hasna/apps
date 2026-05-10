@@ -7,6 +7,7 @@
   "types": "dist/index.d.ts",
   "bin": {
     "todos": "dist/cli/index.js",
+    "todos-remote": "dist/remote-cli/remote-index.js",
     "todos-mcp": "dist/mcp/index.js",
     "todos-serve": "dist/server/index.js"
   },
@@ -30,6 +31,10 @@
     "./contracts": {
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.js"
+    },
+    "./remote": {
+      "types": "./dist/remote.d.ts",
+      "import": "./dist/remote.js"
     }
   },
   "files": [
@@ -39,7 +44,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/logs && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/logs && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts --outdir dist --target bun --external @hasna/logs && tsc --emitDeclarationOnly --outDir dist",
+    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/cli/remote-index.ts --outdir dist/remote-cli --target bun --external chalk --external @hasna/logs && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/logs && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/logs && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/logs && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/remote.ts --outdir dist --target bun --external @hasna/logs && tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

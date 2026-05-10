@@ -18,7 +18,7 @@ export interface TodosPackageSource {
 }
 
 export interface TodosPackageExportContract {
-  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts";
+  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./remote";
   import: string;
   types: string;
   description: string;
@@ -70,6 +70,13 @@ export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
     import: "./dist/contracts.js",
     types: "./dist/contracts.d.ts",
     description: "Stable API, enum, and error contracts for integrations.",
+    stability: "stable",
+  },
+  {
+    subpath: "./remote",
+    import: "./dist/remote.js",
+    types: "./dist/remote.d.ts",
+    description: "Remote API client and configuration helpers that do not import the local SQLite database.",
     stability: "stable",
   },
 ];

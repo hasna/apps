@@ -348,8 +348,15 @@ export type { AgentBudget, BudgetCheck } from "./db/budgets.js";
 export type { ExtractedComment, ExtractOptions, ExtractResult, ExtractTag } from "./lib/extract.js";
 
 // Config
-export { loadConfig, getCompletionGuardConfig } from "./lib/config.js";
-export type { TodosConfig, AgentConfig, CompletionGuardConfig } from "./lib/config.js";
+export {
+  loadConfig,
+  updateConfig,
+  getCompletionGuardConfig,
+  getRemoteApiConfig,
+  isRemoteMode,
+  normalizeApiUrl,
+} from "./lib/config.js";
+export type { TodosConfig, AgentConfig, CompletionGuardConfig, RemoteApiConfig, TodosMode } from "./lib/config.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

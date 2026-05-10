@@ -8,7 +8,10 @@ import {
   getTaskPrefixConfig,
   getAgentPoolForProject,
   getCompletionGuardConfig,
+  getRemoteApiConfig,
+  normalizeApiUrl,
   resetConfig,
+  updateConfig,
 } from "./config.js";
 
 // The config module has an in-memory cache. We set up a config file once
@@ -142,5 +145,60 @@ describe("getCompletionGuardConfig", () => {
     expect(config.enabled).toBe(true);
     expect(config.min_work_seconds).toBe(60);
     expect(config.window_minutes).toBe(10);
+  });
+});
+
+describe("remote API config", () => {
+  it("normalizes hosted API URLs", () => {
+    expect(normalizeApiUrl(" https://todos.example/api/// ")).toBe("https://todos.example/api");
+    expect(normalizeApiUrl("   ")).toBeNull();
+  });
+
+  it("stays local by default when no API URL is configured", () => {
+    resetConfig();
+    updateConfig({ apiUrl: undefined, apiKey: undefined, mode: undefined });
+    const config = getRemoteApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+    } as NodeJS.ProcessEnv);
+    expect(config.mode).toBe("local");
+    expect(config.apiUrl).toBeNull();
+  });
+
+  it("uses config apiUrl for remote mode without deleting local config", () => {
+    updateConfig({ apiUrl: "https://todos.example/", apiKey: "config-key" });
+    const config = getRemoteApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+    } as NodeJS.ProcessEnv);
+    expect(config.mode).toBe("remote");
+    expect(config.apiUrl).toBe("https://todos.example");
+    expect(config.apiKey).toBe("config-key");
+    expect(config.source.apiUrl).toBe("config");
+  });
+
+  it("lets env vars override config values", () => {
+    const config = getRemoteApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+      TODOS_MODE: "remote",
+      TODOS_API_URL: "https://env.todos.example//",
+      TODOS_API_KEY: "env-key",
+    } as NodeJS.ProcessEnv);
+    expect(config.mode).toBe("remote");
+    expect(config.apiUrl).toBe("https://env.todos.example");
+    expect(config.apiKey).toBe("env-key");
+    expect(config.source.apiUrl).toBe("TODOS_API_URL");
+    expect(config.source.apiKey).toBe("TODOS_API_KEY");
+  });
+
+  it("ignores invalid persisted mode values", () => {
+    updateConfig({ mode: "hybrid" as "remote" });
+    const config = getRemoteApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+    } as NodeJS.ProcessEnv);
+    expect(config.mode).toBe("remote");
+    expect(config.source.mode).toBe("derived");
   });
 });
