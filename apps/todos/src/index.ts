@@ -2,6 +2,17 @@
 export { TodosClient, createClient } from "./sdk.js";
 export type { TodosClientOptions } from "./sdk.js";
 
+// Package capability manifest
+export { TODOS_CAPABILITIES, createCapabilityManifest } from "./capabilities.js";
+export type {
+  CreateCapabilityManifestOptions,
+  TodosCapability,
+  TodosCapabilityKind,
+  TodosCapabilityManifest,
+  TodosCapabilitySource,
+  TodosCapabilityStability,
+} from "./capabilities.js";
+
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 
