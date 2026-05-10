@@ -41,10 +41,14 @@ const expectedExports = {
     types: "./dist/remote.d.ts",
     import: "./dist/remote.js",
   },
+  "./storage": {
+    types: "./dist/storage.d.ts",
+    import: "./dist/storage.js",
+  },
 };
 
 describe("package subpath exports", () => {
-  test("declares stable root, SDK, MCP, registry, and contracts exports", () => {
+  test("declares stable root, SDK, MCP, registry, contracts, remote, and storage exports", () => {
     expect(packageJson.exports).toEqual(expectedExports);
     expect(TODOS_PACKAGE_EXPORTS.map((entry) => entry.subpath)).toEqual(Object.keys(expectedExports));
 

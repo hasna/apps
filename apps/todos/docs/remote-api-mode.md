@@ -36,6 +36,18 @@ entrypoint imports the REST SDK and config helpers only; it does not import the
 local database modules or initialize SQLite. Paid or hosted distributions should
 package this remote entrypoint instead of the OSS local CLI.
 
+## Storage Boundary
+
+Integrations that need to reuse core todos behavior without importing SQLite can
+depend on `@hasna/todos/storage`. That subpath exports pure task, project, plan,
+agent, task-list, template, audit, and sync store contracts plus the default
+`createLocalSqliteTodosStorageAdapter()` implementation used by the open-source
+package.
+
+Hosted implementations can provide their own adapter behind the same contracts.
+The open package keeps SQLite as the default local adapter and does not include
+commercial plan, object storage, or deployment-specific code.
+
 ## Local Data Safety
 
 Remote mode does not delete, rewrite, or migrate local SQLite data. Local data

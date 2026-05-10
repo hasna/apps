@@ -476,3 +476,30 @@ export type { FormatOpts } from "./lib/dispatch-formatter.js";
 
 // tmux primitives
 export { parseTmuxTarget, formatTmuxTarget, validateTmuxTarget, sendToTmux, calculateDelay, DELAY_MIN, DELAY_MAX } from "./lib/tmux.js";
+
+// Storage/service adapter boundary
+export { createLocalSqliteTodosStorageAdapter } from "./storage.js";
+export type {
+  CreateLocalSqliteTodosStorageAdapterOptions,
+  MaybePromise,
+  TodosActiveWorkFilter,
+  TodosAgentUpdateInput,
+  TodosAgentStore,
+  TodosAuditStore,
+  TodosPlanStore,
+  TodosProjectStore,
+  TodosStorageAdapter,
+  TodosStorageCapabilities,
+  TodosStorageContext,
+  TodosStorageImportResult,
+  TodosStorageKind,
+  TodosStorageSnapshot,
+  TodosSyncStore,
+  TodosTaskClaimFilter,
+  TodosTaskCompletionOptions,
+  TodosTaskFailureOptions,
+  TodosTaskFailureResult,
+  TodosTaskListStore,
+  TodosTaskStore,
+  TodosTemplateStore,
+} from "./storage.js";
