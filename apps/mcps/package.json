@@ -1,11 +1,11 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/mcps.git"
+    "url": "git+https://github.com/hasna/mcps.git"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
