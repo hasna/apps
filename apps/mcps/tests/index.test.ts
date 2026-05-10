@@ -59,5 +59,7 @@ describe("index exports", () => {
     expect(typeof api.removeProviderProfile).toBe("function");
     expect(typeof api.enableProviderProfile).toBe("function");
     expect(typeof api.disableProviderProfile).toBe("function");
+    expect(typeof api.seedDefaultProviderProfiles).toBe("function");
+    expect(Array.isArray(api.DEFAULT_PROVIDER_PROFILE_SEEDS)).toBe(true);
   });
 });

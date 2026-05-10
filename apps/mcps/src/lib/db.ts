@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync } from "fs";
 import { MCPS_DIR, DB_PATH } from "./config.js";
+import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "./provider-profile-seeds.js";
 
 let db: Database | null = null;
 let _adapter: SqliteAdapter | null = null;
@@ -105,7 +106,9 @@ export function getDb(): Database {
       description TEXT,
       endpoint TEXT,
       transport TEXT NOT NULL,
+      fallback_endpoints TEXT NOT NULL DEFAULT '[]',
       auth_type TEXT NOT NULL,
+      auth_metadata TEXT NOT NULL DEFAULT '{}',
       scopes TEXT NOT NULL DEFAULT '[]',
       token_mode TEXT NOT NULL DEFAULT 'none',
       install_fallback TEXT NOT NULL DEFAULT '{}',
@@ -118,7 +121,45 @@ export function getDb(): Database {
     )
   `);
 
+  // Safe migrations for provider profile databases created before auth/fallback metadata.
+  try { db.exec("ALTER TABLE provider_profiles ADD COLUMN fallback_endpoints TEXT NOT NULL DEFAULT '[]'"); } catch {}
+  try { db.exec("ALTER TABLE provider_profiles ADD COLUMN auth_metadata TEXT NOT NULL DEFAULT '{}'"); } catch {}
+
   db.exec("CREATE INDEX IF NOT EXISTS idx_provider_profiles_enabled ON provider_profiles(enabled)");
+
+  const providerProfileCount = (db.query("SELECT COUNT(*) as c FROM provider_profiles").get() as { c: number }).c;
+  if (providerProfileCount === 0) {
+    const insertProviderProfile = db.prepare(`
+      INSERT OR IGNORE INTO provider_profiles (
+        id, display_name, description, endpoint, transport, fallback_endpoints,
+        auth_type, auth_metadata, scopes, token_mode, install_fallback,
+        docs_url, safety, provenance, enabled
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const run = db.transaction(() => {
+      for (const profile of DEFAULT_PROVIDER_PROFILE_SEEDS) {
+        insertProviderProfile.run(
+          profile.id,
+          profile.displayName,
+          profile.description ?? null,
+          profile.endpoint ?? null,
+          profile.transport,
+          JSON.stringify(profile.fallbackEndpoints ?? []),
+          profile.authType,
+          JSON.stringify(profile.authMetadata ?? {}),
+          JSON.stringify(profile.scopes ?? []),
+          profile.tokenMode ?? "none",
+          JSON.stringify(profile.installFallback ?? null),
+          profile.docsUrl ?? null,
+          JSON.stringify(profile.safety ?? {}),
+          JSON.stringify(profile.provenance),
+          profile.enabled === false ? 0 : 1
+        );
+      }
+    });
+    run();
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS feedback (

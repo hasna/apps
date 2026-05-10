@@ -32,7 +32,20 @@ describe("provider profiles", () => {
       description: "Workspace docs and databases",
       endpoint: "https://mcp.notion.com/mcp",
       transport: "streamable-http",
+      fallbackEndpoints: [
+        {
+          transport: "sse",
+          url: "https://mcp.notion.com/sse",
+          notes: "Fallback for clients that do not support Streamable HTTP",
+        },
+      ],
       authType: "oauth2",
+      authMetadata: {
+        oauthVersion: "2.0",
+        pkce: true,
+        dynamicClientRegistration: true,
+        bearerToken: "none",
+      },
       scopes: ["read_content", "read_content", "update_content"],
       tokenMode: "workspace",
       installFallback: {
@@ -61,7 +74,20 @@ describe("provider profiles", () => {
       description: "Workspace docs and databases",
       endpoint: "https://mcp.notion.com/mcp",
       transport: "streamable-http",
+      fallbackEndpoints: [
+        {
+          transport: "sse",
+          url: "https://mcp.notion.com/sse",
+          notes: "Fallback for clients that do not support Streamable HTTP",
+        },
+      ],
       authType: "oauth2",
+      authMetadata: {
+        oauthVersion: "2.0",
+        pkce: true,
+        dynamicClientRegistration: true,
+        bearerToken: "none",
+      },
       scopes: ["read_content", "update_content"],
       tokenMode: "workspace",
       docsUrl: "https://developers.notion.com/docs/mcp",
@@ -72,6 +98,12 @@ describe("provider profiles", () => {
       args: ["-y", "@notionhq/notion-mcp-server"],
       packageName: "@notionhq/notion-mcp-server",
       registryId: "io.notion/notion-mcp-server",
+    });
+    expect(profile.authMetadata).toEqual({
+      oauthVersion: "2.0",
+      pkce: true,
+      dynamicClientRegistration: true,
+      bearerToken: "none",
     });
     expect(profile.safety.requiresApproval).toBe(true);
     expect(profile.provenance.source).toBe("curated");
@@ -175,6 +207,8 @@ describe("provider profiles", () => {
     const joined = PG_MIGRATIONS.join("\n");
     expect(joined).toContain("CREATE TABLE IF NOT EXISTS provider_profiles");
     expect(joined).toContain("display_name TEXT NOT NULL");
+    expect(joined).toContain("fallback_endpoints TEXT NOT NULL DEFAULT '[]'");
+    expect(joined).toContain("auth_metadata TEXT NOT NULL DEFAULT '{}'");
     expect(joined).toContain("install_fallback TEXT NOT NULL DEFAULT '{}'");
     expect(joined).toContain(`provenance TEXT NOT NULL DEFAULT '{"source":"manual"}'`);
     expect(joined).toContain("idx_provider_profiles_enabled");

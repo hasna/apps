@@ -109,6 +109,7 @@ export interface AddSourceOptions {
 export type ProviderProfileTransport = "stdio" | "sse" | "streamable-http";
 export type ProviderProfileAuthType = "none" | "oauth2" | "api_key" | "bearer_token" | "custom";
 export type ProviderProfileTokenMode = "none" | "user" | "workspace" | "service";
+export type ProviderProfileBearerTokenMode = "none" | "optional" | "required";
 export type ProviderProfileSource =
   | "curated"
   | "official-registry"
@@ -123,6 +124,20 @@ export interface ProviderInstallFallback {
   packageName?: string;
   registryId?: string;
   url?: string;
+}
+
+export interface ProviderEndpointFallback {
+  transport: ProviderProfileTransport;
+  url: string;
+  notes?: string;
+}
+
+export interface ProviderAuthMetadata {
+  oauthVersion?: "2.0" | "2.1";
+  pkce?: boolean;
+  dynamicClientRegistration?: boolean;
+  bearerToken?: ProviderProfileBearerTokenMode;
+  notes?: string;
 }
 
 export interface ProviderSafetyMetadata {
@@ -148,7 +163,9 @@ export interface ProviderProfile {
   description: string | null;
   endpoint: string | null;
   transport: ProviderProfileTransport;
+  fallbackEndpoints: ProviderEndpointFallback[];
   authType: ProviderProfileAuthType;
+  authMetadata: ProviderAuthMetadata;
   scopes: string[];
   tokenMode: ProviderProfileTokenMode;
   installFallback: ProviderInstallFallback | null;
@@ -166,7 +183,9 @@ export interface UpsertProviderProfileOptions {
   description?: string;
   endpoint?: string;
   transport: ProviderProfileTransport;
+  fallbackEndpoints?: ProviderEndpointFallback[];
   authType: ProviderProfileAuthType;
+  authMetadata?: ProviderAuthMetadata;
   scopes?: string[];
   tokenMode?: ProviderProfileTokenMode;
   installFallback?: ProviderInstallFallback | null;

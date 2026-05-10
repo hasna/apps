@@ -1,8 +1,12 @@
 import { getDb } from "./db.js";
+import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "./provider-profile-seeds.js";
 import type {
   ProviderInstallFallback,
+  ProviderAuthMetadata,
+  ProviderEndpointFallback,
   ProviderProfile,
   ProviderProfileAuthType,
+  ProviderProfileBearerTokenMode,
   ProviderProfileSource,
   ProviderProfileTokenMode,
   ProviderProfileTransport,
@@ -14,6 +18,7 @@ import type {
 const TRANSPORTS = new Set<ProviderProfileTransport>(["stdio", "sse", "streamable-http"]);
 const AUTH_TYPES = new Set<ProviderProfileAuthType>(["none", "oauth2", "api_key", "bearer_token", "custom"]);
 const TOKEN_MODES = new Set<ProviderProfileTokenMode>(["none", "user", "workspace", "service"]);
+const BEARER_TOKEN_MODES = new Set<ProviderProfileBearerTokenMode>(["none", "optional", "required"]);
 const PROVENANCE_SOURCES = new Set<ProviderProfileSource>(["curated", "official-registry", "npm", "github", "manual"]);
 
 function safeJsonParse<T>(value: unknown, fallback: T): T {
@@ -79,6 +84,38 @@ function normalizeInstallFallback(fallback: ProviderInstallFallback | null | und
   return Object.values(normalized).some((value) => value !== undefined) ? normalized : null;
 }
 
+function normalizeFallbackEndpoints(fallbacks: ProviderEndpointFallback[] | undefined): ProviderEndpointFallback[] {
+  const seen = new Set<string>();
+  const normalized: ProviderEndpointFallback[] = [];
+  for (const fallback of fallbacks ?? []) {
+    const transport = assertKnown(fallback.transport, TRANSPORTS, "fallback transport");
+    const url = normalizeString(fallback.url);
+    if (!url) continue;
+    const key = `${transport}:${url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      transport,
+      url,
+      notes: normalizeString(fallback.notes) ?? undefined,
+    });
+  }
+  return normalized;
+}
+
+function normalizeAuthMetadata(authMetadata: ProviderAuthMetadata | undefined): ProviderAuthMetadata {
+  const bearerToken = authMetadata?.bearerToken
+    ? assertKnown(authMetadata.bearerToken, BEARER_TOKEN_MODES, "bearer token mode")
+    : undefined;
+  return {
+    oauthVersion: authMetadata?.oauthVersion,
+    pkce: authMetadata?.pkce,
+    dynamicClientRegistration: authMetadata?.dynamicClientRegistration,
+    bearerToken,
+    notes: normalizeString(authMetadata?.notes) ?? undefined,
+  };
+}
+
 function parseRow(row: Record<string, unknown>): ProviderProfile {
   const installFallback = safeJsonParse<ProviderInstallFallback | null>(row.install_fallback as string, null);
   return {
@@ -87,7 +124,9 @@ function parseRow(row: Record<string, unknown>): ProviderProfile {
     description: (row.description as string) || null,
     endpoint: (row.endpoint as string) || null,
     transport: row.transport as ProviderProfileTransport,
+    fallbackEndpoints: safeJsonParse<ProviderEndpointFallback[]>(row.fallback_endpoints as string, []),
     authType: row.auth_type as ProviderProfileAuthType,
+    authMetadata: safeJsonParse<ProviderAuthMetadata>(row.auth_metadata as string, {}),
     scopes: safeJsonParse<string[]>(row.scopes as string, []),
     tokenMode: row.token_mode as ProviderProfileTokenMode,
     installFallback,
@@ -107,7 +146,9 @@ export function upsertProviderProfile(opts: UpsertProviderProfileOptions): Provi
   if (!displayName) throw new Error("Provider profile displayName is required");
 
   const transport = assertKnown(opts.transport, TRANSPORTS, "transport");
+  const fallbackEndpoints = normalizeFallbackEndpoints(opts.fallbackEndpoints);
   const authType = assertKnown(opts.authType, AUTH_TYPES, "auth type");
+  const authMetadata = normalizeAuthMetadata(opts.authMetadata);
   const tokenMode = assertKnown(opts.tokenMode ?? "none", TOKEN_MODES, "token mode");
   const scopes = normalizeScopes(opts.scopes);
   const installFallback = normalizeInstallFallback(opts.installFallback);
@@ -118,16 +159,18 @@ export function upsertProviderProfile(opts: UpsertProviderProfileOptions): Provi
   const row = db
     .prepare(
       `INSERT INTO provider_profiles (
-         id, display_name, description, endpoint, transport, auth_type, scopes,
+         id, display_name, description, endpoint, transport, fallback_endpoints, auth_type, auth_metadata, scopes,
          token_mode, install_fallback, docs_url, safety, provenance, enabled
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          display_name = excluded.display_name,
          description = excluded.description,
          endpoint = excluded.endpoint,
          transport = excluded.transport,
+         fallback_endpoints = excluded.fallback_endpoints,
          auth_type = excluded.auth_type,
+         auth_metadata = excluded.auth_metadata,
          scopes = excluded.scopes,
          token_mode = excluded.token_mode,
          install_fallback = excluded.install_fallback,
@@ -144,7 +187,9 @@ export function upsertProviderProfile(opts: UpsertProviderProfileOptions): Provi
       normalizeString(opts.description),
       normalizeString(opts.endpoint),
       transport,
+      JSON.stringify(fallbackEndpoints),
       authType,
+      JSON.stringify(authMetadata),
       JSON.stringify(scopes),
       tokenMode,
       JSON.stringify(installFallback),
@@ -182,6 +227,10 @@ export function enableProviderProfile(id: string): ProviderProfile {
 
 export function disableProviderProfile(id: string): ProviderProfile {
   return setProviderProfileEnabled(id, false);
+}
+
+export function seedDefaultProviderProfiles(): ProviderProfile[] {
+  return DEFAULT_PROVIDER_PROFILE_SEEDS.map((profile) => upsertProviderProfile(profile));
 }
 
 function setProviderProfileEnabled(id: string, enabled: boolean): ProviderProfile {
