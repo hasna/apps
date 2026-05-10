@@ -106,6 +106,76 @@ export interface AddSourceOptions {
   description?: string;
 }
 
+export type ProviderProfileTransport = "stdio" | "sse" | "streamable-http";
+export type ProviderProfileAuthType = "none" | "oauth2" | "api_key" | "bearer_token" | "custom";
+export type ProviderProfileTokenMode = "none" | "user" | "workspace" | "service";
+export type ProviderProfileSource =
+  | "curated"
+  | "official-registry"
+  | "npm"
+  | "github"
+  | "manual";
+
+export interface ProviderInstallFallback {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  packageName?: string;
+  registryId?: string;
+  url?: string;
+}
+
+export interface ProviderSafetyMetadata {
+  readOnly?: boolean;
+  requiresApproval?: boolean;
+  destructiveTools?: string[];
+  sensitiveScopes?: string[];
+  dataClasses?: string[];
+  notes?: string;
+}
+
+export interface ProviderSourceProvenance {
+  source: ProviderProfileSource;
+  sourceUrl?: string;
+  repositoryUrl?: string;
+  packageName?: string;
+  verifiedAt?: string;
+}
+
+export interface ProviderProfile {
+  id: string;
+  displayName: string;
+  description: string | null;
+  endpoint: string | null;
+  transport: ProviderProfileTransport;
+  authType: ProviderProfileAuthType;
+  scopes: string[];
+  tokenMode: ProviderProfileTokenMode;
+  installFallback: ProviderInstallFallback | null;
+  docsUrl: string | null;
+  safety: ProviderSafetyMetadata;
+  provenance: ProviderSourceProvenance;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertProviderProfileOptions {
+  id: string;
+  displayName: string;
+  description?: string;
+  endpoint?: string;
+  transport: ProviderProfileTransport;
+  authType: ProviderProfileAuthType;
+  scopes?: string[];
+  tokenMode?: ProviderProfileTokenMode;
+  installFallback?: ProviderInstallFallback | null;
+  docsUrl?: string;
+  safety?: ProviderSafetyMetadata;
+  provenance: ProviderSourceProvenance;
+  enabled?: boolean;
+}
+
 export type MachinePlatform = "linux" | "darwin" | "unknown";
 export type MachineArch = "arm64" | "x64" | "unknown";
 export type MachineInstaller = "auto" | "bun" | "npm";

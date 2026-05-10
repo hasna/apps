@@ -51,4 +51,13 @@ describe("index exports", () => {
   it("exports version helpers", () => {
     expect(typeof api.readPackageVersion).toBe("function");
   });
+
+  it("exports provider profile functions", () => {
+    expect(typeof api.upsertProviderProfile).toBe("function");
+    expect(typeof api.listProviderProfiles).toBe("function");
+    expect(typeof api.getProviderProfile).toBe("function");
+    expect(typeof api.removeProviderProfile).toBe("function");
+    expect(typeof api.enableProviderProfile).toBe("function");
+    expect(typeof api.disableProviderProfile).toBe("function");
+  });
 });

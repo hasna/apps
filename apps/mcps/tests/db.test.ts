@@ -48,6 +48,14 @@ describe("db", () => {
     expect(tables).toHaveLength(1);
   });
 
+  it("creates the provider_profiles table", () => {
+    const db = getDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_profiles'")
+      .all();
+    expect(tables).toHaveLength(1);
+  });
+
   it("creates the idx_tool_cache_server index", () => {
     const db = getDb();
     const indexes = db
@@ -60,6 +68,14 @@ describe("db", () => {
     const db = getDb();
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_machines_enabled'")
+      .all();
+    expect(indexes).toHaveLength(1);
+  });
+
+  it("creates the idx_provider_profiles_enabled index", () => {
+    const db = getDb();
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_provider_profiles_enabled'")
       .all();
     expect(indexes).toHaveLength(1);
   });

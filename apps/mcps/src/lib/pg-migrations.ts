@@ -57,4 +57,25 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  // Migration 5: provider profile catalog
+  `CREATE TABLE IF NOT EXISTS provider_profiles (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    description TEXT,
+    endpoint TEXT,
+    transport TEXT NOT NULL,
+    auth_type TEXT NOT NULL,
+    scopes TEXT NOT NULL DEFAULT '[]',
+    token_mode TEXT NOT NULL DEFAULT 'none',
+    install_fallback TEXT NOT NULL DEFAULT '{}',
+    docs_url TEXT,
+    safety TEXT NOT NULL DEFAULT '{}',
+    provenance TEXT NOT NULL DEFAULT '{"source":"manual"}',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_provider_profiles_enabled ON provider_profiles(enabled)`,
 ];

@@ -99,6 +99,28 @@ export function getDb(): Database {
   }
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS provider_profiles (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      description TEXT,
+      endpoint TEXT,
+      transport TEXT NOT NULL,
+      auth_type TEXT NOT NULL,
+      scopes TEXT NOT NULL DEFAULT '[]',
+      token_mode TEXT NOT NULL DEFAULT 'none',
+      install_fallback TEXT NOT NULL DEFAULT '{}',
+      docs_url TEXT,
+      safety TEXT NOT NULL DEFAULT '{}',
+      provenance TEXT NOT NULL DEFAULT '{"source":"manual"}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec("CREATE INDEX IF NOT EXISTS idx_provider_profiles_enabled ON provider_profiles(enabled)");
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS feedback (
       id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
       message TEXT NOT NULL,

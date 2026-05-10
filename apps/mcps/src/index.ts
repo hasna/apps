@@ -15,6 +15,15 @@ export type {
   FleetHealthReport,
   FleetInstallPackageResult,
   FleetInstallReport,
+  ProviderInstallFallback,
+  ProviderProfile,
+  ProviderProfileAuthType,
+  ProviderProfileSource,
+  ProviderProfileTokenMode,
+  ProviderProfileTransport,
+  ProviderSafetyMetadata,
+  ProviderSourceProvenance,
+  UpsertProviderProfileOptions,
 } from "./types.js";
 
 export {
@@ -47,6 +56,14 @@ export {
   enableSource,
   disableSource,
 } from "./lib/sources.js";
+export {
+  upsertProviderProfile,
+  listProviderProfiles,
+  getProviderProfile,
+  removeProviderProfile,
+  enableProviderProfile,
+  disableProviderProfile,
+} from "./lib/provider-profiles.js";
 export { installToAgents } from "./lib/install.js";
 export type { AgentTarget, InstallResult } from "./lib/install.js";
 export type { McpSource, AddSourceOptions } from "./types.js";
