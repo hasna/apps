@@ -30,6 +30,7 @@ export interface TodosRegistry {
   generatedAt: string;
   package: TodosPackageSource;
   exports: TodosPackageExportContract[];
+  jsonContractDocsPath: "docs/json-contracts.md";
   capabilities: TodosCapabilityManifest;
   contracts: TodosContractsManifest;
   mcp: TodosMcpManifest;
@@ -89,6 +90,7 @@ export function createTodosRegistry(options: CreateTodosRegistryOptions = {}): T
     generatedAt,
     package: source(version),
     exports: TODOS_PACKAGE_EXPORTS,
+    jsonContractDocsPath: "docs/json-contracts.md",
     capabilities: createCapabilityManifest({ version, generatedAt }),
     contracts: createContractsManifest({ version, generatedAt }),
     mcp: createMcpManifest({ version, generatedAt }),

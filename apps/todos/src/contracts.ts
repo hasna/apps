@@ -1,4 +1,24 @@
 import { getPackageVersion } from "./lib/package-version.js";
+import { createJsonContractsManifest } from "./json-contracts.js";
+export {
+  TODOS_JSON_CONTRACTS,
+  TODOS_JSON_CONTRACTS_MANIFEST,
+  createJsonContractsManifest,
+  getJsonContract,
+  validateJsonContract,
+} from "./json-contracts.js";
+export type {
+  CreateJsonContractsManifestOptions,
+  JsonContractValidationIssue,
+  JsonContractValidationResult,
+  TodosJsonContractPackageSource,
+  TodosJsonContractsManifest,
+  TodosJsonFieldContract,
+  TodosJsonFieldType,
+  TodosJsonObjectContract,
+  TodosJsonStability,
+  TodosJsonSurface,
+} from "./json-contracts.js";
 import {
   AgentNotFoundError,
   CompletionGuardError,
@@ -16,6 +36,7 @@ import {
   VersionConflictError,
 } from "./types/index.js";
 import type { DispatchStatus, PlanStatus, TaskPriority, TaskStatus } from "./types/index.js";
+import type { TodosJsonContractsManifest } from "./json-contracts.js";
 
 export type TodosHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 export type TodosContractStability = "stable" | "experimental";
@@ -70,6 +91,7 @@ export interface TodosContractsManifest {
   };
   apiRoutes: TodosApiRouteContract[];
   errorCodes: TodosErrorContract[];
+  jsonOutputs: TodosJsonContractsManifest;
 }
 
 const objectSchema: TodosJsonSchema = {
@@ -326,9 +348,10 @@ export function createContractsManifest(
   options: CreateContractsManifestOptions = {},
 ): TodosContractsManifest {
   const version = options.version ?? getPackageVersion(import.meta.url);
+  const generatedAt = options.generatedAt ?? new Date().toISOString();
   return {
     schemaVersion: 1,
-    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    generatedAt,
     package: source(version),
     values: {
       taskStatuses: TASK_STATUSES,
@@ -338,6 +361,7 @@ export function createContractsManifest(
     },
     apiRoutes: TODOS_API_ROUTES,
     errorCodes: TODOS_ERROR_CODES,
+    jsonOutputs: createJsonContractsManifest({ version, generatedAt }),
   };
 }
 

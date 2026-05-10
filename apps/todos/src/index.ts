@@ -25,6 +25,25 @@ export type {
   TodosHttpMethod,
   TodosJsonSchema,
 } from "./contracts.js";
+export {
+  TODOS_JSON_CONTRACTS,
+  TODOS_JSON_CONTRACTS_MANIFEST,
+  createJsonContractsManifest,
+  getJsonContract,
+  validateJsonContract,
+} from "./contracts.js";
+export type {
+  CreateJsonContractsManifestOptions,
+  JsonContractValidationIssue,
+  JsonContractValidationResult,
+  TodosJsonContractPackageSource,
+  TodosJsonContractsManifest,
+  TodosJsonFieldContract,
+  TodosJsonFieldType,
+  TodosJsonObjectContract,
+  TodosJsonStability,
+  TodosJsonSurface,
+} from "./contracts.js";
 
 // Side-effect-free MCP metadata
 export {

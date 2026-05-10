@@ -109,6 +109,10 @@ describe("package subpath exports", () => {
     expect(manifest.errorCodes.map((error) => error.code)).toEqual(
       expect.arrayContaining(["TASK_NOT_FOUND", "VERSION_CONFLICT", "COMPLETION_BLOCKED"]),
     );
+    expect(manifest.jsonOutputs.contracts.map((contract) => contract.id)).toEqual(
+      expect.arrayContaining(["task", "project", "agent", "template", "task_list", "comment", "checkpoint", "dispatch", "audit_history", "status_summary", "structured_error", "api_error"]),
+    );
+    expect(manifest.jsonOutputs.generatedAt).toBe(manifest.generatedAt);
     expect(TODOS_ERROR_CODES).toHaveLength(manifest.errorCodes.length);
     expect(TODOS_CONTRACTS.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });
@@ -129,6 +133,7 @@ describe("package subpath exports", () => {
       },
     });
     expect(registry.exports).toEqual(TODOS_PACKAGE_EXPORTS);
+    expect(registry.jsonContractDocsPath).toBe("docs/json-contracts.md");
     expect(registry.capabilities.package.version).toBe("1.2.3");
     expect(registry.contracts.package.version).toBe("1.2.3");
     expect(registry.mcp.package.version).toBe("1.2.3");
