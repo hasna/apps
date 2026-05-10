@@ -43,6 +43,12 @@ import {
 } from "../lib/machines.js";
 import { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "../lib/fleet.js";
 import { readPackageVersion } from "../lib/version.js";
+import {
+  getProviderProfile,
+  installProviderProfile,
+  listProviderProfiles,
+  searchProviderProfiles,
+} from "../lib/provider-profiles.js";
 
 const VERSION = readPackageVersion(import.meta.url);
 
@@ -228,6 +234,54 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         sources: Array.isArray(sources) ? sources.map(String) : undefined,
         limit: typeof limit === "number" ? limit : undefined,
       })),
+    },
+    {
+      name: "list_provider_profiles",
+      description: "List curated provider profiles for hosted/common MCP integrations such as Notion and Linear.",
+      paramsSchema: {
+        enabled_only: z.boolean().optional().describe("Only include enabled provider profiles"),
+      },
+      run: ({ enabled_only }) => jsonContent(listProviderProfiles({ enabledOnly: enabled_only === true })),
+    },
+    {
+      name: "search_provider_profiles",
+      description: "Search curated provider profiles separately from raw MCP registry/source search.",
+      paramsSchema: {
+        query: z.string().describe("Search query such as 'notion', 'linear', or an endpoint URL"),
+        enabled_only: z.boolean().optional().describe("Only include enabled provider profiles"),
+      },
+      run: ({ query, enabled_only }) => jsonContent(searchProviderProfiles(String(query), { enabledOnly: enabled_only === true })),
+    },
+    {
+      name: "get_provider_profile",
+      description: "Get one curated provider profile by ID.",
+      paramsSchema: {
+        id: z.string().describe("Provider profile ID"),
+      },
+      run: ({ id }) => {
+        const profile = getProviderProfile(String(id));
+        if (!profile) return errorContent(`Provider profile "${String(id)}" not found.`);
+        return jsonContent(profile);
+      },
+    },
+    {
+      name: "install_provider_profile",
+      description: "Register a curated provider profile as an MCP server.",
+      paramsSchema: {
+        id: z.string().describe("Provider profile ID"),
+        name: z.string().optional().describe("Override registered server name"),
+        use_fallback: z.boolean().optional().describe("Install the stdio fallback command instead of the direct remote transport"),
+      },
+      run: ({ id, name, use_fallback }) => {
+        try {
+          return jsonContent(redactServerEnv(installProviderProfile(String(id), {
+            name: typeof name === "string" ? name : undefined,
+            useFallback: use_fallback === true,
+          })));
+        } catch (err) {
+          return errorContent((err as Error).message);
+        }
+      },
     },
     {
       name: "list_sources",

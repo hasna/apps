@@ -5,15 +5,19 @@ import {
   disableProviderProfile,
   enableProviderProfile,
   getProviderProfile,
+  installProviderProfile,
   listProviderProfiles,
   removeProviderProfile,
+  searchProviderProfiles,
   upsertProviderProfile,
 } from "../src/lib/provider-profiles";
+import { getServer } from "../src/lib/registry";
 import { PG_MIGRATIONS } from "../src/lib/pg-migrations";
 
 function clearDb() {
   const db = getDb();
   db.exec("DELETE FROM provider_profiles");
+  db.exec("DELETE FROM servers");
 }
 
 describe("provider profiles", () => {
@@ -164,6 +168,68 @@ describe("provider profiles", () => {
 
     expect(listProviderProfiles().map((profile) => profile.id)).toEqual(["a-provider", "z-provider"]);
     expect(listProviderProfiles({ enabledOnly: true }).map((profile) => profile.id)).toEqual(["z-provider"]);
+  });
+
+  it("searches profiles by id, display name, description, and endpoint", () => {
+    upsertProviderProfile({
+      id: "linear",
+      displayName: "Linear",
+      description: "Issue tracking",
+      endpoint: "https://mcp.linear.app/mcp",
+      transport: "streamable-http",
+      authType: "oauth2",
+      provenance: { source: "curated" },
+    });
+
+    expect(searchProviderProfiles("linear").map((profile) => profile.id)).toEqual(["linear"]);
+    expect(searchProviderProfiles("issue tracking").map((profile) => profile.id)).toEqual(["linear"]);
+    expect(searchProviderProfiles("mcp.linear.app").map((profile) => profile.id)).toEqual(["linear"]);
+    expect(searchProviderProfiles("notion")).toEqual([]);
+  });
+
+  it("installs provider profiles as direct remote MCP servers by default", () => {
+    upsertProviderProfile({
+      id: "notion",
+      displayName: "Notion",
+      endpoint: "https://mcp.notion.com/mcp",
+      transport: "streamable-http",
+      authType: "oauth2",
+      installFallback: {
+        command: "npx",
+        args: ["-y", "mcp-remote", "https://mcp.notion.com/sse", "--transport", "sse-only"],
+        url: "https://mcp.notion.com/sse",
+      },
+      provenance: { source: "curated" },
+    });
+
+    const server = installProviderProfile("notion");
+    expect(server.id).toBe("notion");
+    expect(server.transport).toBe("streamable-http");
+    expect(server.url).toBe("https://mcp.notion.com/mcp");
+    expect(server.source).toBe("provider-profile");
+    expect(getServer("notion")).toEqual(server);
+  });
+
+  it("installs provider profile fallback commands when requested", () => {
+    upsertProviderProfile({
+      id: "notion",
+      displayName: "Notion",
+      endpoint: "https://mcp.notion.com/mcp",
+      transport: "streamable-http",
+      authType: "oauth2",
+      installFallback: {
+        command: "npx",
+        args: ["-y", "mcp-remote", "https://mcp.notion.com/sse", "--transport", "sse-only"],
+        url: "https://mcp.notion.com/sse",
+      },
+      provenance: { source: "curated" },
+    });
+
+    const server = installProviderProfile("notion", { name: "Notion Fallback", useFallback: true });
+    expect(server.id).toBe("notion-fallback");
+    expect(server.transport).toBe("stdio");
+    expect(server.args).toEqual(["-y", "mcp-remote", "https://mcp.notion.com/sse", "--transport", "sse-only"]);
+    expect(server.url).toBe("https://mcp.notion.com/sse");
   });
 
   it("enables, disables, and removes profiles", () => {

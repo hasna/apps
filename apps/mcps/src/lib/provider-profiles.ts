@@ -1,6 +1,9 @@
 import { getDb } from "./db.js";
 import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "./provider-profile-seeds.js";
+import { addServer } from "./registry.js";
 import type {
+  InstallProviderProfileOptions,
+  McpServerEntry,
   ProviderInstallFallback,
   ProviderAuthMetadata,
   ProviderEndpointFallback,
@@ -210,6 +213,24 @@ export function listProviderProfiles(options: { enabledOnly?: boolean } = {}): P
   return (db.prepare(sql).all() as Record<string, unknown>[]).map(parseRow);
 }
 
+export function searchProviderProfiles(query: string, options: { enabledOnly?: boolean } = {}): ProviderProfile[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return listProviderProfiles(options);
+
+  return listProviderProfiles(options).filter((profile) => {
+    const searchable = [
+      profile.id,
+      profile.displayName,
+      profile.description ?? "",
+      profile.endpoint ?? "",
+      profile.docsUrl ?? "",
+      profile.provenance.sourceUrl ?? "",
+      profile.provenance.packageName ?? "",
+    ].join("\n").toLowerCase();
+    return searchable.includes(normalizedQuery);
+  });
+}
+
 export function getProviderProfile(id: string): ProviderProfile | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM provider_profiles WHERE id = ?").get(normalizeId(id)) as Record<string, unknown> | null;
@@ -231,6 +252,30 @@ export function disableProviderProfile(id: string): ProviderProfile {
 
 export function seedDefaultProviderProfiles(): ProviderProfile[] {
   return DEFAULT_PROVIDER_PROFILE_SEEDS.map((profile) => upsertProviderProfile(profile));
+}
+
+export function installProviderProfile(id: string, options: InstallProviderProfileOptions = {}): McpServerEntry {
+  const profile = getProviderProfile(id);
+  if (!profile) throw new Error(`Provider profile "${id}" not found`);
+  if (!profile.enabled) throw new Error(`Provider profile "${id}" is disabled`);
+
+  const fallback = profile.installFallback;
+  const useFallback = options.useFallback || !profile.endpoint;
+  const command = useFallback ? fallback?.command : fallback?.command ?? "npx";
+  const args = useFallback ? fallback?.args ?? [] : fallback?.args ?? [];
+  if (!command) {
+    throw new Error(`Provider profile "${id}" does not define an install fallback command`);
+  }
+
+  return addServer({
+    name: options.name ?? profile.displayName,
+    description: profile.description ?? undefined,
+    command,
+    args,
+    transport: useFallback ? "stdio" : profile.transport,
+    url: useFallback ? fallback?.url : profile.endpoint ?? undefined,
+    source: "provider-profile",
+  });
 }
 
 function setProviderProfileEnabled(id: string, enabled: boolean): ProviderProfile {

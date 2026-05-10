@@ -53,6 +53,12 @@ import {
   updateMachine as updateRegisteredMachine,
 } from "../lib/machines.js";
 import { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "../lib/fleet.js";
+import {
+  getProviderProfile,
+  installProviderProfile,
+  listProviderProfiles,
+  searchProviderProfiles,
+} from "../lib/provider-profiles.js";
 import * as readline from "readline";
 import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
@@ -76,6 +82,23 @@ const MACHINE_PLATFORMS = ["linux", "darwin", "unknown"] as const;
 const MACHINE_ARCHES = ["arm64", "x64", "unknown"] as const;
 const MACHINE_INSTALLERS = ["auto", "bun", "npm"] as const;
 const FLEET_INSTALL_MODES = ["missing", "missing-or-outdated", "all"] as const;
+
+function printProviderProfile(profile: ReturnType<typeof listProviderProfiles>[number]): void {
+  const status = profile.enabled ? chalk.green("enabled") : chalk.red("disabled");
+  console.log(`  ${chalk.bold(profile.displayName)} ${chalk.dim(`[${profile.id}]`)} — ${chalk.dim(profile.transport)} — ${status}`);
+  if (profile.description) console.log(`    ${chalk.dim(profile.description)}`);
+  if (profile.endpoint) console.log(`    ${chalk.cyan(profile.endpoint)}`);
+  if (profile.authMetadata.bearerToken === "optional") {
+    console.log(`    ${chalk.dim("Auth: OAuth with optional bearer token/API key support")}`);
+  } else if (profile.authMetadata.pkce || profile.authMetadata.dynamicClientRegistration) {
+    const parts = [
+      profile.authMetadata.oauthVersion ? `OAuth ${profile.authMetadata.oauthVersion}` : "OAuth",
+      profile.authMetadata.pkce ? "PKCE" : null,
+      profile.authMetadata.dynamicClientRegistration ? "dynamic client registration" : null,
+    ].filter(Boolean);
+    console.log(`    ${chalk.dim(`Auth: ${parts.join(", ")}`)}`);
+  }
+}
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -287,6 +310,109 @@ program
       process.exit(1);
     } finally {
       closeDb();
+    }
+  });
+
+// --- providers ---
+const providersCmd = program.command("providers").description("Discover and install curated MCP provider profiles");
+
+providersCmd
+  .command("list")
+  .description("List curated provider profiles")
+  .option("--json", "Output as JSON")
+  .option("--enabled-only", "Only include enabled profiles")
+  .action((opts) => {
+    const profiles = listProviderProfiles({ enabledOnly: opts.enabledOnly === true });
+    if (opts.json) {
+      printJson(profiles);
+      closeDb();
+      return;
+    }
+    if (profiles.length === 0) {
+      console.log(chalk.dim("No curated provider profiles available."));
+      closeDb();
+      return;
+    }
+    for (const profile of profiles) printProviderProfile(profile);
+    closeDb();
+  });
+
+providersCmd
+  .command("search")
+  .argument("<query>", "Search query")
+  .description("Search curated provider profiles")
+  .option("--json", "Output as JSON")
+  .option("--enabled-only", "Only include enabled profiles")
+  .action((query: string, opts) => {
+    const profiles = searchProviderProfiles(query, { enabledOnly: opts.enabledOnly === true });
+    if (opts.json) {
+      printJson(profiles);
+      closeDb();
+      return;
+    }
+    if (profiles.length === 0) {
+      console.log(chalk.dim("No curated provider profiles found."));
+      closeDb();
+      return;
+    }
+    for (const profile of profiles) printProviderProfile(profile);
+    console.log(chalk.dim(`\n${profiles.length} provider profile(s). Use \`mcps providers install <id>\` to register one.`));
+    closeDb();
+  });
+
+providersCmd
+  .command("info")
+  .argument("<id>", "Provider profile ID")
+  .description("Show a curated provider profile")
+  .option("--json", "Output as JSON")
+  .action((id: string, opts) => {
+    const profile = getProviderProfile(id);
+    if (!profile) {
+      console.error(chalk.red(`Provider profile "${id}" not found.`));
+      closeDb();
+      process.exit(1);
+    }
+    if (opts.json) {
+      printJson(profile);
+      closeDb();
+      return;
+    }
+    printProviderProfile(profile);
+    if (profile.fallbackEndpoints.length > 0) {
+      console.log(chalk.bold("    Fallback endpoints:"));
+      for (const fallback of profile.fallbackEndpoints) {
+        console.log(`      ${fallback.transport}: ${chalk.cyan(fallback.url)}`);
+      }
+    }
+    if (profile.docsUrl) console.log(`    Docs: ${chalk.cyan(profile.docsUrl)}`);
+    closeDb();
+  });
+
+providersCmd
+  .command("install")
+  .argument("<id>", "Provider profile ID")
+  .description("Register a curated provider profile as an MCP server")
+  .option("--name <name>", "Override registered server name")
+  .option("--fallback", "Install the stdio fallback command instead of direct remote transport")
+  .option("--json", "Output as JSON")
+  .action((id: string, opts) => {
+    try {
+      const server = installProviderProfile(id, {
+        name: opts.name,
+        useFallback: opts.fallback === true,
+      });
+      if (opts.json) {
+        printJson(server);
+      } else {
+        console.log(chalk.green(`Installed provider profile: ${server.name} [${server.id}]`));
+        console.log(chalk.dim(`  Transport: ${server.transport}`));
+        if (server.url) console.log(chalk.dim(`  URL: ${server.url}`));
+      }
+      closeDb();
+    } catch (err) {
+      console.error(chalk.red(`Failed to install provider profile: ${(err as Error).message}`));
+      closeDb();
+      process.exit(1);
     }
   });
 
@@ -746,7 +872,7 @@ program
   .argument("<shell>", "Shell type: bash, zsh, fish")
   .description("Generate shell completion script")
   .action((shell: string) => {
-    const commands = ["list","search","find","add","remove","enable","disable","info","status","tools","call","doctor","install","machines","fleet","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
+    const commands = ["list","search","providers","find","add","remove","enable","disable","info","status","tools","call","doctor","install","machines","fleet","export","import","env","sources","clone","update-server","serve","update","mcp","completion"];
 
     if (shell === "bash") {
       console.log(`# Add to ~/.bashrc: eval "$(mcps completion bash)"

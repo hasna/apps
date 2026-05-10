@@ -7,7 +7,7 @@ export interface McpServerEntry {
   env: Record<string, string>;
   transport: "stdio" | "sse" | "streamable-http";
   url: string | null;
-  source: "local" | "registry";
+  source: "local" | "registry" | "provider-profile";
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -23,7 +23,7 @@ export interface AddServerOptions {
   env?: Record<string, string>;
   transport?: "stdio" | "sse" | "streamable-http";
   url?: string;
-  source?: "local" | "registry";
+  source?: "local" | "registry" | "provider-profile";
 }
 
 export interface McpTool {
@@ -193,6 +193,11 @@ export interface UpsertProviderProfileOptions {
   safety?: ProviderSafetyMetadata;
   provenance: ProviderSourceProvenance;
   enabled?: boolean;
+}
+
+export interface InstallProviderProfileOptions {
+  name?: string;
+  useFallback?: boolean;
 }
 
 export type MachinePlatform = "linux" | "darwin" | "unknown";

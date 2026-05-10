@@ -115,6 +115,32 @@ describe("MCP server tools", () => {
     await client.close();
   });
 
+  it("lists, searches, inspects, and installs provider profiles", async () => {
+    const { client } = await createClientServer();
+
+    const listResult = await client.callTool({ name: "list_provider_profiles", arguments: {} });
+    const profiles = JSON.parse((listResult.content as any)[0].text);
+    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual(["linear", "notion"]);
+
+    const searchResult = await client.callTool({ name: "search_provider_profiles", arguments: { query: "notion" } });
+    const searchProfiles = JSON.parse((searchResult.content as any)[0].text);
+    expect(searchProfiles).toHaveLength(1);
+    expect(searchProfiles[0].endpoint).toBe("https://mcp.notion.com/mcp");
+
+    const infoResult = await client.callTool({ name: "get_provider_profile", arguments: { id: "linear" } });
+    const linear = JSON.parse((infoResult.content as any)[0].text);
+    expect(linear.authMetadata.bearerToken).toBe("optional");
+
+    const installResult = await client.callTool({ name: "install_provider_profile", arguments: { id: "linear" } });
+    const server = JSON.parse((installResult.content as any)[0].text);
+    expect(server.id).toBe("linear");
+    expect(server.transport).toBe("streamable-http");
+    expect(server.url).toBe("https://mcp.linear.app/mcp");
+    expect(server.env).toEqual({});
+
+    await client.close();
+  });
+
   it("lists available tools", async () => {
     const { client } = await createClientServer();
     const result = await client.listTools();
@@ -123,6 +149,8 @@ describe("MCP server tools", () => {
     expect(toolNames).toContain("add_server");
     expect(toolNames).toContain("remove_server");
     expect(toolNames).toContain("get_server_info");
+    expect(toolNames).toContain("list_provider_profiles");
+    expect(toolNames).toContain("install_provider_profile");
     await client.close();
   });
 

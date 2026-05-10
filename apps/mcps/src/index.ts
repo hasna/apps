@@ -26,6 +26,7 @@ export type {
   ProviderProfileTransport,
   ProviderSafetyMetadata,
   ProviderSourceProvenance,
+  InstallProviderProfileOptions,
   UpsertProviderProfileOptions,
 } from "./types.js";
 
@@ -62,7 +63,9 @@ export {
 export {
   upsertProviderProfile,
   listProviderProfiles,
+  searchProviderProfiles,
   getProviderProfile,
+  installProviderProfile,
   removeProviderProfile,
   enableProviderProfile,
   disableProviderProfile,
