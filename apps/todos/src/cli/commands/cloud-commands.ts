@@ -8,6 +8,59 @@ export function registerCloudCommands(program: Command) {
     .description("Cloud sync commands");
 
   cloudCmd
+    .command("migrate")
+    .description("Copy local SQLite todos data to a configured remote API without deleting local data")
+    .option("--api-url <url>", "Remote API URL (defaults to TODOS_API_URL/config apiUrl)")
+    .option("--api-key <key>", "Remote API key (defaults to TODOS_API_KEY/config apiKey)")
+    .option("--confirm", "Send the copy-only import to the remote API")
+    .option("--dry-run", "Build the export manifest and print counts without sending (default)")
+    .option("--idempotency-key <key>", "Stable idempotency key for retry/resume")
+    .option("--conflict <strategy>", "Conflict strategy: skip, upsert, or fail", "skip")
+    .option("--include-empty", "Include empty tables in the manifest")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const useJson = opts.json || globalOpts.json;
+      try {
+        const { pushLocalCloudExport } = await import("../../lib/cloud-migration.js");
+        const dryRun = opts.dryRun || !opts.confirm;
+        const result = await pushLocalCloudExport({
+          apiUrl: opts.apiUrl,
+          apiKey: opts.apiKey,
+          dryRun,
+          idempotencyKey: opts.idempotencyKey,
+          conflictStrategy: opts.conflict,
+          includeEmptyTables: opts.includeEmpty,
+        });
+
+        if (useJson) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        console.log(chalk.bold(dryRun ? "Local-to-cloud migration dry run" : "Local-to-cloud migration submitted"));
+        console.log(`  Mode: ${result.manifest.mode}`);
+        console.log(`  Local data deleted: ${result.manifest.safety.deletesLocalData ? "yes" : "no"}`);
+        console.log(`  Local data mutated: ${result.manifest.safety.mutatesLocalData ? "yes" : "no"}`);
+        console.log(`  Endpoint: ${result.endpoint || "(not configured)"}`);
+        console.log(`  Idempotency key: ${result.idempotencyKey}`);
+        console.log(`  Conflict strategy: ${result.conflictStrategy}`);
+        console.log(`  Rows: ${result.manifest.totals.rows}`);
+        for (const [table, count] of Object.entries(result.manifest.counts).filter(([, count]) => count > 0)) {
+          console.log(`    ${table}: ${count}`);
+        }
+        if (dryRun) {
+          console.log(chalk.dim("\nDry run only. Re-run with --confirm to send this copy-only import."));
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (useJson) console.log(JSON.stringify({ error: msg }));
+        else console.error(chalk.red(msg));
+        process.exit(1);
+      }
+    });
+
+  cloudCmd
     .command("status")
     .description("Show cloud config, connection health, machine registry, and sync status")
     .option("-j, --json", "Output as JSON")

@@ -357,6 +357,19 @@ export {
   normalizeApiUrl,
 } from "./lib/config.js";
 export type { TodosConfig, AgentConfig, CompletionGuardConfig, RemoteApiConfig, TodosMode } from "./lib/config.js";
+export {
+  LOCAL_TO_CLOUD_TABLES,
+  createLocalCloudExport,
+  pushLocalCloudExport,
+} from "./lib/cloud-migration.js";
+export type {
+  CreateLocalCloudExportOptions,
+  LocalCloudExportManifest,
+  LocalCloudMigrationResult,
+  LocalToCloudConflictStrategy,
+  LocalToCloudTable,
+  PushLocalCloudExportOptions,
+} from "./lib/cloud-migration.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

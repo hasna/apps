@@ -42,7 +42,5 @@ Remote mode does not delete, rewrite, or migrate local SQLite data. Local data
 stays on disk until a user explicitly runs a future copy/import command and
 separately chooses to clean up local files.
 
-The local-to-cloud migration path must be copy-only by default: export local
-projects, plans, task lists, tasks, agents, templates, comments, audit history,
-dispatches, checkpoints, and metadata to the remote API while preserving source
-IDs as provenance.
+Use `todos cloud migrate --dry-run` to inspect the copy-only migration manifest.
+See `docs/local-to-cloud-migration.md` for the full migration contract.
