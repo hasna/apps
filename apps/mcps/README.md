@@ -27,6 +27,9 @@ mcps --help
 - `mcps call`
 - `mcps info`
 - `mcps doctor`
+- `mcps providers list`
+- `mcps providers search github`
+- `mcps providers install github`
 - `mcps env list <server-id>`
 - `mcps env ref <server-id> API_KEY=UPSTREAM_API_KEY --source env`
 - `mcps machines list`
@@ -54,6 +57,23 @@ Notes:
 - `mcps fleet install` requires `--yes` because it performs remote installs.
 - Targets need SSH access plus `node` and either `bun` or `npm` available remotely.
 - Use `-j` or `--json` on the new `machines` and `fleet` commands for scriptable output.
+
+## Curated Provider Profiles
+
+`mcps providers` exposes a curated catalog of common MCP providers with source,
+auth, transport, and install metadata. The default catalog includes Notion,
+Linear, GitHub, Slack, Gmail, Google Drive, Google Calendar, Stripe, Cloudflare,
+PostgreSQL, filesystem, and browser automation profiles.
+
+```bash
+mcps providers list
+mcps providers info github --json
+mcps providers install github
+```
+
+Direct remote providers install as HTTP/SSE entries. Local stdio fallbacks such
+as PostgreSQL, filesystem, and Playwright browser automation require explicit
+local command consent before registration.
 
 ## Credential References
 

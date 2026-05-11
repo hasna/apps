@@ -325,7 +325,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "list_provider_profiles",
-      description: "List curated provider profiles for hosted/common MCP integrations such as Notion and Linear.",
+      description: "List curated provider profiles for hosted/common MCP integrations such as GitHub, Slack, Google Workspace, Stripe, Cloudflare, Postgres, filesystem, and browser automation.",
       paramsSchema: {
         enabled_only: z.boolean().optional().describe("Only include enabled provider profiles"),
       },
@@ -335,7 +335,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
       name: "search_provider_profiles",
       description: "Search curated provider profiles separately from raw MCP registry/source search.",
       paramsSchema: {
-        query: z.string().describe("Search query such as 'notion', 'linear', or an endpoint URL"),
+        query: z.string().describe("Search query such as 'github', 'slack', 'postgres', or an endpoint URL"),
         enabled_only: z.boolean().optional().describe("Only include enabled provider profiles"),
       },
       run: ({ query, enabled_only }) => jsonContent(searchProviderProfiles(String(query), { enabledOnly: enabled_only === true })),

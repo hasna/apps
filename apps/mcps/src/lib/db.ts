@@ -129,39 +129,36 @@ export function getDb(): Database {
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_provider_profiles_enabled ON provider_profiles(enabled)");
 
-  const providerProfileCount = (db.query("SELECT COUNT(*) as c FROM provider_profiles").get() as { c: number }).c;
-  if (providerProfileCount === 0) {
-    const insertProviderProfile = db.prepare(`
-      INSERT OR IGNORE INTO provider_profiles (
-        id, display_name, description, endpoint, transport, fallback_endpoints,
-        auth_type, auth_metadata, scopes, token_mode, install_fallback,
-        docs_url, safety, provenance, enabled
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+  const insertProviderProfile = db.prepare(`
+    INSERT OR IGNORE INTO provider_profiles (
+      id, display_name, description, endpoint, transport, fallback_endpoints,
+      auth_type, auth_metadata, scopes, token_mode, install_fallback,
+      docs_url, safety, provenance, enabled
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
 
-    const run = db.transaction(() => {
-      for (const profile of DEFAULT_PROVIDER_PROFILE_SEEDS) {
-        insertProviderProfile.run(
-          profile.id,
-          profile.displayName,
-          profile.description ?? null,
-          profile.endpoint ?? null,
-          profile.transport,
-          JSON.stringify(profile.fallbackEndpoints ?? []),
-          profile.authType,
-          JSON.stringify(profile.authMetadata ?? {}),
-          JSON.stringify(profile.scopes ?? []),
-          profile.tokenMode ?? "none",
-          JSON.stringify(profile.installFallback ?? null),
-          profile.docsUrl ?? null,
-          JSON.stringify(profile.safety ?? {}),
-          JSON.stringify(profile.provenance),
-          profile.enabled === false ? 0 : 1
-        );
-      }
-    });
-    run();
-  }
+  const seedProviderProfiles = db.transaction(() => {
+    for (const profile of DEFAULT_PROVIDER_PROFILE_SEEDS) {
+      insertProviderProfile.run(
+        profile.id,
+        profile.displayName,
+        profile.description ?? null,
+        profile.endpoint ?? null,
+        profile.transport,
+        JSON.stringify(profile.fallbackEndpoints ?? []),
+        profile.authType,
+        JSON.stringify(profile.authMetadata ?? {}),
+        JSON.stringify(profile.scopes ?? []),
+        profile.tokenMode ?? "none",
+        JSON.stringify(profile.installFallback ?? null),
+        profile.docsUrl ?? null,
+        JSON.stringify(profile.safety ?? {}),
+        JSON.stringify(profile.provenance),
+        profile.enabled === false ? 0 : 1
+      );
+    }
+  });
+  seedProviderProfiles();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS feedback (

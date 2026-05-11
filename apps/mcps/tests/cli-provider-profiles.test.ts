@@ -2,6 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "../src/lib/provider-profile-seeds";
+
+function idsSortedByDisplayName() {
+  return [...DEFAULT_PROVIDER_PROFILE_SEEDS]
+    .sort((left, right) => left.displayName.localeCompare(right.displayName))
+    .map((profile) => profile.id);
+}
 
 function runCli(args: string[], dataDir = mkdtempSync(join(tmpdir(), "mcps-cli-provider-"))) {
   const result = Bun.spawnSync({
@@ -29,7 +36,10 @@ describe("provider profile CLI", () => {
     const result = runCli(["providers", "list", "--json"]);
     expect(result.exitCode).toBe(0);
     const profiles = JSON.parse(result.stdoutText);
-    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual(["linear", "notion"]);
+    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual(idsSortedByDisplayName());
+    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("github");
+    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("google-calendar");
+    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("browser");
   });
 
   it("searches and inspects curated provider profiles as JSON", () => {

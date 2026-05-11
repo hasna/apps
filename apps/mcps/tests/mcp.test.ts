@@ -5,6 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { readFileSync } from "fs";
 import { addServer, getServer } from "../src/lib/registry";
 import { getDb, closeDb } from "../src/lib/db";
+import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "../src/lib/provider-profile-seeds";
 import { createMcpServer, listTools, tools } from "../src/mcp/index";
 
 function clearDb() {
@@ -171,7 +172,12 @@ describe("MCP server tools", () => {
 
     const listResult = await client.callTool({ name: "list_provider_profiles", arguments: {} });
     const profiles = JSON.parse((listResult.content as any)[0].text);
-    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual(["linear", "notion"]);
+    const expectedIds = [...DEFAULT_PROVIDER_PROFILE_SEEDS]
+      .sort((left, right) => left.displayName.localeCompare(right.displayName))
+      .map((profile) => profile.id);
+    expect(profiles.map((profile: { id: string }) => profile.id)).toEqual(expectedIds);
+    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("stripe");
+    expect(profiles.map((profile: { id: string }) => profile.id)).toContain("cloudflare");
 
     const searchResult = await client.callTool({ name: "search_provider_profiles", arguments: { query: "notion" } });
     const searchProfiles = JSON.parse((searchResult.content as any)[0].text);
