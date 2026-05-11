@@ -38,6 +38,8 @@ import {
   assertLocalCommandConsent,
   type LocalCommandConsent,
 } from "../lib/local-command-consent.js";
+import { normalizeCredentialRefs } from "../lib/credentials.js";
+import type { CredentialReferenceMap } from "../types.js";
 import {
   addMachine,
   getMachine as getRegisteredMachine,
@@ -102,6 +104,12 @@ function localConsent(input: Record<string, unknown>): LocalCommandConsent {
   };
 }
 
+function readCredentialRefs(input: Record<string, unknown>): CredentialReferenceMap {
+  return normalizeCredentialRefs(
+    (input.credential_refs ?? input.credentialRefs) as CredentialReferenceMap | undefined,
+  );
+}
+
 export function buildMcpTools(): McpsMcpToolDefinition[] {
   const definitions: InternalMcpToolDefinition[] = [
     {
@@ -127,6 +135,12 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         transport: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Transport type"),
         url: z.string().optional().describe("URL for remote transports"),
         env: z.record(z.string()).optional().describe("Environment variables"),
+        credential_refs: z.record(z.object({
+          source: z.enum(["env", "local-vault", "hosted"]),
+          name: z.string(),
+          required: z.boolean().optional(),
+          description: z.string().optional(),
+        })).optional().describe("Credential references by server env key"),
         allow_local_stdio: z.boolean().optional().describe("Approve registering this local stdio command"),
         allow_risky_command: z.boolean().optional().describe("Approve registering risky local command patterns"),
       },
@@ -134,10 +148,17 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         const command = String(input.command);
         const args = Array.isArray(input.args) ? input.args.map(String) : [];
         const env = isRecordOfStrings(input.env) ? input.env : {};
+        const credentialRefs = readCredentialRefs(input);
         const transport = input.transport as Parameters<typeof addServer>[0]["transport"];
         try {
           assertLocalCommandConsent(
-            { command, args, env, transport, operation: "register" },
+            {
+              command,
+              args,
+              env: { ...env, ...Object.fromEntries(Object.keys(credentialRefs).map((key) => [key, "<credential-ref>"])) },
+              transport,
+              operation: "register",
+            },
             localConsent(input),
           );
           return jsonContent(addServer({
@@ -148,6 +169,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
             transport,
             url: typeof input.url === "string" ? input.url : undefined,
             env,
+            credentialRefs,
           }));
         } catch (err) {
           return errorContent((err as Error).message);
@@ -212,6 +234,12 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         args: z.array(z.string()).optional().describe("New args list"),
         transport: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("New transport type"),
         url: z.string().optional().describe("New URL for remote transports"),
+        credential_refs: z.record(z.object({
+          source: z.enum(["env", "local-vault", "hosted"]),
+          name: z.string(),
+          required: z.boolean().optional(),
+          description: z.string().optional(),
+        })).optional().describe("Credential references by server env key"),
         allow_local_stdio: z.boolean().optional().describe("Approve updating this local stdio command"),
         allow_risky_command: z.boolean().optional().describe("Approve risky local command patterns"),
       },
@@ -224,6 +252,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         if (typeof input.description === "string") fields.description = input.description;
         if (typeof input.command === "string") fields.command = input.command;
         if (Array.isArray(input.args)) fields.args = input.args.map(String);
+        if (input.credential_refs !== undefined || input.credentialRefs !== undefined) fields.credentialRefs = readCredentialRefs(input);
         if (input.transport === "stdio" || input.transport === "sse" || input.transport === "streamable-http") fields.transport = input.transport;
         if (typeof input.url === "string") fields.url = input.url;
         if (fields.command !== undefined || fields.args !== undefined || fields.transport !== undefined) {
@@ -232,7 +261,10 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
               {
                 command: fields.command ?? existing.command,
                 args: fields.args ?? existing.args,
-                env: existing.env,
+                env: {
+                  ...existing.env,
+                  ...Object.fromEntries(Object.keys(fields.credentialRefs ?? existing.credentialRefs ?? {}).map((key) => [key, "<credential-ref>"])),
+                },
                 transport: fields.transport ?? existing.transport,
                 operation: "register",
               },

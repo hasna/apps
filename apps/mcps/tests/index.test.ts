@@ -71,4 +71,12 @@ describe("index exports", () => {
     expect(typeof api.assertLocalCommandConsent).toBe("function");
     expect(typeof api.LocalCommandConsentError).toBe("function");
   });
+
+  it("exports credential reference helpers", () => {
+    expect(typeof api.resolveServerEnv).toBe("function");
+    expect(typeof api.redactServerCredentials).toBe("function");
+    expect(typeof api.setServerCredentialRef).toBe("function");
+    expect(typeof api.unsetServerCredentialRef).toBe("function");
+    expect(typeof api.CredentialReferenceError).toBe("function");
+  });
 });

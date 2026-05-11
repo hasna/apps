@@ -5,6 +5,7 @@ export interface McpServerEntry {
   command: string;
   args: string[];
   env: Record<string, string>;
+  credentialRefs?: CredentialReferenceMap;
   transport: "stdio" | "sse" | "streamable-http";
   url: string | null;
   source: "local" | "registry" | "provider-profile";
@@ -21,10 +22,22 @@ export interface AddServerOptions {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  credentialRefs?: CredentialReferenceMap;
   transport?: "stdio" | "sse" | "streamable-http";
   url?: string;
   source?: "local" | "registry" | "provider-profile";
 }
+
+export type CredentialReferenceSource = "env" | "local-vault" | "hosted";
+
+export interface CredentialReference {
+  source: CredentialReferenceSource;
+  name: string;
+  required?: boolean;
+  description?: string;
+}
+
+export type CredentialReferenceMap = Record<string, CredentialReference>;
 
 export interface McpTool {
   server_id: string;

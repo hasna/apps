@@ -32,4 +32,18 @@ describe("install consent", () => {
     });
     expect(results[0].error).toContain("local stdio command approval is required");
   });
+
+  it("refuses to materialize credential refs into local agent configs", () => {
+    const results = installToAgents(
+      makeEntry({
+        credentialRefs: { API_KEY: { source: "env", name: "UPSTREAM_API_KEY" } },
+      }),
+      ["codex"],
+      { localCommandConsent: { approved: true, source: "test" } },
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ agent: "codex", success: false });
+    expect(results[0].error).toContain("credential references");
+  });
 });

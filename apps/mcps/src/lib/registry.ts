@@ -1,5 +1,10 @@
 import { getDb } from "./db.js";
-import type { McpServerEntry, AddServerOptions } from "../types.js";
+import {
+  normalizeCredentialRefs,
+  normalizeLiteralEnv,
+  parseCredentialRefs,
+} from "./credentials.js";
+import type { CredentialReference, McpServerEntry, AddServerOptions } from "../types.js";
 
 function parseRow(row: Record<string, unknown>): McpServerEntry {
   return {
@@ -9,6 +14,7 @@ function parseRow(row: Record<string, unknown>): McpServerEntry {
     command: row.command as string,
     args: safeJsonParse(row.args as string, []),
     env: safeJsonParse(row.env as string, {}),
+    credentialRefs: parseCredentialRefs(safeJsonParse(row.credential_refs as string, {})),
     transport: row.transport as McpServerEntry["transport"],
     url: (row.url as string) || null,
     source: row.source as McpServerEntry["source"],
@@ -83,8 +89,8 @@ export function addServer(opts: AddServerOptions): McpServerEntry {
 
   const row = db
     .prepare(
-      `INSERT INTO servers (id, name, description, command, args, env, transport, url, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO servers (id, name, description, command, args, env, credential_refs, transport, url, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING *`
     )
     .get(
@@ -93,7 +99,8 @@ export function addServer(opts: AddServerOptions): McpServerEntry {
       opts.description || null,
       command,
       JSON.stringify(opts.args || []),
-      JSON.stringify(opts.env || {}),
+      JSON.stringify(normalizeLiteralEnv(opts.env)),
+      JSON.stringify(normalizeCredentialRefs(opts.credentialRefs)),
       opts.transport || "stdio",
       opts.url || null,
       opts.source || "local"
@@ -121,7 +128,7 @@ export function getServer(id: string): McpServerEntry | null {
 
 export function updateServer(
   id: string,
-  updates: Partial<Pick<McpServerEntry, "name" | "description" | "command" | "args" | "env" | "transport" | "url" | "enabled">>
+  updates: Partial<Pick<McpServerEntry, "name" | "description" | "command" | "args" | "env" | "credentialRefs" | "transport" | "url" | "enabled">>
 ): McpServerEntry {
   const db = getDb();
   const sets: string[] = [];
@@ -145,7 +152,11 @@ export function updateServer(
   }
   if (updates.env !== undefined) {
     sets.push("env = ?");
-    values.push(JSON.stringify(updates.env));
+    values.push(JSON.stringify(normalizeLiteralEnv(updates.env)));
+  }
+  if (updates.credentialRefs !== undefined) {
+    sets.push("credential_refs = ?");
+    values.push(JSON.stringify(normalizeCredentialRefs(updates.credentialRefs)));
   }
   if (updates.transport !== undefined) {
     sets.push("transport = ?");
@@ -187,7 +198,7 @@ export function setServerEnv(id: string, key: string, value: string): void {
   const server = getServer(id);
   if (!server) throw new Error(`Server "${id}" not found`);
   const env = { ...server.env, [key]: value };
-  db.prepare("UPDATE servers SET env = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(env), id);
+  db.prepare("UPDATE servers SET env = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(normalizeLiteralEnv(env)), id);
 }
 
 export function unsetServerEnv(id: string, key: string): void {
@@ -197,6 +208,29 @@ export function unsetServerEnv(id: string, key: string): void {
   const env = { ...server.env };
   delete env[key];
   db.prepare("UPDATE servers SET env = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(env), id);
+}
+
+export function setServerCredentialRef(id: string, key: string, ref: CredentialReference): void {
+  const db = getDb();
+  const server = getServer(id);
+  if (!server) throw new Error(`Server "${id}" not found`);
+  const credentialRefs = normalizeCredentialRefs({ ...(server.credentialRefs ?? {}), [key]: ref });
+  db.prepare("UPDATE servers SET credential_refs = ?, updated_at = datetime('now') WHERE id = ?").run(
+    JSON.stringify(credentialRefs),
+    id,
+  );
+}
+
+export function unsetServerCredentialRef(id: string, key: string): void {
+  const db = getDb();
+  const server = getServer(id);
+  if (!server) throw new Error(`Server "${id}" not found`);
+  const credentialRefs = { ...(server.credentialRefs ?? {}) };
+  delete credentialRefs[key];
+  db.prepare("UPDATE servers SET credential_refs = ?, updated_at = datetime('now') WHERE id = ?").run(
+    JSON.stringify(normalizeCredentialRefs(credentialRefs)),
+    id,
+  );
 }
 
 export function cacheTools(
@@ -248,6 +282,7 @@ export function cloneServer(id: string, newName: string): McpServerEntry {
     command: server.command,
     args: server.args,
     env: server.env,
+    credentialRefs: server.credentialRefs,
     transport: server.transport,
     url: server.url ?? undefined,
     source: server.source,

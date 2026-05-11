@@ -65,8 +65,8 @@ describe("registry", () => {
     });
 
     it("stores env as JSON object", () => {
-      const s = addServer({ command: "npx", env: { API_KEY: "abc" } });
-      expect(s.env).toEqual({ API_KEY: "abc" });
+      const s = addServer({ command: "npx", env: { DEBUG: "true" } });
+      expect(s.env).toEqual({ DEBUG: "true" });
     });
 
     it("respects transport option", () => {

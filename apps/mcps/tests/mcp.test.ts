@@ -67,6 +67,50 @@ describe("MCP server tools", () => {
     await client.close();
   });
 
+  it("add_server handles credential refs without exposing raw secrets", async () => {
+    const { client } = await createClientServer();
+
+    const rejected = await client.callTool({
+      name: "add_server",
+      arguments: {
+        command: "npx",
+        name: "RejectedCredentialMCP",
+        env: { API_KEY: "sk_live_should_not_be_stored" },
+        allow_local_stdio: true,
+      },
+    });
+    expect(rejected.isError).toBe(true);
+    expect((rejected.content as any)[0].text).toContain("credential reference");
+
+    const addResult = await client.callTool({
+      name: "add_server",
+      arguments: {
+        command: "npx",
+        name: "CredentialMCP",
+        env: { DEBUG: "1" },
+        credential_refs: {
+          API_KEY: { source: "env", name: "UPSTREAM_API_KEY" },
+        },
+        allow_local_stdio: true,
+      },
+    });
+    const added = JSON.parse((addResult.content as any)[0].text);
+    expect(added.env).toEqual({ DEBUG: "1" });
+    expect(added.credentialRefs.API_KEY).toEqual({
+      source: "env",
+      name: "UPSTREAM_API_KEY",
+      required: true,
+    });
+
+    const listResult = await client.callTool({ name: "list_servers", arguments: {} });
+    const listed = JSON.parse((listResult.content as any)[0].text);
+    expect(listed[0].env).toEqual({});
+    expect(JSON.stringify(listed)).not.toContain("sk_live_should_not_be_stored");
+    expect(JSON.stringify(getServer("rejectedcredentialmcp"))).not.toContain("sk_live_should_not_be_stored");
+
+    await client.close();
+  });
+
   it("remove_server removes a server", async () => {
     const { client } = await createClientServer();
 

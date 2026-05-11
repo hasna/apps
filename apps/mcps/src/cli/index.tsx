@@ -14,11 +14,13 @@ import {
   disableServer,
   getToolCounts,
   setServerEnv,
+  setServerCredentialRef,
   unsetServerEnv,
+  unsetServerCredentialRef,
   updateServer,
   cloneServer,
 } from "../lib/registry.js";
-import type { McpSource } from "../types.js";
+import type { CredentialReferenceMap, CredentialReferenceSource, McpSource } from "../types.js";
 import { diagnoseServer } from "../lib/doctor.js";
 import { searchRegistry, installFromRegistry } from "../lib/remote.js";
 import { listAwesomeServers } from "../lib/finder.js";
@@ -66,6 +68,12 @@ import {
   type LocalCommandConsent,
   type LocalCommandInput,
 } from "../lib/local-command-consent.js";
+import {
+  normalizeCredentialRefs,
+  normalizeLiteralEnv,
+  redactServerCredentials,
+  redactEnv,
+} from "../lib/credentials.js";
 import * as readline from "readline";
 import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
@@ -122,6 +130,35 @@ function assertCliLocalCommandConsent(
   }
   assertLocalCommandConsent(input, consent);
   return consent;
+}
+
+function parseCredentialPairs(pairs: string[] | undefined, source: CredentialReferenceSource): CredentialReferenceMap {
+  const refs: CredentialReferenceMap = {};
+  for (const pair of pairs ?? []) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx <= 0) throw new Error(`Credential reference must use KEY=NAME format: ${pair}`);
+    const key = pair.slice(0, eqIdx).trim();
+    const name = pair.slice(eqIdx + 1).trim();
+    if (!key || !name) throw new Error(`Credential reference must use KEY=NAME format: ${pair}`);
+    refs[key] = { source, name, required: true };
+  }
+  return refs;
+}
+
+function credentialRefsFromOptions(opts: {
+  credentialEnv?: string[];
+  credentialLocal?: string[];
+  credentialHosted?: string[];
+}): CredentialReferenceMap {
+  return {
+    ...parseCredentialPairs(opts.credentialEnv, "env"),
+    ...parseCredentialPairs(opts.credentialLocal, "local-vault"),
+    ...parseCredentialPairs(opts.credentialHosted, "hosted"),
+  };
+}
+
+function formatCredentialRef(ref: CredentialReferenceMap[string]): string {
+  return `${ref.source}:${ref.name}`;
 }
 
 function printProviderProfile(profile: ReturnType<typeof listProviderProfiles>[number]): void {
@@ -485,6 +522,9 @@ program
   .option("--transport <type>", "Transport type: stdio, sse, streamable-http", "stdio")
   .option("--url <url>", "URL for remote transports")
   .option("--env <pairs...>", "Environment variables as KEY=VALUE pairs")
+  .option("--credential-env <pairs...>", "Credential refs as KEY=ENV_VAR pairs")
+  .option("--credential-local <pairs...>", "Credential refs as KEY=LOCAL_VAULT_NAME pairs")
+  .option("--credential-hosted <pairs...>", "Credential refs as KEY=HOSTED_CREDENTIAL_ID pairs")
   .option("--wizard", "Interactive setup wizard")
   .option("--force", "Register even if duplicate command exists")
   .option("--yes", "Approve registering local stdio commands")
@@ -570,6 +610,7 @@ program
           description: wizardDescription || undefined,
           transport: transport as any,
           env,
+          credentialRefs: credentialRefsFromOptions(opts),
         });
         console.log(chalk.green(`Added: ${server.name} [${server.id}]`));
         closeDb();
@@ -602,12 +643,13 @@ program
           envMap[key] = rest.join("=");
         }
       }
+      const credentialRefs = credentialRefsFromOptions(opts);
 
       assertCliLocalCommandConsent(
         {
           command,
           args,
-          env: envMap,
+          env: { ...envMap, ...Object.fromEntries(Object.keys(credentialRefs).map((key) => [key, "<credential-ref>"])) },
           transport: opts.transport,
           operation: "register",
         },
@@ -622,6 +664,7 @@ program
         transport: opts.transport,
         url: opts.url,
         env: envMap,
+        credentialRefs,
       });
 
       console.log(chalk.green(`Added server: ${server.name} [${server.id}]`));
@@ -879,18 +922,24 @@ program
       process.exit(1);
     }
 
-    console.log(chalk.bold(server.name) + " " + chalk.dim(`[${server.id}]`));
-    console.log(`  Status:    ${server.enabled ? chalk.green("enabled") : chalk.red("disabled")}`);
-    console.log(`  Source:    ${server.source}`);
-    console.log(`  Transport: ${server.transport}`);
-    console.log(`  Command:   ${server.command} ${server.args.join(" ")}`);
-    if (server.url) console.log(`  URL:       ${server.url}`);
-    if (server.description) console.log(`  Desc:      ${server.description}`);
-    if (Object.keys(server.env).length > 0) {
-      console.log(`  Env:       ${Object.entries(server.env).map(([k, v]) => `${k}=${v}`).join(", ")}`);
+    const safeServer = redactServerCredentials(server);
+    console.log(chalk.bold(safeServer.name) + " " + chalk.dim(`[${safeServer.id}]`));
+    console.log(`  Status:    ${safeServer.enabled ? chalk.green("enabled") : chalk.red("disabled")}`);
+    console.log(`  Source:    ${safeServer.source}`);
+    console.log(`  Transport: ${safeServer.transport}`);
+    console.log(`  Command:   ${safeServer.command} ${safeServer.args.join(" ")}`);
+    if (safeServer.url) console.log(`  URL:       ${safeServer.url}`);
+    if (safeServer.description) console.log(`  Desc:      ${safeServer.description}`);
+    if (Object.keys(safeServer.env).length > 0) {
+      console.log(`  Env:       ${Object.entries(safeServer.env).map(([k, v]) => `${k}=${v}`).join(", ")}`);
     }
-    console.log(`  Created:   ${server.created_at}`);
-    console.log(`  Updated:   ${server.updated_at}`);
+    if (Object.keys(safeServer.credentialRefs ?? {}).length > 0) {
+      console.log(
+        `  Cred refs: ${Object.entries(safeServer.credentialRefs ?? {}).map(([k, ref]) => `${k}=${formatCredentialRef(ref)}`).join(", ")}`,
+      );
+    }
+    console.log(`  Created:   ${safeServer.created_at}`);
+    console.log(`  Updated:   ${safeServer.updated_at}`);
 
     const cached = getCachedTools(id);
     if (cached.length > 0) {
@@ -1732,7 +1781,7 @@ program
   .option("--file <path>", "Output file path", `${process.env.HOME ?? "~"}/.hasna/mcps/export.json`)
   .option("--stdout", "Write to stdout instead of a file")
   .action((opts) => {
-    const servers = listServers();
+    const servers = listServers().map(redactServerCredentials);
     const sources = listSources();
     const payload = {
       version: 1,
@@ -1784,9 +1833,25 @@ program
         serversSkipped++;
         continue;
       }
+      const literalEnv = normalizeLiteralEnv(s.env ?? {});
+      const credentialRefs = normalizeCredentialRefs(s.credentialRefs ?? s.credential_refs ?? {});
       db.run(
-        `INSERT ${orReplace} INTO servers (id, name, description, command, args, env, transport, url, source, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [s.id, s.name, s.description, s.command, JSON.stringify(s.args ?? []), JSON.stringify(s.env ?? {}), s.transport, s.url, s.source, s.enabled ? 1 : 0, s.created_at, s.updated_at]
+        `INSERT ${orReplace} INTO servers (id, name, description, command, args, env, credential_refs, transport, url, source, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          s.id,
+          s.name,
+          s.description,
+          s.command,
+          JSON.stringify(s.args ?? []),
+          JSON.stringify(literalEnv),
+          JSON.stringify(credentialRefs),
+          s.transport,
+          s.url,
+          s.source,
+          s.enabled ? 1 : 0,
+          s.created_at,
+          s.updated_at,
+        ]
       );
       serversImported++;
     }
@@ -1818,9 +1883,11 @@ envCmd.command("list").argument("<id>").description("List env vars for a server"
   .action((id: string) => {
     const server = getServer(id);
     if (!server) { console.error(chalk.red(`Server "${id}" not found.`)); closeDb(); process.exit(1); }
-    const entries = Object.entries(server.env);
-    if (entries.length === 0) { console.log(chalk.dim("No env vars set.")); closeDb(); return; }
-    for (const [k, v] of entries) console.log(`  ${chalk.bold(k)}=${chalk.dim(v)}`);
+    const envEntries = Object.entries(redactEnv(server.env));
+    const refEntries = Object.entries(server.credentialRefs ?? {});
+    if (envEntries.length === 0 && refEntries.length === 0) { console.log(chalk.dim("No env vars or credential refs set.")); closeDb(); return; }
+    for (const [k, v] of envEntries) console.log(`  ${chalk.bold(k)}=${chalk.dim(v)}`);
+    for (const [k, ref] of refEntries) console.log(`  ${chalk.bold(k)}=${chalk.dim(formatCredentialRef(ref))}`);
     closeDb();
   });
 
@@ -1833,6 +1900,41 @@ envCmd.command("set").argument("<id>").argument("<pair>", "KEY=VALUE").descripti
     try {
       setServerEnv(id, key, value);
       console.log(chalk.green(`Set ${key} on ${id}`));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+envCmd.command("ref").argument("<id>").argument("<pair>", "KEY=NAME").description("Set a credential reference for a server env key")
+  .option("--source <source>", "Credential source: env, local-vault, hosted", "env")
+  .action((id: string, pair: string, opts) => {
+    const source = opts.source as CredentialReferenceSource;
+    if (source !== "env" && source !== "local-vault" && source !== "hosted") {
+      console.error(chalk.red("Source must be one of: env, local-vault, hosted"));
+      closeDb();
+      process.exit(1);
+    }
+    try {
+      const refs = parseCredentialPairs([pair], source);
+      const [key, ref] = Object.entries(refs)[0];
+      setServerCredentialRef(id, key, ref);
+      console.log(chalk.green(`Set credential ref ${key}=${formatCredentialRef(ref)} on ${id}`));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      closeDb();
+      process.exit(1);
+    }
+    closeDb();
+  });
+
+envCmd.command("unset-ref").argument("<id>").argument("<key>").description("Remove a credential reference")
+  .action((id: string, key: string) => {
+    try {
+      unsetServerCredentialRef(id, key);
+      console.log(chalk.green(`Unset credential ref ${key} on ${id}`));
     } catch (err) {
       console.error(chalk.red((err as Error).message));
       closeDb();

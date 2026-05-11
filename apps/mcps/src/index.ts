@@ -28,6 +28,9 @@ export type {
   ProviderSourceProvenance,
   InstallProviderProfileOptions,
   UpsertProviderProfileOptions,
+  CredentialReference,
+  CredentialReferenceMap,
+  CredentialReferenceSource,
 } from "./types.js";
 
 export {
@@ -41,7 +44,9 @@ export {
   getToolCounts,
   getCachedTools,
   setServerEnv,
+  setServerCredentialRef,
   unsetServerEnv,
+  unsetServerCredentialRef,
   cloneServer,
 } from "./lib/registry.js";
 
@@ -93,6 +98,19 @@ export {
   inspectLocalCommand,
   LocalCommandConsentError,
 } from "./lib/local-command-consent.js";
+export {
+  CredentialReferenceError,
+  REDACTED_CREDENTIAL_VALUE,
+  credentialRefPlaceholders,
+  isSecretLikeEnvKey,
+  isSecretLikeValue,
+  normalizeCredentialRefs,
+  normalizeCredentialRef,
+  normalizeLiteralEnv,
+  redactEnv,
+  redactServerCredentials,
+  resolveServerEnv,
+} from "./lib/credentials.js";
 export type {
   LocalCommandConsent,
   LocalCommandInput,

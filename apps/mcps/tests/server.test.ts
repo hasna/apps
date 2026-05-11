@@ -91,6 +91,38 @@ describe("server API", () => {
       expect(data.args).toEqual(["-y", "test"]);
     });
 
+    it("rejects raw secret-like env values and accepts credential refs", async () => {
+      const raw = await api("/api/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command: "npx",
+          name: "RawSecret",
+          env: { API_KEY: "sk_live_should_not_be_stored" },
+          allow_local_stdio: true,
+        }),
+      });
+      expect(raw.status).toBe(400);
+      expect(raw.data.error).toContain("credential reference");
+
+      const referenced = await api("/api/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command: "npx",
+          name: "ReferencedSecret",
+          credential_refs: { API_KEY: { source: "env", name: "UPSTREAM_API_KEY" } },
+          allow_local_stdio: true,
+        }),
+      });
+      expect(referenced.status).toBe(200);
+      expect(referenced.data.env).toEqual({});
+      expect(referenced.data.credentialRefs.API_KEY).toMatchObject({
+        source: "env",
+        name: "UPSTREAM_API_KEY",
+      });
+    });
+
     it("returns 400 when command is missing", async () => {
       const { status, data } = await api("/api/servers", {
         method: "POST",

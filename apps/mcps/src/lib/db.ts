@@ -25,6 +25,7 @@ export function getDb(): Database {
       command TEXT NOT NULL,
       args TEXT NOT NULL DEFAULT '[]',
       env TEXT NOT NULL DEFAULT '{}',
+      credential_refs TEXT NOT NULL DEFAULT '{}',
       transport TEXT NOT NULL DEFAULT 'stdio',
       url TEXT,
       source TEXT NOT NULL DEFAULT 'local',
@@ -51,6 +52,7 @@ export function getDb(): Database {
   // Add health columns if they don't exist (safe migration)
   try { db.exec("ALTER TABLE servers ADD COLUMN last_connected_at TEXT"); } catch {}
   try { db.exec("ALTER TABLE servers ADD COLUMN last_error TEXT"); } catch {}
+  try { db.exec("ALTER TABLE servers ADD COLUMN credential_refs TEXT NOT NULL DEFAULT '{}'"); } catch {}
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS sources (

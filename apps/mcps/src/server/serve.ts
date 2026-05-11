@@ -36,6 +36,8 @@ import {
   LocalCommandConsentError,
   type LocalCommandConsent,
 } from "../lib/local-command-consent.js";
+import { CredentialReferenceError, normalizeCredentialRefs, redactServerCredentials } from "../lib/credentials.js";
+import type { CredentialReferenceMap } from "../types.js";
 
 interface ServerWithToolCount {
   id: string;
@@ -53,8 +55,8 @@ interface ServerWithToolCount {
   updated_at: string;
 }
 
-function redactServer<T extends { env: Record<string, string> }>(server: T): T {
-  return { ...server, env: {} };
+function redactServer<T extends { env: Record<string, string>; credentialRefs?: CredentialReferenceMap }>(server: T): T {
+  return { ...redactServerCredentials(server), env: {} };
 }
 
 function resolveDashboardDir(): string {
@@ -278,6 +280,9 @@ export async function startServer(
             command?: string;
             args?: unknown;
             description?: string;
+            env?: Record<string, string>;
+            credential_refs?: CredentialReferenceMap;
+            credentialRefs?: CredentialReferenceMap;
             transport?: string;
             url?: string;
             allow_local_stdio?: boolean;
@@ -308,9 +313,17 @@ export async function startServer(
             return json({ error: "Invalid 'args' format" }, 400, port);
           }
           const args = (body.args as string[]) || [];
+          const credentialRefs = normalizeCredentialRefs(body.credential_refs ?? body.credentialRefs);
+          const env = body.env && typeof body.env === "object" && !Array.isArray(body.env) ? body.env : {};
           try {
             assertLocalCommandConsent(
-              { command, args, env: {}, transport: transport as any, operation: "register" },
+              {
+                command,
+                args,
+                env: { ...env, ...Object.fromEntries(Object.keys(credentialRefs).map((key) => [key, "<credential-ref>"])) },
+                transport: transport as any,
+                operation: "register",
+              },
               consentFromInput(body),
             );
           } catch (err) {
@@ -323,9 +336,12 @@ export async function startServer(
             description: body.description,
             transport: transport as any,
             url: body.url,
+            env,
+            credentialRefs,
           });
           return json(entry, 200, port);
         } catch (e) {
+          if (e instanceof CredentialReferenceError) return json({ error: e.message }, 400, port);
           return json({ error: e instanceof Error ? e.message : "Failed to add server" }, 500, port);
         }
       }
@@ -395,6 +411,9 @@ export async function startServer(
             description?: string;
             command?: string;
             args?: unknown;
+            env?: Record<string, string>;
+            credential_refs?: CredentialReferenceMap;
+            credentialRefs?: CredentialReferenceMap;
             transport?: string;
             url?: string;
             allow_local_stdio?: boolean;
@@ -409,6 +428,10 @@ export async function startServer(
           if (body.name !== undefined) fields.name = body.name;
           if (body.description !== undefined) fields.description = body.description;
           if (body.command !== undefined) fields.command = body.command;
+          if (body.env !== undefined) fields.env = body.env;
+          if (body.credential_refs !== undefined || body.credentialRefs !== undefined) {
+            fields.credentialRefs = normalizeCredentialRefs(body.credential_refs ?? body.credentialRefs);
+          }
           if (body.transport !== undefined) fields.transport = body.transport as any;
           if (body.url !== undefined) fields.url = body.url;
           if (body.args !== undefined) {
@@ -423,7 +446,10 @@ export async function startServer(
                 {
                   command: fields.command ?? existing.command,
                   args: fields.args ?? existing.args,
-                  env: existing.env,
+                  env: {
+                    ...(fields.env ?? existing.env),
+                    ...Object.fromEntries(Object.keys(fields.credentialRefs ?? existing.credentialRefs ?? {}).map((key) => [key, "<credential-ref>"])),
+                  },
                   transport: (fields.transport ?? existing.transport) as any,
                   operation: "register",
                 },
@@ -459,6 +485,7 @@ export async function startServer(
           setServerEnv(id, body.key, body.value);
           return json({ ok: true }, 200, port);
         } catch (e) {
+          if (e instanceof CredentialReferenceError) return json({ error: e.message }, 400, port);
           return json({ error: e instanceof Error ? e.message : "Failed" }, 500, port);
         }
       }

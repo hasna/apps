@@ -233,7 +233,8 @@ describe("edge cases", () => {
         description: "A fully configured server",
         command: "node",
         args: ["server.js", "--port", "3000"],
-        env: { API_KEY: "secret123", DEBUG: "true" },
+        env: { DEBUG: "true" },
+        credentialRefs: { API_KEY: { source: "env", name: "FULL_SERVER_API_KEY" } },
         transport: "sse",
         url: "http://localhost:3000/sse",
         source: "registry",
@@ -245,7 +246,10 @@ describe("edge cases", () => {
       expect(retrieved!.description).toBe("A fully configured server");
       expect(retrieved!.command).toBe("node");
       expect(retrieved!.args).toEqual(["server.js", "--port", "3000"]);
-      expect(retrieved!.env).toEqual({ API_KEY: "secret123", DEBUG: "true" });
+      expect(retrieved!.env).toEqual({ DEBUG: "true" });
+      expect(retrieved!.credentialRefs).toEqual({
+        API_KEY: { source: "env", name: "FULL_SERVER_API_KEY", required: true },
+      });
       expect(retrieved!.transport).toBe("sse");
       expect(retrieved!.url).toBe("http://localhost:3000/sse");
       expect(retrieved!.source).toBe("registry");

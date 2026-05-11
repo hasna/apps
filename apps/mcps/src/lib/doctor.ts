@@ -2,6 +2,7 @@ import { execFileSync } from "child_process";
 import type { McpServerEntry } from "../types.js";
 import { connectToServer, disconnectServer } from "./proxy.js";
 import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
+import { credentialRefPlaceholders, resolveServerEnv } from "./credentials.js";
 
 export interface DoctorCheck {
   name: string;
@@ -31,7 +32,7 @@ export async function diagnoseServer(
         {
           command: server.command,
           args: server.args,
-          env: server.env,
+          env: { ...server.env, ...credentialRefPlaceholders(server.credentialRefs) },
           transport: server.transport,
           operation: "diagnose",
         },
@@ -61,14 +62,29 @@ export async function diagnoseServer(
     }
   }
 
-  // 2. Required env vars — check if any env keys have empty values
+  // 2. Required env vars and credential references — check for empty or unresolved values without printing values.
   const missingEnv = Object.entries(server.env).filter(([, v]) => !v);
-  if (Object.keys(server.env).length === 0) {
-    checks.push({ name: "env vars", pass: true, message: "no env vars required" });
-  } else if (missingEnv.length > 0) {
-    checks.push({ name: "env vars", pass: false, message: `missing values for: ${missingEnv.map(([k]) => k).join(", ")}` });
+  const credentialRefCount = Object.keys(server.credentialRefs ?? {}).length;
+  let credentialError: string | null = null;
+  try {
+    resolveServerEnv(server);
+  } catch (err) {
+    credentialError = (err as Error).message;
+  }
+  if (Object.keys(server.env).length === 0 && credentialRefCount === 0) {
+    checks.push({ name: "env vars", pass: true, message: "no env vars or credential refs required" });
+  } else if (missingEnv.length > 0 || credentialError) {
+    const parts = [];
+    if (missingEnv.length > 0) parts.push(`missing literal values for: ${missingEnv.map(([k]) => k).join(", ")}`);
+    if (credentialError) parts.push(credentialError);
+    checks.push({ name: "env vars", pass: false, message: parts.join("; ") });
   } else {
-    checks.push({ name: "env vars", pass: true, message: `${Object.keys(server.env).length} env var(s) set` });
+    const literalCount = Object.keys(server.env).length;
+    checks.push({
+      name: "env vars",
+      pass: true,
+      message: `${literalCount} literal env var(s), ${credentialRefCount} credential ref(s) available`,
+    });
   }
 
   // 3. URL reachable (for SSE/HTTP servers)

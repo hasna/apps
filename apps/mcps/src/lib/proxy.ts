@@ -6,6 +6,7 @@ import { TOOL_PREFIX_SEPARATOR } from "./config.js";
 import { listServers, cacheTools } from "./registry.js";
 import { getDb } from "./db.js";
 import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
+import { credentialRefPlaceholders, resolveServerEnv } from "./credentials.js";
 import type { McpServerEntry, McpTool, ConnectedServer } from "../types.js";
 
 const connections = new Map<string, ConnectedServer>();
@@ -61,7 +62,7 @@ export async function connectToServer(entry: McpServerEntry, options: ConnectOpt
           {
             command: entry.command,
             args: entry.args,
-            env: entry.env,
+            env: { ...entry.env, ...credentialRefPlaceholders(entry.credentialRefs) },
             transport: entry.transport,
             operation: "launch",
           },
@@ -70,7 +71,7 @@ export async function connectToServer(entry: McpServerEntry, options: ConnectOpt
         transport = new StdioClientTransport({
           command: entry.command,
           args: entry.args,
-          env: buildEnv(entry.env),
+          env: buildEnv(resolveServerEnv(entry)),
         });
       } else if (entry.transport === "sse") {
         transport = new SSEClientTransport(requireUrl(entry));

@@ -4,6 +4,12 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import type { McpServerEntry } from "../types.js";
 import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
+import {
+  credentialRefPlaceholders,
+  CredentialReferenceError,
+  isSecretLikeEnvKey,
+  isSecretLikeValue,
+} from "./credentials.js";
 
 export type AgentTarget = "claude" | "codex" | "gemini";
 
@@ -30,7 +36,7 @@ function installToClaude(entry: McpServerEntry): InstallResult {
     ];
 
     // Add env vars as --env KEY=VALUE pairs (before the --)
-    for (const [k, v] of Object.entries(entry.env)) {
+    for (const [k, v] of Object.entries(assertAgentInstallEnv(entry))) {
       args.push("--env", `${k}=${v}`);
     }
 
@@ -84,16 +90,34 @@ function installToGemini(entry: McpServerEntry): InstallResult {
       settings = JSON.parse(readFileSync(configPath, "utf-8"));
     }
     if (!settings.mcpServers) settings.mcpServers = {};
+    const env = assertAgentInstallEnv(entry);
     settings.mcpServers[entry.id] = {
       command: entry.command,
       args: entry.args,
-      ...(Object.keys(entry.env).length > 0 ? { env: entry.env } : {}),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
     };
     writeFileSync(configPath, JSON.stringify(settings, null, 2), "utf-8");
     return { agent: "gemini", success: true };
   } catch (err) {
     return { agent: "gemini", success: false, error: (err as Error).message };
   }
+}
+
+function assertAgentInstallEnv(entry: McpServerEntry): Record<string, string> {
+  const refs = entry.credentialRefs ?? {};
+  if (Object.keys(refs).length > 0) {
+    throw new CredentialReferenceError(
+      `Server "${entry.id}" uses credential references; refusing to materialize secrets into local agent config files`,
+    );
+  }
+  for (const [key, value] of Object.entries(entry.env)) {
+    if (isSecretLikeEnvKey(key) || isSecretLikeValue(value)) {
+      throw new CredentialReferenceError(
+        `Server "${entry.id}" has legacy raw secret-like env "${key}"; move it to a credential reference before installing to agents`,
+      );
+    }
+  }
+  return entry.env;
 }
 
 export function installToAgents(
@@ -106,12 +130,22 @@ export function installToAgents(
       {
         command: entry.command,
         args: entry.args,
-        env: entry.env,
+        env: { ...entry.env, ...credentialRefPlaceholders(entry.credentialRefs) },
         transport: entry.transport,
         operation: "install",
       },
       options.localCommandConsent,
     );
+  } catch (err) {
+    return targets.map((target) => ({
+      agent: target,
+      success: false,
+      error: (err as Error).message,
+    }));
+  }
+
+  try {
+    assertAgentInstallEnv(entry);
   } catch (err) {
     return targets.map((target) => ({
       agent: target,
