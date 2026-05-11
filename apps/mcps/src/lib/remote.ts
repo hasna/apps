@@ -1,5 +1,6 @@
 import { REGISTRY_API_URL } from "./config.js";
 import { addServer } from "./registry.js";
+import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
 import type { RegistryServer, RegistryServerEntry, McpServerEntry } from "../types.js";
 
 function parseRegistryEntry(entry: RegistryServerEntry): RegistryServer {
@@ -46,7 +47,10 @@ export async function getRegistryServer(id: string): Promise<RegistryServer | nu
   return all.find((s) => s.id === id) || null;
 }
 
-export async function installFromRegistry(id: string): Promise<McpServerEntry> {
+export async function installFromRegistry(
+  id: string,
+  options: { localCommandConsent?: LocalCommandConsent } = {},
+): Promise<McpServerEntry> {
   const server = await getRegistryServer(id);
   if (!server) {
     throw new Error(`Server "${id}" not found in registry`);
@@ -68,6 +72,17 @@ export async function installFromRegistry(id: string): Promise<McpServerEntry> {
       transport = pkg.transport.type as typeof transport;
     }
   }
+
+  assertLocalCommandConsent(
+    {
+      command,
+      args,
+      transport,
+      env: {},
+      operation: "register",
+    },
+    options.localCommandConsent,
+  );
 
   return addServer({
     name: server.name,

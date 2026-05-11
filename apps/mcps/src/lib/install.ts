@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import type { McpServerEntry } from "../types.js";
+import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
 
 export type AgentTarget = "claude" | "codex" | "gemini";
 
@@ -10,6 +11,10 @@ export interface InstallResult {
   agent: AgentTarget;
   success: boolean;
   error?: string;
+}
+
+export interface InstallToAgentsOptions {
+  localCommandConsent?: LocalCommandConsent;
 }
 
 /** Install to Claude Code via `claude mcp add` */
@@ -93,8 +98,28 @@ function installToGemini(entry: McpServerEntry): InstallResult {
 
 export function installToAgents(
   entry: McpServerEntry,
-  targets: AgentTarget[] = ["claude", "codex", "gemini"]
+  targets: AgentTarget[] = ["claude", "codex", "gemini"],
+  options: InstallToAgentsOptions = {},
 ): InstallResult[] {
+  try {
+    assertLocalCommandConsent(
+      {
+        command: entry.command,
+        args: entry.args,
+        env: entry.env,
+        transport: entry.transport,
+        operation: "install",
+      },
+      options.localCommandConsent,
+    );
+  } catch (err) {
+    return targets.map((target) => ({
+      agent: target,
+      success: false,
+      error: (err as Error).message,
+    }));
+  }
+
   return targets.map((target) => {
     if (target === "claude") return installToClaude(entry);
     if (target === "codex") return installToCodex(entry);

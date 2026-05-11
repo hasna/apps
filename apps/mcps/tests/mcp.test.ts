@@ -42,10 +42,17 @@ describe("MCP server tools", () => {
   it("add_server creates a server and list_servers returns it", async () => {
     const { client } = await createClientServer();
 
+    const rejected = await client.callTool({
+      name: "add_server",
+      arguments: { command: "npx", name: "RejectedMCP" },
+    });
+    expect(rejected.isError).toBe(true);
+    expect((rejected.content as any)[0].text).toContain("local stdio command approval is required");
+
     // Add
     const addResult = await client.callTool({
       name: "add_server",
-      arguments: { command: "npx", name: "TestMCP", description: "Test" },
+      arguments: { command: "npx", name: "TestMCP", description: "Test", allow_local_stdio: true },
     });
     const added = JSON.parse((addResult.content as any)[0].text);
     expect(added.name).toBe("TestMCP");
@@ -166,6 +173,7 @@ describe("MCP server tools", () => {
       type: "object",
       properties: {
         command: { type: "string" },
+        allow_local_stdio: { type: "boolean" },
       },
       required: ["command"],
       additionalProperties: false,

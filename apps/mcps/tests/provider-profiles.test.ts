@@ -225,7 +225,15 @@ describe("provider profiles", () => {
       provenance: { source: "curated" },
     });
 
-    const server = installProviderProfile("notion", { name: "Notion Fallback", useFallback: true });
+    expect(() => installProviderProfile("notion", { name: "Notion Fallback", useFallback: true })).toThrow(
+      /local stdio command approval is required/i,
+    );
+
+    const server = installProviderProfile("notion", {
+      name: "Notion Fallback",
+      useFallback: true,
+      localCommandConsent: { approved: true, source: "test" },
+    });
     expect(server.id).toBe("notion-fallback");
     expect(server.transport).toBe("stdio");
     expect(server.args).toEqual(["-y", "mcp-remote", "https://mcp.notion.com/sse", "--transport", "sse-only"]);

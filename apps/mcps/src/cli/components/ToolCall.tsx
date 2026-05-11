@@ -32,7 +32,9 @@ export function ToolCall({ server, tool, onBack }: Props) {
     setResult(null);
 
     try {
-      await connectToServer(server);
+      await connectToServer(server, {
+        localCommandConsent: { approved: true, source: "tui" },
+      });
       const prefixed = `${server.id}${TOOL_PREFIX_SEPARATOR}${tool.name}`;
       const res = await callTool(prefixed, args);
       const text = res.content.map((c) => c.text).join("\n");

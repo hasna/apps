@@ -191,10 +191,23 @@ describe("remote", () => {
   // ── installFromRegistry ──
 
   describe("installFromRegistry", () => {
-    it("installs an npm package server", async () => {
+    it("requires local stdio command consent for npm package servers", async () => {
       const restore = mockFetchSuccess();
       try {
-        const entry = await installFromRegistry("test/server-alpha");
+        await expect(installFromRegistry("test/server-alpha")).rejects.toThrow(
+          /local stdio command approval is required/i,
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("installs an npm package server after local stdio consent", async () => {
+      const restore = mockFetchSuccess();
+      try {
+        const entry = await installFromRegistry("test/server-alpha", {
+          localCommandConsent: { approved: true, source: "test" },
+        });
         expect(entry.name).toBe("test/server-alpha");
         expect(entry.command).toBe("npx");
         expect(entry.args).toEqual(["-y", "@test/server-alpha"]);
@@ -226,7 +239,9 @@ describe("remote", () => {
     it("handles server with no packages", async () => {
       const restore = mockFetchSuccess();
       try {
-        const entry = await installFromRegistry("test/server-gamma");
+        const entry = await installFromRegistry("test/server-gamma", {
+          localCommandConsent: { approved: true, source: "test" },
+        });
         expect(entry.command).toBe("npx");
         expect(entry.args).toEqual([]);
       } finally {

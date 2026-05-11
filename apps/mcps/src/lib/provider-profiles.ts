@@ -1,5 +1,6 @@
 import { getDb } from "./db.js";
 import { DEFAULT_PROVIDER_PROFILE_SEEDS } from "./provider-profile-seeds.js";
+import { assertLocalCommandConsent } from "./local-command-consent.js";
 import { addServer } from "./registry.js";
 import type {
   InstallProviderProfileOptions,
@@ -267,11 +268,23 @@ export function installProviderProfile(id: string, options: InstallProviderProfi
     throw new Error(`Provider profile "${id}" does not define an install fallback command`);
   }
 
+  assertLocalCommandConsent(
+    {
+      command,
+      args,
+      env: fallback?.env ?? {},
+      transport: useFallback ? "stdio" : profile.transport,
+      operation: "register",
+    },
+    options.localCommandConsent,
+  );
+
   return addServer({
     name: options.name ?? profile.displayName,
     description: profile.description ?? undefined,
     command,
     args,
+    env: fallback?.env,
     transport: useFallback ? "stdio" : profile.transport,
     url: useFallback ? fallback?.url : profile.endpoint ?? undefined,
     source: "provider-profile",

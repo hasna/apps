@@ -31,6 +31,11 @@ import {
 import { diagnoseServer } from "../lib/doctor.js";
 import { connectToServer, callTool, disconnectServer } from "../lib/proxy.js";
 import { getDb, closeDb } from "../lib/db.js";
+import {
+  assertLocalCommandConsent,
+  LocalCommandConsentError,
+  type LocalCommandConsent,
+} from "../lib/local-command-consent.js";
 
 interface ServerWithToolCount {
   id: string;
@@ -114,6 +119,27 @@ function isValidId(id: string): boolean {
 }
 
 const MAX_BODY_SIZE = 1024 * 1024;
+
+function consentFromInput(input: {
+  allow_local_stdio?: unknown;
+  allow_risky_command?: unknown;
+  allowLocalStdio?: unknown;
+  allowRiskyCommand?: unknown;
+}): LocalCommandConsent {
+  return {
+    approved: input.allow_local_stdio === true || input.allowLocalStdio === true,
+    allowRisky: input.allow_risky_command === true || input.allowRiskyCommand === true,
+    source: "api",
+  };
+}
+
+function consentFromSearchParams(params: URLSearchParams): LocalCommandConsent {
+  return {
+    approved: params.get("allow_local_stdio") === "1" || params.get("allow_local_stdio") === "true",
+    allowRisky: params.get("allow_risky_command") === "1" || params.get("allow_risky_command") === "true",
+    source: "api",
+  };
+}
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
@@ -254,6 +280,8 @@ export async function startServer(
             description?: string;
             transport?: string;
             url?: string;
+            allow_local_stdio?: boolean;
+            allow_risky_command?: boolean;
           };
           try {
             body = (await req.json()) as typeof body;
@@ -280,6 +308,14 @@ export async function startServer(
             return json({ error: "Invalid 'args' format" }, 400, port);
           }
           const args = (body.args as string[]) || [];
+          try {
+            assertLocalCommandConsent(
+              { command, args, env: {}, transport: transport as any, operation: "register" },
+              consentFromInput(body),
+            );
+          } catch (err) {
+            return json({ error: (err as Error).message }, 400, port);
+          }
           const entry = addServer({
             name: body.name,
             command,
@@ -361,6 +397,8 @@ export async function startServer(
             args?: unknown;
             transport?: string;
             url?: string;
+            allow_local_stdio?: boolean;
+            allow_risky_command?: boolean;
           };
           try {
             body = (await req.json()) as typeof body;
@@ -378,6 +416,22 @@ export async function startServer(
               return json({ error: "Invalid 'args' format" }, 400, port);
             }
             fields.args = body.args as string[];
+          }
+          if (fields.command !== undefined || fields.args !== undefined || fields.transport !== undefined) {
+            try {
+              assertLocalCommandConsent(
+                {
+                  command: fields.command ?? existing.command,
+                  args: fields.args ?? existing.args,
+                  env: existing.env,
+                  transport: (fields.transport ?? existing.transport) as any,
+                  operation: "register",
+                },
+                consentFromInput(body),
+              );
+            } catch (err) {
+              return json({ error: (err as Error).message }, 400, port);
+            }
           }
           const updated = updateServer(id, fields);
           return json(redactServer(updated), 200, port);
@@ -444,20 +498,28 @@ export async function startServer(
         try {
           const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
           if (contentLength > MAX_BODY_SIZE) return json({ error: "Request body too large" }, 413, port);
-          let body: { tool?: string; args?: Record<string, unknown> };
+          let body: {
+            tool?: string;
+            args?: Record<string, unknown>;
+            allow_local_stdio?: boolean;
+            allow_risky_command?: boolean;
+          };
           try {
             body = (await req.json()) as typeof body;
           } catch {
             return json({ error: "Invalid JSON body" }, 400, port);
           }
           if (!body.tool || typeof body.tool !== "string") return json({ error: "Missing 'tool'" }, 400, port);
-          await connectToServer(entry);
+          await connectToServer(entry, { localCommandConsent: consentFromInput(body) });
           const toolName = `${id}__${body.tool}`;
           const result = await callTool(toolName, body.args || {});
           await disconnectServer(id).catch(() => undefined);
           return json({ content: result.content }, 200, port);
         } catch (e) {
           await disconnectServer(id).catch(() => undefined);
+          if (e instanceof LocalCommandConsentError) {
+            return json({ error: e.message }, 400, port);
+          }
           return json({ error: e instanceof Error ? e.message : "Failed to call tool" }, 500, port);
         }
       }
@@ -470,7 +532,7 @@ export async function startServer(
         const entry = getServer(id);
         if (!entry) return json({ error: `Server '${id}' not found` }, 404, port);
         try {
-          const report = await diagnoseServer(entry);
+          const report = await diagnoseServer(entry, { localCommandConsent: consentFromSearchParams(url.searchParams) });
           return json(report, 200, port);
         } catch (e) {
           return json({ error: e instanceof Error ? e.message : "Failed to diagnose server" }, 500, port);

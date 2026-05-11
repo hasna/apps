@@ -69,11 +69,21 @@ describe("server API", () => {
   // ── POST /api/servers ──
 
   describe("POST /api/servers", () => {
-    it("adds a server and returns entry", async () => {
+    it("requires consent before adding local stdio commands", async () => {
       const { status, data } = await api("/api/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "npx", name: "NewServer", args: ["-y", "test"] }),
+        body: JSON.stringify({ command: "npx", name: "NeedsConsent", args: ["-y", "test"] }),
+      });
+      expect(status).toBe(400);
+      expect(data.error).toContain("local stdio command approval is required");
+    });
+
+    it("adds a server and returns entry after local stdio consent", async () => {
+      const { status, data } = await api("/api/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "npx", name: "NewServer", args: ["-y", "test"], allow_local_stdio: true }),
       });
       expect(status).toBe(200);
       expect(data.id).toBe("newserver");
@@ -96,7 +106,7 @@ describe("server API", () => {
       const { status, data } = await api("/api/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "npx", name: "dup" }),
+        body: JSON.stringify({ command: "npx", name: "dup", allow_local_stdio: true }),
       });
       expect(status).toBe(500);
       expect(data.error).toBeTruthy();
@@ -190,6 +200,23 @@ describe("server API", () => {
 
       const { data: detail } = await api("/api/servers/disab");
       expect(detail.enabled).toBe(false);
+    });
+  });
+
+  // ── POST /api/servers/:id/call ──
+
+  describe("POST /api/servers/:id/call", () => {
+    it("returns 400 when local stdio launch consent is missing", async () => {
+      addServer({ command: "npx", args: ["-y", "@example/mcp-server"], name: "callme" });
+
+      const { status, data } = await api("/api/servers/callme/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "example" }),
+      });
+
+      expect(status).toBe(400);
+      expect(data.error).toContain("local stdio command approval is required");
     });
   });
 

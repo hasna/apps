@@ -35,6 +35,10 @@ import { diagnoseServer } from "../lib/doctor.js";
 import { TOOL_PREFIX_SEPARATOR } from "../lib/config.js";
 import { getAdapter } from "../lib/db.js";
 import {
+  assertLocalCommandConsent,
+  type LocalCommandConsent,
+} from "../lib/local-command-consent.js";
+import {
   addMachine,
   getMachine as getRegisteredMachine,
   listMachines,
@@ -90,6 +94,14 @@ function errorContent(text: string) {
   return { ...textContent(text), isError: true };
 }
 
+function localConsent(input: Record<string, unknown>): LocalCommandConsent {
+  return {
+    approved: input.allow_local_stdio === true,
+    allowRisky: input.allow_risky_command === true,
+    source: "mcp",
+  };
+}
+
 export function buildMcpTools(): McpsMcpToolDefinition[] {
   const definitions: InternalMcpToolDefinition[] = [
     {
@@ -115,22 +127,48 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         transport: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Transport type"),
         url: z.string().optional().describe("URL for remote transports"),
         env: z.record(z.string()).optional().describe("Environment variables"),
+        allow_local_stdio: z.boolean().optional().describe("Approve registering this local stdio command"),
+        allow_risky_command: z.boolean().optional().describe("Approve registering risky local command patterns"),
       },
-      run: ({ command, args, name, description, transport, url, env }) => jsonContent(addServer({
-        command: String(command),
-        args: Array.isArray(args) ? args.map(String) : [],
-        name: typeof name === "string" ? name : undefined,
-        description: typeof description === "string" ? description : undefined,
-        transport: transport as Parameters<typeof addServer>[0]["transport"],
-        url: typeof url === "string" ? url : undefined,
-        env: isRecordOfStrings(env) ? env : {},
-      })),
+      run: (input) => {
+        const command = String(input.command);
+        const args = Array.isArray(input.args) ? input.args.map(String) : [];
+        const env = isRecordOfStrings(input.env) ? input.env : {};
+        const transport = input.transport as Parameters<typeof addServer>[0]["transport"];
+        try {
+          assertLocalCommandConsent(
+            { command, args, env, transport, operation: "register" },
+            localConsent(input),
+          );
+          return jsonContent(addServer({
+            command,
+            args,
+            name: typeof input.name === "string" ? input.name : undefined,
+            description: typeof input.description === "string" ? input.description : undefined,
+            transport,
+            url: typeof input.url === "string" ? input.url : undefined,
+            env,
+          }));
+        } catch (err) {
+          return errorContent((err as Error).message);
+        }
+      },
     },
     {
       name: "install_from_registry",
       description: "Install an MCP server from the official registry",
-      paramsSchema: { id: z.string().describe("Registry server ID") },
-      run: async ({ id }) => jsonContent(await installFromRegistry(String(id))),
+      paramsSchema: {
+        id: z.string().describe("Registry server ID"),
+        allow_local_stdio: z.boolean().optional().describe("Approve registering registry stdio commands"),
+        allow_risky_command: z.boolean().optional().describe("Approve registering risky local command patterns"),
+      },
+      run: async (input) => {
+        try {
+          return jsonContent(await installFromRegistry(String(input.id), { localCommandConsent: localConsent(input) }));
+        } catch (err) {
+          return errorContent((err as Error).message);
+        }
+      },
     },
     {
       name: "remove_server",
@@ -174,18 +212,36 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         args: z.array(z.string()).optional().describe("New args list"),
         transport: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("New transport type"),
         url: z.string().optional().describe("New URL for remote transports"),
+        allow_local_stdio: z.boolean().optional().describe("Approve updating this local stdio command"),
+        allow_risky_command: z.boolean().optional().describe("Approve risky local command patterns"),
       },
-      run: ({ id, name, description, command, args, transport, url }) => {
-        const serverId = String(id);
+      run: (input) => {
+        const serverId = String(input.id);
         const existing = getServer(serverId);
         if (!existing) return errorContent(`Server "${serverId}" not found.`);
         const fields: Parameters<typeof updateServer>[1] = {};
-        if (typeof name === "string") fields.name = name;
-        if (typeof description === "string") fields.description = description;
-        if (typeof command === "string") fields.command = command;
-        if (Array.isArray(args)) fields.args = args.map(String);
-        if (transport === "stdio" || transport === "sse" || transport === "streamable-http") fields.transport = transport;
-        if (typeof url === "string") fields.url = url;
+        if (typeof input.name === "string") fields.name = input.name;
+        if (typeof input.description === "string") fields.description = input.description;
+        if (typeof input.command === "string") fields.command = input.command;
+        if (Array.isArray(input.args)) fields.args = input.args.map(String);
+        if (input.transport === "stdio" || input.transport === "sse" || input.transport === "streamable-http") fields.transport = input.transport;
+        if (typeof input.url === "string") fields.url = input.url;
+        if (fields.command !== undefined || fields.args !== undefined || fields.transport !== undefined) {
+          try {
+            assertLocalCommandConsent(
+              {
+                command: fields.command ?? existing.command,
+                args: fields.args ?? existing.args,
+                env: existing.env,
+                transport: fields.transport ?? existing.transport,
+                operation: "register",
+              },
+              localConsent(input),
+            );
+          } catch (err) {
+            return errorContent((err as Error).message);
+          }
+        }
         return jsonContent(redactServerEnv(updateServer(serverId, fields)));
       },
     },
@@ -271,12 +327,15 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         id: z.string().describe("Provider profile ID"),
         name: z.string().optional().describe("Override registered server name"),
         use_fallback: z.boolean().optional().describe("Install the stdio fallback command instead of the direct remote transport"),
+        allow_local_stdio: z.boolean().optional().describe("Approve registering provider stdio fallback commands"),
+        allow_risky_command: z.boolean().optional().describe("Approve risky local command patterns"),
       },
-      run: ({ id, name, use_fallback }) => {
+      run: (input) => {
         try {
-          return jsonContent(redactServerEnv(installProviderProfile(String(id), {
-            name: typeof name === "string" ? name : undefined,
-            useFallback: use_fallback === true,
+          return jsonContent(redactServerEnv(installProviderProfile(String(input.id), {
+            name: typeof input.name === "string" ? input.name : undefined,
+            useFallback: input.use_fallback === true,
+            localCommandConsent: localConsent(input),
           })));
         } catch (err) {
           return errorContent((err as Error).message);
@@ -347,13 +406,17 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
       paramsSchema: {
         id: z.string().describe("Server ID to install (from list_servers)"),
         targets: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("Target agents to install into (default: all)"),
+        allow_local_stdio: z.boolean().optional().describe("Approve installing local stdio commands into local agent configs"),
+        allow_risky_command: z.boolean().optional().describe("Approve installing risky local command patterns"),
       },
-      run: ({ id, targets }) => {
-        const serverId = String(id);
+      run: (input) => {
+        const serverId = String(input.id);
         const entry = getServer(serverId);
         if (!entry) return errorContent(`Server "${serverId}" not found.`);
-        const agentTargets = (Array.isArray(targets) ? targets : undefined) as AgentTarget[] | undefined;
-        return jsonContent(installToAgents(entry, agentTargets ?? ["claude", "codex", "gemini"]));
+        const agentTargets = (Array.isArray(input.targets) ? input.targets : undefined) as AgentTarget[] | undefined;
+        return jsonContent(installToAgents(entry, agentTargets ?? ["claude", "codex", "gemini"], {
+          localCommandConsent: localConsent(input),
+        }));
       },
     },
     {
@@ -365,11 +428,14 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     {
       name: "connect_and_list_tools",
       description: "Connect to all enabled MCP servers and list their available tools",
-      paramsSchema: {},
-      run: async () => {
+      paramsSchema: {
+        allow_local_stdio: z.boolean().optional().describe("Approve launching enabled local stdio commands"),
+        allow_risky_command: z.boolean().optional().describe("Approve launching risky local command patterns"),
+      },
+      run: async (input) => {
         let liveTools = [];
         try {
-          await connectAllEnabled();
+          await connectAllEnabled({ localCommandConsent: localConsent(input) });
           liveTools = listAllTools();
         } finally {
           await disconnectAll().catch(() => undefined);
@@ -383,18 +449,20 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
       paramsSchema: {
         tool_name: z.string().describe(`Prefixed tool name (server_id${TOOL_PREFIX_SEPARATOR}tool_name)`),
         arguments: z.record(z.unknown()).optional().describe("Tool arguments as key-value pairs"),
+        allow_local_stdio: z.boolean().optional().describe("Approve launching this local stdio command"),
+        allow_risky_command: z.boolean().optional().describe("Approve launching risky local command patterns"),
       },
-      run: async ({ tool_name, arguments: args }) => {
+      run: async (input) => {
         try {
-          const toolName = String(tool_name);
+          const toolName = String(input.tool_name);
           const sepIdx = toolName.indexOf(TOOL_PREFIX_SEPARATOR);
           if (sepIdx === -1) return errorContent(`Error: Invalid tool name "${toolName}"`);
           const serverId = toolName.slice(0, sepIdx);
           const entry = getServer(serverId);
           if (!entry) return errorContent(`Error: Server "${serverId}" not found.`);
           if (!entry.enabled) return errorContent(`Error: Server "${serverId}" is disabled.`);
-          await connectToServer(entry);
-          const result = await callTool(toolName, readRecord(args));
+          await connectToServer(entry, { localCommandConsent: localConsent(input) });
+          const result = await callTool(toolName, readRecord(input.arguments));
           return { content: result.content as any };
         } catch (error) {
           return errorContent(`Error: ${(error as Error).message}`);
@@ -404,12 +472,16 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     {
       name: "diagnose_server",
       description: "Run health checks on a registered MCP server",
-      paramsSchema: { id: z.string().describe("Server ID") },
-      run: async ({ id }) => {
-        const serverId = String(id);
+      paramsSchema: {
+        id: z.string().describe("Server ID"),
+        allow_local_stdio: z.boolean().optional().describe("Approve launching local stdio diagnostics"),
+        allow_risky_command: z.boolean().optional().describe("Approve diagnosing risky local command patterns"),
+      },
+      run: async (input) => {
+        const serverId = String(input.id);
         const entry = getServer(serverId);
         if (!entry) return errorContent(`Server "${serverId}" not found.`);
-        return jsonContent(await diagnoseServer(entry));
+        return jsonContent(await diagnoseServer(entry, { localCommandConsent: localConsent(input) }));
       },
     },
     {

@@ -5,11 +5,16 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { TOOL_PREFIX_SEPARATOR } from "./config.js";
 import { listServers, cacheTools } from "./registry.js";
 import { getDb } from "./db.js";
+import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
 import type { McpServerEntry, McpTool, ConnectedServer } from "../types.js";
 
 const connections = new Map<string, ConnectedServer>();
 const inflightConnections = new Map<string, Promise<ConnectedServer>>();
 const CONNECT_CONCURRENCY = 4;
+
+export interface ConnectOptions {
+  localCommandConsent?: LocalCommandConsent;
+}
 
 function buildEnv(extra: Record<string, string>): Record<string, string> {
   const merged: Record<string, string> = {};
@@ -34,7 +39,7 @@ function requireUrl(entry: McpServerEntry): URL {
   }
 }
 
-export async function connectToServer(entry: McpServerEntry): Promise<ConnectedServer> {
+export async function connectToServer(entry: McpServerEntry, options: ConnectOptions = {}): Promise<ConnectedServer> {
   if (connections.has(entry.id)) {
     return connections.get(entry.id)!;
   }
@@ -52,6 +57,16 @@ export async function connectToServer(entry: McpServerEntry): Promise<ConnectedS
         if (!entry.command?.trim()) {
           throw new Error(`Server "${entry.id}" is missing a command`);
         }
+        assertLocalCommandConsent(
+          {
+            command: entry.command,
+            args: entry.args,
+            env: entry.env,
+            transport: entry.transport,
+            operation: "launch",
+          },
+          options.localCommandConsent,
+        );
         transport = new StdioClientTransport({
           command: entry.command,
           args: entry.args,
@@ -230,7 +245,7 @@ export async function refreshTools(id: string): Promise<McpTool[]> {
   return tools;
 }
 
-export async function connectAllEnabled(): Promise<ConnectedServer[]> {
+export async function connectAllEnabled(options: ConnectOptions = {}): Promise<ConnectedServer[]> {
   const servers = listServers().filter((s) => s.enabled);
   const results: ConnectedServer[] = [];
 
@@ -242,7 +257,7 @@ export async function connectAllEnabled(): Promise<ConnectedServer[]> {
       if (current >= servers.length) return;
       const server = servers[current];
       try {
-        const conn = await connectToServer(server);
+        const conn = await connectToServer(server, options);
         results.push(conn);
       } catch (err) {
         console.error(`Failed to connect to ${server.name}: ${(err as Error).message}`);

@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
 import type { McpServerEntry } from "../types.js";
 import { connectToServer, disconnectServer } from "./proxy.js";
+import { assertLocalCommandConsent, type LocalCommandConsent } from "./local-command-consent.js";
 
 export interface DoctorCheck {
   name: string;
@@ -16,15 +17,36 @@ export interface DoctorReport {
   healthy: boolean;
 }
 
-export async function diagnoseServer(server: McpServerEntry): Promise<DoctorReport> {
+export async function diagnoseServer(
+  server: McpServerEntry,
+  options: { localCommandConsent?: LocalCommandConsent } = {},
+): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
+  let hasLocalConsent = true;
 
   // 1. Command exists on PATH (for stdio servers)
   if (server.transport === "stdio") {
     try {
+      assertLocalCommandConsent(
+        {
+          command: server.command,
+          args: server.args,
+          env: server.env,
+          transport: server.transport,
+          operation: "diagnose",
+        },
+        options.localCommandConsent,
+      );
+    } catch (err) {
+      hasLocalConsent = false;
+      checks.push({ name: "local command consent", pass: false, message: (err as Error).message });
+    }
+
+    try {
       const path = execFileSync("which", [server.command], { stdio: "pipe" }).toString().trim();
       let version = "";
       try {
+        if (!hasLocalConsent) throw new Error("local stdio command approval is required before version probing");
         version = execFileSync(server.command, ["--version"], { stdio: "pipe" }).toString().trim().split("\n")[0];
       } catch {}
       checks.push({ name: "command on PATH", pass: true, message: `${path}${version ? ` (${version})` : ""}` });
@@ -60,10 +82,10 @@ export async function diagnoseServer(server: McpServerEntry): Promise<DoctorRepo
   }
 
   // 4. Can connect and list tools (with 10s timeout)
-  if (server.enabled) {
+  if (server.enabled && hasLocalConsent) {
     try {
       await Promise.race([
-        connectToServer(server),
+        connectToServer(server, { localCommandConsent: options.localCommandConsent }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout after 10s")), 10000)),
       ]);
       await disconnectServer(server.id);
@@ -71,8 +93,10 @@ export async function diagnoseServer(server: McpServerEntry): Promise<DoctorRepo
     } catch (err) {
       checks.push({ name: "connect & list tools", pass: false, message: (err as Error).message });
     }
-  } else {
+  } else if (!server.enabled) {
     checks.push({ name: "connect & list tools", pass: true, message: "skipped (server disabled)" });
+  } else {
+    checks.push({ name: "connect & list tools", pass: false, message: "skipped until local stdio command is approved" });
   }
 
   return {

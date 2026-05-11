@@ -87,6 +87,19 @@ export {
 } from "./lib/machines.js";
 export { listHasnaMcpCatalog, runFleetHealthCheck, runFleetInstall } from "./lib/fleet.js";
 export { readPackageVersion } from "./lib/version.js";
+export {
+  assertLocalCommandConsent,
+  formatLocalCommandReview,
+  inspectLocalCommand,
+  LocalCommandConsentError,
+} from "./lib/local-command-consent.js";
+export type {
+  LocalCommandConsent,
+  LocalCommandInput,
+  LocalCommandOperation,
+  LocalCommandReview,
+  LocalCommandRisk,
+} from "./lib/local-command-consent.js";
 
 export {
   connectToServer,

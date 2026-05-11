@@ -59,6 +59,13 @@ import {
   listProviderProfiles,
   searchProviderProfiles,
 } from "../lib/provider-profiles.js";
+import {
+  assertLocalCommandConsent,
+  formatLocalCommandReview,
+  inspectLocalCommand,
+  type LocalCommandConsent,
+  type LocalCommandInput,
+} from "../lib/local-command-consent.js";
 import * as readline from "readline";
 import { startMcpServer } from "../mcp/index.js";
 import { startServer } from "../server/serve.js";
@@ -82,6 +89,40 @@ const MACHINE_PLATFORMS = ["linux", "darwin", "unknown"] as const;
 const MACHINE_ARCHES = ["arm64", "x64", "unknown"] as const;
 const MACHINE_INSTALLERS = ["auto", "bun", "npm"] as const;
 const FLEET_INSTALL_MODES = ["missing", "missing-or-outdated", "all"] as const;
+
+type LocalConsentOptions = {
+  yes?: boolean;
+  allowLocalStdio?: boolean;
+  allowRiskyCommand?: boolean;
+};
+
+function localConsentFromOptions(opts: LocalConsentOptions, approved = false): LocalCommandConsent {
+  return {
+    approved: approved || opts.yes === true || opts.allowLocalStdio === true,
+    allowRisky: opts.allowRiskyCommand === true,
+    source: "cli",
+  };
+}
+
+function printLocalCommandReviewIfNeeded(input: LocalCommandInput): void {
+  const review = inspectLocalCommand(input);
+  if (!review.requiresConsent) return;
+  console.log(chalk.dim(formatLocalCommandReview(review)));
+}
+
+function assertCliLocalCommandConsent(
+  input: LocalCommandInput,
+  opts: LocalConsentOptions,
+  approved = false,
+): LocalCommandConsent {
+  const consent = localConsentFromOptions(opts, approved);
+  const review = inspectLocalCommand(input);
+  if (review.requiresConsent && consent.approved === true && (!review.hasDangerousRisk || consent.allowRisky === true)) {
+    console.log(chalk.dim(formatLocalCommandReview(review)));
+  }
+  assertLocalCommandConsent(input, consent);
+  return consent;
+}
 
 function printProviderProfile(profile: ReturnType<typeof listProviderProfiles>[number]): void {
   const status = profile.enabled ? chalk.green("enabled") : chalk.red("disabled");
@@ -394,12 +435,16 @@ providersCmd
   .description("Register a curated provider profile as an MCP server")
   .option("--name <name>", "Override registered server name")
   .option("--fallback", "Install the stdio fallback command instead of direct remote transport")
+  .option("--yes", "Approve local stdio fallback commands")
+  .option("--allow-local-stdio", "Approve local stdio fallback commands")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .option("--json", "Output as JSON")
   .action((id: string, opts) => {
     try {
       const server = installProviderProfile(id, {
         name: opts.name,
         useFallback: opts.fallback === true,
+        localCommandConsent: localConsentFromOptions(opts),
       });
       if (opts.json) {
         printJson(server);
@@ -442,12 +487,17 @@ program
   .option("--env <pairs...>", "Environment variables as KEY=VALUE pairs")
   .option("--wizard", "Interactive setup wizard")
   .option("--force", "Register even if duplicate command exists")
+  .option("--yes", "Approve registering local stdio commands")
+  .option("--allow-local-stdio", "Approve registering local stdio commands")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .description("Add a local MCP server")
   .action(async (command: string | undefined, args: string[], opts) => {
     try {
       if (opts.fromRegistry) {
         console.log(chalk.dim(`Installing "${opts.fromRegistry}" from registry...`));
-        const server = await installFromRegistry(opts.fromRegistry);
+        const server = await installFromRegistry(opts.fromRegistry, {
+          localCommandConsent: localConsentFromOptions(opts),
+        });
         console.log(chalk.green(`Added server: ${server.name} [${server.id}]`));
         console.log(chalk.dim(`  ${server.command} ${server.args.join(" ")}`));
         closeDb();
@@ -485,6 +535,13 @@ program
         console.log(`  Transport: ${transport}`);
         if (wizardName) console.log(`  Name:      ${wizardName}`);
         if (Object.keys(env).length) console.log(`  Env:       ${Object.keys(env).join(", ")}`);
+        printLocalCommandReviewIfNeeded({
+          command: wizardCommand,
+          args: wizardArgs,
+          env,
+          transport: transport as any,
+          operation: "register",
+        });
         const confirm = await new Promise<string>(resolve => {
           const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
           rl2.question(chalk.bold("Add this server? [Y/n]: "), ans => { rl2.close(); resolve(ans); });
@@ -494,6 +551,17 @@ program
           closeDb();
           return;
         }
+
+        assertLocalCommandConsent(
+          {
+            command: wizardCommand,
+            args: wizardArgs,
+            env,
+            transport: transport as any,
+            operation: "register",
+          },
+          localConsentFromOptions(opts, true),
+        );
 
         const server = addServer({
           command: wizardCommand,
@@ -535,6 +603,17 @@ program
         }
       }
 
+      assertCliLocalCommandConsent(
+        {
+          command,
+          args,
+          env: envMap,
+          transport: opts.transport,
+          operation: "register",
+        },
+        opts,
+      );
+
       const server = addServer({
         name: opts.name,
         description: opts.description,
@@ -570,23 +649,44 @@ program
   .option("--args <args...>", "New args list")
   .option("--transport <type>", "New transport type")
   .option("--url <url>", "New URL")
+  .option("--yes", "Approve updated local stdio commands")
+  .option("--allow-local-stdio", "Approve updated local stdio commands")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .action((id: string, opts) => {
-    const server = getServer(id);
-    if (!server) {
-      console.error(chalk.red(`Server "${id}" not found.`));
+    try {
+      const server = getServer(id);
+      if (!server) {
+        console.error(chalk.red(`Server "${id}" not found.`));
+        closeDb();
+        process.exit(1);
+      }
+      const fields: Parameters<typeof updateServer>[1] = {};
+      if (opts.name !== undefined) fields.name = opts.name;
+      if (opts.description !== undefined) fields.description = opts.description;
+      if (opts.command !== undefined) fields.command = opts.command;
+      if (opts.args !== undefined) fields.args = opts.args as string[];
+      if (opts.transport !== undefined) fields.transport = opts.transport;
+      if (opts.url !== undefined) fields.url = opts.url;
+      if (fields.command !== undefined || fields.args !== undefined || fields.transport !== undefined) {
+        assertCliLocalCommandConsent(
+          {
+            command: fields.command ?? server.command,
+            args: fields.args ?? server.args,
+            env: server.env,
+            transport: fields.transport ?? server.transport,
+            operation: "register",
+          },
+          opts,
+        );
+      }
+      const updated = updateServer(id, fields);
+      console.log(chalk.green(`Updated server: ${updated.name} [${updated.id}]`));
+      closeDb();
+    } catch (err) {
+      console.error(chalk.red(`Failed to update server: ${(err as Error).message}`));
       closeDb();
       process.exit(1);
     }
-    const fields: Parameters<typeof updateServer>[1] = {};
-    if (opts.name !== undefined) fields.name = opts.name;
-    if (opts.description !== undefined) fields.description = opts.description;
-    if (opts.command !== undefined) fields.command = opts.command;
-    if (opts.args !== undefined) fields.args = opts.args as string[];
-    if (opts.transport !== undefined) fields.transport = opts.transport;
-    if (opts.url !== undefined) fields.url = opts.url;
-    const updated = updateServer(id, fields);
-    console.log(chalk.green(`Updated server: ${updated.name} [${updated.id}]`));
-    closeDb();
   });
 
 // --- clone ---
@@ -665,10 +765,13 @@ program
   .argument("[server-id]", "Optional server ID to filter by")
   .description("List tools (all or per server)")
   .option("--connect", "Connect to servers to fetch live tools")
+  .option("--yes", "Approve launching local stdio commands when --connect is used")
+  .option("--allow-local-stdio", "Approve launching local stdio commands when --connect is used")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .action(async (serverId: string | undefined, opts) => {
     if (opts.connect) {
       console.log(chalk.dim("Connecting to enabled servers..."));
-      await connectAllEnabled();
+      await connectAllEnabled({ localCommandConsent: localConsentFromOptions(opts) });
       const tools = listAllTools();
       if (tools.length === 0) {
         console.log(chalk.dim("No tools available."));
@@ -719,6 +822,9 @@ program
   .argument("<tool>", "Tool name (server_id__tool_name)")
   .option("--arg <pairs...>", "Arguments as key=value pairs")
   .option("--json <json>", "Arguments as JSON string")
+  .option("--yes", "Approve launching local stdio commands")
+  .option("--allow-local-stdio", "Approve launching local stdio commands")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .description("Call a tool directly")
   .action(async (tool: string, opts) => {
     let args: Record<string, unknown> = {};
@@ -745,7 +851,7 @@ program
     let exitCode = 0;
     try {
       console.log(chalk.dim(`Connecting to servers...`));
-      await connectAllEnabled();
+      await connectAllEnabled({ localCommandConsent: localConsentFromOptions(opts) });
       console.log(chalk.dim(`Calling ${tool}...`));
       const result = await callTool(tool, args);
       for (const c of result.content) {
@@ -828,6 +934,9 @@ program
   .argument("[id]", "Server ID to check (omit to check all)")
   .description("Diagnose server health — checks PATH, env vars, connectivity")
   .option("--fix", "Attempt to fix issues automatically")
+  .option("--yes", "Approve probing and launching local stdio commands")
+  .option("--allow-local-stdio", "Approve probing and launching local stdio commands")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .action(async (id: string | undefined, opts) => {
     const { execFileSync: execFileSync2 } = await import("child_process");
     const servers = id ? [getServer(id)].filter(Boolean) : listServers();
@@ -840,7 +949,7 @@ program
     let allHealthy = true;
     for (const server of servers) {
       console.log(chalk.bold(`\n${server!.name} [${server!.id}]`));
-      const report = await diagnoseServer(server!);
+      const report = await diagnoseServer(server!, { localCommandConsent: localConsentFromOptions(opts) });
       for (const check of report.checks) {
         const icon = check.pass ? chalk.green("✓") : chalk.red("✗");
         console.log(`  ${icon} ${check.name}: ${chalk.dim(check.message)}`);
@@ -956,6 +1065,7 @@ program
   .option("--json", "Output as JSON")
   .option("--install", "After showing results, prompt to select one and install it")
   .option("--yes", "Auto-install without prompting (only when there is exactly 1 result)")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .option("--no-cache", "Bypass source cache and fetch fresh results")
   .action(async (query: string | undefined, opts) => {
     try {
@@ -1082,6 +1192,14 @@ program
         }
 
         console.log(chalk.dim(`Installing ${chosen.name}...`));
+        const localCommandInput: LocalCommandInput = {
+          command: "npx",
+          args: ["-y", pkg],
+          env: {},
+          transport: "stdio",
+          operation: "install",
+        };
+        const localCommandConsent = assertCliLocalCommandConsent(localCommandInput, opts, true);
         const server = addServer({
           command: "npx",
           args: ["-y", pkg],
@@ -1089,7 +1207,7 @@ program
           description: chosen.description,
           transport: "stdio",
         });
-        const results2 = installToAgents(server, ["claude", "codex", "gemini"]);
+        const results2 = installToAgents(server, ["claude", "codex", "gemini"], { localCommandConsent });
         for (const r of results2) {
           if (r.success) {
             console.log(chalk.green(`  ✓ ${r.agent}`));
@@ -1284,6 +1402,9 @@ program
   .option("--to <agents...>", "Agents to install to: claude, codex, gemini")
   .option("--from-registry <id>", "Add from official registry and install in one step")
   .option("--npm <package>", "Add an npm package as a server and install in one step")
+  .option("--yes", "Approve installing local stdio commands into agents")
+  .option("--allow-local-stdio", "Approve installing local stdio commands into agents")
+  .option("--allow-risky-command", "Approve high-risk local command patterns")
   .action(async (id: string | undefined, opts) => {
     // Build target list from --to, individual flags, or --all
     const targets: AgentTarget[] = [];
@@ -1306,7 +1427,9 @@ program
     if (opts.fromRegistry) {
       console.log(chalk.dim(`Installing "${opts.fromRegistry}" from registry...`));
       try {
-        server = await installFromRegistry(opts.fromRegistry);
+        server = await installFromRegistry(opts.fromRegistry, {
+          localCommandConsent: localConsentFromOptions(opts),
+        });
         console.log(chalk.green(`Added server: ${server.name} [${server.id}]`));
       } catch (err) {
         console.error(chalk.red(`Failed to install from registry: ${(err as Error).message}`));
@@ -1315,6 +1438,16 @@ program
       }
     } else if (opts.npm) {
       const pkg = opts.npm as string;
+      assertCliLocalCommandConsent(
+        {
+          command: "npx",
+          args: ["-y", pkg],
+          env: {},
+          transport: "stdio",
+          operation: "install",
+        },
+        opts,
+      );
       server = addServer({ command: "npx", args: ["-y", pkg], name: pkg, transport: "stdio" });
       console.log(chalk.green(`Added server: ${server.name} [${server.id}]`));
     } else {
@@ -1332,7 +1465,7 @@ program
     }
 
     console.log(chalk.dim(`Installing "${server.name}" to: ${targets.join(", ")}...`));
-    const results = installToAgents(server, targets);
+    const results = installToAgents(server, targets, { localCommandConsent: localConsentFromOptions(opts) });
 
     for (const r of results) {
       if (r.success) {

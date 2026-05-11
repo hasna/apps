@@ -103,9 +103,15 @@ describe("proxy", () => {
   // ── connectToServer ──
 
   describe("connectToServer", () => {
+    it("refuses to launch stdio servers without explicit local command consent", async () => {
+      const entry = makeEntry();
+      await expect(connectToServer(entry)).rejects.toThrow(/local stdio command approval is required/i);
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
     it("connects and returns tools", async () => {
       const entry = makeEntry();
-      const conn = await connectToServer(entry);
+      const conn = await connectToServer(entry, { localCommandConsent: { approved: true, source: "test" } });
       expect(conn.entry).toBe(entry);
       expect(conn.tools).toHaveLength(2);
       expect(conn.tools[0].name).toBe("echo");
@@ -117,7 +123,7 @@ describe("proxy", () => {
 
     it("caches tools in database", async () => {
       const entry = makeEntry();
-      await connectToServer(entry);
+      await connectToServer(entry, { localCommandConsent: { approved: true, source: "test" } });
       const cached = getCachedTools("test-server");
       expect(cached).toHaveLength(2);
       expect(cached[0].name).toBe("echo");
@@ -125,7 +131,7 @@ describe("proxy", () => {
 
     it("returns existing connection for same server", async () => {
       const entry = makeEntry();
-      const conn1 = await connectToServer(entry);
+      const conn1 = await connectToServer(entry, { localCommandConsent: { approved: true, source: "test" } });
       const conn2 = await connectToServer(entry);
       expect(conn1).toBe(conn2);
       expect(mockConnect).toHaveBeenCalledTimes(1); // only called once
@@ -159,7 +165,7 @@ describe("proxy", () => {
   describe("disconnectServer", () => {
     it("disconnects a connected server", async () => {
       const entry = makeEntry();
-      await connectToServer(entry);
+      await connectToServer(entry, { localCommandConsent: { approved: true, source: "test" } });
       await disconnectServer("test-server");
       expect(mockClose).toHaveBeenCalledTimes(1);
     });
@@ -176,9 +182,9 @@ describe("proxy", () => {
       addServer({ command: "npx", name: "server-a" });
       addServer({ command: "npx", name: "server-b" });
 
-      await connectToServer(makeEntry({ id: "test-server" }));
-      await connectToServer(makeEntry({ id: "server-a", name: "A" }));
-      await connectToServer(makeEntry({ id: "server-b", name: "B" }));
+      await connectToServer(makeEntry({ id: "test-server" }), { localCommandConsent: { approved: true, source: "test" } });
+      await connectToServer(makeEntry({ id: "server-a", name: "A" }), { localCommandConsent: { approved: true, source: "test" } });
+      await connectToServer(makeEntry({ id: "server-b", name: "B" }), { localCommandConsent: { approved: true, source: "test" } });
 
       await disconnectAll();
       expect(mockClose).toHaveBeenCalledTimes(3);
@@ -194,7 +200,7 @@ describe("proxy", () => {
     });
 
     it("returns tools prefixed with server ID", async () => {
-      await connectToServer(makeEntry());
+      await connectToServer(makeEntry(), { localCommandConsent: { approved: true, source: "test" } });
       const tools = listAllTools();
       expect(tools).toHaveLength(2);
       expect(tools[0].name).toBe("test-server__echo");
@@ -203,8 +209,8 @@ describe("proxy", () => {
 
     it("aggregates tools from multiple servers", async () => {
       addServer({ command: "npx", name: "server-x" });
-      await connectToServer(makeEntry());
-      await connectToServer(makeEntry({ id: "server-x", name: "X" }));
+      await connectToServer(makeEntry(), { localCommandConsent: { approved: true, source: "test" } });
+      await connectToServer(makeEntry({ id: "server-x", name: "X" }), { localCommandConsent: { approved: true, source: "test" } });
       const tools = listAllTools();
       expect(tools).toHaveLength(4);
     });
@@ -214,7 +220,7 @@ describe("proxy", () => {
 
   describe("callTool", () => {
     it("calls the correct tool on the correct server", async () => {
-      await connectToServer(makeEntry());
+      await connectToServer(makeEntry(), { localCommandConsent: { approved: true, source: "test" } });
       const result = await callTool("test-server__echo", { msg: "hi" });
       expect(result.content).toHaveLength(1);
       expect(result.content[0].text).toBe("result");
@@ -238,7 +244,7 @@ describe("proxy", () => {
 
   describe("refreshTools", () => {
     it("refreshes tools for a connected server", async () => {
-      await connectToServer(makeEntry());
+      await connectToServer(makeEntry(), { localCommandConsent: { approved: true, source: "test" } });
       mockListTools.mockClear();
       const tools = await refreshTools("test-server");
       expect(tools).toHaveLength(2);
@@ -257,7 +263,7 @@ describe("proxy", () => {
   describe("connectAllEnabled", () => {
     it("connects to all enabled servers", async () => {
       // test-server is already added and enabled from beforeEach
-      const results = await connectAllEnabled();
+      const results = await connectAllEnabled({ localCommandConsent: { approved: true, source: "test" } });
       expect(results.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -271,7 +277,7 @@ describe("proxy", () => {
       await disconnectAll();
       mockConnect.mockClear();
 
-      const results = await connectAllEnabled();
+      const results = await connectAllEnabled({ localCommandConsent: { approved: true, source: "test" } });
       // Only the enabled one should be connected
       expect(results).toHaveLength(1);
     });

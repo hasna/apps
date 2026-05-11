@@ -198,6 +198,11 @@ export interface UpsertProviderProfileOptions {
 export interface InstallProviderProfileOptions {
   name?: string;
   useFallback?: boolean;
+  localCommandConsent?: {
+    approved?: boolean;
+    allowRisky?: boolean;
+    source?: string;
+  };
 }
 
 export type MachinePlatform = "linux" | "darwin" | "unknown";

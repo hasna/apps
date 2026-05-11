@@ -64,4 +64,11 @@ describe("index exports", () => {
     expect(typeof api.seedDefaultProviderProfiles).toBe("function");
     expect(Array.isArray(api.DEFAULT_PROVIDER_PROFILE_SEEDS)).toBe(true);
   });
+
+  it("exports local command consent helpers", () => {
+    expect(typeof api.inspectLocalCommand).toBe("function");
+    expect(typeof api.formatLocalCommandReview).toBe("function");
+    expect(typeof api.assertLocalCommandConsent).toBe("function");
+    expect(typeof api.LocalCommandConsentError).toBe("function");
+  });
 });

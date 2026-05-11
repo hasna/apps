@@ -4,6 +4,7 @@ import SelectInput from "ink-select-input";
 import Spinner from "ink-spinner";
 import { getCachedTools } from "../../lib/registry.js";
 import { connectToServer, disconnectServer } from "../../lib/proxy.js";
+import { formatLocalCommandReview, inspectLocalCommand } from "../../lib/local-command-consent.js";
 import type { McpServerEntry, McpTool } from "../../types.js";
 
 interface Props {
@@ -16,6 +17,13 @@ export function ServerDetail({ server, onSelectTool, onBack }: Props) {
   const [tools, setTools] = useState<McpTool[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const commandReview = inspectLocalCommand({
+    command: server.command,
+    args: server.args,
+    env: server.env,
+    transport: server.transport,
+    operation: "launch",
+  });
 
   const cachedTools = getCachedTools(server.id);
   const cachedKey = cachedTools
@@ -43,7 +51,9 @@ export function ServerDetail({ server, onSelectTool, onBack }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const conn = await connectToServer(server);
+      const conn = await connectToServer(server, {
+        localCommandConsent: { approved: true, source: "tui" },
+      });
       setTools(conn.tools);
     } catch (err) {
       setError((err as Error).message);
@@ -85,6 +95,18 @@ export function ServerDetail({ server, onSelectTool, onBack }: Props) {
       <Text dimColor>
         Command: {server.command} {server.args.join(" ")}
       </Text>
+      {commandReview.requiresConsent && (
+        <Box marginTop={1} flexDirection="column">
+          <Text color={commandReview.hasDangerousRisk ? "red" : "yellow"}>Local stdio command review</Text>
+          {formatLocalCommandReview(commandReview)
+            .split("\n")
+            .map((line, index) => (
+              <Text key={`${index}:${line}`} dimColor>
+                {line}
+              </Text>
+            ))}
+        </Box>
+      )}
       {server.description && <Text dimColor>{server.description}</Text>}
 
       <Box marginTop={1} flexDirection="column">

@@ -45,7 +45,9 @@ export function SearchView({ onBack }: Props) {
     setInstalling(item.value);
     setMessage(null);
     try {
-      const server = await installFromRegistry(item.value);
+      const server = await installFromRegistry(item.value, {
+        localCommandConsent: { approved: true, source: "tui" },
+      });
       setMessage(`Installed: ${server.name} [${server.id}]`);
     } catch (err) {
       setMessage(`Install failed: ${(err as Error).message}`);
