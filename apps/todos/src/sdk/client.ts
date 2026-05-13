@@ -8,7 +8,7 @@
  * ```ts
  * import { TodosClient } from "@hasna/todos";
  *
- * const client = new TodosClient(); // uses TODOS_URL or localhost:19427
+ * const client = new TodosClient(); // uses local TODOS_URL or localhost:19427
  * const tasks = await client.tasks.list({ status: "pending", limit: 20 });
  * await client.tasks.complete(taskId);
  * ```
@@ -68,7 +68,7 @@ import {
   TodosRateLimitError,
   TodosTimeoutError,
 } from "./types.js";
-import { getRemoteApiConfig, normalizeApiUrl } from "../lib/config.js";
+import { getLocalApiConfig, normalizeApiUrl } from "../lib/config.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -473,13 +473,12 @@ export class TodosClient {
   readonly templates: TemplatesResource;
 
   constructor(options: TodosClientOptions = {}) {
-    const remoteConfig = getRemoteApiConfig();
+    const localConfig = getLocalApiConfig();
     this.baseUrl = normalizeApiUrl(options.baseUrl)
-      || remoteConfig.apiUrl
-      || normalizeApiUrl(process.env["TODOS_URL"])
+      || localConfig.apiUrl
       || "http://localhost:19427";
     this.timeout = options.timeout ?? 10000;
-    this.apiKey = options.apiKey || remoteConfig.apiKey;
+    this.apiKey = options.apiKey || localConfig.apiKey;
     this.maxRetries = options.maxRetries ?? 0;
     this.retryDelay = options.retryDelay ?? 1000;
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudSyncTools } from "./tools/cloud.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { logError } from "../lib/logger.js";
@@ -226,10 +225,6 @@ registerMachineTools(server, { shouldRegisterTool, formatError });
 // === DISPATCH ===
 
 registerDispatchTools(server, { shouldRegisterTool, resolveId, formatError });
-
-// === CLOUD ===
-
-registerCloudSyncTools(server, { shouldRegisterTool, formatError });
 
 // === START SERVER ===
 

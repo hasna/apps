@@ -15,7 +15,7 @@ const originalFetch = globalThis.fetch;
 let fakeHome: string;
 
 beforeEach(() => {
-  fakeHome = mkdtempSync(join(tmpdir(), "todos-sdk-remote-"));
+  fakeHome = mkdtempSync(join(tmpdir(), "todos-sdk-local-"));
   process.env["HOME"] = fakeHome;
   delete process.env["TODOS_API_URL"];
   delete process.env["TODOS_URL"];
@@ -40,35 +40,26 @@ afterEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
 });
 
-describe("TodosClient remote API config", () => {
+describe("TodosClient local API config", () => {
   test("uses local server URL by default", () => {
     const client = new TodosClient();
     expect(client.baseUrl).toBe("http://localhost:19427");
     expect(client.apiKey).toBeNull();
   });
 
-  test("uses TODOS_API_URL and TODOS_API_KEY for remote mode", async () => {
+  test("ignores hosted remote env vars by default", () => {
     process.env["TODOS_API_URL"] = "https://todos.example/api/";
+    process.env["TODOS_MODE"] = "remote";
     process.env["TODOS_API_KEY"] = "env-token";
-    let observedUrl = "";
-    let observedHeaders: HeadersInit | undefined;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      observedUrl = String(input);
-      observedHeaders = init?.headers;
-      return new Response(JSON.stringify([]), { status: 200 });
-    }) as typeof fetch;
 
     const client = new TodosClient();
-    await client.tasks.list();
 
-    expect(client.baseUrl).toBe("https://todos.example/api");
+    expect(client.baseUrl).toBe("http://localhost:19427");
     expect(client.apiKey).toBe("env-token");
-    expect(observedUrl).toBe("https://todos.example/api/api/tasks");
-    expect((observedHeaders as Record<string, string>)["x-api-key"]).toBe("env-token");
   });
 
-  test("uses config apiUrl and apiKey when env is absent", async () => {
-    updateConfig({ apiUrl: "https://config.todos.example/", apiKey: "config-token" });
+  test("uses local config apiUrl and apiKey when env is absent", async () => {
+    updateConfig({ apiUrl: "http://127.0.0.1:19427/", apiKey: "config-token" });
     let observedHeaders: HeadersInit | undefined;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       observedHeaders = init?.headers;
@@ -78,16 +69,16 @@ describe("TodosClient remote API config", () => {
     const client = new TodosClient();
     await client.tasks.list();
 
-    expect(client.baseUrl).toBe("https://config.todos.example");
+    expect(client.baseUrl).toBe("http://127.0.0.1:19427");
     expect(client.apiKey).toBe("config-token");
     expect((observedHeaders as Record<string, string>)["x-api-key"]).toBe("config-token");
   });
 
-  test("constructor options override remote env/config", () => {
+  test("constructor options override local env/config", () => {
     process.env["TODOS_API_URL"] = "https://env.todos.example";
     process.env["TODOS_API_KEY"] = "env-token";
-    const client = new TodosClient({ baseUrl: "https://option.todos.example/", apiKey: "option-token" });
-    expect(client.baseUrl).toBe("https://option.todos.example");
+    const client = new TodosClient({ baseUrl: "http://localhost:19428/", apiKey: "option-token" });
+    expect(client.baseUrl).toBe("http://localhost:19428");
     expect(client.apiKey).toBe("option-token");
   });
 });

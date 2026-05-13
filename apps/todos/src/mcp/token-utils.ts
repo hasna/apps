@@ -180,17 +180,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "machines_set_primary",
     "machines_unarchive",
   ],
-  cloud: [
-    "sync_all",
-    "todos_cloud_conflicts",
-    "todos_cloud_feedback",
-    "todos_cloud_pull",
-    "todos_cloud_push",
-    "todos_cloud_status",
-    "todos_inbox",
-    "todos_retro",
-  ],
-  maintenance: ["extract_todos", "migrate_pg", "notify_upcoming_deadlines", "score_task"],
+  maintenance: ["extract_todos", "notify_upcoming_deadlines", "score_task"],
 };
 
 export const MCP_PROFILE_GROUPS: Record<string, readonly string[]> = {

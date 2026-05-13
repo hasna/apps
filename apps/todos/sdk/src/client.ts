@@ -16,9 +16,8 @@ export class TodosClient {
   private apiKey: string | null = null;
 
   constructor(options: TodosClientOptions = {}) {
-    const envApiUrl = typeof process !== "undefined" ? process.env["TODOS_API_URL"] : undefined;
-    const legacyEnvUrl = typeof process !== "undefined" ? process.env["TODOS_URL"] : undefined;
-    this.baseUrl = (options.baseUrl || envApiUrl || legacyEnvUrl || "http://localhost:19427").replace(/\/+$/, "");
+    const localEnvUrl = typeof process !== "undefined" ? process.env["TODOS_URL"] : undefined;
+    this.baseUrl = (options.baseUrl || localEnvUrl || "http://localhost:19427").replace(/\/+$/, "");
     if (options.agentName) this.agentName = options.agentName;
     const envApiKey = typeof process !== "undefined" ? process.env["TODOS_API_KEY"] : undefined;
     this.apiKey = options.apiKey || envApiKey || null;

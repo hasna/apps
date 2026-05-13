@@ -26,7 +26,7 @@ todos-mcp
 The MCP server defaults to the token-saving `TODOS_PROFILE=minimal` profile.
 Use `TODOS_PROFILE=standard` for broader task/project/resource tools, or
 `TODOS_PROFILE=full` when you explicitly need every tool. You can add groups
-with `TODOS_TOOL_GROUPS=cloud,templates`.
+with `TODOS_TOOL_GROUPS=templates`.
 
 High-volume tools return compact payloads by default. Pass `detail: "full"` to
 MCP calls such as `get_task`, `get_status`, `get_context`, `bootstrap`, and
@@ -56,16 +56,6 @@ Agent callers can trim REST responses with field selectors:
 curl "http://localhost:19427/api/tasks?fields=id,title,status,priority"
 curl "http://localhost:19427/api/tasks/<id>?fields=id,title,status"
 curl "http://localhost:19427/api/tasks/<id>/history?limit=20"
-```
-
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service todos
-cloud sync pull --service todos
 ```
 
 ## Data Directory

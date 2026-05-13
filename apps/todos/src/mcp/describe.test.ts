@@ -108,11 +108,10 @@ describe("TODOS_PROFILE filtering", () => {
     expect(shouldRegisterToolForProfile("create_webhook", "minimal")).toBe(false);
   });
 
-  it("standard profile excludes webhook/template/cloud-only tools", () => {
+  it("standard profile excludes webhook/template-only tools", () => {
     for (const excluded of [
       "create_webhook", "list_webhooks", "delete_webhook",
       "create_template", "list_templates", "create_task_from_template", "delete_template",
-      "todos_cloud_status",
     ]) {
       expect(shouldRegisterToolForProfile(excluded, "standard")).toBe(false);
     }

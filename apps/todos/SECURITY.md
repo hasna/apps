@@ -13,7 +13,7 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public GitHub issue
-2. Email **hasna@todos.md** with details
+2. Email **hasna@hasna.com** with details
 3. Include steps to reproduce if possible
 4. Allow reasonable time for a fix before public disclosure
 
@@ -21,8 +21,8 @@ If you discover a security vulnerability, please report it responsibly:
 
 ### Local-first Architecture
 
-todos.md stores all data in a local SQLite database. No data is sent to external
-servers unless you explicitly use the sync feature.
+`@hasna/todos` stores all data in a local SQLite database. No data is sent to
+external servers by default.
 
 ### API Key Authentication
 

@@ -144,7 +144,6 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             get_org_chart: "get_org_chart — Get global org chart. Params: format",
             set_reports_to: "set_reports_to — Set org hierarchy. Params: agent_id, reports_to",
             extract_todos: "extract_todos — Scan code for TODO comments. Params: path, project_id, task_list_id, patterns, tags, assigned_to, agent_id, dry_run, extensions",
-            migrate_pg: "migrate_pg — Apply PostgreSQL migrations. Params: connection_string",
           };
 
           if (toolDocs[tool_name]) {

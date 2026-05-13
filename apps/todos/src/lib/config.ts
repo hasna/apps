@@ -2,8 +2,6 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { HOME, ensureDir, readJsonFile, writeJsonFile } from "./sync-utils.js";
 
-export type TodosMode = "local" | "remote";
-
 export interface AgentConfig {
   task_list_id?: string;
   tasks_dir?: string;
@@ -27,11 +25,9 @@ export interface ProjectOverrideConfig {
 }
 
 export interface TodosConfig {
-  /** Explicit mode. Defaults to local unless apiUrl/TODOS_API_URL is set. */
-  mode?: TodosMode;
-  /** Hosted compatible API URL used by remote CLI/SDK mode. */
+  /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
-  /** API key for remote API mode. Prefer TODOS_API_KEY for shared machines. */
+  /** API key for the local HTTP server when local API keys are enabled. */
   apiKey?: string;
   sync_agents?: string[] | string;
   task_list_id?: string;
@@ -102,48 +98,31 @@ export function normalizeApiUrl(value: string | null | undefined): string | null
   return trimmed.replace(/\/+$/, "");
 }
 
-function normalizeMode(value: unknown): TodosMode | null {
-  return value === "local" || value === "remote" ? value : null;
-}
-
-export interface RemoteApiConfig {
-  mode: TodosMode;
+export interface LocalApiConfig {
   apiUrl: string | null;
   apiKey: string | null;
   source: {
-    mode: "env" | "config" | "derived";
-    apiUrl: "TODOS_API_URL" | "TODOS_URL" | "config" | "none";
+    apiUrl: "TODOS_URL" | "config" | "none";
     apiKey: "TODOS_API_KEY" | "config" | "none";
   };
 }
 
-export function getRemoteApiConfig(env: NodeJS.ProcessEnv = process.env): RemoteApiConfig {
+export function getLocalApiConfig(env: NodeJS.ProcessEnv = process.env): LocalApiConfig {
   const config = loadConfig();
-  const envApiUrl = normalizeApiUrl(env["TODOS_API_URL"]);
-  const legacyEnvUrl = normalizeApiUrl(env["TODOS_URL"]);
+  const envApiUrl = normalizeApiUrl(env["TODOS_URL"]);
   const configApiUrl = normalizeApiUrl(config.apiUrl);
-  const apiUrl = envApiUrl ?? legacyEnvUrl ?? configApiUrl;
-
-  const envMode = normalizeMode(env["TODOS_MODE"]);
-  const configMode = normalizeMode(config.mode);
-  const mode = envMode ?? configMode ?? (apiUrl ? "remote" : "local");
+  const apiUrl = envApiUrl ?? configApiUrl;
 
   const apiKey = env["TODOS_API_KEY"] || config.apiKey || null;
 
   return {
-    mode,
-    apiUrl: mode === "remote" ? apiUrl : null,
+    apiUrl,
     apiKey,
     source: {
-      mode: envMode ? "env" : configMode ? "config" : "derived",
-      apiUrl: envApiUrl ? "TODOS_API_URL" : legacyEnvUrl ? "TODOS_URL" : configApiUrl ? "config" : "none",
+      apiUrl: envApiUrl ? "TODOS_URL" : configApiUrl ? "config" : "none",
       apiKey: env["TODOS_API_KEY"] ? "TODOS_API_KEY" : config.apiKey ? "config" : "none",
     },
   };
-}
-
-export function isRemoteMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return getRemoteApiConfig(env).mode === "remote";
 }
 
 export function getSyncAgentsFromConfig(): string[] | null {

@@ -802,7 +802,7 @@ describe("initBuiltinTemplates", () => {
     const templates = listTemplates(db);
     const osp = templates.find(t => t.name === "open-source-project");
     const withTasks = getTemplateWithTasks(osp!.id, db);
-    expect(withTasks!.tasks.length).toBe(16);
+    expect(withTasks!.tasks.length).toBe(13);
   });
 
   it("should create bug-fix template with 5 tasks", () => {
@@ -949,7 +949,7 @@ describe("previewTemplate", () => {
     const osp = templates.find(t => t.name === "open-source-project");
 
     const preview = previewTemplate(osp!.id, { name: "invoices" }, db);
-    expect(preview.tasks).toHaveLength(16);
+    expect(preview.tasks).toHaveLength(13);
     expect(preview.tasks[0]!.title).toBe("Scaffold invoices package structure");
     expect(preview.tasks[8]!.title).toBe("Create GitHub repo hasna/invoices");
     expect(preview.resolved_variables.org).toBe("hasna");

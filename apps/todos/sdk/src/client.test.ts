@@ -156,9 +156,9 @@ describe("TodosClient baseUrl normalization", () => {
     expect(client).toBeDefined();
   });
 
-  it("should prefer TODOS_API_URL over legacy TODOS_URL", async () => {
+  it("should ignore TODOS_API_URL and use local TODOS_URL", async () => {
     process.env["TODOS_API_URL"] = "https://api-url.todos.test/";
-    process.env["TODOS_URL"] = "https://legacy.todos.test/";
+    process.env["TODOS_URL"] = "http://127.0.0.1:19427/";
     let observedUrl = "";
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       observedUrl = String(input);
@@ -171,7 +171,7 @@ describe("TodosClient baseUrl normalization", () => {
     const client = new TodosClient();
     await client.listTasks();
 
-    expect(observedUrl).toBe("https://api-url.todos.test/api/tasks");
+    expect(observedUrl).toBe("http://127.0.0.1:19427/api/tasks");
   });
 });
 

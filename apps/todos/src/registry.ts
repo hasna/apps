@@ -18,7 +18,7 @@ export interface TodosPackageSource {
 }
 
 export interface TodosPackageExportContract {
-  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./remote" | "./storage";
+  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./storage";
   import: string;
   types: string;
   description: string;
@@ -73,17 +73,10 @@ export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
     stability: "stable",
   },
   {
-    subpath: "./remote",
-    import: "./dist/remote.js",
-    types: "./dist/remote.d.ts",
-    description: "Remote API client and configuration helpers that do not import the local SQLite database.",
-    stability: "stable",
-  },
-  {
     subpath: "./storage",
     import: "./dist/storage.js",
     types: "./dist/storage.d.ts",
-    description: "Storage and service adapter contracts for local SQLite and hosted implementations.",
+    description: "Storage and service adapter contracts for local SQLite implementations.",
     stability: "stable",
   },
 ];
