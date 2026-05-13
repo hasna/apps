@@ -85,14 +85,7 @@ The skill automatically handles files larger than provider limits:
 ## Configuration
 
 ```bash
-# ElevenLabs
-export ELEVENLABS_API_KEY=your_key
-
-# OpenAI
-export OPENAI_API_KEY=your_key
-
-# Google Gemini
-export GOOGLE_API_KEY=your_key
+export SKILL_API_KEY=your_skill_api_key
 ```
 
 ## Dependencies

@@ -174,6 +174,11 @@ describe("CLI", () => {
     test("shows documentation for a skill with SKILL.md", async () => {
       const { stdout } = await runCli(["docs", "image"]);
       expect(stdout).toContain("Image Generation");
+      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).not.toContain("OPENAI_API_KEY");
+      expect(stdout).not.toContain("GEMINI_API_KEY");
+      expect(stdout).not.toContain("XAI_API_KEY");
+      expect(stdout).not.toContain("GOOGLE_PROJECT_ID");
     });
 
     test("shows CLAUDE.md when no SKILL.md", async () => {
@@ -210,7 +215,11 @@ describe("CLI", () => {
     test("shows requirements for a skill", async () => {
       const { stdout } = await runCli(["requires", "image"]);
       expect(stdout).toContain("Requirements for image");
-      expect(stdout).toContain("OPENAI_API_KEY");
+      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).not.toContain("OPENAI_API_KEY");
+      expect(stdout).not.toContain("GEMINI_API_KEY");
+      expect(stdout).not.toContain("XAI_API_KEY");
+      expect(stdout).not.toContain("GOOGLE_PROJECT_ID");
     });
 
     test("shows CLI command", async () => {
@@ -228,7 +237,7 @@ describe("CLI", () => {
       const { stdout } = await runCli(["requires", "image", "--json"]);
       const data = JSON.parse(stdout);
       expect(Array.isArray(data.envVars)).toBe(true);
-      expect(data.envVars).toContain("OPENAI_API_KEY");
+      expect(data.envVars).toEqual(["SKILL_API_KEY"]);
       expect(data.cliCommand).toBe("skill-image");
       expect(data).toHaveProperty("systemDeps");
       expect(data).toHaveProperty("dependencies");
@@ -246,14 +255,15 @@ describe("CLI", () => {
       const { stdout } = await runCli(["info", "image", "--json"]);
       const data = JSON.parse(stdout);
       expect(data.name).toBe("image");
-      expect(data.envVars).toContain("OPENAI_API_KEY");
+      expect(data.envVars).toEqual(["SKILL_API_KEY"]);
       expect(data.cliCommand).toBe("skill-image");
     });
 
     test("human-readable shows env vars", async () => {
       const { stdout } = await runCli(["info", "image"]);
       expect(stdout).toContain("Env vars:");
-      expect(stdout).toContain("OPENAI_API_KEY");
+      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).not.toContain("OPENAI_API_KEY");
     });
   });
 
@@ -904,7 +914,8 @@ describe("CLI", () => {
       const { stdout, exitCode } = await runCli(["auth", "image"]);
       expect(exitCode).toBe(0);
       expect(stdout).toContain("Auth status for image");
-      expect(stdout).toContain("OPENAI_API_KEY");
+      expect(stdout).toContain("SKILL_API_KEY");
+      expect(stdout).not.toContain("OPENAI_API_KEY");
     });
 
     test("shows set/missing markers for env vars", async () => {
@@ -925,11 +936,10 @@ describe("CLI", () => {
       expect(typeof data.envVars[0].set).toBe("boolean");
     });
 
-    test("JSON output contains OPENAI_API_KEY for image skill", async () => {
+    test("JSON output contains only SKILL_API_KEY for API-backed image skill", async () => {
       const { stdout } = await runCli(["auth", "image", "--json"]);
       const data = JSON.parse(stdout);
-      const openaiVar = data.envVars.find((v: { name: string }) => v.name === "OPENAI_API_KEY");
-      expect(openaiVar).toBeDefined();
+      expect(data.envVars.map((v: { name: string }) => v.name)).toEqual(["SKILL_API_KEY"]);
     });
 
     test("fails for nonexistent skill", async () => {

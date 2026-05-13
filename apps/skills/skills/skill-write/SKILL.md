@@ -7,6 +7,8 @@ description: Generate high-quality articles using parallel AI agents. Supports r
 
 This skill spawns parallel AI agents to research and write articles on any topic. Each article goes through a multi-phase pipeline:
 
+This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skills/connectors runtime; provider-specific keys are managed by that runtime.
+
 1. **Research Agent** - Gathers information and key points about the topic
 2. **Writer Agent** - Creates a well-structured article based on the research
 3. **Image Agent** (optional) - Generates a cover image for the article
@@ -45,12 +47,10 @@ bun run src/index.ts batch \
 
 ## Configuration
 
-Set up API keys as environment variables:
+Set the hosted runtime API key:
+
 ```bash
-export ANTHROPIC_API_KEY=your_anthropic_key    # Required
-export OPENAI_API_KEY=your_openai_key          # For image generation
-export GOOGLE_API_KEY=your_google_key          # Alternative image provider
-export XAI_API_KEY=your_xai_key                # Alternative image provider
+export SKILL_API_KEY=your_skill_api_key
 ```
 
 ## Output Format

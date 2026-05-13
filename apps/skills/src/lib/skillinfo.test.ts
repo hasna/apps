@@ -72,11 +72,14 @@ describe("skillinfo", () => {
   });
 
   describe("getSkillRequirements", () => {
-    test("extracts env vars from image skill", () => {
+    test("extracts only hosted runtime env vars from API-backed image skill", () => {
       const reqs = getSkillRequirements("image");
       expect(reqs).not.toBeNull();
-      expect(reqs!.envVars).toContain("OPENAI_API_KEY");
-      expect(reqs!.envVars).toContain("GEMINI_API_KEY");
+      expect(reqs!.envVars).toEqual(["SKILL_API_KEY"]);
+      expect(reqs!.envVars).not.toContain("OPENAI_API_KEY");
+      expect(reqs!.envVars).not.toContain("GEMINI_API_KEY");
+      expect(reqs!.envVars).not.toContain("XAI_API_KEY");
+      expect(reqs!.envVars).not.toContain("GOOGLE_PROJECT_ID");
     });
 
     test("extracts CLI command from package.json", () => {
@@ -125,8 +128,11 @@ describe("skillinfo", () => {
     test("generates env example from installed skills", () => {
       installSkill("image", { targetDir: testDir });
       const result = generateEnvExample(testDir);
-      expect(result).toContain("OPENAI_API_KEY");
-      expect(result).toContain("GEMINI_API_KEY");
+      expect(result).toContain("SKILL_API_KEY");
+      expect(result).not.toContain("OPENAI_API_KEY");
+      expect(result).not.toContain("GEMINI_API_KEY");
+      expect(result).not.toContain("XAI_API_KEY");
+      expect(result).not.toContain("GOOGLE_PROJECT_ID");
       expect(result).toContain("# Used by: image");
     });
 
@@ -140,8 +146,9 @@ describe("skillinfo", () => {
     test("groups by provider prefix", () => {
       installSkill("image", { targetDir: testDir });
       const result = generateEnvExample(testDir);
-      expect(result).toContain("# OPENAI");
-      expect(result).toContain("# GEMINI");
+      expect(result).toContain("# SKILL");
+      expect(result).not.toContain("# OPENAI");
+      expect(result).not.toContain("# GEMINI");
     });
   });
 

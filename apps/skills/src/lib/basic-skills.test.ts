@@ -14,6 +14,7 @@ import { getSkillPath } from "./installer";
 const BASIC_SKILLS = [...BASIC_SKILL_NAMES];
 
 const CONNECTOR_BACKED_SKILLS = ["image", "video", "audio", "transcript", "convert"];
+const HOSTED_RUNTIME_PROVIDER_KEYS = ["OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "GOOGLE_PROJECT_ID"];
 
 const EXPECTED_PACKAGE_DEPS: Record<string, string[]> = {
   "read-pdf": ["pdf-lib"],
@@ -94,6 +95,9 @@ describe("basic skill profile for Takumi", () => {
     for (const skill of CONNECTOR_BACKED_SKILLS) {
       const reqs = getSkillRequirements(skill);
       expect(reqs?.envVars, `${skill} should disclose SKILL_API_KEY`).toContain("SKILL_API_KEY");
+      for (const envVar of HOSTED_RUNTIME_PROVIDER_KEYS) {
+        expect(reqs?.envVars, `${skill} should not require local ${envVar}`).not.toContain(envVar);
+      }
     }
   });
 

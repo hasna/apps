@@ -14,17 +14,17 @@ This CLI is API-backed. Set `SKILL_API_KEY` when routing through the hosted skil
 ### OpenAI
 - **Models**: dall-e-3, gpt-image-1
 - **Sizes**: 1024x1024, 1792x1024, 1024x1792
-- **API Key**: `OPENAI_API_KEY`
+- **Credentials**: managed by the hosted skills runtime
 
 ### Google Gemini 3.0 (Nano Banana)
 - **Model**: gemini-3.0-generate-001
 - **Sizes**: Configurable aspect ratios
-- **API Key**: `GEMINI_API_KEY`
+- **Credentials**: managed by the hosted skills runtime
 
 ### xAI Grok-2 Image
 - **Model**: grok-2-image-1212 (Grok's image generator)
 - **Text-to-image capabilities**
-- **API Key**: `XAI_API_KEY`
+- **Credentials**: managed by the hosted skills runtime
 
 ## Usage
 
@@ -49,10 +49,8 @@ bun run src/index.ts generate --provider xai --prompt "a bird" --output ./output
 
 ## Environment Variables
 
-Set the appropriate API key for your chosen provider:
+Set the hosted runtime API key:
 
 ```bash
-export OPENAI_API_KEY="your-openai-key"
-export GEMINI_API_KEY="your-gemini-key"
-export XAI_API_KEY="your-xai-key"
+export SKILL_API_KEY="your-skill-api-key"
 ```

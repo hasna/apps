@@ -257,7 +257,7 @@ describe("MCP Server", () => {
       expect(response.result).toBeDefined();
       const reqs = JSON.parse(response.result.content[0].text);
       expect(Array.isArray(reqs.envVars)).toBe(true);
-      expect(reqs.envVars).toContain("OPENAI_API_KEY");
+      expect(reqs.envVars).toEqual(["SKILL_API_KEY"]);
       expect(reqs.cliCommand).toBe("skill-image");
     } finally {
       await client.close();

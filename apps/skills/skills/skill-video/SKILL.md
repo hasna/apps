@@ -53,19 +53,10 @@ bun run src/index.ts generate \
 
 ## Environment Variables
 
-Set up your API keys:
+Set the hosted runtime API key. Provider credentials are managed remotely.
 
 ```bash
-# Google Veo 3.1 (Vertex AI)
-export GOOGLE_API_KEY=your_key_here
-# or
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-
-# OpenAI Sora
-export OPENAI_API_KEY=your_key_here
-
-# Runway
-export RUNWAY_API_KEY=your_key_here
+export SKILL_API_KEY=your_skill_api_key
 ```
 
 ## Installation

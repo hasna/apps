@@ -64,9 +64,8 @@ bun run src/index.ts formats
 - `@anthropic-ai/sdk` - Claude AI
 - `openai` - GPT-4o AI
 
-### API Keys (for AI features)
-- `ANTHROPIC_API_KEY` - For Claude-powered conversions
-- `OPENAI_API_KEY` - For GPT-4o-powered conversions
+### API Key
+- `SKILL_API_KEY` - Hosted runtime access. Provider credentials for AI features are managed remotely.
 
 ## Conversion Categories
 

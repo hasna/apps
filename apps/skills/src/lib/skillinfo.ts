@@ -60,7 +60,9 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   const allText = texts.join("\n");
 
   // Extract env vars
-  const envVars = extractEnvVars(allText);
+  const envVars = isHostedRuntimeSkill(skillPath, allText)
+    ? new Set(["SKILL_API_KEY"])
+    : extractEnvVars(allText);
 
   // Extract system deps
   const systemDeps = new Set<string>();
@@ -336,7 +338,9 @@ export function generateEnvExample(targetDir: string = process.cwd()): string {
     }
     const allText = texts.join("\n");
 
-    const foundVars = extractEnvVars(allText);
+    const foundVars = isHostedRuntimeSkill(skillPath, allText)
+      ? new Set(["SKILL_API_KEY"])
+      : extractEnvVars(allText);
     for (const envVar of foundVars) {
       if (!envMap.has(envVar)) {
         envMap.set(envVar, []);
@@ -476,6 +480,28 @@ function extractEnvVars(text: string): Set<string> {
     }
   }
   return envVars;
+}
+
+function isHostedRuntimeSkill(skillPath: string, text: string): boolean {
+  if (/hosted skills\/connectors runtime/i.test(text) || /provider-specific keys are managed by that runtime/i.test(text)) {
+    return true;
+  }
+
+  const sourceFiles = [
+    join(skillPath, "src", "index.ts"),
+    join(skillPath, "src", "index.js"),
+    join(skillPath, "src", "index-local.ts"),
+    join(skillPath, "src", "index-local.js"),
+  ];
+
+  for (const sourceFile of sourceFiles) {
+    const source = readIfExists(sourceFile);
+    if (source && /requiredEnvVars\s*:\s*\[\s*["']SKILL_API_KEY["']\s*\]/.test(source)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function readIfExists(path: string): string | null {

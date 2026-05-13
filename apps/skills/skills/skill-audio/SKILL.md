@@ -45,11 +45,10 @@ bun run src/index.ts voices --provider google
 
 ## Configuration
 
-Set up API keys as environment variables:
+Set the hosted runtime API key. Provider credentials are managed remotely.
+
 ```bash
-export ELEVENLABS_API_KEY=your_elevenlabs_key
-export OPENAI_API_KEY=your_openai_key
-export GOOGLE_API_KEY=your_google_key
+export SKILL_API_KEY=your_skill_api_key
 ```
 
 ## Features
