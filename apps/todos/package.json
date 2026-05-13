@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.11.38",
+  "version": "0.11.40",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -43,7 +43,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist dashboard/dist && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
