@@ -288,6 +288,79 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should create all tasks and dependencies from a reusable plan template", async () => {
+    const dbPath = "/tmp/test-cli-plan-template-use.db";
+    const importPath = "/tmp/test-cli-plan-template-use.json";
+    const { unlinkSync, writeFileSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+    try { unlinkSync(importPath); } catch {}
+
+    writeFileSync(importPath, JSON.stringify({
+      name: "Local Release Plan",
+      title_pattern: "Release {feature}",
+      description: "Reusable local release plan",
+      priority: "high",
+      tags: ["release"],
+      variables: [{ name: "feature", required: true }],
+      project_id: null,
+      plan_id: null,
+      metadata: {},
+      tasks: [
+        {
+          position: 0,
+          title_pattern: "Plan {feature}",
+          description: "Scope {feature}",
+          priority: "high",
+          tags: ["planning"],
+          task_type: null,
+          condition: null,
+          include_template_id: null,
+          depends_on_positions: [],
+          metadata: {},
+        },
+        {
+          position: 1,
+          title_pattern: "Build {feature}",
+          description: "Implement {feature}",
+          priority: "critical",
+          tags: ["implementation"],
+          task_type: null,
+          condition: null,
+          include_template_id: null,
+          depends_on_positions: [0],
+          metadata: {},
+        },
+      ],
+    }));
+
+    const imported = await runCli(["template-import", importPath, "--json"], dbPath);
+    expect(imported.exitCode).toBe(0);
+    const template = JSON.parse(imported.stdout);
+
+    const used = await runCli(["templates", "--use", template.id, "--var", "feature=dashboard", "--json"], dbPath);
+    expect(used.exitCode).toBe(0);
+    const tasks = JSON.parse(used.stdout);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0].title).toBe("Plan dashboard");
+    expect(tasks[0].description).toBe("Scope dashboard");
+    expect(tasks[1].title).toBe("Build dashboard");
+    expect(tasks[1].description).toBe("Implement dashboard");
+
+    const graphResult = await runCli(["deps", tasks[1].id, "--graph", "--json"], dbPath);
+    expect(graphResult.exitCode).toBe(0);
+    const graph = JSON.parse(graphResult.stdout);
+    expect(graph.task.id).toBe(tasks[1].id);
+    expect(graph.task.is_blocked).toBe(true);
+    expect(graph.depends_on[0].task.id).toBe(tasks[0].id);
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+    try { unlinkSync(importPath); } catch {}
+  });
+
   it("should run sprint command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "sprint", "--json"],

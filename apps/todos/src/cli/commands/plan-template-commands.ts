@@ -155,7 +155,15 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const { createTemplate, listTemplates, deleteTemplate, updateTemplate, taskFromTemplate } = await import("../../db/templates.js");
+      const {
+        createTemplate,
+        getTemplateWithTasks,
+        listTemplates,
+        deleteTemplate,
+        updateTemplate,
+        taskFromTemplate,
+        tasksFromTemplate,
+      } = await import("../../db/templates.js");
 
       if (opts.add) {
         if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
@@ -205,6 +213,27 @@ export function registerPlanTemplateCommands(program: Command) {
               variables[v.slice(0, eq)] = v.slice(eq + 1);
             }
           }
+          const template = getTemplateWithTasks(opts.use);
+          if (!template) {
+            console.error(chalk.red("Template not found."));
+            process.exit(1);
+          }
+          if (template.tasks.length > 0) {
+            const tasks = tasksFromTemplate(
+              opts.use,
+              template.project_id || autoProject(globalOpts),
+              Object.keys(variables).length > 0 ? variables : undefined,
+            );
+            if (globalOpts.json) {
+              output(tasks, true);
+            } else {
+              console.log(chalk.green(`${tasks.length} tasks created from template:`));
+              for (const task of tasks) {
+                console.log(formatTaskLine(task));
+              }
+            }
+            return;
+          }
           const input = taskFromTemplate(opts.use, {
             title: opts.title,
             description: opts.description,
@@ -216,6 +245,13 @@ export function registerPlanTemplateCommands(program: Command) {
               title = title.replace(new RegExp(`\\{${k}\\}`, "g"), v);
             }
             input.title = title;
+          }
+          if (input.description) {
+            let description = input.description;
+            for (const [k, v] of Object.entries(variables)) {
+              description = description.replace(new RegExp(`\\{${k}\\}`, "g"), v);
+            }
+            input.description = description;
           }
           const task = createTask({ ...input, agent_id: globalOpts.agent, project_id: input.project_id || autoProject(globalOpts) });
           if (globalOpts.json) { output(task, true); }
