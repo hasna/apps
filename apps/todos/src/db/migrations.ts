@@ -855,4 +855,37 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(revoked_at, expires_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (50);
   `,
+  // Migration 51: Local git refs and verification evidence linked to tasks
+  `
+  CREATE TABLE IF NOT EXISTS task_git_refs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    ref_type TEXT NOT NULL CHECK(ref_type IN ('branch', 'pull_request')),
+    name TEXT NOT NULL,
+    url TEXT,
+    provider TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, ref_type, name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_git_refs_task ON task_git_refs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_git_refs_lookup ON task_git_refs(ref_type, name);
+  CREATE INDEX IF NOT EXISTS idx_task_git_refs_url ON task_git_refs(url);
+
+  CREATE TABLE IF NOT EXISTS task_verifications (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('passed', 'failed', 'unknown')),
+    output_summary TEXT,
+    artifact_path TEXT,
+    agent_id TEXT,
+    run_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_verifications_task ON task_verifications(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_verifications_status ON task_verifications(status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (51);
+  `,
 ];

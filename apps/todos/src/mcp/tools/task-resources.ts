@@ -9,7 +9,16 @@ import { z } from "zod";
 import { listTasks, getTask } from "../../db/tasks.js";
 import { listProjects } from "../../db/projects.js";
 import { listAgents } from "../../db/agents.js";
-import { linkTaskToCommit, getTaskCommits, findTaskByCommit } from "../../db/task-commits.js";
+import {
+  addTaskVerification,
+  findTasksByGitRef,
+  findTaskByCommit,
+  getTaskGitRefs,
+  getTaskTraceability,
+  getTaskCommits,
+  linkTaskGitRef,
+  linkTaskToCommit,
+} from "../../db/task-commits.js";
 
 interface TaskResourcesContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -288,6 +297,100 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
           const result = findTaskByCommit(sha);
           if (!result) return { content: [{ type: "text" as const, text: `No task linked to commit ${sha}` }] };
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("link_task_git_ref")) {
+    server.tool(
+      "link_task_git_ref",
+      "Link a local git branch or pull request to a task. Upserts on task, ref_type, and name.",
+      {
+        task_id: z.string().describe("Task ID"),
+        ref_type: z.enum(["branch", "pull_request"]).describe("Git ref type"),
+        name: z.string().describe("Branch name, PR number, or PR label"),
+        url: z.string().optional().describe("Optional remote URL for the branch or pull request"),
+        provider: z.string().optional().describe("Provider name, e.g. git or github"),
+        metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+      },
+      async ({ task_id, ref_type, name, url, provider, metadata }) => {
+        try {
+          const resolvedId = resolveId(task_id);
+          const ref = linkTaskGitRef({ task_id: resolvedId, ref_type, name, url, provider, metadata });
+          return { content: [{ type: "text" as const, text: JSON.stringify(ref, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_task_git_refs")) {
+    server.tool(
+      "get_task_git_refs",
+      "Get branches and pull requests linked to a task.",
+      { task_id: z.string().describe("Task ID") },
+      async ({ task_id }) => {
+        try {
+          const refs = getTaskGitRefs(resolveId(task_id));
+          return { content: [{ type: "text" as const, text: JSON.stringify(refs, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("find_tasks_by_git_ref")) {
+    server.tool(
+      "find_tasks_by_git_ref",
+      "Find tasks linked to a branch name, PR number, or PR URL.",
+      { ref: z.string().describe("Branch name, PR number, or PR URL substring") },
+      async ({ ref }) => {
+        try {
+          const refs = findTasksByGitRef(ref);
+          return { content: [{ type: "text" as const, text: JSON.stringify(refs, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("add_task_verification")) {
+    server.tool(
+      "add_task_verification",
+      "Record a local verification command, status, summary, and optional artifact path for a task.",
+      {
+        task_id: z.string().describe("Task ID"),
+        command: z.string().describe("Verification command that was run"),
+        status: z.enum(["passed", "failed", "unknown"]).optional().describe("Verification result"),
+        output_summary: z.string().optional().describe("Short command output summary"),
+        artifact_path: z.string().optional().describe("Optional local artifact or log path"),
+        agent_id: z.string().optional().describe("Agent that ran the verification"),
+        run_at: z.string().optional().describe("ISO timestamp when the command was run"),
+      },
+      async ({ task_id, command, status, output_summary, artifact_path, agent_id, run_at }) => {
+        try {
+          const verification = addTaskVerification({
+            task_id: resolveId(task_id),
+            command,
+            status,
+            output_summary,
+            artifact_path,
+            agent_id,
+            run_at,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(verification, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_task_traceability")) {
+    server.tool(
+      "get_task_traceability",
+      "Get local git commits, branches, pull requests, and verification commands linked to a task.",
+      { task_id: z.string().describe("Task ID") },
+      async ({ task_id }) => {
+        try {
+          const trace = getTaskTraceability(resolveId(task_id));
+          return { content: [{ type: "text" as const, text: JSON.stringify(trace, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

@@ -12,6 +12,7 @@ import { registerTaskRelTools } from "./tools/task-rel-tools.js";
 import { registerTaskAdvTools } from "./tools/task-adv-tools.js";
 import { registerTaskAutoTools } from "./tools/task-auto-tools.js";
 import { registerAgentTools } from "./tools/agents.js";
+import { registerTaskResources } from "./tools/task-resources.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -28,6 +29,9 @@ type CapturedTool = {
 function captureTools(register: (server: any, ctx: any) => void): Map<string, CapturedTool> {
   const tools = new Map<string, CapturedTool>();
   const server = {
+    resource() {
+      // Resource handlers are not needed for these tool-wrapper tests.
+    },
     tool(name: string, description: string, schemaOrHandler: Record<string, any> | CapturedTool["handler"], maybeHandler?: CapturedTool["handler"]) {
       const schema = typeof schemaOrHandler === "function" ? {} : schemaOrHandler;
       const handler = typeof schemaOrHandler === "function" ? schemaOrHandler : maybeHandler!;
@@ -260,6 +264,41 @@ describe("MCP tool wrappers", () => {
       completed: ["one"],
       next_steps: ["two"],
     });
+  });
+
+  it("git traceability tools link refs, commits, and verification evidence", async () => {
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Traceable via MCP" }, db);
+
+    await callCapturedTool(tools, "link_task_to_commit", {
+      task_id: task.id,
+      sha: "abcdef1234567890",
+      message: "Implement trace tools",
+      files_changed: ["src/db/task-commits.ts"],
+    });
+    await callCapturedTool(tools, "link_task_git_ref", {
+      task_id: task.id,
+      ref_type: "pull_request",
+      name: "42",
+      url: "https://github.com/hasna/todos/pull/42",
+      provider: "github",
+    });
+    await callCapturedTool(tools, "add_task_verification", {
+      task_id: task.id,
+      command: "bun test src/db/task-commits.test.ts",
+      status: "passed",
+      output_summary: "traceability tests passed",
+    });
+
+    const traceResult = await callCapturedTool(tools, "get_task_traceability", { task_id: task.id });
+    const trace = JSON.parse(traceResult.content[0]!.text);
+    expect(trace.commits[0].sha).toBe("abcdef1234567890");
+    expect(trace.git_refs[0].name).toBe("42");
+    expect(trace.verifications[0].status).toBe("passed");
+
+    const refResult = await callCapturedTool(tools, "find_tasks_by_git_ref", { ref: "pull/42" });
+    const refs = JSON.parse(refResult.content[0]!.text);
+    expect(refs[0].task_id).toBe(task.id);
   });
 
   it("comment wrappers persist and read the real comment fields", async () => {

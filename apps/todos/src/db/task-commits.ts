@@ -12,6 +12,30 @@ export interface TaskCommit {
   created_at: string;
 }
 
+export interface TaskGitRef {
+  id: string;
+  task_id: string;
+  ref_type: "branch" | "pull_request";
+  name: string;
+  url: string | null;
+  provider: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskVerification {
+  id: string;
+  task_id: string;
+  command: string;
+  status: "passed" | "failed" | "unknown";
+  output_summary: string | null;
+  artifact_path: string | null;
+  agent_id: string | null;
+  run_at: string;
+  created_at: string;
+}
+
 interface TaskCommitRow {
   id: string;
   task_id: string;
@@ -23,11 +47,46 @@ interface TaskCommitRow {
   created_at: string;
 }
 
+interface TaskGitRefRow {
+  id: string;
+  task_id: string;
+  ref_type: "branch" | "pull_request";
+  name: string;
+  url: string | null;
+  provider: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TaskVerificationRow {
+  id: string;
+  task_id: string;
+  command: string;
+  status: "passed" | "failed" | "unknown";
+  output_summary: string | null;
+  artifact_path: string | null;
+  agent_id: string | null;
+  run_at: string;
+  created_at: string;
+}
+
 function rowToCommit(row: TaskCommitRow): TaskCommit {
   return {
     ...row,
     files_changed: row.files_changed ? JSON.parse(row.files_changed) : null,
   };
+}
+
+function rowToGitRef(row: TaskGitRefRow): TaskGitRef {
+  return {
+    ...row,
+    metadata: row.metadata ? JSON.parse(row.metadata) : {},
+  };
+}
+
+function rowToVerification(row: TaskVerificationRow): TaskVerification {
+  return row;
 }
 
 export interface LinkTaskToCommitInput {
@@ -81,4 +140,105 @@ export function findTaskByCommit(sha: string, db?: Database): { task_id: string;
 export function unlinkTaskCommit(taskId: string, sha: string, db?: Database): boolean {
   const d = db || getDatabase();
   return d.run("DELETE FROM task_commits WHERE task_id = ? AND (sha = ? OR sha LIKE ?)", [taskId, sha, `${sha}%`]).changes > 0;
+}
+
+export interface LinkTaskGitRefInput {
+  task_id: string;
+  ref_type: "branch" | "pull_request";
+  name: string;
+  url?: string;
+  provider?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Link a local branch or pull request URL/number to a task. Upserts on task+type+name. */
+export function linkTaskGitRef(input: LinkTaskGitRefInput, db?: Database): TaskGitRef {
+  const d = db || getDatabase();
+  const timestamp = now();
+  const metadata = JSON.stringify(input.metadata || {});
+  const existing = d
+    .query("SELECT * FROM task_git_refs WHERE task_id = ? AND ref_type = ? AND name = ?")
+    .get(input.task_id, input.ref_type, input.name) as TaskGitRefRow | null;
+
+  if (existing) {
+    d.run(
+      "UPDATE task_git_refs SET url = COALESCE(?, url), provider = COALESCE(?, provider), metadata = ?, updated_at = ? WHERE id = ?",
+      [input.url ?? null, input.provider ?? null, metadata, timestamp, existing.id],
+    );
+    return rowToGitRef(d.query("SELECT * FROM task_git_refs WHERE id = ?").get(existing.id) as TaskGitRefRow);
+  }
+
+  const id = uuid();
+  d.run(
+    "INSERT INTO task_git_refs (id, task_id, ref_type, name, url, provider, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [id, input.task_id, input.ref_type, input.name, input.url ?? null, input.provider ?? null, metadata, timestamp, timestamp],
+  );
+  return rowToGitRef(d.query("SELECT * FROM task_git_refs WHERE id = ?").get(id) as TaskGitRefRow);
+}
+
+export function getTaskGitRefs(taskId: string, db?: Database): TaskGitRef[] {
+  const d = db || getDatabase();
+  return (d
+    .query("SELECT * FROM task_git_refs WHERE task_id = ? ORDER BY ref_type, updated_at DESC")
+    .all(taskId) as TaskGitRefRow[]).map(rowToGitRef);
+}
+
+export function findTasksByGitRef(ref: string, db?: Database): TaskGitRef[] {
+  const d = db || getDatabase();
+  return (d
+    .query("SELECT * FROM task_git_refs WHERE name = ? OR url = ? OR name LIKE ? OR url LIKE ? ORDER BY updated_at DESC")
+    .all(ref, ref, `%${ref}%`, `%${ref}%`) as TaskGitRefRow[]).map(rowToGitRef);
+}
+
+export interface AddTaskVerificationInput {
+  task_id: string;
+  command: string;
+  status?: "passed" | "failed" | "unknown";
+  output_summary?: string;
+  artifact_path?: string;
+  agent_id?: string;
+  run_at?: string;
+}
+
+export function addTaskVerification(input: AddTaskVerificationInput, db?: Database): TaskVerification {
+  const d = db || getDatabase();
+  const id = uuid();
+  const runAt = input.run_at || now();
+  d.run(
+    "INSERT INTO task_verifications (id, task_id, command, status, output_summary, artifact_path, agent_id, run_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      id,
+      input.task_id,
+      input.command,
+      input.status || "unknown",
+      input.output_summary ?? null,
+      input.artifact_path ?? null,
+      input.agent_id ?? null,
+      runAt,
+      now(),
+    ],
+  );
+  return rowToVerification(d.query("SELECT * FROM task_verifications WHERE id = ?").get(id) as TaskVerificationRow);
+}
+
+export function getTaskVerifications(taskId: string, db?: Database): TaskVerification[] {
+  const d = db || getDatabase();
+  return (d
+    .query("SELECT * FROM task_verifications WHERE task_id = ? ORDER BY run_at DESC, created_at DESC")
+    .all(taskId) as TaskVerificationRow[]).map(rowToVerification);
+}
+
+export function getTaskTraceability(taskId: string, db?: Database): {
+  task_id: string;
+  commits: TaskCommit[];
+  git_refs: TaskGitRef[];
+  verifications: TaskVerification[];
+} {
+  const d = db || getDatabase();
+  return {
+    task_id: taskId,
+    commits: getTaskCommits(taskId, d),
+    git_refs: getTaskGitRefs(taskId, d),
+    verifications: getTaskVerifications(taskId, d),
+  };
 }

@@ -185,6 +185,38 @@ export function ensureSchema(db: Database): void {
       CHECK (source_task_id != target_task_id)
     )`);
 
+  ensureTable("task_git_refs", `
+    CREATE TABLE task_git_refs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      ref_type TEXT NOT NULL CHECK(ref_type IN ('branch', 'pull_request')),
+      name TEXT NOT NULL,
+      url TEXT,
+      provider TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(task_id, ref_type, name)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_git_refs_task ON task_git_refs(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_git_refs_lookup ON task_git_refs(ref_type, name)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_git_refs_url ON task_git_refs(url)");
+
+  ensureTable("task_verifications", `
+    CREATE TABLE task_verifications (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      command TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'unknown' CHECK(status IN ('passed', 'failed', 'unknown')),
+      output_summary TEXT,
+      artifact_path TEXT,
+      agent_id TEXT,
+      run_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_verifications_task ON task_verifications(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_verifications_status ON task_verifications(status)");
+
   ensureTable("kg_edges", `
     CREATE TABLE kg_edges (
       id TEXT PRIMARY KEY,

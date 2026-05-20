@@ -56,6 +56,26 @@ The same local-only workflow is available to MCP clients through
 `create_template`, `list_templates`, `create_task_from_template`,
 `preview_template`, `export_template`, and `import_template`.
 
+## Local Git Traceability
+
+Tasks can be linked to local git evidence without contacting hosted services:
+
+```bash
+todos link-commit <task-id> <sha> --message "fix parser" --files src/parser.ts
+todos link-ref <task-id> task/parser-fix --type branch
+todos link-ref <task-id> 42 --type pr --url https://github.com/hasna/todos/pull/42
+todos record-verification <task-id> "bun test" --status passed --summary "1522 pass"
+todos trace <task-id>
+todos find-commit <sha-prefix>
+todos find-ref <branch-or-pr>
+todos blame src/parser.ts
+```
+
+MCP clients get the same local data through `link_task_to_commit`,
+`find_task_by_commit`, `link_task_git_ref`, `find_tasks_by_git_ref`,
+`add_task_verification`, and `get_task_traceability`, so agents can explain
+which task changed a commit, branch, PR, file, or verification command.
+
 ## MCP Server
 
 ```bash
