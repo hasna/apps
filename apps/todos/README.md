@@ -8,7 +8,7 @@ Universal task management for AI coding agents - CLI + MCP server + interactive 
 ## Install
 
 ```bash
-npm install -g @hasna/todos
+bun install -g @hasna/todos
 ```
 
 ## CLI Usage

@@ -6,8 +6,8 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/hasna/open-todos.git
-cd open-todos
+git clone https://github.com/hasna/todos.git
+cd todos
 
 # Install dependencies
 bun install
@@ -84,7 +84,7 @@ bun test src/db/tasks.test.ts  # Run a single file
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/hasna/open-todos/issues) to report bugs or request features. Please include:
+Use [GitHub Issues](https://github.com/hasna/todos/issues) to report bugs or request features. Please include:
 
 - Steps to reproduce
 - Expected vs actual behavior
