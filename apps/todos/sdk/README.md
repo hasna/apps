@@ -1,6 +1,6 @@
 # @hasna/todos-sdk
 
-Universal agent SDK for [@hasna/todos](https://github.com/hasna/open-todos) task management.
+Universal agent SDK for [@hasna/todos](https://github.com/hasna/todos) task management.
 
 Works with **any AI agent framework** — Claude, Codex, Gemini, or custom agents. Zero dependencies beyond `fetch`.
 
@@ -8,8 +8,6 @@ Works with **any AI agent framework** — Claude, Codex, Gemini, or custom agent
 
 ```bash
 bun add @hasna/todos-sdk
-# or
-npm install @hasna/todos-sdk
 ```
 
 ## Quick Start

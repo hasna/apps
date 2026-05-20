@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.11.40",
+  "version": "0.11.41",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -36,6 +36,9 @@
       "import": "./dist/storage.js"
     }
   },
+  "workspaces": [
+    "dashboard"
+  ],
   "files": [
     "dist",
     "dashboard/dist",
@@ -47,10 +50,12 @@
     "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:no-cloud": "bun test src/no-cloud-boundary.test.ts src/local-first.test.ts src/lib/public-release-gate.test.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run build",
+    "verify:release": "bun run scripts/verify-public-release.ts",
+    "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
   },
   "keywords": [
@@ -94,6 +99,7 @@
   "devDependencies": {
     "@types/bun": "^1.2.4",
     "@types/react": "^18.3.18",
+    "bun-types": "1.3.9",
     "typescript": "^5.7.3"
   }
 }

@@ -21,7 +21,9 @@ jobs:
 
       - name: Type check
         run: bun run typecheck
-        continue-on-error: true
+
+      - name: No-cloud release guards
+        run: bun run test:no-cloud
 
       - name: Run tests
         run: bun test

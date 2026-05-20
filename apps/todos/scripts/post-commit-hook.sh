@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# post-commit hook for open-todos: auto-links commits to tasks
+# post-commit hook for @hasna/todos: auto-links commits to tasks
 # Parses commit message and branch name for task short_ids (e.g. OPE-00042)
 # and calls todos CLI to link them via linkTaskToCommit.
 #

@@ -400,17 +400,7 @@ export function registerAgentCommands(program: Command) {
           return;
         }
 
-        let useBun = false;
-        try {
-          execSync("which bun", { stdio: "ignore" });
-          useBun = true;
-        } catch {
-          // bun not available, fall back to npm
-        }
-
-        const cmd = useBun
-          ? "bun add -g @hasna/todos@latest"
-          : "npm install -g @hasna/todos@latest";
+        const cmd = "bun install -g @hasna/todos@latest";
 
         console.log(chalk.dim(`\nRunning: ${cmd}`));
         execSync(cmd, { stdio: "inherit" });

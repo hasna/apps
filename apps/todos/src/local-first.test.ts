@@ -6,6 +6,7 @@ import packageJson from "../package.json";
 import { createTask } from "./db/task-crud.js";
 import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createMcpManifest } from "./mcp.js";
+import { withNoNetwork } from "./test/no-network.js";
 
 const CWD = join(import.meta.dir, "..");
 const originalFetch = globalThis.fetch;
@@ -84,16 +85,16 @@ describe("OSS local-first package surface", () => {
 
 describe("OSS local-first runtime defaults", () => {
   test("local DB task creation does not call fetch when no webhooks are registered", () => {
-    let called = false;
-    globalThis.fetch = (async () => {
-      called = true;
-      throw new Error("unexpected network call");
-    }) as typeof fetch;
-
     const task = createTask({ title: "Local task only" }, getDatabase());
 
     expect(task.title).toBe("Local task only");
-    expect(called).toBe(false);
+  });
+
+  test("no-network fixture fails local operations that unexpectedly fetch", async () => {
+    const { result: task, calls } = await withNoNetwork(() => createTask({ title: "Trapped local task" }, getDatabase()));
+
+    expect(task.title).toBe("Trapped local task");
+    expect(calls).toEqual([]);
   });
 
   test("CLI ignores hosted remote env vars and writes to local SQLite", async () => {

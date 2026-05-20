@@ -30,7 +30,7 @@ import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { getPackageVersion } from "../lib/package-version.js";
-import { installMcpTokenTelemetry, shouldRegisterToolForProfile } from "./token-utils.js";
+import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
 
 function getMcpVersion(): string {
   return getPackageVersion(import.meta.url);
@@ -49,7 +49,7 @@ const server = new McpServer({
   name: "todos",
   version: getMcpVersion(),
 });
-installMcpTokenTelemetry(server);
+installMcpTokenDiagnostics(server);
 
 // === PROFILE FILTERING ===
 

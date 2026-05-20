@@ -23,9 +23,9 @@
   },
   "keywords": ["todos", "tasks", "ai", "agent", "sdk", "claude", "codex", "gemini", "mcp"],
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "https://github.com/hasna/open-todos.git", "directory": "sdk" },
-  "homepage": "https://github.com/hasna/open-todos",
-  "bugs": { "url": "https://github.com/hasna/open-todos/issues" },
+  "repository": { "type": "git", "url": "https://github.com/hasna/todos.git", "directory": "sdk" },
+  "homepage": "https://github.com/hasna/todos",
+  "bugs": { "url": "https://github.com/hasna/todos/issues" },
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "devDependencies": {

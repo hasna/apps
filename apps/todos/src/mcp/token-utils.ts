@@ -332,11 +332,11 @@ export function estimateMcpTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-function tokenTelemetryEnabled(): boolean {
-  return /^(1|true|yes|on)$/i.test(process.env["TODOS_MCP_TOKEN_TELEMETRY"] || "");
+function tokenDiagnosticsEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env["TODOS_MCP_TOKEN_DIAGNOSTICS"] || "");
 }
 
-export function withMcpTokenTelemetry(result: unknown, toolName: string, enabled = tokenTelemetryEnabled()): unknown {
+export function withMcpTokenDiagnostics(result: unknown, toolName: string, enabled = tokenDiagnosticsEnabled()): unknown {
   if (!enabled || !result || typeof result !== "object") return result;
   const response = result as { content?: unknown };
   if (!Array.isArray(response.content)) return result;
@@ -345,7 +345,7 @@ export function withMcpTokenTelemetry(result: unknown, toolName: string, enabled
   const textChars = content.reduce((sum, item) => (
     item["type"] === "text" && typeof item["text"] === "string" ? sum + item["text"].length : sum
   ), 0);
-  const telemetry = `[mcp-token-telemetry tool=${toolName} chars=${textChars} approx_tokens=${Math.max(1, Math.ceil(textChars / 4))}]`;
+  const diagnostics = `[mcp-token-diagnostics tool=${toolName} chars=${textChars} approx_tokens=${Math.max(1, Math.ceil(textChars / 4))}]`;
   const nextContent = [...content];
   let lastTextIndex = -1;
   for (let index = nextContent.length - 1; index >= 0; index -= 1) {
@@ -357,14 +357,14 @@ export function withMcpTokenTelemetry(result: unknown, toolName: string, enabled
   }
   if (lastTextIndex >= 0) {
     const item = nextContent[lastTextIndex]!;
-    nextContent[lastTextIndex] = { ...item, text: `${item["text"]}\n\n${telemetry}` };
+    nextContent[lastTextIndex] = { ...item, text: `${item["text"]}\n\n${diagnostics}` };
   } else {
-    nextContent.push({ type: "text", text: telemetry });
+    nextContent.push({ type: "text", text: diagnostics });
   }
   return { ...response, content: nextContent };
 }
 
-export function installMcpTokenTelemetry(server: any): void {
+export function installMcpTokenDiagnostics(server: any): void {
   const originalTool = server.tool.bind(server);
   server.tool = (...args: unknown[]) => {
     const name = String(args[0]);
@@ -372,7 +372,7 @@ export function installMcpTokenTelemetry(server: any): void {
     if (typeof last !== "function") return originalTool(...args);
     const wrapped = async (...handlerArgs: unknown[]) => {
       const result = await last(...handlerArgs);
-      return withMcpTokenTelemetry(result, name);
+      return withMcpTokenDiagnostics(result, name);
     };
     return originalTool(...args.slice(0, -1), wrapped);
   };

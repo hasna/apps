@@ -101,6 +101,23 @@ curl "http://localhost:19427/api/tasks/<id>/history?limit=20"
 
 Data is stored in `~/.hasna/todos/`.
 
+## Local-Only Security Boundary
+
+`@hasna/todos` is an open source, local-first package. The CLI, MCP server, SDK,
+and local dashboard read and write local state by default and do not require a
+hosted API, cloud account, billing provider, or remote model provider.
+
+Release checks enforce that boundary before publishing:
+
+- package metadata must stay public and point at `hasna/todos`
+- install snippets must use `bun install -g @hasna/todos`
+- package dependencies and generated tarballs are scanned for private or hosted
+  service coupling
+- public text surfaces and packed files are scanned for secret-like values
+- local runtime tests use a no-network fixture for local-only workflows
+- `bun run verify:release` builds, packs, validates provenance, and runs a clean
+  Bun global install smoke test from the candidate tarball
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
