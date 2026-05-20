@@ -288,6 +288,69 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should link and query local git traceability evidence", async () => {
+    const dbPath = "/tmp/test-cli-git-traceability.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Traceable task", "--json"], dbPath)).stdout);
+    const commit = await runCli([
+      "link-commit",
+      task.id,
+      "abcdef1234567890",
+      "--message",
+      "Implement traceability",
+      "--files",
+      "src/db/task-commits.ts,src/cli/cli.test.ts",
+      "--json",
+    ], dbPath);
+    expect(commit.exitCode).toBe(0);
+
+    const ref = await runCli([
+      "link-ref",
+      task.id,
+      "task/local-git-pr-traceability",
+      "--type",
+      "branch",
+      "--url",
+      "https://github.com/hasna/todos/tree/task/local-git-pr-traceability",
+      "--json",
+    ], dbPath);
+    expect(ref.exitCode).toBe(0);
+
+    const verification = await runCli([
+      "record-verification",
+      task.id,
+      "bun test src/db/task-commits.test.ts",
+      "--status",
+      "passed",
+      "--summary",
+      "task commit tests passed",
+      "--json",
+    ], dbPath);
+    expect(verification.exitCode).toBe(0);
+
+    const traceResult = await runCli(["trace", task.id, "--json"], dbPath);
+    expect(traceResult.exitCode).toBe(0);
+    const trace = JSON.parse(traceResult.stdout);
+    expect(trace.commits[0].sha).toBe("abcdef1234567890");
+    expect(trace.commits[0].files_changed).toContain("src/db/task-commits.ts");
+    expect(trace.git_refs[0].name).toBe("task/local-git-pr-traceability");
+    expect(trace.verifications[0].status).toBe("passed");
+
+    const commitLookup = JSON.parse((await runCli(["find-commit", "abcdef12", "--json"], dbPath)).stdout);
+    expect(commitLookup.task_id).toBe(task.id);
+
+    const refLookup = JSON.parse((await runCli(["find-ref", "local-git-pr", "--json"], dbPath)).stdout);
+    expect(refLookup[0].task_id).toBe(task.id);
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
     const importPath = "/tmp/test-cli-plan-template-use.json";

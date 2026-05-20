@@ -333,6 +333,160 @@ exit 0
       console.log(chalk.green(`Linked commit ${sha.slice(0, 7)} to task ${taskId}`));
     });
 
+  program
+    .command("find-commit <sha>")
+    .description("Find which task explains a git commit SHA")
+    .action(async (sha: string) => {
+      const globalOpts = program.opts();
+      const { findTaskByCommit } = await import("../../db/task-commits.js");
+      const { getTask } = await import("../../db/tasks.js");
+      const result = findTaskByCommit(sha);
+      if (globalOpts.json) {
+        output(result, true);
+        return;
+      }
+      if (!result) {
+        console.log(chalk.dim(`No task linked to commit ${sha}.`));
+        return;
+      }
+      const task = getTask(result.task_id);
+      const taskLabel = task ? `${task.short_id || task.id.slice(0, 8)} ${task.title}` : result.task_id;
+      console.log(`${chalk.yellow(result.commit.sha.slice(0, 7))} -> ${chalk.cyan(taskLabel)}`);
+      if (result.commit.message) console.log(chalk.dim(`  ${result.commit.message}`));
+    });
+
+  program
+    .command("link-ref <task-id> <ref>")
+    .description("Link a git branch or pull request to a task")
+    .option("--type <type>", "Ref type: branch or pull_request", "branch")
+    .option("--url <url>", "Remote URL for the branch or pull request")
+    .option("--provider <name>", "Provider name, e.g. git or github")
+    .option("--metadata <json>", "Additional JSON metadata")
+    .action(async (taskId: string, ref: string, opts: { type?: string; url?: string; provider?: string; metadata?: string }) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      const { linkTaskGitRef } = await import("../../db/task-commits.js");
+      const refType = opts.type === "pr" ? "pull_request" : opts.type;
+      if (refType !== "branch" && refType !== "pull_request") {
+        console.error(chalk.red("--type must be branch, pr, or pull_request"));
+        process.exit(1);
+      }
+      let metadata: Record<string, unknown> | undefined;
+      if (opts.metadata) {
+        try {
+          metadata = JSON.parse(opts.metadata) as Record<string, unknown>;
+        } catch {
+          console.error(chalk.red("--metadata must be valid JSON"));
+          process.exit(1);
+        }
+      }
+      const gitRef = linkTaskGitRef({
+        task_id: resolvedId,
+        ref_type: refType,
+        name: ref,
+        url: opts.url,
+        provider: opts.provider,
+        metadata,
+      });
+      if (globalOpts.json) { output(gitRef, true); return; }
+      console.log(chalk.green(`Linked ${gitRef.ref_type} ${gitRef.name} to task ${taskId}`));
+    });
+
+  program
+    .command("find-ref <ref>")
+    .description("Find tasks linked to a git branch or pull request")
+    .action(async (ref: string) => {
+      const globalOpts = program.opts();
+      const { findTasksByGitRef } = await import("../../db/task-commits.js");
+      const { getTask } = await import("../../db/tasks.js");
+      const refs = findTasksByGitRef(ref);
+      if (globalOpts.json) {
+        output(refs, true);
+        return;
+      }
+      if (refs.length === 0) {
+        console.log(chalk.dim(`No tasks linked to ${ref}.`));
+        return;
+      }
+      for (const gitRef of refs) {
+        const task = getTask(gitRef.task_id);
+        const label = task ? `${task.short_id || task.id.slice(0, 8)} ${task.title}` : gitRef.task_id;
+        const url = gitRef.url ? chalk.dim(` ${gitRef.url}`) : "";
+        console.log(`${chalk.cyan(label)} <- ${gitRef.ref_type} ${chalk.yellow(gitRef.name)}${url}`);
+      }
+    });
+
+  program
+    .command("record-verification <task-id> <command>")
+    .description("Record a verification command and result for a task")
+    .option("--status <status>", "Verification status: passed, failed, or unknown", "unknown")
+    .option("--summary <text>", "Short output summary")
+    .option("--artifact <path>", "Artifact or log path")
+    .option("--agent <name>", "Agent that ran the command")
+    .action(async (taskId: string, command: string, opts: { status?: string; summary?: string; artifact?: string; agent?: string }) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
+        console.error(chalk.red("--status must be passed, failed, or unknown"));
+        process.exit(1);
+      }
+      const { addTaskVerification } = await import("../../db/task-commits.js");
+      const verification = addTaskVerification({
+        task_id: resolvedId,
+        command,
+        status: opts.status,
+        output_summary: opts.summary,
+        artifact_path: opts.artifact,
+        agent_id: opts.agent,
+      });
+      if (globalOpts.json) { output(verification, true); return; }
+      console.log(chalk.green(`Recorded ${verification.status} verification for task ${taskId}`));
+    });
+
+  program
+    .command("trace <task-id>")
+    .description("Show local git refs, commits, changed files, and verification commands for a task")
+    .action(async (taskId: string) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      const { getTaskTraceability } = await import("../../db/task-commits.js");
+      const { getTask } = await import("../../db/tasks.js");
+      const { listTaskFiles } = await import("../../db/task-files.js");
+      const task = getTask(resolvedId);
+      const trace = {
+        task,
+        ...getTaskTraceability(resolvedId),
+        files: listTaskFiles(resolvedId),
+      };
+      if (globalOpts.json) {
+        output(trace, true);
+        return;
+      }
+      console.log(chalk.bold(`Trace: ${task?.short_id || resolvedId.slice(0, 8)} ${task?.title || ""}\n`));
+      if (trace.git_refs.length > 0) {
+        console.log(chalk.bold("Git refs:"));
+        for (const ref of trace.git_refs) console.log(`  ${ref.ref_type} ${chalk.yellow(ref.name)}${ref.url ? ` ${chalk.dim(ref.url)}` : ""}`);
+      }
+      if (trace.commits.length > 0) {
+        console.log(chalk.bold("\nCommits:"));
+        for (const commit of trace.commits) console.log(`  ${chalk.yellow(commit.sha.slice(0, 7))} ${commit.message || ""}`);
+      }
+      if (trace.files.length > 0) {
+        console.log(chalk.bold("\nFiles:"));
+        for (const file of trace.files) console.log(`  [${file.status}] ${file.path}`);
+      }
+      if (trace.verifications.length > 0) {
+        console.log(chalk.bold("\nVerifications:"));
+        for (const verification of trace.verifications) {
+          const summary = verification.output_summary ? chalk.dim(` — ${verification.output_summary}`) : "";
+          console.log(`  ${verification.status} ${verification.command}${summary}`);
+        }
+      }
+      if (trace.git_refs.length === 0 && trace.commits.length === 0 && trace.files.length === 0 && trace.verifications.length === 0) {
+        console.log(chalk.dim("No local traceability links recorded."));
+      }
+    });
+
   // hook install/uninstall
   const hookCmd = program.command("hook").description("Manage git hooks for auto-linking commits to tasks");
 
