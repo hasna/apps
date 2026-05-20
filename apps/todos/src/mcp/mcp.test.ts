@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
-import { createTask, getTask, listTasks, completeTask } from "../db/tasks.js";
+import { addDependency, createTask, getTask, listTasks, completeTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
 import { addComment, listComments } from "../db/comments.js";
 import { searchTasks } from "../lib/search.js";
@@ -180,6 +180,23 @@ describe("MCP tool wrappers", () => {
     const updated = getTask(task.id, db)!;
     expect(updated.status).toBe("in_progress");
     expect(updated.locked_by).toBe("mcp");
+  });
+
+  it("get_task_dependencies returns the transitive dependency tree for agent planning", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const taskA = createTask({ title: "Task A" }, db);
+    const taskB = createTask({ title: "Task B" }, db);
+    const taskC = createTask({ title: "Task C" }, db);
+    addDependency(taskA.id, taskB.id, db);
+    addDependency(taskB.id, taskC.id, db);
+
+    const result = await callCapturedTool(tools, "get_task_dependencies", {
+      task_id: taskA.id,
+      direction: "upstream",
+    });
+
+    expect(result.content[0]!.text).toContain("Task B");
+    expect(result.content[0]!.text).toContain("Task C");
   });
 
   it("update_task fetches the current version and maps deadline/estimate aliases", async () => {

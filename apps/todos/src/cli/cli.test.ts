@@ -2,6 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 
+async function runCli(args: string[], dbPath: string) {
+  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+    cwd: import.meta.dir + "/../..",
+    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
@@ -250,6 +263,29 @@ describe("CLI integration", () => {
 
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync("/tmp/test-cli-ready.db"); } catch {}
+  });
+
+  it("should expose a dependency graph through deps --graph --json", async () => {
+    const dbPath = "/tmp/test-cli-deps-graph.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const taskA = JSON.parse((await runCli(["add", "Task A", "--json"], dbPath)).stdout);
+    const taskB = JSON.parse((await runCli(["add", "Task B", "--json"], dbPath)).stdout);
+    const taskC = JSON.parse((await runCli(["add", "Task C", "--json"], dbPath)).stdout);
+
+    expect((await runCli(["deps", taskA.id, "--needs", taskB.id], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["deps", taskB.id, "--needs", taskC.id], dbPath)).exitCode).toBe(0);
+
+    const graphResult = await runCli(["deps", taskA.id, "--graph", "--json"], dbPath);
+    expect(graphResult.exitCode).toBe(0);
+    const graph = JSON.parse(graphResult.stdout);
+    expect(graph.task.id).toBe(taskA.id);
+    expect(graph.task.is_blocked).toBe(true);
+    expect(graph.depends_on[0].task.id).toBe(taskB.id);
+    expect(graph.depends_on[0].depends_on[0].task.id).toBe(taskC.id);
+
+    try { unlinkSync(dbPath); } catch {}
   });
 
   it("should run sprint command", async () => {
