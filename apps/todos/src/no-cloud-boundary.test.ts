@@ -43,13 +43,18 @@ describe("OSS no-cloud boundary", () => {
     expect(sdkPackageJson.homepage).toBe("https://github.com/hasna/todos");
     expect(sdkPackageJson.bugs.url).toBe("https://github.com/hasna/todos/issues");
 
-    const dependencyNames = Object.keys(packageJson.dependencies ?? {});
+    const dependencyNames = [
+      ...Object.keys(packageJson.dependencies ?? {}),
+      ...Object.keys(packageJson.devDependencies ?? {}),
+      ...Object.keys(sdkPackageJson.dependencies ?? {}),
+      ...Object.keys(sdkPackageJson.devDependencies ?? {}),
+    ];
     for (const forbidden of ["aws", "cloudflare", "stripe", "cerebras", "hasnastudio", "platform-todos"]) {
       expect(dependencyNames.some((name) => name.toLowerCase().includes(forbidden))).toBe(false);
     }
   });
 
-  test("public docs and CLI install paths use Bun and the hasna/todos repo", () => {
+  test("public docs, package surfaces, and scripts stay Bun-only and secret-free", () => {
     const offenders: string[] = [];
     const forbidden = [
       /github\.com\/hasna\/open-todos/i,
@@ -58,11 +63,20 @@ describe("OSS no-cloud boundary", () => {
       /npm install @hasna\/todos-sdk/i,
       /bun add -g @hasna\/todos/i,
     ];
+    const secretLike = [
+      /AKIA[0-9A-Z]{16}/,
+      /ASIA[0-9A-Z]{16}/,
+      /-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/,
+      /[A-Za-z0-9_]*(API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\s*=\s*['"][^'"]{12,}/,
+    ];
 
     for (const file of packageSurfaceFiles(root)) {
       const text = readFileSync(file, "utf8");
       for (const pattern of forbidden) {
         if (pattern.test(text)) offenders.push(`${relative(root, file)}: ${pattern}`);
+      }
+      for (const pattern of secretLike) {
+        if (pattern.test(text)) offenders.push(`${relative(root, file)}: secret-like ${pattern}`);
       }
     }
 
@@ -87,7 +101,7 @@ function runtimeSourceFiles(dir: string): string[] {
 
 function packageSurfaceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
-    if ([".git", "node_modules", "dist", "coverage"].includes(entry)) return [];
+    if ([".git", "node_modules", "dist", "coverage", "dashboard"].includes(entry)) return [];
     const path = join(dir, entry);
     const stats = statSync(path);
     if (stats.isDirectory()) return packageSurfaceFiles(path);
