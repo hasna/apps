@@ -31,8 +31,8 @@ TODOS_PROFILE=full       # all 65+ tools
 
 High-volume MCP tools are compact by default. Pass `detail: "full"` to
 `get_task`, `get_status`, `get_context`, `bootstrap`, or `task_context` when you
-need the larger payload. Set `TODOS_MCP_TOKEN_TELEMETRY=1` to append approximate
-response token counts for profiling.
+need the larger payload. Set `TODOS_MCP_TOKEN_DIAGNOSTICS=1` to append local
+approximate response token counts for profiling.
 
 ## Recommended Agent Session Pattern
 

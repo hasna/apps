@@ -99,21 +99,26 @@ describe("autoAssignTask", () => {
     expect(result.assigned_to).toBe(a2.id);
   });
 
-  it("should use cerebras method when CEREBRAS_API_KEY is set", async () => {
-    // We can't actually call the API, but we can verify the code path is attempted
-    // The call will fail due to invalid key, falling back to capability_match
+  it("should ignore hosted provider env vars and stay local-only", async () => {
+    const originalFetch = globalThis.fetch;
     const originalKey = process.env["CEREBRAS_API_KEY"];
-    process.env["CEREBRAS_API_KEY"] = "invalid-key-for-test";
+    let networkCalls = 0;
+    process.env["CEREBRAS_API_KEY"] = "must-not-trigger-network";
+    globalThis.fetch = (async () => {
+      networkCalls += 1;
+      throw new Error("auto assignment must stay local-only");
+    }) as typeof fetch;
 
     try {
-      const agent = registerAgent({ name: "cerebrastest", role: "agent", status: "active", capabilities: ["general"] }, db);
-      const task = createTask({ title: "API test", tags: ["general"] }, db);
+      const agent = registerAgent({ name: "localmatch", role: "agent", status: "active", capabilities: ["general"] }, db);
+      const task = createTask({ title: "Local assignment", tags: ["general"] }, db);
 
       const result = await autoAssignTask(task.id, db);
-      // The API call will fail, so it falls back to capability_match
       expect(result.assigned_to).toBe(agent.id);
-      expect(result.method === "capability_match" || result.method === "cerebras");
+      expect(result.method).toBe("capability_match");
+      expect(networkCalls).toBe(0);
     } finally {
+      globalThis.fetch = originalFetch;
       if (originalKey === undefined) {
         delete process.env["CEREBRAS_API_KEY"];
       } else {
