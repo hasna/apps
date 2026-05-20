@@ -8,7 +8,7 @@ Universal task management for AI coding agents - CLI + MCP server + interactive 
 ## Install
 
 ```bash
-npm install -g @hasna/todos
+bun install -g @hasna/todos
 ```
 
 ## CLI Usage
@@ -34,6 +34,27 @@ The same workflow is available to MCP clients through
 `get_blocked_tasks`. Dependency writes reject cycles, `ready` omits locked or
 blocked pending tasks, and startup schema repair recreates the local dependency
 table for older databases.
+
+## Local Plan Templates
+
+Reusable plan templates also live in the local SQLite database. They can create
+one task or a full ordered plan with dependencies, variables, priorities, tags,
+and descriptions:
+
+```bash
+todos template-init
+todos template-preview <template-id> --var name=api
+todos templates --use <template-id> --var name=api
+todos template-export <template-id> > plan-template.json
+todos template-import plan-template.json
+```
+
+`todos templates --use` creates every task in a multi-task template and wires
+its local dependency graph, so agents can immediately run `todos ready`,
+`todos blocked`, or `todos deps <task-id> --graph` against the generated plan.
+The same local-only workflow is available to MCP clients through
+`create_template`, `list_templates`, `create_task_from_template`,
+`preview_template`, `export_template`, and `import_template`.
 
 ## MCP Server
 
