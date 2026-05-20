@@ -44,6 +44,7 @@ import { createTaskList, deleteTaskList } from "./task-lists.js";
 import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
 import { createPlan } from "./plans.js";
+import { ensureSchema } from "./schema.js";
 
 let db: Database;
 
@@ -482,6 +483,19 @@ describe("dependencies", () => {
     expect(() => addDependency(a.id, "non-existent", db)).toThrow(
       TaskNotFoundError,
     );
+  });
+
+  it("should repair dependency storage when old local databases are missing the table", () => {
+    db.run("DROP TABLE task_dependencies");
+
+    ensureSchema(db);
+
+    const a = createTask({ title: "A" }, db);
+    const b = createTask({ title: "B" }, db);
+    addDependency(b.id, a.id, db);
+
+    const full = getTaskWithRelations(b.id, db);
+    expect(full!.dependencies.map((dependency) => dependency.id)).toEqual([a.id]);
   });
 });
 

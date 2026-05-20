@@ -17,6 +17,24 @@ npm install -g @hasna/todos
 todos --help
 ```
 
+## Local Dependency Workflows
+
+Dependencies are stored in the local SQLite database and never require hosted
+services. Use them to keep agents from starting blocked work:
+
+```bash
+todos deps <task-id> --needs <blocking-task-id>
+todos deps <task-id> --graph
+todos blocked
+todos ready
+```
+
+The same workflow is available to MCP clients through
+`add_task_dependency`, `remove_task_dependency`, `get_task_dependencies`, and
+`get_blocked_tasks`. Dependency writes reject cycles, `ready` omits locked or
+blocked pending tasks, and startup schema repair recreates the local dependency
+table for older databases.
+
 ## MCP Server
 
 ```bash

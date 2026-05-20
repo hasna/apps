@@ -10,8 +10,9 @@ import type { Task } from "../../types/index.js";
 import {
   getTask, updateTask, createTask, listTasks,
   startTask, completeTask, setTaskStatus, setTaskPriority,
-  addDependency, removeDependency, getTaskDependencies,
+  addDependency, removeDependency, getTaskGraph,
 } from "../../db/tasks.js";
+import type { TaskGraph } from "../../db/tasks.js";
 import {
   createProject, listProjects, getProject, updateProject, deleteProject,
 } from "../../db/projects.js";
@@ -49,6 +50,20 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
 
   function updateWithOptionalVersion(taskId: string, updates: Record<string, unknown>, version?: number): Task {
     return updateTask(taskId, { ...updates, version: versionFor(taskId, version) } as Parameters<typeof updateTask>[1]);
+  }
+
+  function formatDependencyGraph(graph: TaskGraph): string {
+    const lines: string[] = [];
+    const visit = (node: TaskGraph, depth: number, edge: "root" | "depends on" | "blocks") => {
+      const prefix = "  ".repeat(depth);
+      const edgeLabel = edge === "root" ? "" : `${edge}: `;
+      const blocked = node.task.is_blocked ? " blocked" : "";
+      lines.push(`${prefix}${edgeLabel}${node.task.short_id || node.task.id.slice(0, 8)} [${node.task.status}] ${node.task.title}${blocked}`);
+      for (const dependency of node.depends_on) visit(dependency, depth + 1, "depends on");
+      for (const dependent of node.blocks) visit(dependent, depth + 1, "blocks");
+    };
+    visit(graph, 0, "root");
+    return lines.join("\n");
   }
 
   // === TASK STATE ===
@@ -241,24 +256,17 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, direction }) => {
         try {
-          const { getTaskDependencies, getTaskDependents, getTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
-          const upstream = direction !== "downstream"
-            ? getTaskDependencies(resolvedId).map((dep: any) => {
-                const dependency = getTask(dep.depends_on);
-                return { direction: "upstream", task_id: dep.depends_on, status: dependency?.status || "unknown" };
-              })
-            : [];
-          const downstream = direction !== "upstream"
-            ? getTaskDependents(resolvedId).map((dep: any) => {
-                const dependent = getTask(dep.task_id);
-                return { direction: "downstream", task_id: dep.task_id, status: dependent?.status || "unknown" };
-              })
-            : [];
-          const deps = [...upstream, ...downstream];
-          if (deps.length === 0) return { content: [{ type: "text" as const, text: "No dependencies." }] };
-          const lines = deps.map((d: any) => `[${d.direction}] ${d.task_id.slice(0,8)} (${d.status})`);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          const graphDirection = direction === "upstream"
+            ? "up"
+            : direction === "downstream"
+              ? "down"
+              : "both";
+          const graph = getTaskGraph(resolvedId, graphDirection);
+          if (graph.depends_on.length === 0 && graph.blocks.length === 0) {
+            return { content: [{ type: "text" as const, text: "No dependencies." }] };
+          }
+          return { content: [{ type: "text" as const, text: formatDependencyGraph(graph) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

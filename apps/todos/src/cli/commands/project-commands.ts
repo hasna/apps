@@ -80,9 +80,11 @@ export function registerProjectCommands(program: Command) {
     .description("Manage task dependencies")
     .option("--needs <dep-id>", "Add dependency (this task needs dep-id)")
     .option("--remove <dep-id>", "Remove dependency")
+    .option("--graph", "Show the dependency graph instead of direct edges")
+    .option("--direction <direction>", "Graph direction: up, down, or both", "both")
     .action(async (id: string, opts) => {
       const globalOpts = program.opts();
-      const { addDependency, removeDependency, getTaskWithRelations } = await import("../../db/tasks.js");
+      const { addDependency, removeDependency, getTaskGraph, getTaskWithRelations } = await import("../../db/tasks.js");
       const resolvedId = resolveTaskId(id);
 
       if (opts.needs) {
@@ -106,6 +108,26 @@ export function registerProjectCommands(program: Command) {
         } else {
           console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
         }
+      } else if (opts.graph) {
+        const direction = opts.direction === "up" || opts.direction === "down" || opts.direction === "both"
+          ? opts.direction
+          : "both";
+        const graph = getTaskGraph(resolvedId, direction);
+        if (globalOpts.json) {
+          output(graph, true);
+          return;
+        }
+
+        const printNode = (node: typeof graph, depth: number, edge: "root" | "depends on" | "blocks") => {
+          const indent = "  ".repeat(depth);
+          const marker = edge === "root" ? "" : `${edge}: `;
+          const blocked = node.task.is_blocked ? chalk.red(" blocked") : "";
+          console.log(`${indent}${marker}${chalk.cyan(node.task.short_id || node.task.id.slice(0, 8))} ${node.task.title}${chalk.dim(` [${node.task.status}]`)}${blocked}`);
+          for (const dep of node.depends_on) printNode(dep, depth + 1, "depends on");
+          for (const dependent of node.blocks) printNode(dependent, depth + 1, "blocks");
+        };
+
+        printNode(graph, 0, "root");
       } else {
         // Show dependencies
         const task = getTaskWithRelations(resolvedId);

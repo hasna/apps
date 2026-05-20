@@ -98,6 +98,18 @@ export function ensureSchema(db: Database): void {
       tag TEXT NOT NULL, PRIMARY KEY (task_id, tag)
     )`);
 
+  ensureTable("task_dependencies", `
+    CREATE TABLE task_dependencies (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      depends_on TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      external_project_id TEXT,
+      external_task_id TEXT,
+      PRIMARY KEY (task_id, depends_on),
+      CHECK (task_id != depends_on)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_dependencies_task ON task_dependencies(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_dependencies_depends_on ON task_dependencies(depends_on)");
+
   ensureTable("task_history", `
     CREATE TABLE task_history (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
