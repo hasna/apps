@@ -1,13 +1,94 @@
 import type { Database } from "bun:sqlite";
-import type { Machine, MachineRow } from "../types/index.js";
+import type {
+  Machine,
+  MachinePathIssue,
+  MachineRow,
+  MachineTopologyDiagnostics,
+  MachineTopologyMetadata,
+  MachineTopologySummary,
+} from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
-import { hostname as osHostname, platform as osPlatform } from "node:os";
+import { existsSync } from "node:fs";
+import { hostname as osHostname, platform as osPlatform, arch as osArch } from "node:os";
+import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+
+export interface MachineTopologyOptions {
+  hostname?: string;
+  platform?: string;
+  ssh_address?: string;
+  primary?: boolean;
+  tailscale_name?: string;
+  tailscale_ip?: string;
+  lan_address?: string;
+  workspace_path?: string;
+  git_root?: string;
+  arch?: string;
+}
+
+interface TopologyPathRow {
+  project_id: string;
+  project_name: string;
+  machine_id: string;
+  machine_name: string;
+  path: string;
+}
+
+function parseMetadata(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 function rowToMachine(row: MachineRow): Machine {
   return {
     ...row,
     is_primary: !!row.is_primary,
-    metadata: row.metadata ? JSON.parse(row.metadata) : {},
+    metadata: parseMetadata(row.metadata),
+  };
+}
+
+function discoverGitRoot(workspacePath: string): string | undefined {
+  const result = spawnSync("git", ["-C", workspacePath, "rev-parse", "--show-toplevel"], {
+    encoding: "utf-8",
+    timeout: 2000,
+  });
+  if (result.status !== 0) return undefined;
+  const root = result.stdout.trim();
+  return root || undefined;
+}
+
+function topologyMetadata(input: MachineTopologyOptions, existing: Record<string, unknown> = {}): Record<string, unknown> {
+  const next = { ...existing };
+  const workspacePath = input.workspace_path ? resolve(input.workspace_path) : undefined;
+  const entries: MachineTopologyMetadata = {
+    tailscale_name: input.tailscale_name,
+    tailscale_ip: input.tailscale_ip,
+    lan_address: input.lan_address,
+    workspace_path: workspacePath,
+    git_root: input.git_root ?? (workspacePath ? discoverGitRoot(workspacePath) : undefined),
+    arch: input.arch,
+  };
+
+  for (const [key, value] of Object.entries(entries)) {
+    if (value !== undefined && value !== "") next[key] = value;
+  }
+  return next;
+}
+
+function extractTopology(machine: Machine): MachineTopologyMetadata {
+  const metadata = machine.metadata;
+  return {
+    tailscale_name: typeof metadata["tailscale_name"] === "string" ? metadata["tailscale_name"] : undefined,
+    tailscale_ip: typeof metadata["tailscale_ip"] === "string" ? metadata["tailscale_ip"] : undefined,
+    lan_address: typeof metadata["lan_address"] === "string" ? metadata["lan_address"] : undefined,
+    workspace_path: typeof metadata["workspace_path"] === "string" ? metadata["workspace_path"] : undefined,
+    git_root: typeof metadata["git_root"] === "string" ? metadata["git_root"] : undefined,
+    arch: typeof metadata["arch"] === "string" ? metadata["arch"] : undefined,
   };
 }
 
@@ -83,16 +164,24 @@ export function listMachines(db?: Database, includeArchived = false): Machine[] 
  */
 export function registerMachine(
   name: string,
-  opts: { hostname?: string; ssh_address?: string; primary?: boolean },
+  opts: MachineTopologyOptions,
   db?: Database,
 ): Machine {
   const d = db || getDatabase();
   const existing = d.query("SELECT * FROM machines WHERE name = ?").get(name) as MachineRow | null;
+  const metadata = topologyMetadata(opts, parseMetadata(existing?.metadata ?? null));
 
   if (existing) {
     d.run(
-      "UPDATE machines SET hostname = ?, ssh_address = ?, last_seen_at = ? WHERE id = ?",
-      [opts.hostname ?? existing.hostname, opts.ssh_address ?? existing.ssh_address, now(), existing.id],
+      "UPDATE machines SET hostname = ?, platform = ?, ssh_address = ?, last_seen_at = ?, metadata = ? WHERE id = ?",
+      [
+        opts.hostname ?? existing.hostname,
+        opts.platform ?? existing.platform,
+        opts.ssh_address ?? existing.ssh_address,
+        now(),
+        JSON.stringify(metadata),
+        existing.id,
+      ],
     );
     if (opts.primary) {
       setPrimaryMachine(name, d);
@@ -103,11 +192,11 @@ export function registerMachine(
   const id = uuid();
   const ts = now();
   const host = opts.hostname || osHostname();
-  const plat = osPlatform();
+  const plat = opts.platform || osPlatform();
 
   d.run(
-    "INSERT INTO machines (id, name, hostname, platform, ssh_address, last_seen_at, is_primary, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, '{}', ?)",
-    [id, name, host, plat, opts.ssh_address ?? null, ts, ts],
+    "INSERT INTO machines (id, name, hostname, platform, ssh_address, last_seen_at, is_primary, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+    [id, name, host, plat, opts.ssh_address ?? null, ts, JSON.stringify(metadata), ts],
   );
 
   if (opts.primary) {
@@ -115,6 +204,145 @@ export function registerMachine(
   }
 
   return getMachine(id, d)!;
+}
+
+export function updateMachineHeartbeat(
+  idOrName?: string,
+  opts: MachineTopologyOptions = {},
+  db?: Database,
+): Machine {
+  const d = db || getDatabase();
+  const key = idOrName || process.env["TODOS_MACHINE_NAME"] || osHostname();
+  const row = d.query("SELECT * FROM machines WHERE id = ? OR name = ?").get(key, key) as MachineRow | null;
+  if (!row) {
+    return registerMachine(key, {
+      hostname: opts.hostname ?? osHostname(),
+      platform: opts.platform ?? osPlatform(),
+      arch: opts.arch ?? osArch(),
+      ...opts,
+    }, d);
+  }
+
+  const metadata = topologyMetadata({ arch: osArch(), ...opts }, parseMetadata(row.metadata));
+  const ts = now();
+  d.run(
+    "UPDATE machines SET hostname = ?, platform = ?, ssh_address = ?, last_seen_at = ?, metadata = ? WHERE id = ?",
+    [
+      opts.hostname ?? row.hostname ?? osHostname(),
+      opts.platform ?? row.platform ?? osPlatform(),
+      opts.ssh_address ?? row.ssh_address,
+      ts,
+      JSON.stringify(metadata),
+      row.id,
+    ],
+  );
+  return getMachine(row.id, d)!;
+}
+
+export function getMachineTopologyDiagnostics(
+  opts: { stale_minutes?: number; include_archived?: boolean } = {},
+  db?: Database,
+  at: Date = new Date(),
+): MachineTopologyDiagnostics {
+  const d = db || getDatabase();
+  const staleAfter = opts.stale_minutes ?? 30;
+  const generatedAt = at.toISOString();
+  const localMachine = getOrCreateLocalMachine(d);
+  const machines = listMachines(d, opts.include_archived ?? true);
+  const machineById = new Map(machines.map((machine) => [machine.id, machine]));
+
+  const summaries: MachineTopologySummary[] = machines.map((machine) => {
+    const lastSeenMs = Date.parse(machine.last_seen_at);
+    const staleMinutes = Number.isFinite(lastSeenMs)
+      ? Math.max(0, Math.floor((at.getTime() - lastSeenMs) / 60_000))
+      : Number.POSITIVE_INFINITY;
+    return {
+      id: machine.id,
+      name: machine.name,
+      hostname: machine.hostname,
+      platform: machine.platform,
+      ssh_address: machine.ssh_address,
+      is_primary: machine.is_primary,
+      archived_at: machine.archived_at,
+      last_seen_at: machine.last_seen_at,
+      stale: !machine.archived_at && staleMinutes > staleAfter,
+      stale_minutes: Number.isFinite(staleMinutes) ? staleMinutes : staleAfter + 1,
+      topology: extractTopology(machine),
+    };
+  });
+
+  const pathRows = d.query(
+    `SELECT p.id AS project_id, p.name AS project_name, pmp.machine_id, m.name AS machine_name, pmp.path
+     FROM project_machine_paths pmp
+     JOIN projects p ON p.id = pmp.project_id
+     LEFT JOIN machines m ON m.id = pmp.machine_id
+     ORDER BY p.name, pmp.machine_id`,
+  ).all() as TopologyPathRow[];
+  const projectRows = d.query("SELECT id, name, path FROM projects ORDER BY name").all() as Array<{ id: string; name: string; path: string }>;
+  const rowsByProject = new Map<string, TopologyPathRow[]>();
+  for (const row of pathRows) {
+    const rows = rowsByProject.get(row.project_id) ?? [];
+    rows.push({ ...row, machine_name: row.machine_name ?? row.machine_id });
+    rowsByProject.set(row.project_id, rows);
+  }
+
+  const pathIssues: MachinePathIssue[] = [];
+  for (const project of projectRows) {
+    const rows = rowsByProject.get(project.id) ?? [];
+    const localRow = rows.find((row) => row.machine_id === localMachine.id);
+    if (!localRow) {
+      pathIssues.push({
+        type: "missing_local_path",
+        project_id: project.id,
+        project_name: project.name,
+        message: `No machine-local path override is registered for ${project.name} on ${localMachine.name}`,
+      });
+    }
+
+    const distinctPaths = [...new Set(rows.map((row) => row.path))];
+    if (distinctPaths.length > 1) {
+      pathIssues.push({
+        type: "path_mismatch",
+        project_id: project.id,
+        project_name: project.name,
+        paths: rows.map((row) => ({ machine_id: row.machine_id, machine_name: row.machine_name, path: row.path })),
+        message: `${project.name} has ${distinctPaths.length} different machine-local paths`,
+      });
+    }
+
+    if (localRow && !existsSync(localRow.path)) {
+      pathIssues.push({
+        type: "path_missing",
+        project_id: project.id,
+        project_name: project.name,
+        machine_id: localMachine.id,
+        machine_name: localMachine.name,
+        path: localRow.path,
+        message: `Local path does not exist on this machine: ${localRow.path}`,
+      });
+    }
+
+    if (!localRow && project.path && machineById.has(localMachine.id) && !existsSync(project.path)) {
+      pathIssues.push({
+        type: "path_missing",
+        project_id: project.id,
+        project_name: project.name,
+        machine_id: localMachine.id,
+        machine_name: localMachine.name,
+        path: project.path,
+        message: `Project path does not exist on this machine: ${project.path}`,
+      });
+    }
+  }
+
+  return {
+    generated_at: generatedAt,
+    stale_after_minutes: staleAfter,
+    local_machine: localMachine,
+    machines: summaries,
+    stale_machines: summaries.filter((summary) => summary.stale),
+    path_issues: pathIssues,
+  };
 }
 
 /**

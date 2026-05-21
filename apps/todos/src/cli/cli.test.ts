@@ -1408,4 +1408,51 @@ describe("CLI integration", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("should register machines with topology metadata and report diagnostics", async () => {
+    const dbPath = "/tmp/test-cli-machines-topology.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const registered = await runCli([
+      "machines",
+      "register",
+      "spark01",
+      "--hostname",
+      "spark01",
+      "--ssh",
+      "hasna@spark01",
+      "--tailscale-name",
+      "spark01.tailnet",
+      "--tailscale-ip",
+      "100.64.0.10",
+      "--lan-address",
+      "192.168.8.10",
+      "--workspace",
+      "/home/hasna/workspace",
+      "--json",
+    ], dbPath);
+    expect(registered.exitCode).toBe(0);
+    expect(JSON.parse(registered.stdout).metadata).toMatchObject({
+      tailscale_name: "spark01.tailnet",
+      tailscale_ip: "100.64.0.10",
+      lan_address: "192.168.8.10",
+      workspace_path: "/home/hasna/workspace",
+    });
+
+    const heartbeat = await runCli(["machines", "heartbeat", "spark01", "--workspace", "/home/hasna/workspace", "--json"], dbPath);
+    expect(heartbeat.exitCode).toBe(0);
+    expect(JSON.parse(heartbeat.stdout).name).toBe("spark01");
+
+    const topology = await runCli(["machines", "topology", "--json"], dbPath);
+    expect(topology.exitCode).toBe(0);
+    const payload = JSON.parse(topology.stdout);
+    expect(payload.machines.find((m: { name: string }) => m.name === "spark01").topology).toMatchObject({
+      tailscale_name: "spark01.tailnet",
+      tailscale_ip: "100.64.0.10",
+      lan_address: "192.168.8.10",
+      workspace_path: "/home/hasna/workspace",
+    });
+    try { unlinkSync(dbPath); } catch {}
+  });
 });

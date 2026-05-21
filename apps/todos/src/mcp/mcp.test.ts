@@ -18,6 +18,7 @@ import { registerAgentTools } from "./tools/agents.js";
 import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
+import { registerMachineTools } from "./tools/machines.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -1091,6 +1092,28 @@ describe("MCP tool wrappers", () => {
     const doctor = await callCapturedTool(tools, "run_doctor", { apply: false });
     expect(doctor.content[0]!.text).toContain("\"dry_run\": true");
     expect(doctor.content[0]!.text).toContain("migration_level");
+  });
+
+  it("machine tools expose heartbeat and topology diagnostics", async () => {
+    const tools = captureTools(registerMachineTools);
+    await callCapturedTool(tools, "machines_register", {
+      name: "spark02",
+      hostname: "spark02",
+      tailscale_name: "spark02.tailnet",
+      tailscale_ip: "100.64.0.11",
+      lan_address: "192.168.8.11",
+      workspace_path: "/home/hasna/workspace",
+    });
+
+    const heartbeat = await callCapturedTool(tools, "machines_heartbeat", {
+      name: "spark02",
+      workspace_path: "/home/hasna/workspace",
+    });
+    expect(heartbeat.content[0]!.text).toContain("spark02");
+
+    const topology = await callCapturedTool(tools, "machines_topology", { stale_minutes: 30 });
+    expect(topology.content[0]!.text).toContain("spark02");
+    expect(topology.content[0]!.text).toContain("100.64.0.11");
   });
 
   it("auto get_stale_tasks accepts MCP hour and minute parameters", async () => {

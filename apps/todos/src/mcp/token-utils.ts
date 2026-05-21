@@ -266,9 +266,11 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
   machines: [
     "machines_archive",
     "machines_delete",
+    "machines_heartbeat",
     "machines_list",
     "machines_register",
     "machines_set_primary",
+    "machines_topology",
     "machines_unarchive",
   ],
   maintenance: ["extract_todos", "get_sla_breaches", "notify_upcoming_deadlines", "run_doctor", "score_task"],

@@ -137,6 +137,51 @@ export interface Machine {
   created_at: string;
 }
 
+export interface MachineTopologyMetadata {
+  tailscale_name?: string;
+  tailscale_ip?: string;
+  lan_address?: string;
+  workspace_path?: string;
+  git_root?: string;
+  arch?: string;
+}
+
+export interface MachineTopologySummary {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  ssh_address: string | null;
+  is_primary: boolean;
+  archived_at: string | null;
+  last_seen_at: string;
+  stale: boolean;
+  stale_minutes: number;
+  topology: MachineTopologyMetadata;
+}
+
+export type MachinePathIssueType = "missing_local_path" | "path_mismatch" | "path_missing";
+
+export interface MachinePathIssue {
+  type: MachinePathIssueType;
+  project_id: string;
+  project_name: string;
+  machine_id?: string;
+  machine_name?: string;
+  path?: string;
+  paths?: Array<{ machine_id: string; machine_name: string; path: string }>;
+  message: string;
+}
+
+export interface MachineTopologyDiagnostics {
+  generated_at: string;
+  stale_after_minutes: number;
+  local_machine: Machine | null;
+  machines: MachineTopologySummary[];
+  stale_machines: MachineTopologySummary[];
+  path_issues: MachinePathIssue[];
+}
+
 export interface MachineRow {
   id: string;
   name: string;

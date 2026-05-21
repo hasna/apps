@@ -327,7 +327,27 @@ export { acquireLock, releaseLock, checkLock, cleanExpiredLocks } from "./db/loc
 export type { ResourceLock } from "./db/locks.js";
 
 // Machines
-export { getOrCreateLocalMachine, getMachineId, resetMachineId, getMachine, getMachineByName, listMachines, deleteMachine } from "./db/machines.js";
+export {
+  getOrCreateLocalMachine,
+  getMachineId,
+  resetMachineId,
+  getMachine,
+  getMachineByName,
+  listMachines,
+  registerMachine,
+  updateMachineHeartbeat,
+  getMachineTopologyDiagnostics,
+  deleteMachine,
+} from "./db/machines.js";
+export type {
+  MachineTopologyOptions,
+} from "./db/machines.js";
+export type {
+  MachinePathIssue,
+  MachineTopologyDiagnostics,
+  MachineTopologyMetadata,
+  MachineTopologySummary,
+} from "./types/index.js";
 
 // Orgs
 export { createOrg, getOrg, getOrgByName, listOrgs, updateOrg, deleteOrg } from "./db/orgs.js";

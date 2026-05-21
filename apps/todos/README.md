@@ -33,6 +33,25 @@ MCP clients can use `bootstrap_project` for the same local-only workflow. The
 command is idempotent, so running it again refreshes machine-local paths without
 duplicating projects, task lists, or source records.
 
+## Local Machine Topology
+
+Machine registry state stays in local SQLite. Machines can record identity,
+last-seen heartbeats, workspace paths, git roots, and user-provided Tailscale
+or LAN addresses without probing the network:
+
+```bash
+todos machines register spark01 --ssh hasna@spark01 --tailscale-name spark01.tailnet --tailscale-ip 100.64.0.10 --lan-address 192.168.8.10 --workspace ~/workspace
+todos machines heartbeat spark01 --workspace ~/workspace
+todos machines topology --json
+todos projects-path set <project-id> ~/workspace/my-project
+```
+
+`todos machines topology` reports stale machines, missing local path overrides,
+missing local paths, and projects whose machine-local paths differ across
+registered machines. MCP clients can use `machines_register`,
+`machines_heartbeat`, `machines_topology`, and `machines_list` for the same
+offline diagnostics.
+
 ## Local Workspace Trust
 
 Workspace trust profiles live in `~/.hasna/todos/config.json` and keep agent
