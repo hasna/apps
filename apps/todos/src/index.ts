@@ -451,6 +451,29 @@ export {
 
 // Dispatch engine
 export { executeDispatch, runDueDispatches, dispatchToMultiple } from "./lib/dispatch.js";
+export {
+  addTaskRunArtifact,
+  addTaskRunCommand,
+  addTaskRunEvent,
+  addTaskRunFile,
+  finishTaskRun,
+  getTaskRun,
+  getTaskRunLedger,
+  listTaskRuns,
+  redactEvidenceText,
+  resolveTaskRunId,
+  startTaskRun,
+} from "./db/task-runs.js";
+export type {
+  TaskRun,
+  TaskRunArtifact,
+  TaskRunCommand,
+  TaskRunCommandStatus,
+  TaskRunEvent,
+  TaskRunEventType,
+  TaskRunLedger,
+  TaskRunStatus,
+} from "./db/task-runs.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

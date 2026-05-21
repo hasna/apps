@@ -351,6 +351,63 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should record a local run ledger with command, file, artifact, and finish evidence", async () => {
+    const dbPath = "/tmp/test-cli-run-ledger.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Run ledger task", "--json"], dbPath)).stdout);
+    const started = await runCli([
+      "runs",
+      "start",
+      task.id,
+      "--agent",
+      "codex",
+      "--title",
+      "Local ledger",
+      "--claim",
+      "--json",
+    ], dbPath);
+    expect(started.exitCode).toBe(0);
+    const run = JSON.parse(started.stdout);
+    expect(run.status).toBe("running");
+
+    expect((await runCli(["runs", "event", run.id, "comment", "Captured progress", "--agent", "codex", "--json"], dbPath)).exitCode).toBe(0);
+    expect((await runCli([
+      "runs",
+      "command",
+      run.id,
+      "bun test src/db/task-runs.test.ts",
+      "--status",
+      "passed",
+      "--exit-code",
+      "0",
+      "--summary",
+      "run ledger tests passed",
+      "--artifact",
+      "logs/run-ledger.txt",
+      "--json",
+    ], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["runs", "file", run.id, "src/db/task-runs.ts", "--status", "modified", "--json"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["runs", "artifact", run.id, "logs/run-ledger.txt", "--type", "log", "--description", "Focused test output", "--json"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["runs", "finish", run.id, "--status", "completed", "--summary", "done", "--json"], dbPath)).exitCode).toBe(0);
+
+    const ledgerResult = await runCli(["runs", "show", run.id, "--json"], dbPath);
+    expect(ledgerResult.exitCode).toBe(0);
+    const ledger = JSON.parse(ledgerResult.stdout);
+    expect(ledger.run.status).toBe("completed");
+    expect(ledger.commands[0].status).toBe("passed");
+    expect(ledger.files[0].path).toBe("src/db/task-runs.ts");
+    expect(ledger.artifacts[0].path).toBe("logs/run-ledger.txt");
+    expect(ledger.events.map((event: { event_type: string }) => event.event_type)).toContain("comment");
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
     const importPath = "/tmp/test-cli-plan-template-use.json";
