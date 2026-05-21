@@ -232,10 +232,15 @@ Matching MCP tool:
 CLI extension install:
 
 ```bash
+todos extensions compat ./todos.extension.json --json
 todos extensions install ./todos.extension.json --trust --json
 ```
 
 Matching MCP tool:
+
+```json
+{ "tool": "test_local_extension_compatibility", "arguments": { "source": "./todos.extension.json" } }
+```
 
 ```json
 { "tool": "install_local_extension", "arguments": { "source": "./todos.extension.json", "trust": true } }

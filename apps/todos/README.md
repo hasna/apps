@@ -104,11 +104,13 @@ decisions stay auditable before an agent records run evidence.
 Extensions are installed from local manifests, directories with
 `todos.extension.json`, or offline JSON bundles. The registry validates the
 manifest shape, checks `@hasna/todos` compatibility ranges, records requested
-permissions, verifies optional source checksums or detached signatures, and
-stores trust state in local config only:
+permissions, runs CLI/MCP compatibility checks, dry-runs declared commands
+through the local runner sandbox, verifies optional source checksums or detached
+signatures, and stores trust state in local config only:
 
 ```bash
 todos extensions inspect ./todos.extension.json --json
+todos extensions compat ./todos.extension.json --json
 todos extensions install ./todos.extension.json --checksum sha256:... --trust --json
 todos extensions verify ./bundle.todos-extension.json --signature <signature> --public-key "$PUBLIC_KEY"
 todos extensions list
@@ -119,8 +121,9 @@ Unsigned extensions are allowed but installed as local records with warnings.
 Without `--trust`, installs remain in `needs_review` so agents can discover
 custom commands, MCP tools, hooks, and permissions without treating them as
 approved. MCP clients can use `inspect_local_extension`,
-`install_local_extension`, `list_local_extensions`, and
-`remove_local_extension` for the same offline workflow.
+`test_local_extension_compatibility`, `install_local_extension`,
+`list_local_extensions`, and `remove_local_extension` for the same offline
+workflow.
 
 ## Local Workflow Prompts
 

@@ -139,6 +139,8 @@ describe("CLI/MCP parity manifest", () => {
       "run_verification_provider",
     ]));
     expect(byDomain.get("verification-providers")?.jsonContracts).toEqual(expect.arrayContaining(["verification_provider", "verification_provider_result"]));
+    expect(byDomain.get("extensions")?.mcpTools).toContain("test_local_extension_compatibility");
+    expect(byDomain.get("extensions")?.jsonContracts).toContain("local_extension_compatibility");
     expect(byDomain.get("handoffs")?.mcpTools).toEqual(expect.arrayContaining([
       "create_handoff",
       "list_handoffs",
@@ -187,6 +189,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
     expect(docs).toContain("todos template-library --json");
+    expect(docs).toContain("todos extensions compat ./todos.extension.json --json");
     expect(docs).toContain("todos handoff --create --agent codex");
     expect(docs).toContain("acknowledge_handoff");
     expect(docs).toContain("create_task");

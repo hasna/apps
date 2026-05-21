@@ -1284,6 +1284,12 @@ describe("CLI integration", () => {
     expect(inspectedPayload.manifest.name).toBe("cli-extension");
     expect(inspectedPayload.validation.ok).toBe(true);
 
+    const compatibility = await runCli(["extensions", "compat", source, "--json"], dbPath, env);
+    expect(compatibility.exitCode).toBe(0);
+    const compatibilityPayload = JSON.parse(compatibility.stdout);
+    expect(compatibilityPayload.summary.commands).toBe(1);
+    expect(compatibilityPayload.validation.sandbox_checks[0].command_name).toBe("cli-demo");
+
     const installed = await runCli(["extensions", "install", source, "--checksum", inspectedPayload.checksum, "--json"], dbPath, env);
     expect(installed.exitCode).toBe(0);
     const installedPayload = JSON.parse(installed.stdout);

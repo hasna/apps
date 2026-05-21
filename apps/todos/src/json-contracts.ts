@@ -238,6 +238,23 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
     optional: {},
   }),
   contract({
+    id: "local_extension_compatibility",
+    name: "Local Extension Compatibility",
+    description: "Local extension schema, permission, CLI/MCP compatibility, and sandbox dry-run diagnostics.",
+    surfaces: ["cli", "mcp", "sdk"],
+    stability: "stable",
+    required: {
+      source: field(["string", "null"], "Inspected extension source path, or null for in-memory manifests.", true),
+      manifest: field("object", "Normalized extension manifest."),
+      validation: field("object", "Schema, compatibility, permission, and sandbox validation details."),
+      ok: field("boolean", "Whether the extension passed hard compatibility checks."),
+      summary: field("object", "Counts for commands, MCP tools, hooks, permissions, sandbox checks, and failed dry-runs."),
+      errors: field("array", "Hard validation or compatibility errors."),
+      warnings: field("array", "Non-blocking diagnostics such as sandbox approval requirements."),
+    },
+    optional: {},
+  }),
+  contract({
     id: "agent",
     name: "Agent",
     description: "Registered agent identity and coordination metadata.",

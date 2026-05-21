@@ -1120,6 +1120,10 @@ describe("MCP tool wrappers", () => {
       expect(inspected.validation.ok).toBe(true);
       expect(inspected.checksum).toMatch(/^sha256:/);
 
+      const compatibility = JSON.parse((await callCapturedTool(tools, "test_local_extension_compatibility", { source })).content[0]!.text);
+      expect(compatibility.ok).toBe(true);
+      expect(compatibility.summary.mcp_tools).toBe(1);
+
       const installed = JSON.parse((await callCapturedTool(tools, "install_local_extension", {
         source,
         checksum: inspected.checksum,

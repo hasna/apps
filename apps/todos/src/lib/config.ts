@@ -98,8 +98,8 @@ export interface LocalExtensionManifest {
     todos?: string;
   };
   permissions?: string[];
-  commands?: Array<{ name: string; command?: string; description?: string }>;
-  mcp_tools?: Array<{ name: string; description?: string }>;
+  commands?: Array<{ name: string; command?: string; description?: string; permissions?: string[]; write_paths?: string[]; env?: string[]; network?: boolean }>;
+  mcp_tools?: Array<{ name: string; description?: string; permissions?: string[] }>;
   hooks?: string[];
   checksum?: string;
   signature?: string;
@@ -117,6 +117,7 @@ export interface LocalExtensionRecord {
   trusted: boolean;
   status: LocalExtensionInstallStatus;
   warnings: string[];
+  diagnostics?: Record<string, unknown>;
   installed_at: string;
   updated_at?: string;
 }

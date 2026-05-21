@@ -10,6 +10,7 @@ import {
   installLocalExtension,
   listLocalExtensions,
   removeLocalExtension,
+  testExtensionCompatibility,
   validateExtensionManifest,
 } from "./local-extensions.js";
 
@@ -71,7 +72,9 @@ describe("local extension registry", () => {
         "extension installed as needs_review until trusted explicitly",
       ]));
       expect(listLocalExtensions()).toHaveLength(1);
-      expect(getLocalExtension("demo-extension")?.manifest.permissions).toEqual(["runs:write", "tasks:read"]);
+      const stored = getLocalExtension("demo-extension");
+      expect(stored?.manifest.permissions).toEqual(["runs:write", "tasks:read"]);
+      expect(stored?.diagnostics?.summary).toMatchObject({ commands: 1, mcp_tools: 1 });
       expect(removeLocalExtension("demo-extension")).toBe(true);
       expect(listLocalExtensions()).toHaveLength(0);
     } finally {
@@ -136,6 +139,40 @@ describe("local extension registry", () => {
 
       writeManifest(sourceDir);
       expect(() => installLocalExtension({ source: sourceDir, checksum: "sha256:bad" })).toThrow(/checksum mismatch/);
+    } finally {
+      rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports CLI MCP permission and sandbox compatibility diagnostics", () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), "todos-extension-compat-"));
+    try {
+      writeManifest(sourceDir, {
+        permissions: ["tasks:read", "badpermission"],
+        commands: [
+          { name: "list", command: "rm -rf /tmp/nope", permissions: ["commands:run"], write_paths: ["../outside"] },
+          { name: "agent-safe", command: "todos status --json", permissions: ["tasks:read"] },
+        ],
+        mcp_tools: [
+          { name: "list_tasks", permissions: ["tasks:read"] },
+          { name: "extension_status", permissions: ["tasks:read"] },
+        ],
+      });
+
+      const report = testExtensionCompatibility(sourceDir);
+      expect(report.ok).toBe(false);
+      expect(report.summary).toMatchObject({
+        commands: 2,
+        mcp_tools: 2,
+        permissions: 6,
+        sandbox_checks: 2,
+      });
+      expect(report.errors).toContain("MCP tool list_tasks conflicts with a built-in todos tool");
+      expect(report.warnings).toEqual(expect.arrayContaining([
+        "command list shadows a built-in todos command name",
+        "permission should use resource:action format such as tasks:read, runs:write, commands:run, or *",
+      ]));
+      expect(report.validation.sandbox_checks.some((check) => check.command_name === "list" && !check.allowed)).toBe(true);
     } finally {
       rmSync(sourceDir, { recursive: true, force: true });
     }

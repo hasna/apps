@@ -57,6 +57,7 @@ import {
   installLocalExtension,
   listLocalExtensions,
   removeLocalExtension,
+  testExtensionCompatibility,
 } from "../../lib/local-extensions.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
@@ -751,6 +752,19 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       async ({ source }) => {
         try {
           return { content: [{ type: "text" as const, text: JSON.stringify(inspectExtensionSource(source), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("test_local_extension_compatibility")) {
+    server.tool(
+      "test_local_extension_compatibility",
+      "Run local CLI/MCP compatibility checks and runner sandbox dry-runs for an extension without installing it.",
+      { source: z.string().describe("Path to todos.extension.json, extension directory, or offline bundle JSON") },
+      async ({ source }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(testExtensionCompatibility(source), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

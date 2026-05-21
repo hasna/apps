@@ -196,6 +196,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "install_local_extension",
     "list_local_extensions",
     "remove_local_extension",
+    "test_local_extension_compatibility",
     "list_task_files",
     "lock_file",
     "create_calendar_item",

@@ -19,6 +19,7 @@ import { captureEnvironmentSnapshot, compareEnvironmentSnapshots } from "./lib/e
 import { buildCodebaseIndex, extractTodos } from "./lib/extract.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
+import { testExtensionCompatibility } from "./lib/local-extensions.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
@@ -86,6 +87,7 @@ describe("stable JSON contracts", () => {
       "task_merge_result",
       "verification_provider",
       "verification_provider_result",
+      "local_extension_compatibility",
       "agent",
       "handoff",
       "template",
@@ -185,6 +187,13 @@ describe("stable JSON contracts", () => {
       task_id: task.id,
       agent_id: "jsoncontractagent",
     }, db);
+    const extensionCompatibility = testExtensionCompatibility({
+      name: "contract-extension",
+      version: "1.0.0",
+      compatibility: { todos: "*" },
+      permissions: ["tasks:read"],
+      mcp_tools: [{ name: "contract_extension_tool", permissions: ["tasks:read"] }],
+    });
     const agent = registerAgent({
       name: "jsoncontractagent",
       description: "Contract fixture agent",
@@ -273,6 +282,7 @@ describe("stable JSON contracts", () => {
     expectValid("task_merge_result", mergeResult);
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
+    expectValid("local_extension_compatibility", extensionCompatibility);
     expectValid("agent", agent);
     expectValid("handoff", handoff);
     expectValid("template", template);

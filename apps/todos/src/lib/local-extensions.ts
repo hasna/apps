@@ -7,8 +7,10 @@ import {
   type LocalExtensionManifest,
   type LocalExtensionRecord,
 } from "./config.js";
+import { getMcpToolNames } from "../mcp.js";
 import { getPackageVersion } from "./package-version.js";
 import { redactValue } from "./redaction.js";
+import { checkRunnerSandbox, type RunnerSandboxCheck } from "./runner-sandbox.js";
 
 export interface ExtensionSourceInspection {
   source: string;
@@ -27,6 +29,43 @@ export interface ExtensionValidationResult {
   compatible: boolean;
   todos_version: string;
   compatibility_range: string | null;
+  permission_declarations: string[];
+  cli_mcp_checks: ExtensionCompatibilityCheck[];
+  sandbox_checks: ExtensionSandboxCheck[];
+}
+
+export interface ExtensionCompatibilityCheck {
+  surface: "cli" | "mcp" | "hook" | "permissions";
+  name: string;
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ExtensionSandboxCheck {
+  command_name: string;
+  command: string;
+  allowed: boolean;
+  requires_approval: boolean;
+  reasons: string[];
+  audit_evidence: RunnerSandboxCheck["audit_evidence"];
+}
+
+export interface ExtensionCompatibilityReport {
+  source: string | null;
+  manifest: LocalExtensionManifest;
+  validation: ExtensionValidationResult;
+  ok: boolean;
+  summary: {
+    commands: number;
+    mcp_tools: number;
+    hooks: number;
+    permissions: number;
+    sandbox_checks: number;
+    failed_sandbox_checks: number;
+  };
+  errors: string[];
+  warnings: string[];
 }
 
 export interface InstallLocalExtensionInput {
@@ -62,6 +101,10 @@ function unique(values: unknown): string[] {
   return Array.from(new Set(values.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean))).sort();
 }
 
+function permissionList(value: unknown): string[] {
+  return unique(value);
+}
+
 function normalizeManifest(input: unknown): LocalExtensionManifest {
   if (!isObject(input)) throw new Error("extension manifest must be a JSON object");
   const name = normalizeName(String(input["name"] || ""));
@@ -74,10 +117,15 @@ function normalizeManifest(input: unknown): LocalExtensionManifest {
     name: normalizeName(String(command["name"] || "")),
     command: typeof command["command"] === "string" ? command["command"] : undefined,
     description: typeof command["description"] === "string" ? command["description"] : undefined,
+    permissions: permissionList(command["permissions"]),
+    write_paths: unique(command["write_paths"]),
+    env: unique(command["env"]),
+    network: typeof command["network"] === "boolean" ? command["network"] : undefined,
   })) : [];
   const mcpTools = Array.isArray(input["mcp_tools"]) ? input["mcp_tools"].filter(isObject).map((tool) => ({
     name: normalizeName(String(tool["name"] || "")),
     description: typeof tool["description"] === "string" ? tool["description"] : undefined,
+    permissions: permissionList(tool["permissions"]),
   })) : [];
   return {
     schema_version: typeof input["schema_version"] === "number" ? input["schema_version"] : 1,
@@ -135,6 +183,113 @@ function decodeSignature(signature: string): Buffer {
   return Buffer.from(value, "base64");
 }
 
+const BUILTIN_CLI_COMMANDS = new Set([
+  "add",
+  "active",
+  "blocked",
+  "calendar",
+  "claim",
+  "config",
+  "context-pack",
+  "done",
+  "extensions",
+  "export",
+  "fail",
+  "list",
+  "next",
+  "ready",
+  "release-notes",
+  "show",
+  "start",
+  "status",
+  "update",
+]);
+
+function validatePermission(permission: string): ExtensionCompatibilityCheck {
+  const ok = permission === "*" || /^[a-z][a-z0-9_-]*:(read|write|run|admin|\*)$/.test(permission);
+  return {
+    surface: "permissions",
+    name: permission,
+    ok,
+    errors: [],
+    warnings: ok ? [] : ["permission should use resource:action format such as tasks:read, runs:write, commands:run, or *"],
+  };
+}
+
+function duplicateChecks(surface: "cli" | "mcp" | "hook", names: string[]): ExtensionCompatibilityCheck[] {
+  const counts = new Map<string, number>();
+  for (const name of names) counts.set(name, (counts.get(name) || 0) + 1);
+  return [...counts.entries()].filter(([, count]) => count > 1).map(([name]) => ({
+    surface,
+    name,
+    ok: false,
+    errors: [`duplicate ${surface} extension name: ${name}`],
+    warnings: [],
+  }));
+}
+
+function compatibilityChecks(manifest: LocalExtensionManifest): ExtensionCompatibilityCheck[] {
+  const checks: ExtensionCompatibilityCheck[] = [];
+  const commands = manifest.commands || [];
+  const tools = manifest.mcp_tools || [];
+  const hooks = manifest.hooks || [];
+  checks.push(...duplicateChecks("cli", commands.map((command) => command.name)));
+  checks.push(...duplicateChecks("mcp", tools.map((tool) => tool.name)));
+  checks.push(...duplicateChecks("hook", hooks));
+
+  for (const command of commands) {
+    checks.push({
+      surface: "cli",
+      name: command.name,
+      ok: Boolean(command.command),
+      errors: command.command ? [] : [`command ${command.name} is missing a command string`],
+      warnings: BUILTIN_CLI_COMMANDS.has(command.name) ? [`command ${command.name} shadows a built-in todos command name`] : [],
+    });
+  }
+
+  const knownMcpTools = new Set(getMcpToolNames({ profile: "full" }));
+  for (const tool of tools) {
+    checks.push({
+      surface: "mcp",
+      name: tool.name,
+      ok: !knownMcpTools.has(tool.name),
+      errors: knownMcpTools.has(tool.name) ? [`MCP tool ${tool.name} conflicts with a built-in todos tool`] : [],
+      warnings: [],
+    });
+  }
+
+  const permissions = [
+    ...(manifest.permissions || []),
+    ...commands.flatMap((command) => command.permissions || []),
+    ...tools.flatMap((tool) => tool.permissions || []),
+  ];
+  checks.push(...permissions.map(validatePermission));
+  return checks;
+}
+
+function sandboxChecks(manifest: LocalExtensionManifest, source?: string): ExtensionSandboxCheck[] {
+  return (manifest.commands || [])
+    .filter((command): command is NonNullable<LocalExtensionManifest["commands"]>[number] & { command: string } => Boolean(command.command))
+    .map((command) => {
+      const check = checkRunnerSandbox({
+        path: source,
+        cwd: source,
+        command: command.command,
+        write_paths: command.write_paths,
+        env: Object.fromEntries((command.env || []).map((key) => [key, "declared"])),
+        network: command.network,
+      });
+      return {
+        command_name: command.name,
+        command: command.command,
+        allowed: check.allowed,
+        requires_approval: check.requires_approval,
+        reasons: check.reasons,
+        audit_evidence: check.audit_evidence,
+      };
+    });
+}
+
 export function verifyExtensionSignature(input: VerifyExtensionSignatureInput): boolean {
   if (!input.signature || !input.public_key) return false;
   const verifier = createVerify("sha256");
@@ -186,13 +341,54 @@ export function validateExtensionManifest(manifest: LocalExtensionManifest): Ext
   if ((candidate.commands || []).length === 0 && (candidate.mcp_tools || []).length === 0 && (candidate.hooks || []).length === 0) {
     warnings.push("extension declares no commands, MCP tools, or hooks");
   }
+  const cliMcpChecks = compatibilityChecks(candidate);
+  for (const check of cliMcpChecks) {
+    errors.push(...check.errors);
+    warnings.push(...check.warnings);
+  }
+  const extensionSandboxChecks = sandboxChecks(candidate);
+  for (const check of extensionSandboxChecks) {
+    if (!check.allowed) warnings.push(`sandbox dry-run for command ${check.command_name}: ${check.reasons.join("; ")}`);
+  }
   return {
     ok: errors.length === 0,
     errors,
-    warnings,
+    warnings: Array.from(new Set(warnings)),
     compatible,
     todos_version: todosVersion,
     compatibility_range: compatibilityRange,
+    permission_declarations: [
+      ...(candidate.permissions || []),
+      ...(candidate.commands || []).flatMap((command) => command.permissions || []),
+      ...(candidate.mcp_tools || []).flatMap((tool) => tool.permissions || []),
+    ].sort(),
+    cli_mcp_checks: cliMcpChecks,
+    sandbox_checks: extensionSandboxChecks,
+  };
+}
+
+export function testExtensionCompatibility(sourceOrManifest: string | LocalExtensionManifest): ExtensionCompatibilityReport {
+  const source = typeof sourceOrManifest === "string" ? sourceOrManifest : null;
+  const inspected = source ? inspectExtensionSource(source) : null;
+  const manifest = inspected?.manifest || normalizeManifest(sourceOrManifest);
+  const validation = inspected?.validation || validateExtensionManifest(manifest);
+  const errors = Array.from(new Set(validation.errors));
+  const warnings = Array.from(new Set(validation.warnings));
+  return {
+    source: inspected?.source || null,
+    manifest,
+    validation,
+    ok: validation.ok,
+    summary: {
+      commands: manifest.commands?.length || 0,
+      mcp_tools: manifest.mcp_tools?.length || 0,
+      hooks: manifest.hooks?.length || 0,
+      permissions: validation.permission_declarations.length,
+      sandbox_checks: validation.sandbox_checks.length,
+      failed_sandbox_checks: validation.sandbox_checks.filter((check) => !check.allowed).length,
+    },
+    errors,
+    warnings,
   };
 }
 
@@ -226,6 +422,7 @@ export function installLocalExtension(input: InstallLocalExtensionInput): LocalE
       ...(signature || publicKey ? (signatureVerified ? [] : ["extension signature could not be verified"]) : ["extension is unsigned"]),
       ...(trusted ? [] : ["extension installed as needs_review until trusted explicitly"]),
     ],
+    diagnostics: testExtensionCompatibility(inspected.source) as unknown as Record<string, unknown>,
     installed_at: existing?.installed_at || timestamp,
     updated_at: timestamp,
   };

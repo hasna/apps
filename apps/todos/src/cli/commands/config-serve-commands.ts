@@ -497,6 +497,23 @@ export function registerConfigServeCommands(program: Command) {
     });
 
   extensions
+    .command("compat <source>")
+    .description("Run local CLI/MCP compatibility checks and runner sandbox dry-runs for an extension")
+    .action(async (source: string) => {
+      const globalOpts = program.opts();
+      const { testExtensionCompatibility } = await import("../../lib/local-extensions.js");
+      const report = testExtensionCompatibility(source);
+      if (globalOpts.json) { output(report, true); return; }
+      console.log(report.ok ? chalk.green("Extension compatibility checks passed") : chalk.red("Extension compatibility checks failed"));
+      console.log(`  ${chalk.dim("Commands:")} ${report.summary.commands}`);
+      console.log(`  ${chalk.dim("MCP tools:")} ${report.summary.mcp_tools}`);
+      console.log(`  ${chalk.dim("Sandbox checks:")} ${report.summary.sandbox_checks} (${report.summary.failed_sandbox_checks} require attention)`);
+      for (const warning of report.warnings) console.log(`  ${chalk.yellow("warning:")} ${warning}`);
+      for (const error of report.errors) console.log(`  ${chalk.red("error:")} ${error}`);
+      if (!report.ok) process.exitCode = 1;
+    });
+
+  extensions
     .command("verify <source>")
     .description("Verify a local extension source checksum and optional signature without installing it")
     .option("--checksum <sha256>", "Expected sha256:<hex> checksum for the source manifest or bundle")

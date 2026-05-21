@@ -130,6 +130,11 @@ and `run_verification_provider`. It includes provider name, kind, status,
 attempt count, redacted output summary, optional artifact path, and task id when
 evidence was recorded.
 
+`local_extension_compatibility` is returned by `todos extensions compat --json`
+and `test_local_extension_compatibility`. It includes normalized manifest
+metadata, permission declaration checks, CLI/MCP naming checks, runner sandbox
+dry-run diagnostics for declared commands, and install-time warnings/errors.
+
 ## Agent Handoffs
 
 `handoff` is the stable local continuation record returned by
