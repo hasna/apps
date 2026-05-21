@@ -144,6 +144,10 @@ Codex, Claude Code, Takumi, and other agent-native clients that need reusable
 local guidance for planning, claiming, review, verification, handoff, release,
 triage, and incident workflows.
 
+Agent setup recipes for MCP registration, `/goal` planning, task
+claim/update/complete loops, evidence comments, and no-cloud verification live
+in [docs/agent-adapters.md](docs/agent-adapters.md).
+
 ## Local Policy Packs
 
 Policy packs are project-local done gates for agents. They validate task status,
