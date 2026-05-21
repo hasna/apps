@@ -259,6 +259,25 @@ MCP clients can use `set_local_event_hook`, `list_local_event_hooks`,
 `test_local_event_hook`, and `remove_local_event_hook`. Hook delivery is
 local-only; it does not call hosted webhooks or cloud automation services.
 
+## Local Terminal Notifications
+
+Terminal notification rules are local watch rules for agents that want concise
+event signals in a shell, tmux pane, or editor terminal. Rules match task, run,
+plan, approval, import, and export events by severity, agent, project, priority,
+status, and payload text, then render deterministic line or JSON notifications:
+
+```bash
+todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --priority high --contains deploy --bell
+todos terminal-notifications test blocked --event task.failed --payload '{"id":"demo","title":"Deploy failed","agent_id":"codex","priority":"high"}' --json
+todos terminal-notifications list --json
+```
+
+MCP clients can use `set_terminal_notification_rule`,
+`list_terminal_notification_rules`, `test_terminal_notification_rule`,
+`evaluate_terminal_watch_rules`, and `remove_terminal_notification_rule`.
+Notifications are evaluated from local event payloads and do not require a
+desktop notification daemon, hosted queue, or cloud webhook service.
+
 ## Local Encryption Profiles
 
 Encryption profiles are optional local config entries for sensitive fields and

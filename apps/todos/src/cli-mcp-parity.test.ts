@@ -33,6 +33,7 @@ const expectedDomains = [
   "time-tracking",
   "handoffs",
   "local-event-hooks",
+  "terminal-notifications",
   "encryption",
   "comments",
   "search",

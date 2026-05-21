@@ -220,6 +220,15 @@ run verification contexts.
 and `set_local_event_hook`. `local_event_hook_delivery` is the stable delivery
 result returned by `todos event-hooks test` and `test_local_event_hook`.
 
+## Terminal Notification Rules
+
+`terminal_notification_rule` is the stable config object returned by
+`todos terminal-notifications list`, `todos terminal-notifications set`,
+`list_terminal_notification_rules`, and `set_terminal_notification_rule`.
+`terminal_notification_evaluation` is returned by terminal notification tests
+and watch-rule evaluation tools, including skipped reasons and generated local
+terminal notification payloads.
+
 ## Local Encryption
 
 `local_encryption_profile` is the stable config object returned by

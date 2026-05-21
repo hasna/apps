@@ -931,6 +931,97 @@ export function registerConfigServeCommands(program: Command) {
       }
     });
 
+  const terminalNotifications = program
+    .command("terminal-notifications")
+    .description("Manage local terminal notification watch rules");
+
+  terminalNotifications
+    .command("list")
+    .description("List local terminal notification rules")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listTerminalNotificationRules } = await import("../../lib/terminal-notifications.js");
+      const rules = listTerminalNotificationRules();
+      if (globalOpts.json) { output(rules, true); return; }
+      if (rules.length === 0) {
+        console.log(chalk.dim("No terminal notification rules configured."));
+        return;
+      }
+      for (const rule of rules) {
+        const status = rule.enabled === false ? chalk.yellow("disabled") : chalk.green("enabled ");
+        console.log(`${status} ${rule.name.padEnd(14)} ${rule.min_severity.padEnd(8)} ${rule.events.join(",")}`);
+      }
+    });
+
+  terminalNotifications
+    .command("set <name>")
+    .description("Add or update a local terminal notification watch rule")
+    .requiredOption("--event <list>", "Comma-separated events, or *")
+    .option("--min-severity <level>", "info, warning, or critical", "info")
+    .option("--format <format>", "line or json", "line")
+    .option("--status <list>", "Comma-separated task statuses to match")
+    .option("--priority <list>", "Comma-separated priorities to match")
+    .option("--agent <list>", "Comma-separated agent IDs to match")
+    .option("--project <list>", "Comma-separated project IDs to match")
+    .option("--contains <list>", "Comma-separated payload text fragments to match")
+    .option("--bell", "Ring the terminal bell for critical matches")
+    .option("--disabled", "Store rule disabled")
+    .action(async (name: string, opts: { event: string; minSeverity?: string; format?: string; status?: string; priority?: string; agent?: string; project?: string; contains?: string; bell?: boolean; disabled?: boolean }) => {
+      const globalOpts = program.opts();
+      const { describeTerminalNotificationRule, upsertTerminalNotificationRule } = await import("../../lib/terminal-notifications.js");
+      const rule = upsertTerminalNotificationRule({
+        name,
+        events: listOption(opts.event) || [],
+        enabled: opts.disabled ? false : true,
+        min_severity: (opts.minSeverity || "info") as any,
+        format: (opts.format || "line") as any,
+        bell: Boolean(opts.bell),
+        task_statuses: listOption(opts.status),
+        priorities: listOption(opts.priority),
+        agent_ids: listOption(opts.agent),
+        project_ids: listOption(opts.project),
+        contains: listOption(opts.contains),
+      });
+      const described = describeTerminalNotificationRule(rule);
+      if (globalOpts.json) { output(described, true); return; }
+      console.log(chalk.green(`Terminal notification rule ${rule.name} saved for ${rule.events.join(",")}`));
+      for (const warning of described.warnings) console.log(chalk.yellow(`  ${warning}`));
+    });
+
+  terminalNotifications
+    .command("remove <name>")
+    .description("Remove a local terminal notification rule")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeTerminalNotificationRule } = await import("../../lib/terminal-notifications.js");
+      const removed = removeTerminalNotificationRule(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Terminal notification rule removed.") : chalk.dim("No terminal notification rule matched."));
+    });
+
+  terminalNotifications
+    .command("test <name>")
+    .description("Evaluate a local terminal notification rule against a sample event")
+    .option("--event <event>", "Event type to emit", "task.failed")
+    .option("--payload <json>", "JSON payload for the test event")
+    .option("--task <id>", "Task ID to include in the payload")
+    .action(async (name: string, opts: { event?: string; payload?: string; task?: string }) => {
+      const globalOpts = program.opts();
+      const { getTerminalNotificationRule, renderTerminalNotification, testTerminalNotificationRule } = await import("../../lib/terminal-notifications.js");
+      const payload = opts.payload ? JSON.parse(opts.payload) : {};
+      if (opts.task) (payload as Record<string, unknown>).id = resolveTaskId(opts.task);
+      const result = testTerminalNotificationRule(name, { type: opts.event || "task.failed", payload });
+      if (globalOpts.json) { output(result, true); return; }
+      if (!result.matched) {
+        console.log(chalk.dim(`No notification: ${result.skipped_reasons.join("; ")}`));
+        return;
+      }
+      const rule = getTerminalNotificationRule(name);
+      for (const notification of result.notifications) {
+        console.log(renderTerminalNotification(notification, rule?.format || "line"));
+      }
+    });
+
   // serve (web dashboard)
   program
     .command("serve")

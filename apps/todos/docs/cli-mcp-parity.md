@@ -44,6 +44,9 @@ structured error contracts.
   with approve, reject, expire, check, and list flows.
 - `local-event-hooks`: local-only event hooks for task, plan, run, approval,
   import, and export events with stdout, file, socket, and script targets.
+- `terminal-notifications`: local terminal watch rules for task, run, plan,
+  approval, import, and export events with severity, agent, project, priority,
+  status, payload text, and bell filters.
 - `encryption`: local encryption profiles, encrypted JSON values, and secure
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
@@ -307,6 +310,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "set_local_event_hook", "arguments": { "name": "audit", "events": ["task.completed"], "target": "file", "file_path": ".todos/events.jsonl" } }
+```
+
+CLI terminal notification rule:
+
+```bash
+todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "set_terminal_notification_rule", "arguments": { "name": "blocked", "events": ["task.blocked", "task.failed"], "min_severity": "warning", "agent_ids": ["codex"] } }
 ```
 
 CLI encryption profile:

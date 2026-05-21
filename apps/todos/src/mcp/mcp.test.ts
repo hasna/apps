@@ -469,6 +469,56 @@ describe("MCP tool operations", () => {
     }
   });
 
+  it("terminal notification tools manage local watch rules", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-terminal-notifications-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+
+    try {
+      const savedResult = await callCapturedTool(tools, "set_terminal_notification_rule", {
+        name: "blocked",
+        events: ["task.blocked", "task.failed"],
+        min_severity: "warning",
+        bell: true,
+        agent_ids: ["codex"],
+        priorities: ["high"],
+        contains: ["deploy"],
+      });
+      expect(JSON.parse(savedResult.content[0]!.text).rule.name).toBe("blocked");
+
+      const testResult = await callCapturedTool(tools, "test_terminal_notification_rule", {
+        name: "blocked",
+        event: "task.failed",
+        payload: { id: "task-1", title: "Deploy failed", agent_id: "codex", priority: "high" },
+      });
+      const testPayload = JSON.parse(testResult.content[0]!.text);
+      expect(testPayload.matched).toBe(true);
+      expect(testPayload.notifications[0].severity).toBe("critical");
+
+      const evaluated = await callCapturedTool(tools, "evaluate_terminal_watch_rules", {
+        event: "task.completed",
+        payload: { title: "Done" },
+      });
+      expect(JSON.parse(evaluated.content[0]!.text)[0].matched).toBe(false);
+
+      const listResult = await callCapturedTool(tools, "list_terminal_notification_rules", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const removeResult = await callCapturedTool(tools, "remove_terminal_notification_rule", { name: "blocked" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("local encryption tools manage profiles and JSON values", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

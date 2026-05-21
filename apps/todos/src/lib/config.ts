@@ -165,6 +165,25 @@ export interface LocalEventHookConfig {
   updated_at?: string;
 }
 
+export type TerminalNotificationSeverity = "info" | "warning" | "critical";
+export type TerminalNotificationFormat = "line" | "json";
+
+export interface TerminalNotificationRuleConfig {
+  name: string;
+  enabled: boolean;
+  events: string[];
+  min_severity: TerminalNotificationSeverity;
+  format: TerminalNotificationFormat;
+  bell: boolean;
+  task_statuses?: string[];
+  priorities?: string[];
+  agent_ids?: string[];
+  project_ids?: string[];
+  contains?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export type LocalEncryptionAlgorithm = "aes-256-gcm";
 export type LocalEncryptionKdf = "scrypt";
 
@@ -216,6 +235,8 @@ export interface TodosConfig {
   policy_packs?: Record<string, PolicyPackConfig>;
   /** Local event hooks and automation triggers, keyed by hook name. */
   local_event_hooks?: Record<string, LocalEventHookConfig>;
+  /** Local terminal notification watch rules, keyed by rule name. */
+  terminal_notification_rules?: Record<string, TerminalNotificationRuleConfig>;
   /** Local encryption profiles. Profiles store key references and nonsecret KDF salt only. */
   encryption_profiles?: Record<string, LocalEncryptionProfileConfig>;
   /** Local secret safety settings for offline redaction and export scanning. */

@@ -595,6 +595,22 @@ export type {
   LocalEventType,
 } from "./lib/event-hooks.js";
 export {
+  describeTerminalNotificationRule,
+  evaluateTerminalWatchRules,
+  getTerminalNotificationRule,
+  listTerminalNotificationRules,
+  removeTerminalNotificationRule,
+  renderTerminalNotification,
+  testTerminalNotificationRule,
+  upsertTerminalNotificationRule,
+} from "./lib/terminal-notifications.js";
+export type {
+  TerminalNotification,
+  TerminalNotificationEvaluation,
+  TerminalNotificationRuleInput,
+  TerminalWatchEventInput,
+} from "./lib/terminal-notifications.js";
+export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,
   TODOS_ENCRYPTED_BRIDGE_KIND,

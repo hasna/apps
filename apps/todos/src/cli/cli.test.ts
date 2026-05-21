@@ -1778,6 +1778,64 @@ END:VCALENDAR`);
     }
   });
 
+  it("should manage local terminal notification rules from the CLI", async () => {
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-terminal-notifications-"));
+    process.env["HOME"] = home;
+    const dbPath = join(home, "todos.db");
+
+    try {
+      const saved = await runCli([
+        "terminal-notifications",
+        "set",
+        "blocked",
+        "--event",
+        "task.blocked,task.failed",
+        "--min-severity",
+        "warning",
+        "--agent",
+        "codex",
+        "--priority",
+        "high",
+        "--contains",
+        "deploy",
+        "--bell",
+        "--json",
+      ], dbPath);
+      expect(saved.exitCode).toBe(0);
+      expect(JSON.parse(saved.stdout).rule.name).toBe("blocked");
+
+      const test = await runCli([
+        "terminal-notifications",
+        "test",
+        "blocked",
+        "--event",
+        "task.failed",
+        "--payload",
+        "{\"id\":\"task-1\",\"title\":\"Deploy failed\",\"agent_id\":\"codex\",\"priority\":\"high\"}",
+        "--json",
+      ], dbPath);
+      expect(test.exitCode).toBe(0);
+      const payload = JSON.parse(test.stdout);
+      expect(payload.matched).toBe(true);
+      expect(payload.notifications[0].severity).toBe("critical");
+
+      const list = await runCli(["terminal-notifications", "list", "--json"], dbPath);
+      expect(JSON.parse(list.stdout)).toHaveLength(1);
+
+      const removed = await runCli(["terminal-notifications", "remove", "blocked", "--json"], dbPath);
+      expect(JSON.parse(removed.stdout).removed).toBe(true);
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("should extract source TODOs with index metadata and watcher output", async () => {
     const { mkdtempSync, rmSync, writeFileSync, unlinkSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

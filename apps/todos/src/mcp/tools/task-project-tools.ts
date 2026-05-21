@@ -69,6 +69,14 @@ import {
   upsertLocalEventHook,
 } from "../../lib/event-hooks.js";
 import {
+  describeTerminalNotificationRule,
+  evaluateTerminalWatchRules,
+  listTerminalNotificationRules,
+  removeTerminalNotificationRule,
+  testTerminalNotificationRule,
+  upsertTerminalNotificationRule,
+} from "../../lib/terminal-notifications.js";
+import {
   decryptValue,
   encryptValue,
   encryptionProfileStatus,
@@ -630,6 +638,103 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (task_id) resolvedPayload.id = resolveId(task_id);
           const results = await testLocalEventHook(name, { type: event || "task.completed", payload: resolvedPayload });
           return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === TERMINAL NOTIFICATION WATCH RULES ===
+
+  if (shouldRegisterTool("list_terminal_notification_rules")) {
+    server.tool("list_terminal_notification_rules", "List configured local terminal notification watch rules.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listTerminalNotificationRules(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("set_terminal_notification_rule")) {
+    server.tool(
+      "set_terminal_notification_rule",
+      "Create or update a local terminal notification watch rule for task, plan, run, approval, import, or export events.",
+      {
+        name: z.string().describe("Rule name"),
+        events: z.array(z.string()).describe("Event names, or *"),
+        enabled: z.boolean().optional(),
+        min_severity: z.enum(["info", "warning", "critical"]).optional(),
+        format: z.enum(["line", "json"]).optional(),
+        bell: z.boolean().optional(),
+        task_statuses: z.array(z.string()).optional(),
+        priorities: z.array(z.string()).optional(),
+        agent_ids: z.array(z.string()).optional(),
+        project_ids: z.array(z.string()).optional(),
+        contains: z.array(z.string()).optional(),
+      },
+      async (input) => {
+        try {
+          const rule = upsertTerminalNotificationRule(input as Parameters<typeof upsertTerminalNotificationRule>[0]);
+          return { content: [{ type: "text" as const, text: JSON.stringify(describeTerminalNotificationRule(rule), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_terminal_notification_rule")) {
+    server.tool(
+      "remove_terminal_notification_rule",
+      "Remove a configured local terminal notification watch rule.",
+      { name: z.string().describe("Rule name") },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeTerminalNotificationRule(name) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("test_terminal_notification_rule")) {
+    server.tool(
+      "test_terminal_notification_rule",
+      "Evaluate one local terminal notification watch rule against a sample event.",
+      {
+        name: z.string().describe("Rule name"),
+        event: z.string().optional().describe("Event type. Defaults to task.failed."),
+        payload: z.record(z.unknown()).optional(),
+        task_id: z.string().optional().describe("Optional task ID or prefix to include as payload.id"),
+      },
+      async ({ name, event, payload, task_id }) => {
+        try {
+          const resolvedPayload = { ...(payload || {}) } as Record<string, unknown>;
+          if (task_id) resolvedPayload.id = resolveId(task_id);
+          const result = testTerminalNotificationRule(name, { type: event || "task.failed", payload: resolvedPayload });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("evaluate_terminal_watch_rules")) {
+    server.tool(
+      "evaluate_terminal_watch_rules",
+      "Evaluate all local terminal notification watch rules against a sample event.",
+      {
+        event: z.string().describe("Event type."),
+        payload: z.record(z.unknown()).optional(),
+      },
+      async ({ event, payload }) => {
+        try {
+          const result = evaluateTerminalWatchRules({ type: event, payload: payload || {} });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

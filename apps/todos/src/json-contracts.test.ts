@@ -112,6 +112,8 @@ describe("stable JSON contracts", () => {
       "environment_snapshot_comparison",
       "local_event_hook",
       "local_event_hook_delivery",
+      "terminal_notification_rule",
+      "terminal_notification_evaluation",
       "local_encryption_profile",
       "local_encryption_envelope",
       "encrypted_local_bridge_bundle",
@@ -319,6 +321,29 @@ describe("stable JSON contracts", () => {
       status: "delivered",
       attempts: 1,
       integrity: { algorithm: "sha256", digest: "abc" },
+    });
+    expectValid("terminal_notification_rule", {
+      name: "blocked",
+      enabled: true,
+      events: ["task.blocked", "task.failed"],
+      min_severity: "warning",
+      format: "line",
+      bell: true,
+    });
+    expectValid("terminal_notification_evaluation", {
+      rule: "blocked",
+      matched: true,
+      skipped_reasons: [],
+      notifications: [{
+        rule: "blocked",
+        event_type: "task.failed",
+        severity: "critical",
+        title: "Deploy failed",
+        message: "task.failed: Deploy failed",
+        timestamp: "2026-01-02T03:04:05.000Z",
+        bell: true,
+        payload: {},
+      }],
     });
     expectValid("local_encryption_profile", {
       name: "default",

@@ -17,6 +17,7 @@ export type TodosCliMcpParityDomain =
   | "policy-packs"
   | "approval-gates"
   | "local-event-hooks"
+  | "terminal-notifications"
   | "encryption"
   | "agent-runs"
   | "source-index"
@@ -666,6 +667,29 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos event-hooks set audit --event task.completed --target file --file .todos/events.jsonl --json",
       mcpTool: "set_local_event_hook",
+    },
+  },
+  {
+    domain: "terminal-notifications",
+    cliCommands: [
+      "todos terminal-notifications list",
+      "todos terminal-notifications set",
+      "todos terminal-notifications remove",
+      "todos terminal-notifications test",
+    ],
+    mcpTools: [
+      "list_terminal_notification_rules",
+      "set_terminal_notification_rule",
+      "remove_terminal_notification_rule",
+      "test_terminal_notification_rule",
+      "evaluate_terminal_watch_rules",
+    ],
+    jsonContracts: ["terminal_notification_rule", "terminal_notification_evaluation", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --json",
+      mcpTool: "set_terminal_notification_rule",
     },
   },
   {
