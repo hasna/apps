@@ -12,6 +12,7 @@ import { withNoNetwork } from "./test/no-network.js";
 
 const expectedDomains = [
   "tasks",
+  "local-fields",
   "projects",
   "plans",
   "workspace-trust",
@@ -109,6 +110,12 @@ describe("CLI/MCP parity manifest", () => {
       "finish_task_run",
     ]));
     expect(byDomain.get("comments")?.mcpTools).toEqual(expect.arrayContaining(["add_comment", "list_comments"]));
+    expect(byDomain.get("local-fields")?.mcpTools).toEqual(expect.arrayContaining([
+      "get_task_fields",
+      "set_task_fields",
+      "query_tasks_by_fields",
+    ]));
+    expect(byDomain.get("local-fields")?.jsonContracts).toContain("local_task_fields");
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
@@ -128,6 +135,7 @@ describe("CLI/MCP parity manifest", () => {
     const docs = readFileSync(join(import.meta.dir, "..", "docs", "cli-mcp-parity.md"), "utf-8");
 
     expect(docs).toContain("todos add \"Fix flaky parser\" --priority high --json");
+    expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
     expect(docs).toContain("create_task");
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");

@@ -128,6 +128,61 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-search.db"); } catch {}
   });
 
+  it("should manage local task fields from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-fields.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const createdResult = await runCli(["add", "fielded task", "--json"], dbPath);
+      expect(createdResult.exitCode).toBe(0);
+      const created = JSON.parse(createdResult.stdout);
+
+      const setResult = await runCli([
+        "fields",
+        "set",
+        created.id,
+        "--labels",
+        "bug,cli",
+        "--priority",
+        "high",
+        "--severity",
+        "s1",
+        "--owner",
+        "codex",
+        "--area",
+        "parser",
+        "--field",
+        "component=parser",
+        "--json",
+      ], dbPath);
+      expect(setResult.stderr).toBe("");
+      expect(setResult.exitCode).toBe(0);
+      const updated = JSON.parse(setResult.stdout);
+      expect(updated.task.priority).toBe("high");
+      expect(updated.fields.labels).toEqual(["bug", "cli"]);
+      expect(updated.fields.custom.component).toBe("parser");
+
+      const queryResult = await runCli([
+        "fields",
+        "query",
+        "--labels",
+        "bug",
+        "--severity",
+        "s1",
+        "--field",
+        "component=parser",
+        "--json",
+      ], dbPath);
+      expect(queryResult.exitCode).toBe(0);
+      const query = JSON.parse(queryResult.stdout);
+      expect(query.count).toBe(1);
+      expect(query.tasks[0].id).toBe(created.id);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should bootstrap a local project from CLI JSON output", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

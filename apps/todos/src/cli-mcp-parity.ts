@@ -3,6 +3,7 @@ import { getMcpToolNames } from "./mcp.js";
 
 export type TodosCliMcpParityDomain =
   | "tasks"
+  | "local-fields"
   | "projects"
   | "plans"
   | "workspace-trust"
@@ -123,6 +124,27 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos add \"Fix flaky parser\" --priority high --json",
       mcpTool: "create_task",
+    },
+  },
+  {
+    domain: "local-fields",
+    cliCommands: [
+      "todos fields show",
+      "todos fields set",
+      "todos fields query",
+    ],
+    mcpTools: [
+      "get_task_fields",
+      "set_task_fields",
+      "query_tasks_by_fields",
+    ],
+    jsonContracts: ["local_task_fields", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json",
+      mcpTool: "set_task_fields",
     },
   },
   {

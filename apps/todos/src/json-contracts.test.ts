@@ -14,6 +14,7 @@ import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
 import { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 import { createAgentContextPack } from "./lib/context-packs.js";
+import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -61,6 +62,7 @@ describe("stable JSON contracts", () => {
     expect(manifest.contracts.map((contract) => contract.id)).toEqual([
       "task",
       "project",
+      "local_task_fields",
       "agent",
       "template",
       "task_list",
@@ -108,6 +110,14 @@ describe("stable JSON contracts", () => {
       tags: ["contracts"],
       metadata: { fixture: true },
     }, db);
+    setTaskLocalFields(task.id, {
+      labels: ["contracts"],
+      severity: "s2",
+      owner: "jsoncontractagent",
+      area: "contracts",
+      custom: { fixture: true },
+    }, db);
+    const localFields = getTaskLocalFields(task.id, db);
     const agent = registerAgent({
       name: "jsoncontractagent",
       description: "Contract fixture agent",
@@ -152,6 +162,7 @@ describe("stable JSON contracts", () => {
     expectValid("project", project);
     expectValid("task_list", taskList);
     expectValid("task", task);
+    expectValid("local_task_fields", localFields);
     expectValid("agent", agent);
     expectValid("template", template);
     expectValid("comment", comment);
