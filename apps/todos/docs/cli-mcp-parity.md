@@ -30,6 +30,11 @@ structured error contracts.
   creation from templates.
 - `workspace-trust`: local trusted roots, permission presets, command checks,
   write scopes, env redaction declarations, and prompt-required decisions.
+- `secret-safety`: local secret redaction config and scans that return finding
+  counts without exposing matched values.
+- `retention-cleanup`: dry-run-first local pruning for old comments, runs,
+  verification evidence, and expired artifact files with explicit destructive
+  confirmation.
 - `runner-sandbox`: local runner command allowlists, cwd boundaries, write
   scopes, env allowlists, network policy, audit evidence, and dry-run explains.
 - `extensions`: local extension manifests, compatibility checks, checksum or
@@ -180,6 +185,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "run_verification_provider", "arguments": { "name": "local", "task_id": "1234abcd" } }
+```
+
+CLI retention cleanup preview:
+
+```bash
+todos retention cleanup --older-than-days 30 --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "preview_retention_cleanup", "arguments": { "older_than_days": 30 } }
 ```
 
 CLI template library:

@@ -269,6 +269,40 @@ describe("MCP tool operations", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("retention cleanup tools preview and apply local evidence cleanup without leaking content", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const project = createProject({ name: "MCP retention", path: "/tmp/mcp-retention" }, db);
+    const task = createTask({ title: "old mcp evidence", project_id: project.id }, db);
+    const token = ["sk", "abcdefghijklmnop"].join("-");
+    db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "mcp-old-comment",
+      task.id,
+      `legacy ${token} evidence`,
+      "comment",
+      "2026-01-01T00:00:00.000Z",
+    ]);
+
+    const previewResult = await callCapturedTool(tools, "preview_retention_cleanup", {
+      older_than_days: 30,
+      project_id: project.id,
+      now: "2026-05-22T00:00:00.000Z",
+    });
+    const preview = JSON.parse(previewResult.content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.candidate_counts.comments).toBe(1);
+    expect(previewResult.content[0]!.text).not.toContain(token);
+    expect(listComments(task.id, db)).toHaveLength(1);
+
+    const applyResult = await callCapturedTool(tools, "apply_retention_cleanup", {
+      older_than_days: 30,
+      project_id: project.id,
+      now: "2026-05-22T00:00:00.000Z",
+      confirm: "delete-local-retention-data",
+    });
+    expect(JSON.parse(applyResult.content[0]!.text).deleted_counts.comments).toBe(1);
+    expect(listComments(task.id, db)).toHaveLength(0);
+  });
+
   it("runner sandbox tools manage local command safety profiles", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

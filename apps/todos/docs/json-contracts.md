@@ -17,6 +17,7 @@ The stable contracts cover these object IDs:
 - `task`
 - `project`
 - `local_task_fields`
+- `retention_cleanup_report`
 - `duplicate_task_candidate`
 - `task_merge_result`
 - `verification_provider`
@@ -87,6 +88,16 @@ when present.
 `todos fields set --json`, `get_task_fields`, and `set_task_fields`. It keeps
 labels, priority, severity, owner, area, and custom local metadata in task
 metadata so bridge exports and imports carry it without any hosted dependency.
+
+## Retention Cleanup
+
+`retention_cleanup_report` is returned by `todos retention cleanup`,
+`preview_retention_cleanup`, and `apply_retention_cleanup`. It captures the
+local-only dry-run/apply state, normalized filters, cutoff timestamp, required
+confirmation string, candidate counts, deleted counts, candidate IDs, expired
+content-addressed artifact files, and warnings. It intentionally excludes raw
+comments, commands, output summaries, artifact source paths, and secret-bearing
+metadata.
 
 ## Saved Search Views
 

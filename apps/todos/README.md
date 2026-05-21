@@ -79,6 +79,21 @@ Comments, local run evidence, and bridge exports are redacted before storage or
 sharing. MCP clients can use `get_secret_safety`, `set_secret_safety`, and
 `scan_secret_text`.
 
+Retention cleanup is also local and dry-run-first. Use it to prune old comments,
+run ledgers, verification evidence, and expired stored artifact files by age,
+project, task status, and run status. Reports return counts, IDs, and
+content-addressed artifact paths only; they do not include raw comments,
+commands, output summaries, artifact source paths, or secret-like values.
+Destructive cleanup requires the exact confirmation string shown by the preview:
+
+```bash
+todos retention cleanup --older-than-days 30 --project <project-id> --task-status completed --json
+todos retention cleanup --older-than-days 30 --project <project-id> --task-status completed --apply --confirm delete-local-retention-data --json
+```
+
+MCP clients can use `preview_retention_cleanup` and
+`apply_retention_cleanup` for the same offline workflow.
+
 ## Local Runner Sandboxes
 
 Runner sandbox profiles also live in local config. They declare the commands a

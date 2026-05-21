@@ -11,6 +11,7 @@ export type TodosCliMcpParityDomain =
   | "templates"
   | "workspace-trust"
   | "secret-safety"
+  | "retention-cleanup"
   | "runner-sandbox"
   | "extensions"
   | "workflow-prompts"
@@ -340,6 +341,23 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos redaction scan \"TOKEN=value\" --json",
       mcpTool: "scan_secret_text",
+    },
+  },
+  {
+    domain: "retention-cleanup",
+    cliCommands: [
+      "todos retention cleanup",
+    ],
+    mcpTools: [
+      "preview_retention_cleanup",
+      "apply_retention_cleanup",
+    ],
+    jsonContracts: ["retention_cleanup_report", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos retention cleanup --older-than-days 30 --json",
+      mcpTool: "preview_retention_cleanup",
     },
   },
   {

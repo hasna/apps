@@ -876,6 +876,21 @@ export type {
   SecretSafetyConfig,
 } from "./lib/config.js";
 export {
+  RETENTION_CLEANUP_CONFIRMATION,
+  applyRetentionCleanup,
+  previewRetentionCleanup,
+} from "./lib/retention-cleanup.js";
+export type {
+  ApplyRetentionCleanupInput,
+  RetentionCleanupArtifactFileCandidate,
+  RetentionCleanupCounts,
+  RetentionCleanupInput,
+  RetentionCleanupRecordCandidate,
+  RetentionCleanupReport,
+  RetentionCleanupRunStatus,
+  RetentionCleanupScope,
+} from "./lib/retention-cleanup.js";
+export {
   artifactStorePath,
   artifactStoreRoot,
   exportStoredArtifactContent,

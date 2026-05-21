@@ -93,6 +93,8 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "validate_policy_pack",
     "get_project",
     "get_secret_safety",
+    "preview_retention_cleanup",
+    "apply_retention_cleanup",
     "get_task_list",
     "get_workspace_trust",
     "list_approval_gates",

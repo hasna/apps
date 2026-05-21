@@ -1273,6 +1273,55 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should preview and apply local retention cleanup from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-retention.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const task = createTask({ title: "old cli retention evidence" }, db);
+    const token = ["sk", "abcdefghijklmnop"].join("-");
+    db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "cli-old-comment",
+      task.id,
+      `legacy ${token} evidence`,
+      "comment",
+      "2026-01-01T00:00:00.000Z",
+    ]);
+    closeDatabase();
+    resetDatabase();
+    delete process.env["TODOS_DB_PATH"];
+
+    try {
+      const preview = await runCli(["retention", "cleanup", "--older-than-days", "30", "--json"], dbPath);
+      expect(preview.exitCode).toBe(0);
+      const previewPayload = JSON.parse(preview.stdout);
+      expect(previewPayload.dry_run).toBe(true);
+      expect(previewPayload.candidate_counts.comments).toBe(1);
+      expect(preview.stdout).not.toContain(token);
+
+      const denied = await runCli(["retention", "cleanup", "--older-than-days", "30", "--apply", "--json"], dbPath);
+      expect(denied.exitCode).not.toBe(0);
+
+      const applied = await runCli([
+        "retention",
+        "cleanup",
+        "--older-than-days",
+        "30",
+        "--apply",
+        "--confirm",
+        "delete-local-retention-data",
+        "--json",
+      ], dbPath);
+      expect(applied.exitCode).toBe(0);
+      expect(JSON.parse(applied.stdout).deleted_counts.comments).toBe(1);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should manage local runner sandbox profiles and guard run commands", async () => {
     const dbPath = "/tmp/test-cli-sandbox.db";
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");

@@ -219,6 +219,61 @@ export function registerConfigServeCommands(program: Command) {
       process.exitCode = 1;
     });
 
+  const retention = program
+    .command("retention")
+    .description("Preview or apply local retention cleanup for old comments, runs, verification evidence, and expired artifact files");
+
+  retention
+    .command("cleanup")
+    .description("Dry-run by default; add --apply and the exact --confirm value to delete local retention data")
+    .requiredOption("--older-than-days <days>", "Prune records older than this many days", (value) => Number.parseInt(value, 10))
+    .option("--project <id>", "Project ID to scope cleanup")
+    .option("--task-status <list>", "Comma-separated task statuses to include")
+    .option("--run-status <list>", "Comma-separated run statuses to include")
+    .option("--include <list>", "Comma-separated scopes: comments,runs,verifications,expired-artifacts")
+    .option("--apply", "Apply the cleanup. Without this flag the command only previews.")
+    .option("--confirm <value>", "Required exact confirmation for --apply")
+    .action(async (opts: {
+      olderThanDays: number;
+      project?: string;
+      taskStatus?: string;
+      runStatus?: string;
+      include?: string;
+      apply?: boolean;
+      confirm?: string;
+    }) => {
+      const globalOpts = program.opts();
+      const {
+        RETENTION_CLEANUP_CONFIRMATION,
+        applyRetentionCleanup,
+        previewRetentionCleanup,
+      } = await import("../../lib/retention-cleanup.js");
+      const include = listOption(opts.include)?.map((scope) => (
+        scope === "expired-artifacts" ? "expired_artifacts" : scope
+      ));
+      const input = {
+        older_than_days: opts.olderThanDays,
+        project_id: opts.project,
+        task_statuses: listOption(opts.taskStatus) as any,
+        run_statuses: listOption(opts.runStatus) as any,
+        include: include as any,
+      };
+      const report = opts.apply
+        ? applyRetentionCleanup({ ...input, confirm: opts.confirm })
+        : previewRetentionCleanup(input);
+      if (globalOpts.json) { output(report, true); return; }
+      console.log(chalk.bold(opts.apply ? "Retention cleanup applied" : "Retention cleanup preview"));
+      console.log(`  ${chalk.dim("Cutoff:")} ${report.cutoff_at}`);
+      console.log(`  ${chalk.dim("Comments:")} ${report.candidate_counts.comments} candidate(s), ${report.deleted_counts.comments} deleted`);
+      console.log(`  ${chalk.dim("Runs:")} ${report.candidate_counts.runs} candidate(s), ${report.deleted_counts.runs} deleted`);
+      console.log(`  ${chalk.dim("Verifications:")} ${report.candidate_counts.verifications} candidate(s), ${report.deleted_counts.verifications} deleted`);
+      console.log(`  ${chalk.dim("Artifact files:")} ${report.candidate_counts.artifact_files} candidate(s), ${report.deleted_counts.artifact_files} deleted`);
+      for (const warning of report.warnings) console.log(chalk.yellow(`  warning: ${warning}`));
+      if (!opts.apply && Object.values(report.candidate_counts).some((count) => count > 0)) {
+        console.log(chalk.dim(`  Apply with --apply --confirm ${RETENTION_CLEANUP_CONFIRMATION}`));
+      }
+    });
+
   const trust = program
     .command("trust")
     .description("Manage local workspace trust and permission profiles");

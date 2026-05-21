@@ -34,6 +34,11 @@ import {
   upsertSecretSafetyConfig,
 } from "../../lib/redaction.js";
 import {
+  RETENTION_CLEANUP_CONFIRMATION,
+  applyRetentionCleanup,
+  previewRetentionCleanup,
+} from "../../lib/retention-cleanup.js";
+import {
   checkWorkspacePermission,
   getWorkspaceTrustStatus,
   listWorkspaceTrustProfiles,
@@ -141,6 +146,56 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const findings = listSecretFindings(text);
           return { content: [{ type: "text" as const, text: JSON.stringify({ ok: findings.length === 0, findings }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  const retentionCleanupSchema = {
+    older_than_days: z.number().int().positive().describe("Prune records older than this many days"),
+    project_id: z.string().optional().describe("Project ID or prefix to scope cleanup"),
+    task_statuses: z.array(z.enum(["pending", "in_progress", "completed", "failed", "cancelled"])).optional(),
+    run_statuses: z.array(z.enum(["running", "completed", "failed", "cancelled"])).optional(),
+    include: z.array(z.enum(["comments", "runs", "verifications", "expired_artifacts"])).optional(),
+    now: z.string().optional().describe("ISO timestamp for deterministic previews"),
+  };
+
+  if (shouldRegisterTool("preview_retention_cleanup")) {
+    server.tool(
+      "preview_retention_cleanup",
+      "Preview local retention cleanup candidates for comments, runs, verification evidence, and expired artifact files. Never returns raw evidence content.",
+      retentionCleanupSchema,
+      async (input) => {
+        try {
+          const report = previewRetentionCleanup({
+            ...input,
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("apply_retention_cleanup")) {
+    server.tool(
+      "apply_retention_cleanup",
+      `Apply local retention cleanup after a dry run. Requires confirm="${RETENTION_CLEANUP_CONFIRMATION}" and never uploads data.`,
+      {
+        ...retentionCleanupSchema,
+        confirm: z.string().describe(`Exact confirmation string: ${RETENTION_CLEANUP_CONFIRMATION}`),
+      },
+      async (input) => {
+        try {
+          const report = applyRetentionCleanup({
+            ...input,
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

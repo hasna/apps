@@ -21,6 +21,7 @@ import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { testExtensionCompatibility } from "./lib/local-extensions.js";
 import { generateReleaseNotes } from "./lib/release-notes.js";
+import { previewRetentionCleanup } from "./lib/retention-cleanup.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
@@ -83,6 +84,7 @@ describe("stable JSON contracts", () => {
       "task",
       "project",
       "local_task_fields",
+      "retention_cleanup_report",
       "duplicate_task_candidate",
       "task_merge_result",
       "verification_provider",
@@ -161,6 +163,10 @@ describe("stable JSON contracts", () => {
       custom: { fixture: true },
     }, db);
     const localFields = getTaskLocalFields(task.id, db);
+    const retentionCleanupReport = previewRetentionCleanup({
+      older_than_days: 30,
+      now: "2026-01-02T04:00:00.000Z",
+    }, db);
     const duplicate = createTask({
       title: "Contract task",
       description: "Duplicate fixture",
@@ -282,6 +288,7 @@ describe("stable JSON contracts", () => {
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("local_task_fields", localFields);
+    expectValid("retention_cleanup_report", retentionCleanupReport);
     expectValid("duplicate_task_candidate", duplicateCandidate);
     expectValid("task_merge_result", mergeResult);
     expectValid("verification_provider", verificationProvider);

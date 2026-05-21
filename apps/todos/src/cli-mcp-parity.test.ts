@@ -20,6 +20,7 @@ const expectedDomains = [
   "templates",
   "workspace-trust",
   "secret-safety",
+  "retention-cleanup",
   "runner-sandbox",
   "extensions",
   "workflow-prompts",
@@ -132,6 +133,11 @@ describe("CLI/MCP parity manifest", () => {
       "query_tasks_by_fields",
     ]));
     expect(byDomain.get("local-fields")?.jsonContracts).toContain("local_task_fields");
+    expect(byDomain.get("retention-cleanup")?.mcpTools).toEqual(expect.arrayContaining([
+      "preview_retention_cleanup",
+      "apply_retention_cleanup",
+    ]));
+    expect(byDomain.get("retention-cleanup")?.jsonContracts).toContain("retention_cleanup_report");
     expect(byDomain.get("dedupe")?.mcpTools).toEqual(expect.arrayContaining([
       "find_duplicate_tasks",
       "merge_duplicate_task",
@@ -191,6 +197,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
+    expect(docs).toContain("todos retention cleanup --older-than-days 30 --json");
     expect(docs).toContain("todos template-library --json");
     expect(docs).toContain("todos extensions compat ./todos.extension.json --json");
     expect(docs).toContain("todos handoff --create --agent codex");
