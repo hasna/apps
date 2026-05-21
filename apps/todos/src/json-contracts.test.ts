@@ -9,7 +9,7 @@ import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createDispatch } from "./db/dispatches.js";
 import { registerAgent } from "./db/agents.js";
 import { createProject } from "./db/projects.js";
-import { buildTaskBoardSnapshot, createTaskBoard, getStatus, getTimeReport, startFocusSession, stopFocusSession } from "./db/tasks.js";
+import { buildTaskBoardSnapshot, createCalendarItem, createTaskBoard, exportCalendarIcs, getStatus, getTimeReport, listCalendarEvents, startFocusSession, stopFocusSession } from "./db/tasks.js";
 import { createTaskList } from "./db/task-lists.js";
 import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
@@ -95,6 +95,8 @@ describe("stable JSON contracts", () => {
       "local_activity_timeline_entry",
       "status_summary",
       "context_pack",
+      "calendar_event",
+      "ics_export_result",
       "task_board",
       "board_snapshot",
       "focus_session",
@@ -227,6 +229,15 @@ describe("stable JSON contracts", () => {
     const timeline = getLocalActivityTimeline({ entity_type: "task", entity_id: task.id }, db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
     const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
+    createCalendarItem({
+      title: "Contract calendar milestone",
+      kind: "milestone",
+      starts_at: "2026-01-02T04:00:00.000Z",
+      task_id: task.id,
+      project_id: project.id,
+    }, db);
+    const calendarEvent = listCalendarEvents({ kind: "milestone" }, db)[0]!;
+    const icsExport = exportCalendarIcs({ generated_at: "2026-01-02T03:04:05.000Z" }, db);
     const taskBoard = createTaskBoard({ name: "contracts-board", project_id: project.id }, db);
     const boardSnapshot = buildTaskBoardSnapshot(taskBoard.id, db);
     const focusSession = startFocusSession({ task_id: task.id, agent_id: "jsoncontractagent", started_at: "2026-01-02T03:00:00.000Z" }, db);
@@ -253,6 +264,8 @@ describe("stable JSON contracts", () => {
     expectValid("local_activity_timeline_entry", timeline.entries[0]);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
+    expectValid("calendar_event", calendarEvent);
+    expectValid("ics_export_result", icsExport);
     expectValid("task_board", taskBoard);
     expectValid("board_snapshot", boardSnapshot);
     expectValid("focus_session", stoppedFocusSession);

@@ -30,6 +30,10 @@ import {
   listTaskBoards,
   moveBoardCard,
   renderTaskBoard,
+  createCalendarItem,
+  exportCalendarIcs,
+  importCalendarIcs,
+  listCalendarEvents,
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
 import {
@@ -45,7 +49,7 @@ import {
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
-import type { BoardLane, BoardScope, TaskPriority } from "../../types/index.js";
+import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
 import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -172,6 +176,16 @@ function parseBoardLane(value: string, position: number): BoardLane {
 function parseBoardLanes(values: string[] | undefined): BoardLane[] | undefined {
   if (!values || values.length === 0) return undefined;
   return values.map((value, index) => parseBoardLane(value, index));
+}
+
+function parseCalendarKind(value: string | undefined): CalendarEventKind | undefined {
+  if (!value) return undefined;
+  const allowed = ["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"];
+  if (!allowed.includes(value)) {
+    console.error(chalk.red(`--kind must be one of: ${allowed.join(", ")}`));
+    process.exit(1);
+  }
+  return value as CalendarEventKind;
 }
 
 export function registerQueryCommands(program: Command) {
@@ -1651,6 +1665,141 @@ export function registerQueryCommands(program: Command) {
         stale_after_hours: Number(opts.staleAfterHours),
       });
       console.log(renderAgentContextPack(pack, format, Boolean(opts.compact)));
+    });
+
+  const calendar = program
+    .command("calendar")
+    .description("List and export local calendar events");
+
+  calendar
+    .command("list")
+    .description("List local calendar events from tasks, SLA thresholds, runs, and local items")
+    .option("--from <iso>", "Start window")
+    .option("--to <iso>", "End window")
+    .option("--project <id>", "Project filter")
+    .option("--task <id>", "Task filter")
+    .option("--plan <id>", "Plan filter")
+    .option("--kind <kind>", "Event kind filter")
+    .option("--include-completed", "Include completed/cancelled tasks")
+    .option("--no-runs", "Exclude run events")
+    .option("--no-sla", "Exclude SLA threshold events")
+    .option("--no-local", "Exclude local calendar items")
+    .option("--limit <n>", "Max events", "50")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const globalOpts = program.opts();
+        const events = listCalendarEvents({
+          project_id: resolveProjectOption(opts.project || globalOpts.project),
+          task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          kind: parseCalendarKind(opts.kind),
+          from: opts.from,
+          to: opts.to,
+          include_completed: Boolean(opts.includeCompleted),
+          include_runs: opts.runs,
+          include_sla: opts.sla,
+          include_local: opts.local,
+          limit: Number(opts.limit),
+        });
+        if (opts.json || globalOpts.json) { output(events, true); return; }
+        if (events.length === 0) { console.log(chalk.dim("No calendar events.")); return; }
+        for (const event of events) {
+          console.log(`${event.starts_at} ${event.kind.padEnd(13)} ${event.title}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  calendar
+    .command("add <title>")
+    .description("Create a local reminder, milestone, or work block")
+    .option("--kind <kind>", "task_reminder, milestone, work_block, imported", "work_block")
+    .requiredOption("--start <iso>", "Start timestamp")
+    .option("--end <iso>", "End timestamp")
+    .option("--timezone <tz>", "Timezone label")
+    .option("--project <id>", "Project link")
+    .option("--task <id>", "Task link")
+    .option("--plan <id>", "Plan link")
+    .option("--run <id>", "Run link")
+    .option("--rrule <rule>", "Natural recurrence rule or ICS RRULE")
+    .option("--description <text>", "Description")
+    .option("--metadata <json>", "Metadata JSON object")
+    .option("-j, --json", "Output JSON")
+    .action((title: string, opts) => {
+      try {
+        const globalOpts = program.opts();
+        const item = createCalendarItem({
+          title,
+          kind: parseCalendarKind(opts.kind),
+          description: opts.description,
+          starts_at: opts.start,
+          ends_at: opts.end,
+          timezone: opts.timezone,
+          project_id: resolveProjectOption(opts.project || globalOpts.project),
+          task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          run_id: resolveOptionalId("task_runs", opts.run),
+          recurrence_rule: opts.rrule,
+          metadata: parseJsonObjectOption(opts.metadata, "--metadata"),
+        });
+        if (opts.json || globalOpts.json) { output(item, true); return; }
+        console.log(chalk.green(`Created calendar item ${item.id.slice(0, 8)}`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  calendar
+    .command("export")
+    .description("Export deterministic local calendar events as ICS")
+    .option("--from <iso>", "Start window")
+    .option("--to <iso>", "End window")
+    .option("--project <id>", "Project filter")
+    .option("--task <id>", "Task filter")
+    .option("--plan <id>", "Plan filter")
+    .option("--kind <kind>", "Event kind filter")
+    .option("--name <text>", "Calendar name", "Hasna Todos")
+    .option("--redact", "Redact event summaries and descriptions")
+    .option("--out <path>", "Write ICS to file")
+    .option("-j, --json", "Output JSON envelope")
+    .action((opts) => {
+      try {
+        const globalOpts = program.opts();
+        const exported = exportCalendarIcs({
+          calendar_name: opts.name,
+          project_id: resolveProjectOption(opts.project || globalOpts.project),
+          task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+          plan_id: resolveOptionalId("plans", opts.plan),
+          kind: parseCalendarKind(opts.kind),
+          from: opts.from,
+          to: opts.to,
+          redact: Boolean(opts.redact),
+        });
+        if (opts.out) {
+          writeFileSync(opts.out, exported.content);
+          if (!(opts.json || globalOpts.json)) console.log(chalk.green(`Wrote ${exported.events.length} events to ${opts.out}`));
+        }
+        if (opts.json || globalOpts.json) { output(exported, true); return; }
+        if (!opts.out) console.log(exported.content);
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  calendar
+    .command("import <path>")
+    .description("Import VEVENT entries from an ICS file as local imported calendar items")
+    .option("-j, --json", "Output JSON")
+    .action((path: string, opts) => {
+      try {
+        const result = importCalendarIcs(readFileSync(path, "utf-8"));
+        if (opts.json || program.opts().json) { output(result, true); return; }
+        console.log(chalk.green(`Imported ${result.imported} events, skipped ${result.skipped}`));
+      } catch (e) {
+        handleError(e);
+      }
     });
 
   const board = program

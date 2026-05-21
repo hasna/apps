@@ -1060,4 +1060,29 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_task_boards_plan ON task_boards(plan_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (57);
   `,
+  // Migration 58: Local calendar items for ICS export/import
+  `
+  CREATE TABLE IF NOT EXISTS local_calendar_items (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('task_due', 'task_sla', 'task_reminder', 'milestone', 'work_block', 'run', 'imported')),
+    title TEXT NOT NULL,
+    description TEXT,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT,
+    timezone TEXT,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+    run_id TEXT,
+    recurrence_rule TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_time ON local_calendar_items(starts_at, ends_at);
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_task ON local_calendar_items(task_id);
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_project ON local_calendar_items(project_id);
+  CREATE INDEX IF NOT EXISTS idx_local_calendar_items_kind ON local_calendar_items(kind);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (58);
+  `,
 ];

@@ -19,6 +19,7 @@ export type TodosCliMcpParityDomain =
   | "local-event-hooks"
   | "encryption"
   | "agent-runs"
+  | "calendar"
   | "kanban-boards"
   | "time-tracking"
   | "handoffs"
@@ -516,6 +517,28 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos agent-runs queue 1234abcd --adapter codex --json",
       mcpTool: "queue_agent_run",
+    },
+  },
+  {
+    domain: "calendar",
+    cliCommands: [
+      "todos calendar list",
+      "todos calendar add",
+      "todos calendar export",
+      "todos calendar import",
+    ],
+    mcpTools: [
+      "create_calendar_item",
+      "list_calendar_events",
+      "export_calendar_ics",
+      "import_calendar_ics",
+    ],
+    jsonContracts: ["calendar_event", "ics_export_result", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos calendar export --redact --json",
+      mcpTool: "export_calendar_ics",
     },
   },
   {

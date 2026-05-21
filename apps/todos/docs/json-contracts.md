@@ -32,6 +32,8 @@ The stable contracts cover these object IDs:
 - `local_activity_timeline_entry`
 - `status_summary`
 - `context_pack`
+- `calendar_event`
+- `ics_export_result`
 - `task_board`
 - `board_snapshot`
 - `focus_session`
@@ -140,7 +142,17 @@ by `--include`, `--exclude`, or budget pruning. The estimate is intentionally
 simple and offline (`chars_div_4`) so CLI and MCP callers get repeatable compact
 JSON or Markdown without hosted summarization.
 
-## Time Tracking And Focus Sessions
+## Local Calendar And ICS
+
+`calendar_event` is the stable event object returned by `todos calendar list
+--json` and `list_calendar_events`. Events are derived locally from task due
+dates, SLA thresholds, run ledgers, and authored reminders, milestones, or work
+blocks.
+
+`ics_export_result` is returned by `todos calendar export --json` and
+`export_calendar_ics`. It contains the generated `text/calendar` content plus
+the deterministic event list used to build it. Redacted exports replace event
+summaries and descriptions without calling hosted calendar services.
 
 ## Kanban Boards
 
@@ -202,7 +214,8 @@ stored as plaintext JSON.
 `@hasna/todos` data between stores. It contains versioned package metadata,
 source scope, grouped records for projects, task lists, plans, tasks,
 dependencies, comments, runs, run evidence, file evidence, git refs, commits,
-verification records, saved search views, and local board definitions.
+verification records, saved search views, local board definitions, and local
+calendar items.
 
 `local_bridge_import_result` is returned by dry-run and applied imports. It
 reports inserted counts, skipped counts, conflicts, and validation issues so a

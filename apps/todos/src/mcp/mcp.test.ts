@@ -825,6 +825,32 @@ describe("MCP tool wrappers", () => {
     expect(JSON.parse(listResult.content[0].text).map((item: { name: string }) => item.name)).toContain("mcp-board");
   });
 
+  it("calendar tools create list export and import local ICS events", async () => {
+    const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP calendar task", due_at: "2026-06-01T09:00:00.000Z" }, db);
+
+    const createdResult = await callCapturedTool(tools, "create_calendar_item", {
+      title: "MCP milestone",
+      kind: "milestone",
+      starts_at: "2026-06-02T10:00:00.000Z",
+      task_id: task.id,
+    });
+    expect(JSON.parse(createdResult.content[0].text).kind).toBe("milestone");
+
+    const listResult = await callCapturedTool(tools, "list_calendar_events", {});
+    expect(JSON.parse(listResult.content[0].text).map((event: { kind: string }) => event.kind)).toEqual(expect.arrayContaining(["task_due", "milestone"]));
+
+    const exportResult = await callCapturedTool(tools, "export_calendar_ics", { redact: true });
+    const exported = JSON.parse(exportResult.content[0].text);
+    expect(exported.content).toContain("BEGIN:VCALENDAR");
+    expect(exported.content).not.toContain("MCP calendar task");
+
+    const importResult = await callCapturedTool(tools, "import_calendar_ics", {
+      content: "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:mcp@example.com\nDTSTART:20260603T120000Z\nSUMMARY:MCP imported\nEND:VEVENT\nEND:VCALENDAR",
+    });
+    expect(JSON.parse(importResult.content[0].text).imported).toBe(1);
+  });
+
   it("git traceability tools link refs, commits, and verification evidence", async () => {
     const tools = captureTools(registerTaskResources);
     const task = createTask({ title: "Traceable via MCP" }, db);

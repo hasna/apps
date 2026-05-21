@@ -119,5 +119,21 @@ export type {
   UpdateTaskBoardInput,
 } from "./boards.ts";
 
+export {
+  createCalendarItem,
+  exportCalendarIcs,
+  getCalendarItem,
+  importCalendarIcs,
+  listCalendarEvents,
+  listCalendarItems,
+} from "./calendar.js";
+
+export type {
+  CalendarQuery,
+  CreateCalendarItemInput,
+  IcsExportOptions,
+  IcsImportResult,
+} from "./calendar.ts";
+
 // Re-export types that were previously exported from this file
 export type { TaskFilter } from "../types/index.js";

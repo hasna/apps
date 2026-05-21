@@ -66,6 +66,7 @@ function emptyCounts(): Record<keyof TodosLocalBridgeData, number> {
     task_verifications: 0,
     saved_views: 0,
     task_boards: 0,
+    local_calendar_items: 0,
   };
 }
 

@@ -155,8 +155,14 @@ export {
   moveBoardCard,
   renderTaskBoard,
   updateTaskBoard,
+  createCalendarItem,
+  exportCalendarIcs,
+  getCalendarItem,
+  importCalendarIcs,
+  listCalendarEvents,
+  listCalendarItems,
 } from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus, FocusSessionQuery, IdleFocusSessionPrompt, LogTimeInput, StartFocusSessionInput, StopFocusSessionInput, TimeReportEntry, CreateTaskBoardInput, MoveBoardCardInput, TaskBoardBundle, TaskBoardQuery, UpdateTaskBoardInput } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus, FocusSessionQuery, IdleFocusSessionPrompt, LogTimeInput, StartFocusSessionInput, StopFocusSessionInput, TimeReportEntry, CreateTaskBoardInput, MoveBoardCardInput, TaskBoardBundle, TaskBoardQuery, UpdateTaskBoardInput, CalendarQuery, CreateCalendarItemInput, IcsExportOptions, IcsImportResult } from "./db/tasks.js";
 
 // Cycles
 export {

@@ -1654,6 +1654,60 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should list export and import local calendar events from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-calendar.db";
+    const icsPath = "/tmp/test-cli-calendar.ics";
+    const { unlinkSync, writeFileSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(icsPath); } catch {}
+
+    try {
+      const task = JSON.parse((await runCli([
+        "add",
+        "calendar cli task",
+        "--due",
+        "2026-06-01T09:00:00.000Z",
+        "--recurrence",
+        "every week",
+        "--json",
+      ], dbPath)).stdout);
+      const item = await runCli([
+        "calendar",
+        "add",
+        "CLI milestone",
+        "--kind",
+        "milestone",
+        "--start",
+        "2026-06-02T10:00:00.000Z",
+        "--task",
+        task.id,
+        "--json",
+      ], dbPath);
+      expect(item.exitCode).toBe(0);
+      expect(JSON.parse(item.stdout).kind).toBe("milestone");
+
+      const listed = JSON.parse((await runCli(["calendar", "list", "--json"], dbPath)).stdout);
+      expect(listed.map((event: { kind: string }) => event.kind)).toEqual(expect.arrayContaining(["task_due", "milestone"]));
+
+      const exported = JSON.parse((await runCli(["calendar", "export", "--json"], dbPath)).stdout);
+      expect(exported.content).toContain("BEGIN:VCALENDAR");
+      expect(exported.content).toContain("SUMMARY:Due: calendar cli task");
+
+      writeFileSync(icsPath, `BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:cli@example.com
+DTSTART:20260603T120000Z
+SUMMARY:CLI imported
+END:VEVENT
+END:VCALENDAR`);
+      const imported = JSON.parse((await runCli(["calendar", "import", icsPath, "--json"], dbPath)).stdout);
+      expect(imported.imported).toBe(1);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+      try { unlinkSync(icsPath); } catch {}
+    }
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

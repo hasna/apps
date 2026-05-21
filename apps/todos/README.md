@@ -526,6 +526,24 @@ for existing filters, and the metadata is included in local bridge exports.
 MCP clients use `get_task_fields`, `set_task_fields`, and
 `query_tasks_by_fields` for the same local-only workflow.
 
+## Local Calendar And ICS
+
+Calendar events are derived from local tasks, SLA thresholds, run ledgers, and
+authored local reminders, milestones, or work blocks. Exported ICS files are
+deterministic and can be redacted before sharing:
+
+```bash
+todos calendar list --from 2026-06-01T00:00:00.000Z --json
+todos calendar add "Release milestone" --kind milestone --start 2026-06-01T09:00:00.000Z --json
+todos calendar export --redact --out todos.ics
+todos calendar import team.ics --json
+```
+
+Recurring task rules are mapped into ICS `RRULE` values when possible, and task
+SLA thresholds appear as local calendar events without any Google Calendar,
+hosted API, or cloud sync dependency. MCP clients use `create_calendar_item`,
+`list_calendar_events`, `export_calendar_ics`, and `import_calendar_ics`.
+
 ## Local Saved Search Views
 
 Saved views are local SQLite records for repeatable task, project, plan, run,
@@ -641,10 +659,10 @@ todos bridge-import todos-bridge.json --apply --resolve-conflicts
 
 Bridge bundles include local projects, task lists, plans, tasks, dependencies,
 comments, run ledgers, command evidence, file evidence, artifacts, stored
-artifact contents, commits, refs, verification records, saved views, and local
-board definitions. Imports default to dry-run mode and report conflicts before
-writing. The package does not upload bundles or call hosted services; any hosted
-sync must consume the exported JSON explicitly.
+artifact contents, commits, refs, verification records, saved views, local board
+definitions, and local calendar items. Imports default to dry-run mode and
+report conflicts before writing. The package does not upload bundles or call
+hosted services; any hosted sync must consume the exported JSON explicitly.
 
 For multi-machine local work, `--resolve-conflicts` performs a safe task merge
 instead of overwriting local edits. It fills blank local fields from the

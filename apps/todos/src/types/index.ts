@@ -640,6 +640,62 @@ export interface BoardSnapshot {
   };
 }
 
+export type CalendarEventKind = "task_due" | "task_sla" | "task_reminder" | "milestone" | "work_block" | "run" | "imported";
+
+export interface LocalCalendarItem {
+  id: string;
+  kind: CalendarEventKind;
+  title: string;
+  description: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  recurrence_rule: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocalCalendarItemRow {
+  id: string;
+  kind: CalendarEventKind;
+  title: string;
+  description: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  recurrence_rule: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  kind: CalendarEventKind;
+  title: string;
+  description: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  plan_id: string | null;
+  run_id: string | null;
+  recurrence_rule: string | null;
+  source: "task" | "run" | "local";
+  badges: string[];
+  metadata: Record<string, unknown>;
+}
+
 // Task watcher — agent subscription to task events
 export interface TaskWatcher {
   id: string;

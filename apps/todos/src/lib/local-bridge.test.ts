@@ -8,7 +8,7 @@ import { createPlan } from "../db/plans.js";
 import { createProject } from "../db/projects.js";
 import { createTaskList } from "../db/task-lists.js";
 import { linkTaskGitRef, linkTaskToCommit } from "../db/task-commits.js";
-import { addDependency, createTask, createTaskBoard, getTask, listTaskBoards, listTasks } from "../db/tasks.js";
+import { addDependency, createCalendarItem, createTask, createTaskBoard, getTask, listCalendarItems, listTaskBoards, listTasks } from "../db/tasks.js";
 import { addTaskRunArtifact, addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun, verifyTaskRunArtifacts } from "../db/task-runs.js";
 import { resetConfig, saveConfig } from "./config.js";
 import {
@@ -80,6 +80,13 @@ describe("local bridge import/export", () => {
         { id: "doing", name: "Doing", statuses: ["in_progress"], wip_limit: 2, position: 1 },
       ],
     }, db);
+    createCalendarItem({
+      title: "Bridge milestone",
+      kind: "milestone",
+      starts_at: "2026-06-01T09:00:00.000Z",
+      project_id: project.id,
+      task_id: first.id,
+    }, db);
 
     const bundle = createLocalBridgeBundle({
       project_id: project.id,
@@ -109,6 +116,7 @@ describe("local bridge import/export", () => {
       task_verifications: 1,
       saved_views: 1,
       task_boards: 1,
+      local_calendar_items: 1,
     });
     expect(bundle.artifact_contents).toHaveLength(1);
     expect(validateLocalBridgeBundle(bundle).ok).toBe(true);
@@ -156,6 +164,12 @@ describe("local bridge import/export", () => {
       metadata: { source: "test" },
     }, sourceDb);
     createTaskBoard({ name: "portable-board", project_id: project.id }, sourceDb);
+    createCalendarItem({
+      title: "Portable milestone",
+      kind: "milestone",
+      starts_at: "2026-06-01T09:00:00.000Z",
+      project_id: project.id,
+    }, sourceDb);
     const bundle = createLocalBridgeBundle({ project_id: project.id }, sourceDb);
 
     closeDatabase();
@@ -174,8 +188,10 @@ describe("local bridge import/export", () => {
     expect(applied.inserted.projects).toBe(1);
     expect(applied.inserted.tasks).toBe(1);
     expect(applied.inserted.task_boards).toBe(1);
+    expect(applied.inserted.local_calendar_items).toBe(1);
     expect(applied.inserted.saved_views).toBe(0);
     expect(listTaskBoards({}, targetDb).map((board) => board.name)).toContain("portable-board");
+    expect(listCalendarItems({}, targetDb).map((item) => item.title)).toContain("Portable milestone");
     expect(getTask(task.id, targetDb)).toMatchObject({
       id: task.id,
       title: "Portable task",

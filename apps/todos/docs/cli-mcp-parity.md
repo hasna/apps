@@ -48,6 +48,8 @@ structured error contracts.
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
+- `calendar`: local task due dates, SLA threshold events, run-ledger events,
+  reminders, milestones, work blocks, deterministic ICS export, and ICS import.
 - `kanban-boards`: local task and plan board definitions, workflow lanes, WIP
   limits, blocked/ready badges, board snapshots, terminal/TUI rendering, and
   card moves.
@@ -104,6 +106,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "get_board_snapshot", "arguments": { "board_id": "local-flow" } }
+```
+
+CLI calendar export:
+
+```bash
+todos calendar export --redact --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "export_calendar_ics", "arguments": { "redact": true } }
 ```
 
 CLI focus session:

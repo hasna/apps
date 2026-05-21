@@ -656,6 +656,29 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_boards_project ON task_boards(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_boards_plan ON task_boards(plan_id)");
 
+  ensureTable("local_calendar_items", `
+    CREATE TABLE local_calendar_items (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK(kind IN ('task_due', 'task_sla', 'task_reminder', 'milestone', 'work_block', 'run', 'imported')),
+      title TEXT NOT NULL,
+      description TEXT,
+      starts_at TEXT NOT NULL,
+      ends_at TEXT,
+      timezone TEXT,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+      run_id TEXT,
+      recurrence_rule TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_local_calendar_items_time ON local_calendar_items(starts_at, ends_at)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_local_calendar_items_task ON local_calendar_items(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_local_calendar_items_project ON local_calendar_items(project_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_local_calendar_items_kind ON local_calendar_items(kind)");
+
   // Task watchers
   ensureTable("task_watchers", `
     CREATE TABLE task_watchers (

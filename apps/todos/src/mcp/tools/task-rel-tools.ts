@@ -639,6 +639,144 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
     );
   }
 
+  // === CALENDAR ===
+
+  if (shouldRegisterTool("create_calendar_item")) {
+    server.tool(
+      "create_calendar_item",
+      "Create a local calendar reminder, milestone, or work block.",
+      {
+        title: z.string(),
+        kind: z.enum(["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"]).optional(),
+        starts_at: z.string(),
+        ends_at: z.string().optional(),
+        timezone: z.string().optional(),
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        run_id: z.string().optional(),
+        recurrence_rule: z.string().optional(),
+        description: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      },
+      async ({ title, kind, starts_at, ends_at, timezone, project_id, task_id, plan_id, run_id, recurrence_rule, description, metadata }) => {
+        try {
+          const { createCalendarItem } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const item = createCalendarItem({
+            title,
+            kind,
+            starts_at,
+            ends_at,
+            timezone,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            run_id,
+            recurrence_rule,
+            description,
+            metadata,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(item, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_calendar_events")) {
+    server.tool(
+      "list_calendar_events",
+      "List local calendar events derived from tasks, SLA thresholds, runs, and local calendar items.",
+      {
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        kind: z.enum(["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"]).optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        include_completed: z.boolean().optional(),
+        include_runs: z.boolean().optional(),
+        include_sla: z.boolean().optional(),
+        include_local: z.boolean().optional(),
+        limit: z.number().optional(),
+      },
+      async ({ project_id, task_id, plan_id, kind, from, to, include_completed, include_runs, include_sla, include_local, limit }) => {
+        try {
+          const { listCalendarEvents } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const events = listCalendarEvents({
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            kind,
+            from,
+            to,
+            include_completed,
+            include_runs,
+            include_sla,
+            include_local,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(events, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("export_calendar_ics")) {
+    server.tool(
+      "export_calendar_ics",
+      "Export local calendar events as deterministic ICS text.",
+      {
+        calendar_name: z.string().optional(),
+        project_id: z.string().optional(),
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        kind: z.enum(["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"]).optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        redact: z.boolean().optional(),
+      },
+      async ({ calendar_name, project_id, task_id, plan_id, kind, from, to, redact }) => {
+        try {
+          const { exportCalendarIcs } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const exported = exportCalendarIcs({
+            calendar_name,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id: plan_id ? resolveId(plan_id, "plans") : undefined,
+            kind,
+            from,
+            to,
+            redact,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(exported, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_calendar_ics")) {
+    server.tool(
+      "import_calendar_ics",
+      "Import VEVENT entries from ICS text as local calendar items.",
+      { content: z.string().describe("ICS file content") },
+      async ({ content }) => {
+        try {
+          const { importCalendarIcs } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const result = importCalendarIcs(content);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   // === KANBAN BOARDS ===
 
   if (shouldRegisterTool("create_board")) {
