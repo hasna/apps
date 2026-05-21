@@ -183,6 +183,48 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should scan and merge duplicate tasks from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-dedupe.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const firstResult = await runCli(["add", "Duplicate parser crash", "--json"], dbPath);
+      const secondResult = await runCli(["add", "Duplicate parser crash", "--json"], dbPath);
+      expect(firstResult.exitCode).toBe(0);
+      expect(secondResult.exitCode).toBe(0);
+      const first = JSON.parse(firstResult.stdout);
+      const second = JSON.parse(secondResult.stdout);
+
+      const scanResult = await runCli(["dedupe", "scan", "--json"], dbPath);
+      expect(scanResult.stderr).toBe("");
+      expect(scanResult.exitCode).toBe(0);
+      const scan = JSON.parse(scanResult.stdout);
+      expect(scan.count).toBeGreaterThanOrEqual(1);
+      expect(scan.candidates[0].reasons).toContain("exact normalized title match");
+
+      const mergeResult = await runCli([
+        "dedupe",
+        "merge",
+        first.id,
+        second.id,
+        "--agent",
+        "codex",
+        "--reason",
+        "same title",
+        "--json",
+      ], dbPath);
+      expect(mergeResult.stderr).toBe("");
+      expect(mergeResult.exitCode).toBe(0);
+      const merge = JSON.parse(mergeResult.stdout);
+      expect(merge.primary_task.id).toBe(first.id);
+      expect(merge.archived_duplicate.status).toBe("cancelled");
+      expect(merge.archived_duplicate.metadata.merged_into).toBe(first.id);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should bootstrap a local project from CLI JSON output", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

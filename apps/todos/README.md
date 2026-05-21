@@ -317,6 +317,23 @@ for existing filters, and the metadata is included in local bridge exports.
 MCP clients use `get_task_fields`, `set_task_fields`, and
 `query_tasks_by_fields` for the same local-only workflow.
 
+## Local Duplicate Detection
+
+Agents can scan local tasks for likely duplicates from imported issue URLs,
+stack traces, exact titles, and similar task text, then merge duplicate evidence
+without deleting either task record:
+
+```bash
+todos dedupe scan --threshold 0.8 --json
+todos dedupe merge <primary-task-id> <duplicate-task-id> --reason "same imported issue" --json
+```
+
+Merges archive the duplicate as `cancelled`, add a `duplicates` relationship,
+and preserve comments, dependencies, dependents, run ledgers, files, inbox
+items, verification evidence, history, git refs, commits, and checklist rows on
+the primary task. MCP clients use `find_duplicate_tasks` and
+`merge_duplicate_task` for the same local-only workflow.
+
 ## Local Agent Context Packs
 
 Context packs create deterministic run-start bundles for Codex, Claude Code,

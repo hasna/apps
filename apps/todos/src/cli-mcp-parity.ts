@@ -4,6 +4,7 @@ import { getMcpToolNames } from "./mcp.js";
 export type TodosCliMcpParityDomain =
   | "tasks"
   | "local-fields"
+  | "dedupe"
   | "projects"
   | "plans"
   | "workspace-trust"
@@ -145,6 +146,25 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json",
       mcpTool: "set_task_fields",
+    },
+  },
+  {
+    domain: "dedupe",
+    cliCommands: [
+      "todos dedupe scan",
+      "todos dedupe merge",
+    ],
+    mcpTools: [
+      "find_duplicate_tasks",
+      "merge_duplicate_task",
+    ],
+    jsonContracts: ["duplicate_task_candidate", "task_merge_result", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos dedupe scan --threshold 0.8 --json",
+      mcpTool: "find_duplicate_tasks",
     },
   },
   {

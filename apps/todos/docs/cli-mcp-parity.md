@@ -18,6 +18,8 @@ structured error contracts.
   leases, stale recovery, and bulk workflows.
 - `local-fields`: local labels, priority, severity, owner, area, and custom
   fields with query support for agent-native task selection.
+- `dedupe`: local duplicate scans and merge workflows that preserve comments,
+  dependencies, run ledgers, files, inbox links, and verification evidence.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
@@ -71,6 +73,30 @@ Matching MCP tool:
 
 ```json
 { "tool": "set_task_fields", "arguments": { "task_id": "1234abcd", "labels": ["bug", "cli"], "severity": "s1", "custom": { "component": "parser" } } }
+```
+
+CLI duplicate scan:
+
+```bash
+todos dedupe scan --threshold 0.8 --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "find_duplicate_tasks", "arguments": { "threshold": 0.8 } }
+```
+
+CLI duplicate merge:
+
+```bash
+todos dedupe merge primary123 duplicate456 --reason "same imported issue" --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "merge_duplicate_task", "arguments": { "primary_task_id": "primary123", "duplicate_task_id": "duplicate456", "reason": "same imported issue" } }
 ```
 
 CLI workspace permission check:

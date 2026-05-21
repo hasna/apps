@@ -858,6 +858,32 @@ describe("MCP tool wrappers", () => {
     expect(query.tasks[0].id).toBe(task.id);
   });
 
+  it("duplicate wrappers scan and merge without dropping task records", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const primary = createTask({ title: "MCP duplicate parser crash" }, db);
+    const duplicate = createTask({ title: "MCP duplicate parser crash" }, db);
+
+    const scanResult = await callCapturedTool(tools, "find_duplicate_tasks", { threshold: 0.8 });
+    const scan = JSON.parse(scanResult.content[0]!.text);
+    expect(scan.count).toBeGreaterThanOrEqual(1);
+    expect(scan.candidates.some((candidate: { primary_task: Task; duplicate_task: Task }) => {
+      const pair = new Set([candidate.primary_task.id, candidate.duplicate_task.id]);
+      return pair.has(primary.id) && pair.has(duplicate.id);
+    })).toBe(true);
+
+    const mergeResult = await callCapturedTool(tools, "merge_duplicate_task", {
+      primary_task_id: primary.id,
+      duplicate_task_id: duplicate.id,
+      agent_id: "codex",
+      reason: "same MCP task",
+    });
+    const merge = JSON.parse(mergeResult.content[0]!.text);
+    expect(merge.primary_task.id).toBe(primary.id);
+    expect(merge.archived_duplicate.status).toBe("cancelled");
+    expect(merge.archived_duplicate.metadata.merged_into).toBe(primary.id);
+    expect(getTask(duplicate.id)?.status).toBe("cancelled");
+  });
+
   it("search_tasks wrapper calls the search library", async () => {
     const tools = captureTools(registerTaskProjectTools);
     createTask({ title: "Needle wrapper task" }, db);

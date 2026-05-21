@@ -15,6 +15,7 @@ import { createTemplate } from "./db/templates.js";
 import { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 import { createAgentContextPack } from "./lib/context-packs.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
+import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -63,6 +64,8 @@ describe("stable JSON contracts", () => {
       "task",
       "project",
       "local_task_fields",
+      "duplicate_task_candidate",
+      "task_merge_result",
       "agent",
       "template",
       "task_list",
@@ -118,6 +121,23 @@ describe("stable JSON contracts", () => {
       custom: { fixture: true },
     }, db);
     const localFields = getTaskLocalFields(task.id, db);
+    const duplicate = createTask({
+      title: "Contract task",
+      description: "Duplicate fixture",
+      metadata: { source_url: "https://github.com/hasna/todos/issues/991" },
+    }, db);
+    const sourcePeer = createTask({
+      title: "Contract duplicate",
+      metadata: { source_url: "https://github.com/hasna/todos/issues/991" },
+    }, db);
+    const duplicateCandidate = findDuplicateTasks({ threshold: 0.8 }, db)
+      .find((candidate) => candidate.primary_task.id === duplicate.id && candidate.duplicate_task.id === sourcePeer.id)!;
+    const mergeResult = mergeDuplicateTask({
+      primary_task_id: duplicate.id,
+      duplicate_task_id: sourcePeer.id,
+      agent_id: "jsoncontractagent",
+      reason: "contract fixture",
+    }, db);
     const agent = registerAgent({
       name: "jsoncontractagent",
       description: "Contract fixture agent",
@@ -163,6 +183,8 @@ describe("stable JSON contracts", () => {
     expectValid("task_list", taskList);
     expectValid("task", task);
     expectValid("local_task_fields", localFields);
+    expectValid("duplicate_task_candidate", duplicateCandidate);
+    expectValid("task_merge_result", mergeResult);
     expectValid("agent", agent);
     expectValid("template", template);
     expectValid("comment", comment);

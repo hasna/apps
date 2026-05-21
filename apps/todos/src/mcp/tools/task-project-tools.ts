@@ -73,6 +73,7 @@ import {
 } from "../../lib/local-encryption.js";
 import { getLocalActivityTimeline } from "../../lib/activity-timeline.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
+import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -1791,6 +1792,52 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const tasks = queryTasksByLocalFields(input);
           return { content: [{ type: "text" as const, text: JSON.stringify({ tasks, count: tasks.length }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("find_duplicate_tasks")) {
+    server.tool(
+      "find_duplicate_tasks",
+      "Find likely duplicate local tasks from source URLs, imported issues, stack traces, and task text.",
+      {
+        threshold: z.number().min(0).max(1).optional().describe("Minimum duplicate score from 0 to 1."),
+        limit: z.number().optional().describe("Maximum local tasks to compare."),
+        include_archived: z.boolean().optional().describe("Include archived tasks in the scan."),
+      },
+      async (input) => {
+        try {
+          const candidates = findDuplicateTasks(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ candidates, count: candidates.length }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("merge_duplicate_task")) {
+    server.tool(
+      "merge_duplicate_task",
+      "Merge a duplicate local task into a primary task while preserving comments, dependencies, runs, files, inbox items, and verification evidence.",
+      {
+        primary_task_id: z.string().describe("Task ID to keep."),
+        duplicate_task_id: z.string().describe("Task ID to archive as duplicate."),
+        agent_id: z.string().optional().describe("Agent recording the merge."),
+        reason: z.string().optional().describe("Human-readable merge reason."),
+      },
+      async (input) => {
+        try {
+          const result = mergeDuplicateTask({
+            primary_task_id: resolveId(input.primary_task_id),
+            duplicate_task_id: resolveId(input.duplicate_task_id),
+            agent_id: input.agent_id,
+            reason: input.reason,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
