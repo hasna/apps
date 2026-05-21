@@ -16,6 +16,7 @@ import {
 import { getRecap } from "../../db/audit.js";
 import { createHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
 import { isValidRecurrenceRule } from "../../lib/recurrence.js";
+import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
 import type { TaskPriority } from "../../types/index.js";
@@ -1524,6 +1525,64 @@ export function registerQueryCommands(program: Command) {
           return;
         }
         for (const task of tasks) console.log(formatTaskLine(task));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  const dedupe = program
+    .command("dedupe")
+    .description("Find and merge likely duplicate local tasks");
+
+  dedupe
+    .command("scan")
+    .description("Scan local tasks for likely duplicates")
+    .option("--threshold <n>", "Minimum duplicate score from 0 to 1", "0.74")
+    .option("--limit <n>", "Maximum tasks to compare", "1000")
+    .option("--include-archived", "Include archived tasks")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const candidates = findDuplicateTasks({
+          threshold: Number(opts.threshold),
+          limit: Number(opts.limit),
+          include_archived: Boolean(opts.includeArchived),
+        });
+        if (opts.json || globalOpts.json) { output({ candidates, count: candidates.length }, true); return; }
+        if (candidates.length === 0) {
+          console.log(chalk.dim("No duplicate candidates."));
+          return;
+        }
+        for (const candidate of candidates) {
+          const primary = candidate.primary_task.short_id || candidate.primary_task.id.slice(0, 8);
+          const duplicate = candidate.duplicate_task.short_id || candidate.duplicate_task.id.slice(0, 8);
+          console.log(`${chalk.cyan(primary)} <- ${chalk.yellow(duplicate)} ${candidate.score.toFixed(2)} ${candidate.reasons.join(", ")}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  dedupe
+    .command("merge <primary-task-id> <duplicate-task-id>")
+    .description("Merge a duplicate task into a primary task and archive the duplicate")
+    .option("--agent <agent>", "Agent ID recording the merge")
+    .option("--reason <reason>", "Human-readable merge reason")
+    .option("-j, --json", "Output as JSON")
+    .action((primaryTaskId: string, duplicateTaskId: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const result = mergeDuplicateTask({
+          primary_task_id: resolveTaskId(primaryTaskId),
+          duplicate_task_id: resolveTaskId(duplicateTaskId),
+          agent_id: opts.agent || globalOpts.agent,
+          reason: opts.reason,
+        });
+        if (opts.json || globalOpts.json) { output(result, true); return; }
+        const primary = result.primary_task.short_id || result.primary_task.id.slice(0, 8);
+        const duplicate = result.archived_duplicate.short_id || result.archived_duplicate.id.slice(0, 8);
+        console.log(chalk.green(`Merged ${duplicate} into ${primary}.`));
       } catch (e) {
         handleError(e);
       }

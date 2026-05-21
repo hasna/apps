@@ -13,6 +13,7 @@ import { withNoNetwork } from "./test/no-network.js";
 const expectedDomains = [
   "tasks",
   "local-fields",
+  "dedupe",
   "projects",
   "plans",
   "workspace-trust",
@@ -116,6 +117,11 @@ describe("CLI/MCP parity manifest", () => {
       "query_tasks_by_fields",
     ]));
     expect(byDomain.get("local-fields")?.jsonContracts).toContain("local_task_fields");
+    expect(byDomain.get("dedupe")?.mcpTools).toEqual(expect.arrayContaining([
+      "find_duplicate_tasks",
+      "merge_duplicate_task",
+    ]));
+    expect(byDomain.get("dedupe")?.jsonContracts).toEqual(expect.arrayContaining(["duplicate_task_candidate", "task_merge_result"]));
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
@@ -136,6 +142,7 @@ describe("CLI/MCP parity manifest", () => {
 
     expect(docs).toContain("todos add \"Fix flaky parser\" --priority high --json");
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
+    expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("create_task");
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");

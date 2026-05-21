@@ -113,6 +113,8 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             get_task_fields: "get_task_fields — Get local labels, priority, severity, owner, area, and custom fields. Params: task_id",
             set_task_fields: "set_task_fields — Set local labels, priority, severity, owner, area, and custom fields. Params: task_id, labels[], priority, severity, owner, area, custom, merge_custom",
             query_tasks_by_fields: "query_tasks_by_fields — Query tasks by local labels, priority, severity, owner, area, and custom fields. Params: labels[], priority, severity, owner, area, custom, limit",
+            find_duplicate_tasks: "find_duplicate_tasks — Find likely duplicate local tasks. Params: threshold, limit, include_archived",
+            merge_duplicate_task: "merge_duplicate_task — Merge a duplicate task into a primary task and archive the duplicate. Params: primary_task_id, duplicate_task_id, agent_id, reason",
             update_comment: "update_comment — Edit comment. Params: comment_id, body",
             delete_comment: "delete_comment — Delete comment. Params: comment_id",
             lock_task: "lock_task — Acquire exclusive lock. Params: task_id, agent_id, ttl_seconds",

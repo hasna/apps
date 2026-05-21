@@ -529,6 +529,17 @@ export type {
   SetTaskLocalFieldsInput,
 } from "./lib/local-fields.js";
 export {
+  findDuplicateTasks,
+  mergeDuplicateTask,
+} from "./lib/task-dedupe.js";
+export type {
+  DuplicateTaskCandidate,
+  FindDuplicateTasksOptions,
+  MergeDuplicateTaskInput,
+  TaskMergeMovedCounts,
+  TaskMergeResult,
+} from "./lib/task-dedupe.js";
+export {
   createAgentContextPack,
   renderAgentContextPack,
   renderAgentContextPackMarkdown,

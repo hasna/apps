@@ -17,6 +17,8 @@ The stable contracts cover these object IDs:
 - `task`
 - `project`
 - `local_task_fields`
+- `duplicate_task_candidate`
+- `task_merge_result`
 - `agent`
 - `template`
 - `task_list`
@@ -72,6 +74,16 @@ when present.
 `todos fields set --json`, `get_task_fields`, and `set_task_fields`. It keeps
 labels, priority, severity, owner, area, and custom local metadata in task
 metadata so bridge exports and imports carry it without any hosted dependency.
+
+## Duplicate Tasks
+
+`duplicate_task_candidate` is the stable object returned in each item from
+`todos dedupe scan --json` and `find_duplicate_tasks`. It includes the primary
+task, duplicate task, score, and human-readable reasons for the match.
+
+`task_merge_result` is returned by `todos dedupe merge --json` and
+`merge_duplicate_task`. It includes the updated primary task, archived duplicate
+task, duplicate relationship id, and moved evidence counts.
 
 ## Agent Context Packs
 
