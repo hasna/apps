@@ -47,6 +47,9 @@ structured error contracts.
 - `terminal-notifications`: local terminal watch rules for task, run, plan,
   approval, import, and export events with severity, agent, project, priority,
   status, payload text, and bell filters.
+- `branch-work-plans`: local branch-safe work plans with task/plan scope,
+  planned files, active file conflicts, git status, and suggested traceability
+  commands.
 - `encryption`: local encryption profiles, encrypted JSON values, and secure
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
@@ -322,6 +325,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "set_terminal_notification_rule", "arguments": { "name": "blocked", "events": ["task.blocked", "task.failed"], "min_severity": "warning", "agent_ids": ["codex"] } }
+```
+
+CLI branch-safe work plan:
+
+```bash
+todos branch-plan 1234abcd --branch task/parser-fix --path src/parser.ts --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "create_branch_work_plan", "arguments": { "task_id": "1234abcd", "branch": "task/parser-fix", "paths": ["src/parser.ts"] } }
 ```
 
 CLI encryption profile:

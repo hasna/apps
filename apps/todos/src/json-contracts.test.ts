@@ -114,6 +114,7 @@ describe("stable JSON contracts", () => {
       "local_event_hook_delivery",
       "terminal_notification_rule",
       "terminal_notification_evaluation",
+      "branch_work_plan",
       "local_encryption_profile",
       "local_encryption_envelope",
       "encrypted_local_bridge_bundle",
@@ -344,6 +345,23 @@ describe("stable JSON contracts", () => {
         bell: true,
         payload: {},
       }],
+    });
+    expectValid("branch_work_plan", {
+      schema_version: 1,
+      local_only: true,
+      generated_at: "2026-01-02T03:04:05.000Z",
+      branch: "task/demo",
+      base_branch: "main",
+      root: "/repo",
+      task_id: "task-1",
+      plan_id: null,
+      task_ids: ["task-1"],
+      files: ["src/demo.ts"],
+      conflicts: [],
+      git_status: { has_git: true, current_branch: "main", branch_exists: false, dirty_files: [] },
+      safe_to_start: true,
+      reasons: [],
+      commands: ["git switch main", "git switch -c task/demo main"],
     });
     expectValid("local_encryption_profile", {
       name: "default",

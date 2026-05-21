@@ -18,6 +18,7 @@ export type TodosCliMcpParityDomain =
   | "approval-gates"
   | "local-event-hooks"
   | "terminal-notifications"
+  | "branch-work-plans"
   | "encryption"
   | "agent-runs"
   | "source-index"
@@ -690,6 +691,18 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos terminal-notifications set blocked --event task.blocked,task.failed --min-severity warning --agent codex --json",
       mcpTool: "set_terminal_notification_rule",
+    },
+  },
+  {
+    domain: "branch-work-plans",
+    cliCommands: ["todos branch-plan"],
+    mcpTools: ["create_branch_work_plan"],
+    jsonContracts: ["branch_work_plan", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos branch-plan 1234abcd --branch task/parser-fix --path src/parser.ts --json",
+      mcpTool: "create_branch_work_plan",
     },
   },
   {

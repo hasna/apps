@@ -427,6 +427,22 @@ MCP clients get the same local data through `link_task_to_commit`,
 `add_task_verification`, and `get_task_traceability`, so agents can explain
 which task changed a commit, branch, PR, file, or verification command.
 
+## Local Branch-Safe Work Plans
+
+Before an agent starts a branch, it can ask for a local branch work plan that
+checks the task or plan scope, planned files, active file conflicts, local git
+status, and suggested branch/traceability commands:
+
+```bash
+todos branch-plan 1234abcd --branch task/parser-fix --path src/parser.ts --json
+todos branch-plan --plan <plan-id> --branch task/release-plan --no-git-status --json
+```
+
+MCP clients can call `create_branch_work_plan` with `task_id` or `plan_id`.
+The result is local-only: it does not create a branch, fetch from a remote, or
+contact hosted code review services. Agents can inspect `safe_to_start`,
+`conflicts`, `reasons`, and `commands` before running any git operation.
+
 ## Local Release Notes
 
 Generate changelogs from completed local tasks and their linked plans, commits,

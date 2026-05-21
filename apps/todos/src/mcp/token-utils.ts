@@ -75,6 +75,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "bootstrap_project",
     "approve_approval_gate",
     "create_plan",
+    "create_branch_work_plan",
     "create_project",
     "create_task_list",
     "delete_plan",

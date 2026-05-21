@@ -34,6 +34,7 @@ const expectedDomains = [
   "handoffs",
   "local-event-hooks",
   "terminal-notifications",
+  "branch-work-plans",
   "encryption",
   "comments",
   "search",

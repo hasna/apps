@@ -85,6 +85,7 @@ import {
   upsertEncryptionProfile,
 } from "../../lib/local-encryption.js";
 import { getLocalActivityTimeline } from "../../lib/activity-timeline.js";
+import { createBranchWorkPlan } from "../../lib/branch-work-plans.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
@@ -734,6 +735,38 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ event, payload }) => {
         try {
           const result = evaluateTerminalWatchRules({ type: event, payload: payload || {} });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("create_branch_work_plan")) {
+    server.tool(
+      "create_branch_work_plan",
+      "Create a local branch-safe work plan from task or plan files, local file conflicts, and git status.",
+      {
+        task_id: z.string().optional(),
+        plan_id: z.string().optional(),
+        branch: z.string().describe("Branch name to plan"),
+        base_branch: z.string().optional().describe("Base branch. Defaults to main."),
+        paths: z.array(z.string()).optional().describe("Extra planned paths for the branch."),
+        root: z.string().optional().describe("Git root to inspect."),
+        include_git_status: z.boolean().optional().describe("Whether to inspect local git status. Defaults to true."),
+      },
+      async ({ task_id, plan_id, branch, base_branch, paths, root, include_git_status }) => {
+        try {
+          const result = createBranchWorkPlan({
+            task_id: task_id ? resolveId(task_id) : undefined,
+            plan_id,
+            branch,
+            base_branch,
+            paths,
+            root,
+            include_git_status,
+          });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

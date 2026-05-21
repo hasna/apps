@@ -229,6 +229,13 @@ result returned by `todos event-hooks test` and `test_local_event_hook`.
 and watch-rule evaluation tools, including skipped reasons and generated local
 terminal notification payloads.
 
+## Branch Work Plans
+
+`branch_work_plan` is returned by `todos branch-plan` and
+`create_branch_work_plan`. It captures the local task or plan scope, branch and
+base branch, planned files, active local file conflicts, git status, safety
+reasons, and suggested local commands for branch setup and traceability.
+
 ## Local Encryption
 
 `local_encryption_profile` is the stable config object returned by

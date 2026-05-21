@@ -508,6 +508,40 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should create a local branch-safe work plan from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-branch-plan.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Branch safe task", "--json"], dbPath)).stdout);
+    const result = await runCli([
+      "branch-plan",
+      task.id,
+      "--branch",
+      "task/branch-safe-task",
+      "--base",
+      "main",
+      "--path",
+      "src/branch-safe.ts",
+      "--root",
+      "/tmp/not-a-git-repo",
+      "--no-git-status",
+      "--json",
+    ], dbPath);
+
+    expect(result.exitCode).toBe(0);
+    const workPlan = JSON.parse(result.stdout);
+    expect(workPlan.safe_to_start).toBe(true);
+    expect(workPlan.files).toEqual(["src/branch-safe.ts"]);
+    expect(workPlan.commands).toContain(`todos link-ref ${task.id.slice(0, 8)} task/branch-safe-task --type branch --provider git`);
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should manage and run local verification providers from the CLI", async () => {
     const dbPath = "/tmp/test-cli-verification-providers.db";
     const { unlinkSync } = await import("node:fs");

@@ -438,6 +438,47 @@ exit 0
     });
 
   program
+    .command("branch-plan [task-id]")
+    .description("Create a local branch-safe work plan from task or plan files")
+    .requiredOption("--branch <name>", "Branch name to plan")
+    .option("--base <name>", "Base branch", "main")
+    .option("--plan <id>", "Plan ID scope instead of a single task")
+    .option("--path <list>", "Comma-separated extra paths expected for this branch")
+    .option("--root <path>", "Git root to inspect", process.cwd())
+    .option("--no-git-status", "Skip local git status checks")
+    .action(async (taskId: string | undefined, opts: { branch: string; base?: string; plan?: string; path?: string; root?: string; gitStatus?: boolean }) => {
+      const globalOpts = program.opts();
+      const { createBranchWorkPlan } = await import("../../lib/branch-work-plans.js");
+      const resolvedTaskId = taskId ? resolveTaskId(taskId) : undefined;
+      const plan = createBranchWorkPlan({
+        task_id: resolvedTaskId,
+        plan_id: opts.plan,
+        branch: opts.branch,
+        base_branch: opts.base,
+        paths: opts.path ? opts.path.split(",").map((item) => item.trim()).filter(Boolean) : undefined,
+        root: opts.root,
+        include_git_status: opts.gitStatus !== false,
+      });
+      if (globalOpts.json) { output(plan, true); return; }
+      console.log(plan.safe_to_start ? chalk.green("Branch work plan is safe to start.") : chalk.yellow("Branch work plan needs attention."));
+      console.log(`${chalk.dim("Branch:")} ${plan.branch} ${chalk.dim("from")} ${plan.base_branch}`);
+      if (plan.files.length > 0) {
+        console.log(chalk.bold("\nFiles:"));
+        for (const file of plan.files) console.log(`  ${file}`);
+      }
+      if (plan.conflicts.length > 0) {
+        console.log(chalk.bold("\nConflicts:"));
+        for (const conflict of plan.conflicts) console.log(`  ${conflict.level} ${conflict.path} -> ${conflict.conflicting_task_short_id || conflict.conflicting_task_id.slice(0, 8)} ${conflict.conflicting_task_title}`);
+      }
+      if (plan.reasons.length > 0) {
+        console.log(chalk.bold("\nReasons:"));
+        for (const reason of plan.reasons) console.log(`  - ${reason}`);
+      }
+      console.log(chalk.bold("\nCommands:"));
+      for (const command of plan.commands) console.log(`  ${command}`);
+    });
+
+  program
     .command("record-verification <task-id> <command>")
     .description("Record a verification command and result for a task")
     .option("--status <status>", "Verification status: passed, failed, or unknown", "unknown")

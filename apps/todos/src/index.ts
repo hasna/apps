@@ -610,6 +610,13 @@ export type {
   TerminalNotificationRuleInput,
   TerminalWatchEventInput,
 } from "./lib/terminal-notifications.js";
+export { createBranchWorkPlan } from "./lib/branch-work-plans.js";
+export type {
+  BranchWorkPlan,
+  BranchWorkPlanConflict,
+  BranchWorkPlanGitStatus,
+  CreateBranchWorkPlanInput,
+} from "./lib/branch-work-plans.js";
 export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,

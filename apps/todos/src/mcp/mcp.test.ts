@@ -519,6 +519,25 @@ describe("MCP tool operations", () => {
     }
   });
 
+  it("branch work plan tool creates local safe branch plans", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "MCP branch plan" }, db);
+
+    const result = await callCapturedTool(tools, "create_branch_work_plan", {
+      task_id: task.id,
+      branch: "task/mcp-branch-plan",
+      base_branch: "main",
+      paths: ["src/mcp-branch-plan.ts"],
+      root: "/tmp/not-a-git-repo",
+      include_git_status: false,
+    });
+
+    const workPlan = JSON.parse(result.content[0]!.text);
+    expect(workPlan.safe_to_start).toBe(true);
+    expect(workPlan.files).toEqual(["src/mcp-branch-plan.ts"]);
+    expect(workPlan.commands).toContain(`todos link-ref ${task.id.slice(0, 8)} task/mcp-branch-plan --type branch --provider git`);
+  });
+
   it("local encryption tools manage profiles and JSON values", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
