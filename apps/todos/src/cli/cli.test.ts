@@ -1528,6 +1528,31 @@ describe("CLI integration", () => {
     expect(markdown.exitCode).toBe(0);
     expect(markdown.stdout).toContain("# Agent Context Pack: Context pack task");
     expect(markdown.stdout).toContain("For Takumi");
+
+    const compactJson = await runCli([
+      "context-pack",
+      task.id,
+      "--profile",
+      "codex",
+      "--format",
+      "json",
+      "--token-budget",
+      "180",
+      "--exclude",
+      "comments,runs",
+      "--compact",
+    ], dbPath);
+    expect(compactJson.exitCode).toBe(0);
+    const budgeted = JSON.parse(compactJson.stdout);
+    expect(budgeted.context_budget.token_budget).toBe(180);
+    expect(budgeted.context_budget.omitted_sections).toContain("comments");
+    expect(budgeted.context_budget.summaries.some((summary: { section: string; reason: string }) => summary.section === "comments" && summary.reason.includes("exclude_sections"))).toBe(true);
+    expect(compactJson.stdout).not.toContain("\n  ");
+
+    const compactMarkdown = await runCli(["context-pack", task.id, "--format", "compact-markdown", "--token-budget", "180"], dbPath);
+    expect(compactMarkdown.exitCode).toBe(0);
+    expect(compactMarkdown.stdout).toContain("# Context: Context pack task");
+    expect(compactMarkdown.stdout).toContain("Estimated tokens:");
     try { unlinkSync(dbPath); } catch {}
   });
 

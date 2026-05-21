@@ -507,6 +507,19 @@ describe("MCP tool operations", () => {
     });
     expect(markdownResult.content[0]!.text).toContain("# Agent Context Pack: MCP context pack");
     expect(markdownResult.content[0]!.text).toContain("For Claude Code");
+
+    const compactResult = await callCapturedTool(tools, "build_agent_context_pack", {
+      task_id: task.id,
+      profile: "codex",
+      format: "json",
+      token_budget: 180,
+      exclude_sections: ["comments", "runs"],
+      compact: true,
+    });
+    const compactPack = JSON.parse(compactResult.content[0]!.text);
+    expect(compactPack.context_budget.token_budget).toBe(180);
+    expect(compactPack.context_budget.omitted_sections).toEqual(expect.arrayContaining(["comments"]));
+    expect(compactResult.content[0]!.text).not.toContain("\n  ");
   });
 
   it("environment snapshot tools capture and compare local run evidence", async () => {

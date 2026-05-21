@@ -1520,6 +1520,11 @@ export function registerQueryCommands(program: Command) {
     .option("--dependencies <n>", "Dependencies per direction to include", "12")
     .option("--plan-tasks <n>", "Plan sibling tasks to include", "20")
     .option("--max-text <n>", "Max characters for long text fields", "6000")
+    .option("--summary-chars <n>", "Max characters for local omission summaries", "480")
+    .option("--token-budget <n>", "Approximate token budget for compacting context locally")
+    .option("--include <sections>", "Comma-separated sections to include before budgeting")
+    .option("--exclude <sections>", "Comma-separated sections to omit before budgeting")
+    .option("--compact", "Render compact Markdown or minified JSON")
     .option("--stale-after-hours <n>", "Warn when task state is older than this many hours", "72")
     .action(async (taskId: string, opts) => {
       const globalOpts = program.opts();
@@ -1528,8 +1533,8 @@ export function registerQueryCommands(program: Command) {
         console.error(chalk.red("Invalid --profile. Allowed values: codex, claude, takumi, generic."));
         process.exit(1);
       }
-      if (!["markdown", "json"].includes(format)) {
-        console.error(chalk.red("Invalid --format. Allowed values: markdown, json."));
+      if (!["markdown", "json", "compact-markdown", "compact-json"].includes(format)) {
+        console.error(chalk.red("Invalid --format. Allowed values: markdown, json, compact-markdown, compact-json."));
         process.exit(1);
       }
       const { createAgentContextPack, renderAgentContextPack } = await import("../../lib/context-packs.js");
@@ -1545,9 +1550,14 @@ export function registerQueryCommands(program: Command) {
         dependency_limit: Number(opts.dependencies),
         plan_task_limit: Number(opts.planTasks),
         max_text_chars: Number(opts.maxText),
+        summary_char_limit: Number(opts.summaryChars),
+        token_budget: opts.tokenBudget ? Number(opts.tokenBudget) : undefined,
+        include_sections: opts.include ? String(opts.include).split(",") : undefined,
+        exclude_sections: opts.exclude ? String(opts.exclude).split(",") : undefined,
+        compact: Boolean(opts.compact) || String(format).startsWith("compact-"),
         stale_after_hours: Number(opts.staleAfterHours),
       });
-      console.log(renderAgentContextPack(pack, format));
+      console.log(renderAgentContextPack(pack, format, Boolean(opts.compact)));
     });
 
   const fields = program

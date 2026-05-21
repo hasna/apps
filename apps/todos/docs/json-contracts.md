@@ -129,6 +129,13 @@ task ids, relevant local files, run ids, and per-agent acknowledgement state.
 selected task, project, plan, dependency, comment, file, verification, and run
 evidence plus a profile-specific prompt bundle for local agents.
 
+Context packs also include a `context_budget` object. It records the local
+token estimate, optional requested token budget, included/excluded sections,
+omitted sections, and deterministic redacted summaries for any evidence removed
+by `--include`, `--exclude`, or budget pruning. The estimate is intentionally
+simple and offline (`chars_div_4`) so CLI and MCP callers get repeatable compact
+JSON or Markdown without hosted summarization.
+
 ## Environment Snapshots
 
 `environment_snapshot` is the stable local reproducibility bundle returned by

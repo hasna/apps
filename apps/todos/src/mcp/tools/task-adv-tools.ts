@@ -263,9 +263,14 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
         dependency_limit: z.number().optional(),
         plan_task_limit: z.number().optional(),
         max_text_chars: z.number().optional(),
+        summary_char_limit: z.number().optional(),
+        token_budget: z.number().optional().describe("Approximate token budget for local context pruning"),
+        include_sections: z.array(z.string()).optional().describe("Context sections to include before budgeting"),
+        exclude_sections: z.array(z.string()).optional().describe("Context sections to omit before budgeting"),
+        compact: z.boolean().optional().describe("Render compact Markdown or minified JSON"),
         stale_after_hours: z.number().optional(),
       },
-      async ({ task_id, profile, format, run_id, agent_id, comment_limit, file_limit, verification_limit, run_limit, dependency_limit, plan_task_limit, max_text_chars, stale_after_hours }) => {
+      async ({ task_id, profile, format, run_id, agent_id, comment_limit, file_limit, verification_limit, run_limit, dependency_limit, plan_task_limit, max_text_chars, summary_char_limit, token_budget, include_sections, exclude_sections, compact, stale_after_hours }) => {
         try {
           const resolvedId = resolveId(task_id);
           const { createAgentContextPack, renderAgentContextPack } = require("../../lib/context-packs.js") as typeof import("../../lib/context-packs.js");
@@ -281,9 +286,14 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
             dependency_limit,
             plan_task_limit,
             max_text_chars,
+            summary_char_limit,
+            token_budget,
+            include_sections,
+            exclude_sections,
+            compact,
             stale_after_hours,
           });
-          const text = renderAgentContextPack(pack, format || "json");
+          const text = renderAgentContextPack(pack, format || "json", Boolean(compact));
           return { content: [{ type: "text" as const, text }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

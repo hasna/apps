@@ -8,7 +8,8 @@ import { addTaskFile } from "../db/task-files.js";
 import { addDependency } from "../db/task-graph.js";
 import { addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun } from "../db/task-runs.js";
 import { createTask } from "../db/tasks.js";
-import { createAgentContextPack, renderAgentContextPackMarkdown } from "./context-packs.js";
+import { withNoNetwork } from "../test/no-network.js";
+import { createAgentContextPack, renderAgentContextPackCompactMarkdown, renderAgentContextPackMarkdown } from "./context-packs.js";
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -85,5 +86,45 @@ describe("local agent context packs", () => {
     expect(markdown).not.toContain("first");
     expect(pack.comments.omitted).toBe(1);
     expect(pack.warnings).toContain("1 older comments omitted");
+  });
+
+  test("budgets context locally with include exclude rules and deterministic summaries", async () => {
+    const db = getDatabase();
+    const project = createProject({ name: "Budget Project", path: "/tmp/budget" }, db);
+    const plan = createPlan({ name: "Budget Plan", project_id: project.id }, db);
+    const task = createTask({
+      title: "Budget context",
+      description: "A long local description ".repeat(80),
+      project_id: project.id,
+      plan_id: plan.id,
+      metadata: { acceptance_criteria: ["keep the task useful", "summarize omitted local evidence"] },
+    }, db);
+    const blocker = createTask({ title: "Budget dependency", project_id: project.id }, db);
+    addDependency(task.id, blocker.id, db);
+    for (let i = 0; i < 8; i += 1) addComment({ task_id: task.id, agent_id: "codex", content: `comment ${i} ${"detail ".repeat(30)}` }, db);
+    addTaskFile({ task_id: task.id, path: "src/large-context.ts", status: "planned" }, db);
+    addTaskVerification({ task_id: task.id, command: "bun test", status: "passed", output_summary: "ok ".repeat(80) }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex", title: "budget run" }, db);
+    addTaskRunCommand({ run_id: run.id, command: "bun test src/lib/context-packs.test.ts", status: "passed", output_summary: "large output ".repeat(40) }, db);
+
+    const { result, calls } = await withNoNetwork(() => createAgentContextPack({
+      task_id: task.id,
+      profile: "codex",
+      token_budget: 220,
+      include_sections: ["acceptance_criteria", "comments", "traceability", "runs"],
+      exclude_sections: ["runs"],
+      summary_char_limit: 120,
+      compact: true,
+    }, db));
+
+    expect(calls).toEqual([]);
+    expect(result.context_budget.token_budget).toBe(220);
+    expect(result.context_budget.omitted_sections).toEqual(expect.arrayContaining(["project", "plan", "dependencies", "relevant_files", "runs"]));
+    expect(result.context_budget.summaries.some((summary) => summary.section === "runs" && summary.reason.includes("exclude_sections"))).toBe(true);
+    expect(result.context_budget.summaries.every((summary) => summary.text.length <= 135)).toBe(true);
+    expect(result.context_budget.estimated_tokens).toBeLessThan(result.context_budget.original_estimated_tokens);
+    const compact = renderAgentContextPackCompactMarkdown(result);
+    expect(compact).toContain("# Context: Budget context");
+    expect(compact).toContain("Estimated tokens:");
   });
 });

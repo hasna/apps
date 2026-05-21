@@ -553,11 +553,21 @@ traceability, and run-ledger evidence from the local SQLite database only:
 todos context-pack <task-id> --profile codex --format markdown
 todos context-pack <task-id> --profile claude --format json
 todos context-pack <task-id> --profile takumi --run <run-id> --comments 12 --files 40
+todos context-pack <task-id> --profile codex --token-budget 1800 --exclude runs --compact
 ```
 
 MCP clients can call `build_agent_context_pack` with the same limits and choose
-JSON or Markdown output. Long text and evidence are redacted and size-limited,
-and stale or omitted local data is surfaced as warnings in the pack.
+JSON, Markdown, compact JSON, or compact Markdown output. Long text and evidence
+are redacted and size-limited, and stale or omitted local data is surfaced as
+warnings in the pack.
+
+Budget-aware context packing is local and deterministic. Use `--token-budget`
+for an approximate character-based token budget, `--include` or `--exclude` to
+shape sections, and `--summary-chars` to cap the redacted summaries generated
+for omitted evidence. When the pack is too large, lower-priority evidence such
+as runs, traceability, comments, files, dependencies, and plan context is
+summarized in a stable `context_budget` block so agents still know what was left
+out.
 
 ## Local Inbox Intake
 

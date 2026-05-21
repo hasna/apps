@@ -475,7 +475,9 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
       limits: field("object", "Limits used to build the pack."),
       warnings: field("array", "Omission, staleness, and data-quality warnings."),
     },
-    optional: {},
+    optional: {
+      context_budget: field("object", "Local token estimate, budget pruning metadata, and deterministic summaries for omitted context."),
+    },
   }),
   contract({
     id: "environment_snapshot",

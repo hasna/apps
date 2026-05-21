@@ -620,6 +620,7 @@ export type {
 export {
   createAgentContextPack,
   renderAgentContextPack,
+  renderAgentContextPackCompactMarkdown,
   renderAgentContextPackMarkdown,
 } from "./lib/context-packs.js";
 export type {
@@ -627,6 +628,7 @@ export type {
   AgentContextPackFormat,
   AgentContextPackProfile,
   AgentContextPackRelatedTask,
+  AgentContextPackSection,
   AgentContextPackTask,
   CreateAgentContextPackInput,
 } from "./lib/context-packs.js";
