@@ -880,6 +880,34 @@ describe("MCP tool wrappers", () => {
     expect(runs[0].id).toBe(run.id);
   });
 
+  it("simulates local agent replay fixtures through MCP without mutating tasks", async () => {
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Replay via MCP" }, db);
+
+    const before = getTask(task.id, db)!.status;
+    const result = await callCapturedTool(tools, "simulate_agent_replay", {
+      agent_id: "mcp",
+      fixture: {
+        task: { id: task.id, title: task.title, status: "pending" },
+        runs: {
+          items: [{
+            status: "failed",
+            events: [{ event_type: "started", message: "start" }, { event_type: "failed", message: "failure" }],
+            commands: [{ command: "bun test", status: "failed", output_summary: "1 fail" }],
+          }],
+        },
+        approvals: [{ gate: "release", status: "pending" }],
+      },
+    });
+
+    const simulation = JSON.parse(result.content[0]!.text);
+    expect(simulation.mutates_database).toBe(false);
+    expect(simulation.task.final_status).toBe("failed");
+    expect(simulation.commands.failed).toBe(1);
+    expect(simulation.approvals.pending).toBe(1);
+    expect(getTask(task.id, db)!.status).toBe(before);
+  });
+
   it("agent run dispatcher tools queue and dry-run local adapters", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

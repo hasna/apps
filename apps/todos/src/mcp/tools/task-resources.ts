@@ -47,6 +47,7 @@ import {
   runVerificationProvider,
   upsertVerificationProvider,
 } from "../../lib/verification-providers.js";
+import { simulateAgentReplay } from "../../lib/agent-replay-simulator.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
 interface TaskResourcesContext {
@@ -677,6 +678,24 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const ledger = getTaskRunLedger(run_id);
           return { content: [{ type: "text" as const, text: JSON.stringify(ledger, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("simulate_agent_replay")) {
+    server.tool(
+      "simulate_agent_replay",
+      "Dry-run replay a recorded local agent context pack or run fixture without mutating the task database.",
+      {
+        fixture: z.record(z.unknown()).describe("Agent context pack, run replay fixture, or {context_pack} wrapper"),
+        agent_id: z.string().optional().describe("Agent identity to include in the simulation"),
+        scenario: z.string().optional().describe("Scenario label for deterministic snapshots"),
+      },
+      async ({ fixture, agent_id, scenario }) => {
+        try {
+          const simulation = simulateAgentReplay(fixture, { agent_id, scenario });
+          return { content: [{ type: "text" as const, text: JSON.stringify(simulation, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

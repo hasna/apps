@@ -247,6 +247,18 @@ Matching MCP tool:
 { "tool": "build_agent_context_pack", "arguments": { "task_id": "1234abcd", "profile": "codex", "format": "markdown" } }
 ```
 
+CLI agent replay simulation:
+
+```bash
+todos runs simulate replay.json --agent codex --scenario parser-failure --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "simulate_agent_replay", "arguments": { "fixture": { "task": { "id": "1234abcd", "title": "Parser fix", "status": "pending" } }, "agent_id": "codex", "scenario": "parser-failure" } }
+```
+
 CLI environment snapshot:
 
 ```bash

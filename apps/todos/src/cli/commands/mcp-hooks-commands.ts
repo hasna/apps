@@ -807,6 +807,25 @@ exit 0
     });
 
   runs
+    .command("simulate <fixture>")
+    .description("Dry-run replay a recorded context pack or run fixture without mutating local state")
+    .option("--agent <name>", "Agent identity to include in the simulation")
+    .option("--scenario <name>", "Scenario label for the deterministic replay")
+    .option("--format <format>", "Output format: json or markdown", "json")
+    .action(async (fixture: string, opts: { agent?: string; scenario?: string; format?: string }) => {
+      const globalOpts = program.opts();
+      const format = globalOpts.json ? "json" : opts.format || "json";
+      if (format !== "json" && format !== "markdown") {
+        console.error(chalk.red("--format must be json or markdown"));
+        process.exit(1);
+      }
+      const { renderAgentReplaySimulationMarkdown, simulateAgentReplayFile } = await import("../../lib/agent-replay-simulator.js");
+      const simulation = simulateAgentReplayFile(fixture, { agent_id: opts.agent || globalOpts.agent, scenario: opts.scenario });
+      if (format === "json") { output(simulation, true); return; }
+      console.log(renderAgentReplaySimulationMarkdown(simulation));
+    });
+
+  runs
     .command("event <run-id> <type> [message]")
     .description("Record a progress, comment, claim, or generic run event")
     .option("--agent <name>", "Agent recording the event")

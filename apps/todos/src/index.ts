@@ -630,6 +630,16 @@ export type {
   AgentContextPackTask,
   CreateAgentContextPackInput,
 } from "./lib/context-packs.js";
+export {
+  renderAgentReplaySimulationMarkdown,
+  simulateAgentReplay,
+  simulateAgentReplayFile,
+} from "./lib/agent-replay-simulator.js";
+export type {
+  AgentReplayOptions,
+  AgentReplaySimulation,
+  AgentReplayStep,
+} from "./lib/agent-replay-simulator.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

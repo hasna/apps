@@ -233,6 +233,24 @@ MCP clients can use `set_agent_run_adapter`, `queue_agent_run`,
 `cancel_agent_run_dispatch`, and `retry_agent_run_dispatch`. These commands
 launch only local processes and do not call hosted runners.
 
+## Local Agent Replay Simulation
+
+Replay simulation turns a recorded context pack or run fixture into a
+deterministic dry-run snapshot without opening the project database or mutating
+tasks. Use it to debug agent plans, verification commands, task transitions,
+failures, touched files, artifacts, and approval decisions offline:
+
+```bash
+todos context-pack <task-id> --format json > replay.json
+todos runs simulate replay.json --agent codex --scenario parser-failure --json
+todos runs simulate replay.json --format markdown
+```
+
+MCP clients can use `simulate_agent_replay` with a fixture object and optional
+`agent_id` or `scenario`. The simulator redacts fixture values before hashing
+or rendering, reports `mutates_database: false`, and emits stable command,
+approval, failure, file, artifact, and warning summaries for local debugging.
+
 ## Local Dependency Workflows
 
 Dependencies are stored in the local SQLite database and never require hosted

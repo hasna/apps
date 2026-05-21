@@ -629,6 +629,47 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should simulate an agent replay fixture from the CLI without a project database", async () => {
+    const dbPath = "/tmp/test-cli-replay-simulator.db";
+    const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+    const dir = mkdtempSync(join(tmpdir(), "todos-cli-replay-"));
+    const fixturePath = join(dir, "fixture.json");
+    writeFileSync(fixturePath, JSON.stringify({
+      task: { id: "task-1", title: "Replay CLI", status: "pending" },
+      runs: {
+        items: [{
+          status: "completed",
+          events: [{ event_type: "started", message: "start" }, { event_type: "completed", message: "done" }],
+          commands: [{ command: "bun test", status: "passed", output_summary: "ok" }],
+        }],
+      },
+      approvals: [{ gate: "release", status: "approved" }],
+    }));
+
+    const json = await runCli(["runs", "simulate", fixturePath, "--agent", "codex", "--json"], dbPath);
+    expect(json.stderr).toBe("");
+    expect(json.exitCode).toBe(0);
+    const simulation = JSON.parse(json.stdout);
+    expect(simulation.mutates_database).toBe(false);
+    expect(simulation.task.final_status).toBe("completed");
+    expect(simulation.commands.passed).toBe(1);
+    expect(simulation.approvals.approved).toBe(1);
+
+    const markdown = await runCli(["runs", "simulate", fixturePath, "--format", "markdown"], dbPath);
+    expect(markdown.exitCode).toBe(0);
+    expect(markdown.stdout).toContain("# Agent Replay Simulation: Replay CLI");
+
+    rmSync(dir, { recursive: true, force: true });
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should capture local inbox intake and dedupe repeated failures", async () => {
     const dbPath = "/tmp/test-cli-inbox-intake.db";
     const { unlinkSync, writeFileSync } = await import("node:fs");

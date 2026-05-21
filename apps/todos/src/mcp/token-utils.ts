@@ -190,6 +190,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "run_next_agent_dispatch",
     "set_agent_run_adapter",
     "set_verification_provider",
+    "simulate_agent_replay",
     "list_task_files",
     "lock_file",
     "log_time",

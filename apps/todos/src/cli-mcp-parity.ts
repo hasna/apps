@@ -419,6 +419,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "todos runs artifact",
       "todos runs artifact-verify",
       "todos runs finish",
+      "todos runs simulate",
     ],
     mcpTools: [
       "start_task_run",
@@ -430,13 +431,14 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "add_task_run_artifact",
       "verify_task_run_artifacts",
       "finish_task_run",
+      "simulate_agent_replay",
     ],
     jsonContracts: ["checkpoint", "local_bridge_bundle", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
     example: {
-      cli: "todos runs start 1234abcd --agent codex --json",
-      mcpTool: "start_task_run",
+      cli: "todos runs simulate replay.json --json",
+      mcpTool: "simulate_agent_replay",
     },
   },
   {
