@@ -13,6 +13,7 @@ export type TodosCliMcpParityDomain =
   | "runs"
   | "comments"
   | "search"
+  | "context-packs"
   | "imports"
   | "exports";
 
@@ -382,6 +383,18 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos search parser --status pending --json",
       mcpTool: "search_tasks",
+    },
+  },
+  {
+    domain: "context-packs",
+    cliCommands: ["todos context-pack"],
+    mcpTools: ["build_agent_context_pack"],
+    jsonContracts: ["context_pack", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos context-pack 1234abcd --profile codex --format markdown",
+      mcpTool: "build_agent_context_pack",
     },
   },
   {

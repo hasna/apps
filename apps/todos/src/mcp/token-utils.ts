@@ -29,6 +29,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
   tasks: [
     "archive_completed",
     "approve_task",
+    "build_agent_context_pack",
     "bulk_create_tasks",
     "bulk_delete_tasks",
     "bulk_update_tasks",

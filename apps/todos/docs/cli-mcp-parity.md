@@ -34,6 +34,8 @@ structured error contracts.
 - `comments`: task comments, progress notes, and activity entries.
 - `search`: search, status, standup, report, graph, context, and recent
   activity workflows.
+- `context-packs`: deterministic Markdown/JSON local context bundles for agent
+  run starts.
 - `imports`: template imports, inbox intake, and local bridge imports.
 - `exports`: template exports, traceability exports, verification records, and
   local bridge exports.
@@ -110,6 +112,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "queue_agent_run", "arguments": { "task_id": "1234abcd", "adapter": "codex" } }
+```
+
+CLI agent context pack:
+
+```bash
+todos context-pack 1234abcd --profile codex --format markdown
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "build_agent_context_pack", "arguments": { "task_id": "1234abcd", "profile": "codex", "format": "markdown" } }
 ```
 
 CLI bridge export:

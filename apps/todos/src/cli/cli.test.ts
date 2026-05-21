@@ -897,6 +897,29 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should build local agent context packs from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-context-pack.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Context pack task", "--description", "Run safely", "--json"], dbPath)).stdout);
+    expect((await runCli(["comment", task.id, "Bearer abcdefghijklmnop should redact"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["record-verification", task.id, "bun test", "--status", "passed", "--summary", "ok"], dbPath)).exitCode).toBe(0);
+    const json = await runCli(["context-pack", task.id, "--profile", "codex", "--format", "json"], dbPath);
+    expect(json.exitCode).toBe(0);
+    const pack = JSON.parse(json.stdout);
+    expect(pack.profile).toBe("codex");
+    expect(pack.task.title).toBe("Context pack task");
+    expect(pack.comments.recent[0].content).toContain("[REDACTED]");
+    expect(pack.traceability.verifications[0].command).toBe("bun test");
+
+    const markdown = await runCli(["context-pack", task.id, "--profile", "takumi", "--format", "markdown"], dbPath);
+    expect(markdown.exitCode).toBe(0);
+    expect(markdown.stdout).toContain("# Agent Context Pack: Context pack task");
+    expect(markdown.stdout).toContain("For Takumi");
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

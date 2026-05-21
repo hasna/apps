@@ -24,6 +24,7 @@ The stable contracts cover these object IDs:
 - `dispatch`
 - `audit_history`
 - `status_summary`
+- `context_pack`
 - `structured_error`
 - `api_error`
 - `local_bridge_bundle`
@@ -57,6 +58,13 @@ Two error shapes are stable:
 New machine-readable fields may be added to either error object. Existing
 clients should keep displaying the string message and use stable `code` values
 when present.
+
+## Agent Context Packs
+
+`context_pack` is the stable local bundle shape returned by
+`todos context-pack --format json` and `build_agent_context_pack`. It includes
+selected task, project, plan, dependency, comment, file, verification, and run
+evidence plus a profile-specific prompt bundle for local agents.
 
 ## Local Bridge Bundles
 

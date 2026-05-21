@@ -246,6 +246,52 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
     );
   }
 
+  if (shouldRegisterTool("build_agent_context_pack")) {
+    server.tool(
+      "build_agent_context_pack",
+      "Build a deterministic local agent context pack for Codex, Claude Code, Takumi, or generic agents. Returns JSON or Markdown and never calls hosted services.",
+      {
+        task_id: z.string().describe("Task ID"),
+        profile: z.enum(["codex", "claude", "takumi", "generic"]).optional().describe("Target agent profile"),
+        format: z.enum(["json", "markdown"]).optional().describe("Output format (default: json)"),
+        run_id: z.string().optional().describe("Limit run evidence to a specific run ID or prefix"),
+        agent_id: z.string().optional().describe("Agent building the pack"),
+        comment_limit: z.number().optional(),
+        file_limit: z.number().optional(),
+        verification_limit: z.number().optional(),
+        run_limit: z.number().optional(),
+        dependency_limit: z.number().optional(),
+        plan_task_limit: z.number().optional(),
+        max_text_chars: z.number().optional(),
+        stale_after_hours: z.number().optional(),
+      },
+      async ({ task_id, profile, format, run_id, agent_id, comment_limit, file_limit, verification_limit, run_limit, dependency_limit, plan_task_limit, max_text_chars, stale_after_hours }) => {
+        try {
+          const resolvedId = resolveId(task_id);
+          const { createAgentContextPack, renderAgentContextPack } = require("../../lib/context-packs.js") as typeof import("../../lib/context-packs.js");
+          const pack = createAgentContextPack({
+            task_id: resolvedId,
+            profile,
+            run_id,
+            agent_id,
+            comment_limit,
+            file_limit,
+            verification_limit,
+            run_limit,
+            dependency_limit,
+            plan_task_limit,
+            max_text_chars,
+            stale_after_hours,
+          });
+          const text = renderAgentContextPack(pack, format || "json");
+          return { content: [{ type: "text" as const, text }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   // === STANDUP ===
 
   if (shouldRegisterTool("standup")) {

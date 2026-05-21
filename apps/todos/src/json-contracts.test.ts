@@ -12,6 +12,7 @@ import { getStatus } from "./db/tasks.js";
 import { createTaskList } from "./db/task-lists.js";
 import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
+import { createAgentContextPack } from "./lib/context-packs.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -67,6 +68,7 @@ describe("stable JSON contracts", () => {
       "dispatch",
       "audit_history",
       "status_summary",
+      "context_pack",
       "structured_error",
       "api_error",
       "local_bridge_bundle",
@@ -137,6 +139,7 @@ describe("stable JSON contracts", () => {
     }, db);
     const history = logTaskChange(task.id, "update", "status", "pending", "in_progress", "agent-1", db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
+    const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
 
     expectValid("project", project);
     expectValid("task_list", taskList);
@@ -148,6 +151,7 @@ describe("stable JSON contracts", () => {
     expectValid("dispatch", dispatch);
     expectValid("audit_history", history);
     expectValid("status_summary", status);
+    expectValid("context_pack", contextPack);
     expectValid("structured_error", {
       code: "TASK_NOT_FOUND",
       message: "Task not found",

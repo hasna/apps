@@ -352,6 +352,35 @@ describe("MCP tool operations", () => {
     ]));
   });
 
+  it("agent context pack tool returns local JSON and Markdown bundles", async () => {
+    const tools = captureTools(registerTaskAdvTools);
+    const task = createTask({
+      title: "MCP context pack",
+      description: "Context for a local agent",
+      metadata: { acceptance_criteria: ["has JSON", "has Markdown"] },
+    }, db);
+    addComment({ task_id: task.id, agent_id: "mcp", content: "Use sk-abcdefghijklmnop only in redaction tests" }, db);
+
+    const jsonResult = await callCapturedTool(tools, "build_agent_context_pack", {
+      task_id: task.id.slice(0, 8),
+      profile: "codex",
+      format: "json",
+      agent_id: "mcp",
+    });
+    const pack = JSON.parse(jsonResult.content[0]!.text);
+    expect(pack.profile).toBe("codex");
+    expect(pack.acceptance_criteria).toEqual(["has JSON", "has Markdown"]);
+    expect(pack.comments.recent[0].content).toContain("[REDACTED_TOKEN]");
+
+    const markdownResult = await callCapturedTool(tools, "build_agent_context_pack", {
+      task_id: task.id,
+      profile: "claude",
+      format: "markdown",
+    });
+    expect(markdownResult.content[0]!.text).toContain("# Agent Context Pack: MCP context pack");
+    expect(markdownResult.content[0]!.text).toContain("For Claude Code");
+  });
+
   it("version-based optimistic locking via update_task", () => {
     const task = createTask({ title: "Lockable" }, db);
     const { updateTask } = require("./../../src/db/tasks.js");

@@ -469,6 +469,19 @@ export type {
   DecideApprovalGateInput,
   RequestApprovalGateInput,
 } from "./lib/approval-gates.js";
+export {
+  createAgentContextPack,
+  renderAgentContextPack,
+  renderAgentContextPackMarkdown,
+} from "./lib/context-packs.js";
+export type {
+  AgentContextPack,
+  AgentContextPackFormat,
+  AgentContextPackProfile,
+  AgentContextPackRelatedTask,
+  AgentContextPackTask,
+  CreateAgentContextPackInput,
+} from "./lib/context-packs.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

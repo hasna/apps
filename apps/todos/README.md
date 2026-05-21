@@ -242,6 +242,23 @@ metadata, redaction status, retention metadata, and metadata-only fallback when
 the original path is unavailable. Use `--no-store` to record only artifact
 metadata.
 
+## Local Agent Context Packs
+
+Context packs create deterministic run-start bundles for Codex, Claude Code,
+Takumi, or any local agent. A pack selects task, project, plan, dependencies,
+acceptance criteria, recent comments, relevant files, verification history,
+traceability, and run-ledger evidence from the local SQLite database only:
+
+```bash
+todos context-pack <task-id> --profile codex --format markdown
+todos context-pack <task-id> --profile claude --format json
+todos context-pack <task-id> --profile takumi --run <run-id> --comments 12 --files 40
+```
+
+MCP clients can call `build_agent_context_pack` with the same limits and choose
+JSON or Markdown output. Long text and evidence are redacted and size-limited,
+and stale or omitted local data is surfaced as warnings in the pack.
+
 ## Local Inbox Intake
 
 Paste failures, CI logs, GitHub issue URLs, files, or local git context into a

@@ -1282,6 +1282,49 @@ export function registerQueryCommands(program: Command) {
       console.log(chalk.dim(`\n  as_of: ${new Date().toISOString()}`));
     });
 
+  program
+    .command("context-pack <task-id>")
+    .description("Build a deterministic local agent context pack for a task")
+    .option("--profile <profile>", "Agent profile: codex, claude, takumi, generic", "generic")
+    .option("--format <format>", "Output format: markdown or json", "markdown")
+    .option("--run <id>", "Limit run evidence to a specific run ID or prefix")
+    .option("--comments <n>", "Recent comments to include", "8")
+    .option("--files <n>", "Relevant files to include", "24")
+    .option("--verifications <n>", "Verification records to include", "10")
+    .option("--runs <n>", "Run ledgers to include", "3")
+    .option("--dependencies <n>", "Dependencies per direction to include", "12")
+    .option("--plan-tasks <n>", "Plan sibling tasks to include", "20")
+    .option("--max-text <n>", "Max characters for long text fields", "6000")
+    .option("--stale-after-hours <n>", "Warn when task state is older than this many hours", "72")
+    .action(async (taskId: string, opts) => {
+      const globalOpts = program.opts();
+      const format = globalOpts.json ? "json" : opts.format;
+      if (!["codex", "claude", "takumi", "generic"].includes(opts.profile)) {
+        console.error(chalk.red("Invalid --profile. Allowed values: codex, claude, takumi, generic."));
+        process.exit(1);
+      }
+      if (!["markdown", "json"].includes(format)) {
+        console.error(chalk.red("Invalid --format. Allowed values: markdown, json."));
+        process.exit(1);
+      }
+      const { createAgentContextPack, renderAgentContextPack } = await import("../../lib/context-packs.js");
+      const pack = createAgentContextPack({
+        task_id: resolveTaskId(taskId),
+        agent_id: globalOpts.agent,
+        profile: opts.profile,
+        run_id: opts.run,
+        comment_limit: Number(opts.comments),
+        file_limit: Number(opts.files),
+        verification_limit: Number(opts.verifications),
+        run_limit: Number(opts.runs),
+        dependency_limit: Number(opts.dependencies),
+        plan_task_limit: Number(opts.planTasks),
+        max_text_chars: Number(opts.maxText),
+        stale_after_hours: Number(opts.staleAfterHours),
+      });
+      console.log(renderAgentContextPack(pack, format));
+    });
+
   const inbox = program
     .command("inbox")
     .description("Capture local inbox items from pasted errors, CI logs, git context, files, or GitHub issue URLs");

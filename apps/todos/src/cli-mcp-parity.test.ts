@@ -22,6 +22,7 @@ const expectedDomains = [
   "agent-runs",
   "comments",
   "search",
+  "context-packs",
   "imports",
   "exports",
 ];
