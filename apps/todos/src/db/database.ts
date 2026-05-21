@@ -122,11 +122,11 @@ export function uuid(): string {
   return crypto.randomUUID();
 }
 
-export function isLockExpired(lockedAt: string | null): boolean {
+export function isLockExpired(lockedAt: string | null, nowMs = Date.now()): boolean {
   if (!lockedAt) return true;
   const lockTime = new Date(lockedAt).getTime();
   const expiryMs = LOCK_EXPIRY_MINUTES * 60 * 1000;
-  return Date.now() - lockTime > expiryMs;
+  return nowMs - lockTime > expiryMs;
 }
 
 export function lockExpiryCutoff(nowMs = Date.now()): string {
