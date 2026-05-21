@@ -67,6 +67,26 @@ export interface AgentRunAdapterConfig {
   updated_at?: string;
 }
 
+export interface PolicyPackConfig {
+  name: string;
+  version: number;
+  root: string;
+  required_commands: string[];
+  prohibited_commands: string[];
+  prohibited_paths: string[];
+  required_statuses: string[];
+  require_passed_verification: boolean;
+  require_commit: boolean;
+  require_pull_request: boolean;
+  require_approval: boolean;
+  require_run: boolean;
+  require_artifact: boolean;
+  evidence_min_count: number;
+  branch_pattern?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
@@ -89,6 +109,8 @@ export interface TodosConfig {
   runner_sandboxes?: Record<string, RunnerSandboxProfile>;
   /** Local agent run adapters, keyed by adapter name. */
   agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
+  /** Local policy packs for task done gates, keyed by pack name. */
+  policy_packs?: Record<string, PolicyPackConfig>;
 }
 
 function getTodosGlobalDir(): string {

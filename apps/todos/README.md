@@ -73,6 +73,32 @@ MCP clients can use `set_runner_sandbox_profile`,
 are local-only and compose with workspace trust checks, so command and write
 decisions stay auditable before an agent records run evidence.
 
+## Local Policy Packs
+
+Policy packs are project-local done gates for agents. They validate task status,
+passed verification commands, prohibited commands, linked commits and pull
+requests, approvals, branch names, run ledgers, artifacts, changed paths, and
+minimum evidence counts from the local SQLite database and config only:
+
+```bash
+todos policies set release . \
+  --required-status completed \
+  --required-command "bun test,bun run typecheck" \
+  --prohibited-command "npm install -g,git reset --hard" \
+  --require-passed-verification \
+  --require-commit \
+  --require-pr \
+  --require-run \
+  --require-artifact
+todos policies validate release <task-id> --json
+todos policies explain release <task-id>
+```
+
+MCP clients can use `set_policy_pack`, `list_policy_packs`,
+`validate_policy_pack`, `explain_policy_pack`, and `remove_policy_pack`.
+Validation is a dry local read of recorded task evidence; it never calls a
+hosted enforcement service.
+
 ## Local Agent Run Queue
 
 Agent run adapters and queue entries are local. Queueing a task creates a run

@@ -41,6 +41,13 @@ import {
   removeRunnerSandboxProfile,
   upsertRunnerSandboxProfile,
 } from "../../lib/runner-sandbox.js";
+import {
+  explainPolicyPack,
+  listPolicyPacks,
+  removePolicyPack,
+  upsertPolicyPack,
+  validatePolicyPack,
+} from "../../lib/policy-packs.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -260,6 +267,104 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async (input) => {
         try {
           const result = explainRunnerSandbox(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === POLICY PACKS ===
+
+  if (shouldRegisterTool("list_policy_packs")) {
+    server.tool("list_policy_packs", "List local policy packs for task done gates.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listPolicyPacks(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  const policyPackSchema = {
+    name: z.string(),
+    root: z.string().optional(),
+    version: z.number().optional(),
+    required_commands: z.array(z.string()).optional(),
+    prohibited_commands: z.array(z.string()).optional(),
+    prohibited_paths: z.array(z.string()).optional(),
+    required_statuses: z.array(z.string()).optional(),
+    require_passed_verification: z.boolean().optional(),
+    require_commit: z.boolean().optional(),
+    require_pull_request: z.boolean().optional(),
+    require_approval: z.boolean().optional(),
+    require_run: z.boolean().optional(),
+    require_artifact: z.boolean().optional(),
+    evidence_min_count: z.number().optional(),
+    branch_pattern: z.string().optional(),
+  };
+
+  if (shouldRegisterTool("set_policy_pack")) {
+    server.tool(
+      "set_policy_pack",
+      "Create or update a local policy pack for task done gates.",
+      policyPackSchema,
+      async (input) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(upsertPolicyPack(input), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_policy_pack")) {
+    server.tool(
+      "remove_policy_pack",
+      "Remove a local policy pack.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removePolicyPack(name) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  const policyValidationSchema = {
+    name: z.string(),
+    task_id: z.string(),
+    root: z.string().optional(),
+  };
+
+  if (shouldRegisterTool("validate_policy_pack")) {
+    server.tool(
+      "validate_policy_pack",
+      "Validate a task against a local policy pack using only local evidence.",
+      policyValidationSchema,
+      async ({ name, task_id, root }) => {
+        try {
+          const result = validatePolicyPack({ name, task_id: resolveId(task_id), root });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.passed };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("explain_policy_pack")) {
+    server.tool(
+      "explain_policy_pack",
+      "Return dry-run explain output for a local policy-pack validation.",
+      policyValidationSchema,
+      async ({ name, task_id, root }) => {
+        try {
+          const result = explainPolicyPack({ name, task_id: resolveId(task_id), root });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

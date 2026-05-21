@@ -788,6 +788,66 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should manage local policy packs and validate task evidence", async () => {
+    const dbPath = "/tmp/test-cli-policies.db";
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-policies-home-"));
+    const project = join(home, "project");
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    try { unlinkSync(dbPath); } catch {}
+
+    const pack = await runCli([
+      "policies",
+      "set",
+      "release",
+      project,
+      "--required-status",
+      "completed",
+      "--required-command",
+      "bun test",
+      "--require-passed-verification",
+      "--require-commit",
+      "--require-pr",
+      "--require-approval",
+      "--require-run",
+      "--require-artifact",
+      "--evidence-min",
+      "6",
+      "--branch-pattern",
+      "task/*",
+      "--json",
+    ], dbPath);
+    expect(pack.exitCode).toBe(0);
+    expect(JSON.parse(pack.stdout).name).toBe("release");
+
+    const task = JSON.parse((await runCli(["add", "Policy task", "--approval", "--json"], dbPath)).stdout);
+    expect((await runCli(["--agent", "reviewer", "approve", task.id], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["update", task.id, "--status", "completed"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["link-commit", task.id, "abcdef1234567890", "--files", "src/policy.ts"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["link-ref", task.id, "task/local-policy-packs", "--type", "branch"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["link-ref", task.id, "17", "--type", "pull_request"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["record-verification", task.id, "bun test", "--status", "passed", "--artifact", "logs/test.txt"], dbPath)).exitCode).toBe(0);
+    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath)).stdout);
+    expect((await runCli(["runs", "artifact", run.id, "logs/run.txt", "--type", "log", "--no-store", "--json"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["runs", "finish", run.id, "--status", "completed", "--json"], dbPath)).exitCode).toBe(0);
+
+    const validation = await runCli(["policies", "validate", "release", task.id, "--json"], dbPath);
+    expect(validation.exitCode).toBe(0);
+    expect(JSON.parse(validation.stdout).passed).toBe(true);
+
+    const removed = await runCli(["policies", "remove", "release", "--json"], dbPath);
+    expect(removed.exitCode).toBe(0);
+    expect(JSON.parse(removed.stdout).removed).toBe(true);
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    rmSync(home, { recursive: true, force: true });
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

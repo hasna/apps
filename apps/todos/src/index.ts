@@ -385,6 +385,7 @@ export type {
   AgentRunAdapterConfig,
   CompletionGuardConfig,
   LocalApiConfig,
+  PolicyPackConfig,
   RunnerSandboxNetworkPolicy,
   RunnerSandboxProfile,
   WorkspacePermissionPreset,
@@ -435,6 +436,23 @@ export type {
   RunnerSandboxCheckInput,
   UpsertRunnerSandboxInput,
 } from "./lib/runner-sandbox.js";
+export {
+  explainPolicyPack,
+  getPolicyPack,
+  listPolicyPacks,
+  removePolicyPack,
+  upsertPolicyPack,
+  validatePolicyPack,
+} from "./lib/policy-packs.js";
+export type {
+  PolicyEvidenceSummary,
+  PolicyFindingSeverity,
+  PolicyFindingStatus,
+  PolicyPackFinding,
+  PolicyPackValidationResult,
+  UpsertPolicyPackInput,
+  ValidatePolicyPackInput,
+} from "./lib/policy-packs.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

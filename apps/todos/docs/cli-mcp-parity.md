@@ -23,6 +23,8 @@ structured error contracts.
   write scopes, env redaction declarations, and prompt-required decisions.
 - `runner-sandbox`: local runner command allowlists, cwd boundaries, write
   scopes, env allowlists, network policy, audit evidence, and dry-run explains.
+- `policy-packs`: local done-gate policies for required commands, forbidden
+  evidence, commits, pull requests, approvals, runs, and artifacts.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
@@ -70,6 +72,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "check_runner_sandbox", "arguments": { "name": "codex", "command": "bun test", "write_paths": ["src/index.ts"] } }
+```
+
+CLI policy validation:
+
+```bash
+todos policies validate release 1234abcd --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "validate_policy_pack", "arguments": { "name": "release", "task_id": "1234abcd" } }
 ```
 
 CLI agent run queue:

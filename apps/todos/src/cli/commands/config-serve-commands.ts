@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
-import { autoProject, output, formatTaskLine, normalizeStatus } from "../helpers.js";
+import { autoProject, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
 
 export function registerConfigServeCommands(program: Command) {
   // config
@@ -293,6 +293,129 @@ export function registerConfigServeCommands(program: Command) {
     .option("--env <list>", "Comma-separated environment keys to test")
     .option("--network", "Request network access")
     .action((name: string | undefined, opts: { path?: string; cwd?: string; command?: string; write?: string; env?: string; network?: boolean }) => runSandboxCheck(name, opts, false));
+
+  const policies = program
+    .command("policies")
+    .description("Manage local policy packs for task done gates");
+
+  function numberOption(value: string | undefined): number | undefined {
+    if (value === undefined) return undefined;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  function policyInput(name: string, root: string | undefined, opts: {
+    version?: string;
+    requiredCommand?: string;
+    prohibitedCommand?: string;
+    prohibitedPath?: string;
+    requiredStatus?: string;
+    requirePassedVerification?: boolean;
+    requireCommit?: boolean;
+    requirePr?: boolean;
+    requireApproval?: boolean;
+    requireRun?: boolean;
+    requireArtifact?: boolean;
+    evidenceMin?: string;
+    branchPattern?: string;
+  }) {
+    return {
+      name,
+      root: root || process.cwd(),
+      version: numberOption(opts.version),
+      required_commands: listOption(opts.requiredCommand),
+      prohibited_commands: listOption(opts.prohibitedCommand),
+      prohibited_paths: listOption(opts.prohibitedPath),
+      required_statuses: listOption(opts.requiredStatus),
+      require_passed_verification: opts.requirePassedVerification,
+      require_commit: opts.requireCommit,
+      require_pull_request: opts.requirePr,
+      require_approval: opts.requireApproval,
+      require_run: opts.requireRun,
+      require_artifact: opts.requireArtifact,
+      evidence_min_count: numberOption(opts.evidenceMin),
+      branch_pattern: opts.branchPattern,
+    };
+  }
+
+  policies
+    .command("list")
+    .description("List local policy packs")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listPolicyPacks } = await import("../../lib/policy-packs.js");
+      const packs = listPolicyPacks();
+      if (globalOpts.json) { output(packs, true); return; }
+      if (packs.length === 0) {
+        console.log(chalk.dim("No local policy packs configured."));
+        return;
+      }
+      for (const pack of packs) {
+        console.log(`${pack.name.padEnd(14)} v${String(pack.version).padEnd(3)} ${pack.root}`);
+      }
+    });
+
+  policies
+    .command("set <name> [root]")
+    .description("Add or update a local policy pack")
+    .option("--version <number>", "Policy pack version")
+    .option("--required-command <list>", "Comma-separated passed command patterns required for the task")
+    .option("--prohibited-command <list>", "Comma-separated command patterns that must not appear in evidence")
+    .option("--prohibited-path <list>", "Comma-separated changed file or artifact path patterns that must not appear")
+    .option("--required-status <list>", "Comma-separated allowed task statuses")
+    .option("--require-passed-verification", "Require at least one passed verification record")
+    .option("--require-commit", "Require at least one linked commit")
+    .option("--require-pr", "Require at least one linked pull request")
+    .option("--require-approval", "Require task approval fields")
+    .option("--require-run", "Require at least one local run ledger")
+    .option("--require-artifact", "Require at least one verification or run artifact")
+    .option("--evidence-min <number>", "Minimum total evidence record count")
+    .option("--branch-pattern <pattern>", "Require a linked branch matching a string, wildcard, or /regex/")
+    .action(async (name: string, root: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      const { upsertPolicyPack } = await import("../../lib/policy-packs.js");
+      const pack = upsertPolicyPack(policyInput(name, root, opts));
+      if (globalOpts.json) { output(pack, true); return; }
+      console.log(chalk.green(`Policy pack ${pack.name} v${pack.version} saved for ${pack.root}`));
+    });
+
+  policies
+    .command("remove <name>")
+    .description("Remove a local policy pack")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removePolicyPack } = await import("../../lib/policy-packs.js");
+      const removed = removePolicyPack(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Policy pack removed.") : chalk.dim("No policy pack matched."));
+    });
+
+  async function runPolicyValidation(name: string, taskId: string, explain: boolean) {
+    const globalOpts = program.opts();
+    const { validatePolicyPack, explainPolicyPack } = await import("../../lib/policy-packs.js");
+    const resolvedId = resolveTaskId(taskId);
+    const result = explain
+      ? explainPolicyPack({ name, task_id: resolvedId })
+      : validatePolicyPack({ name, task_id: resolvedId });
+    if (globalOpts.json) { output(result, true); return; }
+    console.log(result.passed ? chalk.green("Policy passed") : chalk.red("Policy failed"));
+    for (const item of result.findings) {
+      const marker = item.status === "pass" ? chalk.green("pass") : chalk.red("fail");
+      console.log(`  ${marker} ${item.id}: ${item.message}`);
+      if (item.evidence.length > 0) console.log(`    ${chalk.dim(item.evidence.join(", "))}`);
+    }
+    if (!result.passed && !explain) process.exitCode = 1;
+  }
+
+  policies
+    .command("validate <name> <task-id>")
+    .description("Validate a task against a local policy pack")
+    .action((name: string, taskId: string) => runPolicyValidation(name, taskId, false));
+
+  policies
+    .command("explain <name> <task-id>")
+    .description("Dry-run explain output for local policy-pack validation")
+    .action((name: string, taskId: string) => runPolicyValidation(name, taskId, true));
 
   // serve (web dashboard)
   program

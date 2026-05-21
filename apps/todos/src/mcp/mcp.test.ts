@@ -248,6 +248,66 @@ describe("MCP tool operations", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("policy pack tools manage local done gates", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { addTaskVerification, linkTaskGitRef, linkTaskToCommit } = await import("../db/task-commits.js");
+    const { addTaskRunArtifact, finishTaskRun, startTaskRun } = await import("../db/task-runs.js");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-policies-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const root = join(home, "project");
+    const task = createTask({ title: "Policy via MCP", requires_approval: true }, db);
+    const { updateTask } = await import("../db/tasks.js");
+    updateTask(task.id, { version: task.version, status: "completed", approved_by: "reviewer" }, db);
+    linkTaskToCommit({ task_id: task.id, sha: "abcdef1234567890", files_changed: ["src/policy.ts"] }, db);
+    linkTaskGitRef({ task_id: task.id, ref_type: "pull_request", name: "18" }, db);
+    addTaskVerification({ task_id: task.id, command: "bun test", status: "passed", artifact_path: "logs/test.txt" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp" }, db);
+    addTaskRunArtifact({ run_id: run.id, path: "logs/run.txt", store_content: false }, db);
+    finishTaskRun({ run_id: run.id, status: "completed" }, db);
+
+    const savedResult = await callCapturedTool(tools, "set_policy_pack", {
+      name: "release",
+      root,
+      required_statuses: ["completed"],
+      required_commands: ["bun test"],
+      require_passed_verification: true,
+      require_commit: true,
+      require_pull_request: true,
+      require_approval: true,
+      require_run: true,
+      require_artifact: true,
+    });
+    expect(JSON.parse(savedResult.content[0]!.text).name).toBe("release");
+
+    const validationResult = await callCapturedTool(tools, "validate_policy_pack", {
+      name: "release",
+      task_id: task.id,
+    });
+    const validation = JSON.parse(validationResult.content[0]!.text);
+    expect(validation.passed).toBe(true);
+    expect(validation.audit_evidence.artifacts).toEqual(expect.arrayContaining(["logs/test.txt", "logs/run.txt"]));
+
+    const explainResult = await callCapturedTool(tools, "explain_policy_pack", {
+      name: "release",
+      task_id: task.id,
+    });
+    expect(JSON.parse(explainResult.content[0]!.text).mode).toBe("explain");
+
+    const listResult = await callCapturedTool(tools, "list_policy_packs", {});
+    expect(JSON.parse(listResult.content[0]!.text)[0].name).toBe("release");
+    await callCapturedTool(tools, "remove_policy_pack", { name: "release" });
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
   it("version-based optimistic locking via update_task", () => {
     const task = createTask({ title: "Lockable" }, db);
     const { updateTask } = require("./../../src/db/tasks.js");
