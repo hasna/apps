@@ -591,6 +591,7 @@ export interface LockResult {
   success: boolean;
   locked_by?: string;
   locked_at?: string;
+  expires_at?: string;
   error?: string;
 }
 

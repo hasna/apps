@@ -158,17 +158,24 @@ export function registerTaskWorkflowTools(server: McpServer, ctx: TaskWorkflowCo
         task_list_id: z.string().optional().describe("Filter by task list"),
         plan_id: z.string().optional().describe("Filter by plan"),
         tags: z.array(z.string()).optional().describe("Filter by tags"),
+        steal_stale: z.boolean().optional().describe("Steal the highest-priority stale in-progress task when no pending task is available"),
+        stale_minutes: z.number().optional().describe("How long a task must be stale before stealing (default: 30)"),
       },
-      async ({ agent_id, project_id, task_list_id, plan_id, tags }) => {
+      async ({ agent_id, project_id, task_list_id, plan_id, tags, steal_stale, stale_minutes }) => {
         try {
-          const { claimNextTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const { claimNextTask, claimOrSteal } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const filters: Record<string, unknown> = {};
           if (project_id) filters.project_id = resolveId(project_id, "projects");
           if (task_list_id) filters.task_list_id = resolveId(task_list_id, "task_lists");
           if (plan_id) filters.plan_id = resolveId(plan_id, "plans");
           if (tags) filters.tags = tags;
+          if (steal_stale) {
+            if (stale_minutes !== undefined) filters.stale_minutes = stale_minutes;
+            const result = claimOrSteal(agent_id, filters);
+            return { content: [{ type: "text" as const, text: result ? `${result.stolen ? "Stolen" : "Claimed"}: ${formatTask(result.task)}` : "No available task to claim." }] };
+          }
           const task = claimNextTask(agent_id, filters);
-          return { content: [{ type: "text" as const, text: task ? formatTask(task) : "No available task to claim." }] };
+          return { content: [{ type: "text" as const, text: task ? `Claimed: ${formatTask(task)}` : "No available task to claim." }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

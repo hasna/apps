@@ -13,7 +13,7 @@ import { CORE_MCP_TOOLS, shouldRegisterToolForProfile } from "./token-utils.js";
 // This must match the `all` array in search_tools and the keys in describe_tools.
 const ALL_TOOLS = [
   "create_task","list_tasks","get_task","update_task","delete_task",
-  "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
+  "start_task","complete_task","fail_task","lock_task","unlock_task","check_task_lock","approve_task",
   "add_dependency","remove_dependency","add_comment",
   "bootstrap_project","create_project","list_projects",
   "create_plan","list_plans","get_plan","update_plan","delete_plan",
@@ -33,7 +33,7 @@ const ALL_TOOLS = [
 // The descriptions map from describe_tools (keys only — we verify coverage).
 const DESCRIBE_TOOLS_KEYS = [
   "create_task","list_tasks","get_task","update_task","delete_task",
-  "start_task","complete_task","fail_task","lock_task","unlock_task","approve_task",
+  "start_task","complete_task","fail_task","lock_task","unlock_task","check_task_lock","approve_task",
   "add_dependency","remove_dependency","add_comment",
   "bootstrap_project","create_project","list_projects",
   "create_plan","list_plans","get_plan","update_plan","delete_plan",

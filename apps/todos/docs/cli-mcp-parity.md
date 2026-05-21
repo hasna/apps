@@ -14,8 +14,8 @@ structured error contracts.
 
 ## Covered Domains
 
-- `tasks`: create, list, read, update, lifecycle, assignment, queue, and bulk
-  workflows.
+- `tasks`: create, list, read, update, lifecycle, assignment, queue, lock
+  leases, stale recovery, and bulk workflows.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.

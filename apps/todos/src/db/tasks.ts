@@ -21,6 +21,7 @@ export {
   failTask,
   lockTask,
   unlockTask,
+  getTaskLockStatus,
   claimNextTask,
   getNextTask,
   getActiveWork,
@@ -31,7 +32,7 @@ export {
   getStaleTasks,
 } from "./task-lifecycle.js";
 
-export type { ActiveWorkItem } from "./task-lifecycle.js";
+export type { ActiveWorkItem, StaleTaskQuery, TaskLockStatus } from "./task-lifecycle.js";
 
 export {
   addDependency,

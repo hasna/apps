@@ -94,6 +94,9 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "complete_task",
       "fail_task",
       "approve_task",
+      "lock_task",
+      "unlock_task",
+      "check_task_lock",
       "delete_task",
       "bulk_update_tasks",
       "bulk_create_tasks",
@@ -108,16 +111,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     jsonContracts: ["task", "status_summary", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
-    intentionalGaps: [
-      {
-        cliCommand: "todos lock",
-        reason: "Task locks are available through claim-oriented MCP tools that include agent ownership and stale recovery semantics.",
-      },
-      {
-        cliCommand: "todos unlock",
-        reason: "Task lock release is represented by release_task/release_agent MCP tools to keep agent ownership explicit.",
-      },
-    ],
+    intentionalGaps: [],
     example: {
       cli: "todos add \"Fix flaky parser\" --priority high --json",
       mcpTool: "create_task",
