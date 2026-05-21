@@ -345,6 +345,39 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
       retry_after: field("integer", "Optional retry delay for rate-limited responses."),
     },
   }),
+  contract({
+    id: "local_bridge_bundle",
+    name: "Local Bridge Bundle",
+    description: "Versioned local import/export bundle for moving tasks, projects, plans, runs, and evidence metadata between local stores.",
+    surfaces: ["cli", "sdk"],
+    stability: "stable",
+    required: {
+      schemaVersion: field("integer", "Bridge bundle schema version."),
+      kind: field("string", "Bundle kind identifier."),
+      exportedAt: isoDateField,
+      package: field("object", "Package source metadata."),
+      source: field("object", "Local source scope for the export."),
+      data: field("object", "Exported local records grouped by object type."),
+      stats: field("object", "Record counts by object type."),
+    },
+    optional: {},
+  }),
+  contract({
+    id: "local_bridge_import_result",
+    name: "Local Bridge Import Result",
+    description: "Dry-run or applied import report with inserted counts, skipped counts, conflicts, and validation issues.",
+    surfaces: ["cli", "sdk"],
+    stability: "stable",
+    required: {
+      ok: field("boolean", "Whether the import bundle is valid and has no missing-dependency conflicts."),
+      dry_run: field("boolean", "True when no local records were written."),
+      inserted: field("object", "Records that would be or were inserted, grouped by object type."),
+      skipped: field("object", "Records skipped because they already exist or have missing dependencies."),
+      conflicts: field("array", "Conflict records with table, id, and reason."),
+      issues: field("array", "Validation issue strings."),
+    },
+    optional: {},
+  }),
 ];
 
 function expectedTypes(contract: TodosJsonFieldContract): readonly TodosJsonFieldType[] {

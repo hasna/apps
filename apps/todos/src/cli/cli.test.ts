@@ -449,6 +449,41 @@ describe("CLI integration", () => {
     try { unlinkSync(filePath); } catch {}
   });
 
+  it("should export and import a local bridge bundle through the CLI", async () => {
+    const sourceDb = "/tmp/test-cli-bridge-source.db";
+    const targetDb = "/tmp/test-cli-bridge-target.db";
+    const bundlePath = "/tmp/test-cli-bridge-bundle.json";
+    const { unlinkSync } = await import("node:fs");
+    for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    const task = JSON.parse((await runCli(["add", "Bridge portable task", "--tag", "bridge", "--json"], sourceDb)).stdout);
+    const exported = await runCli(["export", "--format", "bridge", "--output", bundlePath], sourceDb);
+    expect(exported.exitCode).toBe(0);
+    expect(exported.stdout).toContain("Bridge export written");
+
+    const preview = await runCli(["bridge-import", bundlePath, "--json"], targetDb);
+    expect(preview.exitCode).toBe(0);
+    const previewResult = JSON.parse(preview.stdout);
+    expect(previewResult.dry_run).toBe(true);
+    expect(previewResult.inserted.tasks).toBe(1);
+    expect(JSON.parse((await runCli(["list", "--json"], targetDb)).stdout)).toHaveLength(0);
+
+    const applied = await runCli(["bridge-import", bundlePath, "--apply", "--json"], targetDb);
+    expect(applied.exitCode).toBe(0);
+    const importResult = JSON.parse(applied.stdout);
+    expect(importResult.dry_run).toBe(false);
+    expect(importResult.inserted.tasks).toBe(1);
+    const tasks = JSON.parse((await runCli(["list", "--json"], targetDb)).stdout);
+    expect(tasks[0].id).toBe(task.id);
+    expect(tasks[0].title).toBe("Bridge portable task");
+
+    for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+  });
+
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
     const importPath = "/tmp/test-cli-plan-template-use.json";

@@ -7,6 +7,13 @@ export {
   getJsonContract,
   validateJsonContract,
 } from "./json-contracts.js";
+export {
+  TODOS_LOCAL_BRIDGE_KIND,
+  TODOS_LOCAL_BRIDGE_SCHEMA_VERSION,
+  createLocalBridgeBundle,
+  importLocalBridgeBundle,
+  validateLocalBridgeBundle,
+} from "./lib/local-bridge.js";
 export type {
   CreateJsonContractsManifestOptions,
   JsonContractValidationIssue,
@@ -19,6 +26,16 @@ export type {
   TodosJsonStability,
   TodosJsonSurface,
 } from "./json-contracts.js";
+export type {
+  ExportLocalBridgeOptions,
+  LocalBridgeImportConflict,
+  LocalBridgeImportResult,
+  LocalBridgeValidationResult,
+  TodosLocalBridgeBundle,
+  TodosLocalBridgeData,
+  TodosLocalBridgePackageSource,
+  TodosLocalBridgeSource,
+} from "./lib/local-bridge.js";
 import {
   AgentNotFoundError,
   CompletionGuardError,
