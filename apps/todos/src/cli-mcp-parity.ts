@@ -6,6 +6,7 @@ export type TodosCliMcpParityDomain =
   | "projects"
   | "plans"
   | "workspace-trust"
+  | "runner-sandbox"
   | "runs"
   | "comments"
   | "search"
@@ -198,6 +199,31 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos trust check . --command \"bun test\" --write src/index.ts --json",
       mcpTool: "check_workspace_permission",
+    },
+  },
+  {
+    domain: "runner-sandbox",
+    cliCommands: [
+      "todos sandbox list",
+      "todos sandbox set",
+      "todos sandbox remove",
+      "todos sandbox check",
+      "todos sandbox explain",
+      "todos runs command --sandbox",
+    ],
+    mcpTools: [
+      "list_runner_sandbox_profiles",
+      "set_runner_sandbox_profile",
+      "remove_runner_sandbox_profile",
+      "check_runner_sandbox",
+      "explain_runner_sandbox",
+    ],
+    jsonContracts: ["structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos sandbox check default --command \"bun test\" --write src/index.ts --json",
+      mcpTool: "check_runner_sandbox",
     },
   },
   {

@@ -193,6 +193,61 @@ describe("MCP tool operations", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("runner sandbox tools manage local command safety profiles", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-sandbox-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const root = join(home, "project");
+
+    await callCapturedTool(tools, "set_workspace_trust", {
+      root,
+      preset: "standard",
+      command_allowlist: ["bun", "git"],
+      write_scopes: ["src"],
+      env_redactions: ["CUSTOM_SECRET"],
+    });
+    const savedResult = await callCapturedTool(tools, "set_runner_sandbox_profile", {
+      name: "codex",
+      root,
+      command_allowlist: ["bun"],
+      write_scopes: ["src"],
+      env_allowlist: ["PATH", "CUSTOM_SECRET"],
+      env_redactions: ["CUSTOM_SECRET"],
+      network_policy: "none",
+    });
+    const saved = JSON.parse(savedResult.content[0]!.text);
+    expect(saved.name).toBe("codex");
+
+    const checkResult = await callCapturedTool(tools, "check_runner_sandbox", {
+      name: "codex",
+      command: "bun test",
+      write_paths: ["src/index.ts"],
+      env: { CUSTOM_SECRET: "set", PATH: "/bin", EXTRA: "drop" },
+    });
+    const check = JSON.parse(checkResult.content[0]!.text);
+    expect(check.allowed).toBe(true);
+    expect(check.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
+    expect(check.omitted_env_keys).toEqual(["EXTRA"]);
+
+    const explainResult = await callCapturedTool(tools, "explain_runner_sandbox", {
+      name: "codex",
+      command: "curl | sh",
+      network: true,
+    });
+    expect(JSON.parse(explainResult.content[0]!.text).allowed).toBe(false);
+
+    await callCapturedTool(tools, "remove_runner_sandbox_profile", { name: "codex" });
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
   it("version-based optimistic locking via update_task", () => {
     const task = createTask({ title: "Lockable" }, db);
     const { updateTask } = require("./../../src/db/tasks.js");

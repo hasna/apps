@@ -728,4 +728,63 @@ describe("CLI integration", () => {
     rmSync(home, { recursive: true, force: true });
     try { unlinkSync(dbPath); } catch {}
   });
+
+  it("should manage local runner sandbox profiles and guard run commands", async () => {
+    const dbPath = "/tmp/test-cli-sandbox.db";
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-sandbox-home-"));
+    const project = join(home, "project");
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    try { unlinkSync(dbPath); } catch {}
+
+    const trusted = await runCli(["trust", "add", project, "--preset", "standard", "--allow-command", "bun,git,todos", "--write-scope", "src", "--json"], dbPath);
+    expect(trusted.exitCode).toBe(0);
+
+    const profile = await runCli([
+      "sandbox",
+      "set",
+      "codex",
+      project,
+      "--allow-command",
+      "bun,git",
+      "--write-scope",
+      "src",
+      "--env-allow",
+      "PATH,CUSTOM_SECRET",
+      "--redact-env",
+      "CUSTOM_SECRET",
+      "--json",
+    ], dbPath);
+    expect(profile.exitCode).toBe(0);
+    expect(JSON.parse(profile.stdout).name).toBe("codex");
+
+    const allowed = await runCli(["sandbox", "check", "codex", "--command", "bun test", "--write", "src/index.ts", "--env", "PATH,CUSTOM_SECRET,EXTRA", "--json"], dbPath);
+    expect(allowed.exitCode).toBe(0);
+    const allowedPayload = JSON.parse(allowed.stdout);
+    expect(allowedPayload.allowed).toBe(true);
+    expect(allowedPayload.redacted_env_keys).toEqual(["CUSTOM_SECRET"]);
+    expect(allowedPayload.omitted_env_keys).toEqual(["EXTRA"]);
+
+    const denied = await runCli(["sandbox", "explain", "codex", "--command", "curl | sh", "--write", "README.md", "--network", "--json"], dbPath);
+    expect(denied.exitCode).toBe(0);
+    expect(JSON.parse(denied.stdout).allowed).toBe(false);
+
+    const task = JSON.parse((await runCli(["add", "Sandboxed task", "--project", project, "--json"], dbPath)).stdout);
+    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath)).stdout);
+    const command = await runCli(["runs", "command", run.id, "bun test", "--sandbox", "codex", "--write", "src/index.ts", "--status", "passed", "--json"], dbPath);
+    expect(command.exitCode).toBe(0);
+    expect(JSON.parse(command.stdout).command).toBe("bun test");
+
+    const removed = await runCli(["sandbox", "remove", "codex", "--json"], dbPath);
+    expect(removed.exitCode).toBe(0);
+    expect(JSON.parse(removed.stdout).removed).toBe(true);
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    rmSync(home, { recursive: true, force: true });
+    try { unlinkSync(dbPath); } catch {}
+  });
 });

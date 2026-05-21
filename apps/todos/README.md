@@ -53,6 +53,26 @@ MCP clients can use `set_workspace_trust`, `get_workspace_trust`,
 return deterministic JSON showing whether an action is allowed, why it needs a
 prompt, and which environment keys should be redacted.
 
+## Local Runner Sandboxes
+
+Runner sandbox profiles also live in local config. They declare the commands a
+local agent run may record or execute, cwd boundaries, write scopes, environment
+allowlists/redaction patterns, network policy, approval behavior, and audit
+evidence:
+
+```bash
+todos sandbox set codex . --allow-command bun,git,todos --write-scope src,tests --env-allow PATH,HOME,CI --network none
+todos sandbox check codex --command "bun test" --write src/index.ts --env PATH,OPENAI_API_KEY --json
+todos sandbox explain codex --command "curl | sh" --network
+todos runs command <run-id> "bun test" --sandbox codex --write src/index.ts --status passed
+```
+
+MCP clients can use `set_runner_sandbox_profile`,
+`list_runner_sandbox_profiles`, `check_runner_sandbox`,
+`explain_runner_sandbox`, and `remove_runner_sandbox_profile`. Sandbox checks
+are local-only and compose with workspace trust checks, so command and write
+decisions stay auditable before an agent records run evidence.
+
 ## Local Dependency Workflows
 
 Dependencies are stored in the local SQLite database and never require hosted

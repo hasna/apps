@@ -379,7 +379,16 @@ export {
   getLocalApiConfig,
   normalizeApiUrl,
 } from "./lib/config.js";
-export type { TodosConfig, AgentConfig, CompletionGuardConfig, LocalApiConfig, WorkspacePermissionPreset, WorkspaceTrustProfile } from "./lib/config.js";
+export type {
+  TodosConfig,
+  AgentConfig,
+  CompletionGuardConfig,
+  LocalApiConfig,
+  RunnerSandboxNetworkPolicy,
+  RunnerSandboxProfile,
+  WorkspacePermissionPreset,
+  WorkspaceTrustProfile,
+} from "./lib/config.js";
 export {
   checkWorkspacePermission,
   getWorkspaceTrustStatus,
@@ -393,6 +402,19 @@ export type {
   WorkspacePermissionCheckInput,
   WorkspaceTrustStatus,
 } from "./lib/workspace-trust.js";
+export {
+  checkRunnerSandbox,
+  explainRunnerSandbox,
+  getRunnerSandboxProfile,
+  listRunnerSandboxProfiles,
+  removeRunnerSandboxProfile,
+  upsertRunnerSandboxProfile,
+} from "./lib/runner-sandbox.js";
+export type {
+  RunnerSandboxCheck,
+  RunnerSandboxCheckInput,
+  UpsertRunnerSandboxInput,
+} from "./lib/runner-sandbox.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

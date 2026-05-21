@@ -84,6 +84,15 @@ function parseJsonOption(value: string | undefined, label: string): Record<strin
   }
 }
 
+function listOption(value: string | undefined): string[] | undefined {
+  return value?.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function envOption(value: string | undefined): Record<string, string> | undefined {
+  const keys = listOption(value);
+  return keys ? Object.fromEntries(keys.map((key) => [key, "set"])) : undefined;
+}
+
 // --- Claude Code: use `claude mcp add` ---
 
 function registerClaude(binPath: string, global?: boolean): void {
@@ -603,12 +612,34 @@ exit 0
     .option("--exit-code <code>", "Process exit code")
     .option("--summary <text>", "Short output summary")
     .option("--artifact <path>", "Optional local artifact/log path")
+    .option("--sandbox <name>", "Runner sandbox profile to check before recording")
+    .option("--cwd <path>", "Command working directory for sandbox checks")
+    .option("--write <list>", "Comma-separated write paths for sandbox checks")
+    .option("--env <list>", "Comma-separated environment keys for sandbox checks")
+    .option("--network", "Request network access for sandbox checks")
     .option("--agent <name>", "Agent that ran the command")
-    .action(async (runId: string, command: string, opts: { status?: string; exitCode?: string; summary?: string; artifact?: string; agent?: string }) => {
+    .action(async (runId: string, command: string, opts: { status?: string; exitCode?: string; summary?: string; artifact?: string; sandbox?: string; cwd?: string; write?: string; env?: string; network?: boolean; agent?: string }) => {
       const globalOpts = program.opts();
       if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
         console.error(chalk.red("--status must be passed, failed, or unknown"));
         process.exit(1);
+      }
+      if (opts.sandbox) {
+        const { checkRunnerSandbox } = await import("../../lib/runner-sandbox.js");
+        const check = checkRunnerSandbox({
+          name: opts.sandbox,
+          cwd: opts.cwd,
+          command,
+          write_paths: listOption(opts.write),
+          env: envOption(opts.env),
+          network: opts.network,
+        });
+        if (!check.allowed) {
+          if (globalOpts.json) { output(check, true); return; }
+          console.error(chalk.red(`Command denied by sandbox ${opts.sandbox}:`));
+          for (const reason of check.reasons) console.error(`  - ${reason}`);
+          process.exit(1);
+        }
       }
       const { addTaskRunCommand } = await import("../../db/task-runs.js");
       const evidence = addTaskRunCommand({

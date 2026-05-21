@@ -25,6 +25,7 @@ export interface ProjectOverrideConfig {
 }
 
 export type WorkspacePermissionPreset = "restricted" | "readonly" | "standard" | "trusted";
+export type RunnerSandboxNetworkPolicy = "none" | "local" | "full";
 
 export interface WorkspaceTrustProfile {
   root: string;
@@ -36,6 +37,22 @@ export interface WorkspaceTrustProfile {
   write_scopes: string[];
   env_redactions: string[];
   require_prompt_for_unsafe: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RunnerSandboxProfile {
+  name: string;
+  root: string;
+  command_allowlist: string[];
+  command_denylist: string[];
+  cwd_boundary: string;
+  write_scopes: string[];
+  env_allowlist: string[];
+  env_redactions: string[];
+  network_policy: RunnerSandboxNetworkPolicy;
+  require_approval: boolean;
+  audit_evidence: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -58,6 +75,8 @@ export interface TodosConfig {
   project_pools?: Record<string, string[]>;
   /** Local workspace trust profiles, keyed by absolute project root. */
   workspace_trust?: Record<string, WorkspaceTrustProfile>;
+  /** Local runner sandbox profiles, keyed by profile name. */
+  runner_sandboxes?: Record<string, RunnerSandboxProfile>;
 }
 
 function getTodosGlobalDir(): string {

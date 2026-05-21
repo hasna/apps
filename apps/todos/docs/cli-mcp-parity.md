@@ -21,6 +21,8 @@ structured error contracts.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
 - `workspace-trust`: local trusted roots, permission presets, command checks,
   write scopes, env redaction declarations, and prompt-required decisions.
+- `runner-sandbox`: local runner command allowlists, cwd boundaries, write
+  scopes, env allowlists, network policy, audit evidence, and dry-run explains.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
   finish records.
 - `comments`: task comments, progress notes, and activity entries.
@@ -54,6 +56,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "check_workspace_permission", "arguments": { "path": ".", "command": "bun test", "write_path": "src/index.ts" } }
+```
+
+CLI runner sandbox check:
+
+```bash
+todos sandbox check codex --command "bun test" --write src/index.ts --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "check_runner_sandbox", "arguments": { "name": "codex", "command": "bun test", "write_paths": ["src/index.ts"] } }
 ```
 
 CLI bridge export:

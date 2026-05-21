@@ -183,6 +183,117 @@ export function registerConfigServeCommands(program: Command) {
       if (!result.allowed) process.exitCode = 1;
     });
 
+  const sandbox = program
+    .command("sandbox")
+    .description("Manage local runner sandbox profiles and dry-run checks");
+
+  sandbox
+    .command("list")
+    .description("List local runner sandbox profiles")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listRunnerSandboxProfiles } = await import("../../lib/runner-sandbox.js");
+      const profiles = listRunnerSandboxProfiles();
+      if (globalOpts.json) { output(profiles, true); return; }
+      if (profiles.length === 0) {
+        console.log(chalk.dim("No runner sandbox profiles configured."));
+        return;
+      }
+      for (const profile of profiles) {
+        console.log(`${profile.name.padEnd(12)} ${profile.network_policy.padEnd(5)} ${profile.root}`);
+      }
+    });
+
+  sandbox
+    .command("set <name> [root]")
+    .description("Add or update a local runner sandbox profile")
+    .option("--allow-command <list>", "Comma-separated command prefixes or patterns")
+    .option("--deny-command <list>", "Comma-separated denied command substrings or patterns")
+    .option("--cwd-boundary <path>", "Directory boundary for command cwd")
+    .option("--write-scope <list>", "Comma-separated allowed write scopes relative to the root")
+    .option("--env-allow <list>", "Comma-separated environment keys or patterns to pass through")
+    .option("--redact-env <list>", "Comma-separated environment key patterns to redact")
+    .option("--network <policy>", "Network policy: none, local, or full", "none")
+    .option("--no-approval", "Do not require approval when checks fail")
+    .option("--no-audit", "Do not include audit evidence in check output")
+    .action(async (name: string, root: string | undefined, opts: { allowCommand?: string; denyCommand?: string; cwdBoundary?: string; writeScope?: string; envAllow?: string; redactEnv?: string; network?: string; approval?: boolean; audit?: boolean }) => {
+      const globalOpts = program.opts();
+      const { upsertRunnerSandboxProfile } = await import("../../lib/runner-sandbox.js");
+      const network = opts.network === "local" || opts.network === "full" ? opts.network : "none";
+      const profile = upsertRunnerSandboxProfile({
+        name,
+        root: root || process.cwd(),
+        command_allowlist: listOption(opts.allowCommand),
+        command_denylist: listOption(opts.denyCommand),
+        cwd_boundary: opts.cwdBoundary,
+        write_scopes: listOption(opts.writeScope),
+        env_allowlist: listOption(opts.envAllow),
+        env_redactions: listOption(opts.redactEnv),
+        network_policy: network,
+        require_approval: opts.approval === false ? false : undefined,
+        audit_evidence: opts.audit === false ? false : undefined,
+      });
+      if (globalOpts.json) { output(profile, true); return; }
+      console.log(chalk.green(`Runner sandbox ${profile.name} saved for ${profile.root}`));
+    });
+
+  sandbox
+    .command("remove <name>")
+    .description("Remove a local runner sandbox profile")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeRunnerSandboxProfile } = await import("../../lib/runner-sandbox.js");
+      const removed = removeRunnerSandboxProfile(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Runner sandbox removed.") : chalk.dim("No runner sandbox matched."));
+    });
+
+  function envOption(value: string | undefined): Record<string, string> {
+    return Object.fromEntries((listOption(value) || []).map((key) => [key, "set"]));
+  }
+
+  async function runSandboxCheck(name: string | undefined, opts: { path?: string; cwd?: string; command?: string; write?: string; env?: string; network?: boolean }, exitOnDeny: boolean) {
+    const globalOpts = program.opts();
+    const { checkRunnerSandbox } = await import("../../lib/runner-sandbox.js");
+    const result = checkRunnerSandbox({
+      name,
+      path: opts.path,
+      cwd: opts.cwd,
+      command: opts.command,
+      write_paths: listOption(opts.write),
+      env: envOption(opts.env),
+      network: opts.network,
+    });
+    if (globalOpts.json) { output(result, true); return; }
+    console.log(result.allowed ? chalk.green("Allowed") : chalk.yellow("Requires review"));
+    for (const reason of result.reasons) console.log(`  - ${reason}`);
+    if (result.omitted_env_keys.length > 0) console.log(`  ${chalk.dim("Omitted env:")} ${result.omitted_env_keys.join(", ")}`);
+    if (result.redacted_env_keys.length > 0) console.log(`  ${chalk.dim("Redacted env:")} ${result.redacted_env_keys.join(", ")}`);
+    if (!result.allowed && exitOnDeny) process.exitCode = 1;
+  }
+
+  sandbox
+    .command("check [name]")
+    .description("Check whether a local runner action is allowed")
+    .option("--path <path>", "Workspace path to evaluate")
+    .option("--cwd <path>", "Command working directory")
+    .option("--command <command>", "Command line to check")
+    .option("--write <list>", "Comma-separated write paths to check")
+    .option("--env <list>", "Comma-separated environment keys to test")
+    .option("--network", "Request network access")
+    .action((name: string | undefined, opts: { path?: string; cwd?: string; command?: string; write?: string; env?: string; network?: boolean }) => runSandboxCheck(name, opts, true));
+
+  sandbox
+    .command("explain [name]")
+    .description("Dry-run explain output for a local runner sandbox check")
+    .option("--path <path>", "Workspace path to evaluate")
+    .option("--cwd <path>", "Command working directory")
+    .option("--command <command>", "Command line to check")
+    .option("--write <list>", "Comma-separated write paths to check")
+    .option("--env <list>", "Comma-separated environment keys to test")
+    .option("--network", "Request network access")
+    .action((name: string | undefined, opts: { path?: string; cwd?: string; command?: string; write?: string; env?: string; network?: boolean }) => runSandboxCheck(name, opts, false));
+
   // serve (web dashboard)
   program
     .command("serve")

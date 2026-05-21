@@ -34,6 +34,13 @@ import {
   removeWorkspaceTrustProfile,
   upsertWorkspaceTrustProfile,
 } from "../../lib/workspace-trust.js";
+import {
+  checkRunnerSandbox,
+  explainRunnerSandbox,
+  listRunnerSandboxProfiles,
+  removeRunnerSandboxProfile,
+  upsertRunnerSandboxProfile,
+} from "../../lib/runner-sandbox.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -158,6 +165,102 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const result = checkWorkspacePermission(input);
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.allowed };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === RUNNER SANDBOXES ===
+
+  if (shouldRegisterTool("list_runner_sandbox_profiles")) {
+    server.tool("list_runner_sandbox_profiles", "List local runner sandbox profiles.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listRunnerSandboxProfiles(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("set_runner_sandbox_profile")) {
+    server.tool(
+      "set_runner_sandbox_profile",
+      "Create or update a local runner sandbox profile.",
+      {
+        name: z.string(),
+        root: z.string().optional(),
+        command_allowlist: z.array(z.string()).optional(),
+        command_denylist: z.array(z.string()).optional(),
+        cwd_boundary: z.string().optional(),
+        write_scopes: z.array(z.string()).optional(),
+        env_allowlist: z.array(z.string()).optional(),
+        env_redactions: z.array(z.string()).optional(),
+        network_policy: z.enum(["none", "local", "full"]).optional(),
+        require_approval: z.boolean().optional(),
+        audit_evidence: z.boolean().optional(),
+      },
+      async (input) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(upsertRunnerSandboxProfile(input), null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_runner_sandbox_profile")) {
+    server.tool(
+      "remove_runner_sandbox_profile",
+      "Remove a local runner sandbox profile.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeRunnerSandboxProfile(name) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  const runnerSandboxSchema = {
+    name: z.string().optional(),
+    path: z.string().optional(),
+    cwd: z.string().optional(),
+    command: z.string().optional(),
+    write_paths: z.array(z.string()).optional(),
+    env: z.record(z.string()).optional(),
+    network: z.boolean().optional(),
+  };
+
+  if (shouldRegisterTool("check_runner_sandbox")) {
+    server.tool(
+      "check_runner_sandbox",
+      "Check whether a local runner action is allowed by sandbox and workspace trust policy.",
+      runnerSandboxSchema,
+      async (input) => {
+        try {
+          const result = checkRunnerSandbox(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.allowed };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("explain_runner_sandbox")) {
+    server.tool(
+      "explain_runner_sandbox",
+      "Return dry-run explain output for a local runner sandbox check.",
+      runnerSandboxSchema,
+      async (input) => {
+        try {
+          const result = explainRunnerSandbox(input);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
