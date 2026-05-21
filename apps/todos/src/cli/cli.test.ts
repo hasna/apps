@@ -745,6 +745,44 @@ describe("CLI integration", () => {
     try { unlinkSync(filePath); } catch {}
   });
 
+  it("should preview and apply local natural-language inbox intake from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-natural-intake.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+
+    const preview = await runCli([
+      "inbox",
+      "parse",
+      "Add task fix parser priority high @codex #cli due tomorrow",
+      "--reference-date",
+      "2026-01-02T12:00:00.000Z",
+      "--json",
+    ], dbPath);
+    expect(preview.exitCode).toBe(0);
+    const parsed = JSON.parse(preview.stdout);
+    expect(parsed.dry_run).toBe(true);
+    expect(parsed.tasks[0].title).toBe("fix parser");
+    expect(parsed.tasks[0].due_at).toBe("2026-01-03T12:00:00.000Z");
+
+    const applied = await runCli([
+      "inbox",
+      "parse",
+      "Add task build intake preview priority critical #intake",
+      "--apply",
+      "--json",
+    ], dbPath);
+    expect(applied.exitCode).toBe(0);
+    const appliedPayload = JSON.parse(applied.stdout);
+    expect(appliedPayload.dry_run).toBe(false);
+    expect(appliedPayload.created_tasks[0].title).toBe("build intake preview");
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should export and import a local bridge bundle through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-bridge-source.db";
     const targetDb = "/tmp/test-cli-bridge-target.db";

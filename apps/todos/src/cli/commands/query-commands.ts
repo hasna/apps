@@ -2436,6 +2436,41 @@ export function registerQueryCommands(program: Command) {
     });
 
   inbox
+    .command("parse [text]")
+    .description("Preview or apply deterministic local natural-language task intake")
+    .option("--file <path>", "Read natural-language input from a file")
+    .option("--priority <priority>", "Default priority for parsed tasks", "medium")
+    .option("--project <id>", "Project ID for applied tasks")
+    .option("--list <id>", "Task list ID for applied tasks")
+    .option("--reference-date <iso>", "Reference date for due today/tomorrow/next week")
+    .option("--apply", "Create parsed tasks; default is dry-run preview")
+    .option("-j, --json", "Output as JSON")
+    .action(async (text: string | undefined, opts) => {
+      const globalOpts = program.opts();
+      const { readFileSync } = await import("node:fs");
+      const { previewNaturalLanguageIntake } = await import("../../lib/natural-language-intake.js");
+      let body = text || "";
+      if (opts.file) body = readFileSync(opts.file, "utf-8");
+      if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
+      if (!body.trim()) {
+        console.error(chalk.red("Provide text, --file, or stdin input."));
+        process.exit(1);
+      }
+      const result = previewNaturalLanguageIntake({
+        text: body,
+        project_id: opts.project || autoProject(globalOpts) || undefined,
+        task_list_id: opts.list,
+        default_priority: opts.priority,
+        reference_date: opts.referenceDate,
+        apply: Boolean(opts.apply),
+      });
+      if (opts.json || globalOpts.json) { output(result, true); return; }
+      console.log(result.dry_run ? chalk.yellow(`Dry-run: ${result.tasks.length} task(s) parsed.`) : chalk.green(`Created ${result.created_tasks.length} task(s).`));
+      for (const task of result.tasks) console.log(`  ${chalk.cyan(task.priority.padEnd(8))} ${task.title}`);
+      for (const warning of result.warnings) console.log(chalk.yellow(`  ${warning}`));
+    });
+
+  inbox
     .command("list")
     .description("List local inbox items")
     .option("--status <status>", "new, triaged, or ignored")

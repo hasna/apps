@@ -617,6 +617,12 @@ export type {
   BranchWorkPlanGitStatus,
   CreateBranchWorkPlanInput,
 } from "./lib/branch-work-plans.js";
+export { previewNaturalLanguageIntake } from "./lib/natural-language-intake.js";
+export type {
+  NaturalLanguageIntakeInput,
+  NaturalLanguageIntakePreview,
+  NaturalLanguageTaskPreview,
+} from "./lib/natural-language-intake.js";
 export {
   DEFAULT_ENCRYPTION_KEY_ENV,
   DEFAULT_ENCRYPTION_PROFILE,

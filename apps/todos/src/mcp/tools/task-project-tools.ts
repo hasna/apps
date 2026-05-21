@@ -87,6 +87,7 @@ import {
 import { getLocalActivityTimeline } from "../../lib/activity-timeline.js";
 import { createBranchWorkPlan } from "../../lib/branch-work-plans.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
+import { previewNaturalLanguageIntake } from "../../lib/natural-language-intake.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
@@ -767,6 +768,29 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
             root,
             include_git_status,
           });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("preview_natural_language_intake")) {
+    server.tool(
+      "preview_natural_language_intake",
+      "Preview or apply deterministic local natural-language task intake without hosted model calls.",
+      {
+        text: z.string().describe("Natural-language task intake text."),
+        project_id: z.string().optional(),
+        task_list_id: z.string().optional(),
+        default_priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+        reference_date: z.string().optional(),
+        apply: z.boolean().optional().describe("Create parsed tasks. Defaults to dry-run preview."),
+      },
+      async (input) => {
+        try {
+          const result = previewNaturalLanguageIntake(input);
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

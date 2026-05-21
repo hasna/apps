@@ -105,6 +105,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "list_plans",
     "list_projects",
     "list_task_lists",
+    "preview_natural_language_intake",
     "remove_policy_pack",
     "remove_encryption_profile",
     "remove_local_event_hook",

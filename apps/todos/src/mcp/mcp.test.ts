@@ -538,6 +538,23 @@ describe("MCP tool operations", () => {
     expect(workPlan.commands).toContain(`todos link-ref ${task.id.slice(0, 8)} task/mcp-branch-plan --type branch --provider git`);
   });
 
+  it("natural-language intake tool previews local task creation", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const result = await callCapturedTool(tools, "preview_natural_language_intake", {
+      text: "Add task fix parser priority high @codex #cli due tomorrow",
+      reference_date: "2026-01-02T12:00:00.000Z",
+    });
+
+    const preview = JSON.parse(result.content[0]!.text);
+    expect(preview.dry_run).toBe(true);
+    expect(preview.tasks[0]).toMatchObject({
+      title: "fix parser",
+      priority: "high",
+      assigned_to: "codex",
+    });
+    expect(preview.tasks[0].due_at).toBe("2026-01-03T12:00:00.000Z");
+  });
+
   it("local encryption tools manage profiles and JSON values", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

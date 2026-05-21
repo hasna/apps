@@ -19,6 +19,7 @@ export type TodosCliMcpParityDomain =
   | "local-event-hooks"
   | "terminal-notifications"
   | "branch-work-plans"
+  | "natural-language-intake"
   | "encryption"
   | "agent-runs"
   | "source-index"
@@ -703,6 +704,18 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos branch-plan 1234abcd --branch task/parser-fix --path src/parser.ts --json",
       mcpTool: "create_branch_work_plan",
+    },
+  },
+  {
+    domain: "natural-language-intake",
+    cliCommands: ["todos inbox parse"],
+    mcpTools: ["preview_natural_language_intake"],
+    jsonContracts: ["natural_language_intake_preview", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos inbox parse \"Add task fix parser priority high @codex\" --json",
+      mcpTool: "preview_natural_language_intake",
     },
   },
   {

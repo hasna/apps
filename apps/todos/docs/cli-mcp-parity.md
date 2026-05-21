@@ -50,6 +50,9 @@ structured error contracts.
 - `branch-work-plans`: local branch-safe work plans with task/plan scope,
   planned files, active file conflicts, git status, and suggested traceability
   commands.
+- `natural-language-intake`: deterministic local parsing for projects, plans,
+  tasks, dependencies, and acceptance criteria with dry-run previews and
+  explicit apply mode.
 - `encryption`: local encryption profiles, encrypted JSON values, and secure
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
@@ -337,6 +340,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "create_branch_work_plan", "arguments": { "task_id": "1234abcd", "branch": "task/parser-fix", "paths": ["src/parser.ts"] } }
+```
+
+CLI natural-language intake preview:
+
+```bash
+todos inbox parse "Add task fix parser priority high @codex #cli" --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "preview_natural_language_intake", "arguments": { "text": "Add task fix parser priority high @codex #cli" } }
 ```
 
 CLI encryption profile:

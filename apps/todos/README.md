@@ -716,12 +716,17 @@ deduped inbox and create a linked task:
 todos inbox add "bun test failed: parser regression" --source-type ci_log
 todos inbox add --file /tmp/ci.log --source-name "local CI"
 todos inbox add https://github.com/hasna/todos/issues/42 --source-url https://github.com/hasna/todos/issues/42
+todos inbox parse "Add task fix parser priority high @codex #cli due tomorrow" --json
+todos inbox parse --file plan-notes.txt --apply --json
 todos inbox git --diff
 todos inbox list
 ```
 
 Inbox bodies and metadata are redacted before storage. Repeated input resolves
-to the existing inbox item instead of creating duplicate tasks.
+to the existing inbox item instead of creating duplicate tasks. Natural-language
+intake parsing is deterministic and local-only; it defaults to a dry-run preview
+and creates projects, plans, tasks, dependencies, and acceptance criteria only
+with `--apply`.
 
 ## Local Bridge Import/Export
 

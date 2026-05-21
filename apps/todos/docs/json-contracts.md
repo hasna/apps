@@ -236,6 +236,14 @@ terminal notification payloads.
 base branch, planned files, active local file conflicts, git status, safety
 reasons, and suggested local commands for branch setup and traceability.
 
+## Natural-Language Intake
+
+`natural_language_intake_preview` is returned by `todos inbox parse` and
+`preview_natural_language_intake`. It captures the redacted source text, parsed
+project and plan proposals, task previews, dependency edges, acceptance
+criteria, dry-run/apply state, created records when applied, parser warnings,
+and equivalent local CLI commands. Parsing is deterministic and local-only.
+
 ## Local Encryption
 
 `local_encryption_profile` is the stable config object returned by
