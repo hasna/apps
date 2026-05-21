@@ -48,6 +48,14 @@ import {
   upsertPolicyPack,
   validatePolicyPack,
 } from "../../lib/policy-packs.js";
+import {
+  approveApprovalGate,
+  checkApprovalGate,
+  expireApprovalGate,
+  listApprovalGates,
+  rejectApprovalGate,
+  requestApprovalGate,
+} from "../../lib/approval-gates.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -365,6 +373,116 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async ({ name, task_id, root }) => {
         try {
           const result = explainPolicyPack({ name, task_id: resolveId(task_id), root });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === APPROVAL GATES ===
+
+  const approvalGateSchema = {
+    task_id: z.string(),
+    gate: z.string(),
+    reviewer: z.string().optional(),
+    requester: z.string().optional(),
+    reason: z.string().optional(),
+    note: z.string().optional(),
+    plan_id: z.string().optional(),
+    run_id: z.string().optional(),
+    expires_at: z.string().optional(),
+  };
+
+  if (shouldRegisterTool("require_approval_gate")) {
+    server.tool(
+      "require_approval_gate",
+      "Create a local manual approval checkpoint before risky task or run work.",
+      approvalGateSchema,
+      async ({ task_id, gate, reviewer, requester, reason, plan_id, run_id, expires_at }) => {
+        try {
+          const result = requestApprovalGate({ task_id: resolveId(task_id), gate, reviewer, requester, reason, plan_id, run_id, expires_at });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("approve_approval_gate")) {
+    server.tool(
+      "approve_approval_gate",
+      "Approve a local manual approval checkpoint.",
+      { task_id: z.string(), gate: z.string(), reviewer: z.string().optional(), note: z.string().optional() },
+      async ({ task_id, gate, reviewer, note }) => {
+        try {
+          const result = approveApprovalGate({ task_id: resolveId(task_id), gate, reviewer, note });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("reject_approval_gate")) {
+    server.tool(
+      "reject_approval_gate",
+      "Reject a local manual approval checkpoint.",
+      { task_id: z.string(), gate: z.string(), reviewer: z.string().optional(), reason: z.string().optional() },
+      async ({ task_id, gate, reviewer, reason }) => {
+        try {
+          const result = rejectApprovalGate({ task_id: resolveId(task_id), gate, reviewer, reason });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("expire_approval_gate")) {
+    server.tool(
+      "expire_approval_gate",
+      "Expire a pending local manual approval checkpoint.",
+      { task_id: z.string(), gate: z.string(), reviewer: z.string().optional(), reason: z.string().optional() },
+      async ({ task_id, gate, reviewer, reason }) => {
+        try {
+          const result = expireApprovalGate({ task_id: resolveId(task_id), gate, reviewer, reason });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("check_approval_gate")) {
+    server.tool(
+      "check_approval_gate",
+      "Check whether a local approval gate allows task or run work to proceed.",
+      { task_id: z.string(), gate: z.string() },
+      async ({ task_id, gate }) => {
+        try {
+          const result = checkApprovalGate(resolveId(task_id), gate);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.allowed };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_approval_gates")) {
+    server.tool(
+      "list_approval_gates",
+      "List local approval gates for a task.",
+      { task_id: z.string() },
+      async ({ task_id }) => {
+        try {
+          const result = listApprovalGates(resolveId(task_id));
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

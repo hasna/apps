@@ -17,6 +17,7 @@ const expectedDomains = [
   "workspace-trust",
   "runner-sandbox",
   "policy-packs",
+  "approval-gates",
   "runs",
   "agent-runs",
   "comments",

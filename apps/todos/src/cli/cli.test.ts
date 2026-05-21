@@ -848,6 +848,55 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should manage local approval gates and block failed checks in json mode", async () => {
+    const dbPath = "/tmp/test-cli-approval-gates.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Approval gate task", "--json"], dbPath)).stdout);
+    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath)).stdout);
+
+    const missing = await runCli(["approvals", "check", task.id, "deploy", "--json"], dbPath);
+    expect(missing.exitCode).toBe(1);
+    expect(JSON.parse(missing.stdout).allowed).toBe(false);
+
+    const required = await runCli([
+      "approvals",
+      "require",
+      task.id,
+      "deploy",
+      "--requester",
+      "codex",
+      "--reviewer",
+      "reviewer",
+      "--reason",
+      "production-affecting action",
+      "--run",
+      run.id.slice(0, 8),
+      "--json",
+    ], dbPath);
+    expect(required.exitCode).toBe(0);
+    const pending = JSON.parse(required.stdout);
+    expect(pending.status).toBe("pending");
+    expect(pending.run_id).toBe(run.id);
+
+    const blocked = await runCli(["approvals", "check", task.id, "deploy", "--json"], dbPath);
+    expect(blocked.exitCode).toBe(1);
+    expect(JSON.parse(blocked.stdout).reasons).toContain("approval gate deploy is pending");
+
+    const approved = await runCli(["approvals", "approve", task.id, "deploy", "--reviewer", "reviewer", "--json"], dbPath);
+    expect(approved.exitCode).toBe(0);
+    expect(JSON.parse(approved.stdout).status).toBe("approved");
+
+    const allowed = await runCli(["approvals", "check", task.id, "deploy", "--json"], dbPath);
+    expect(allowed.exitCode).toBe(0);
+    expect(JSON.parse(allowed.stdout).allowed).toBe(true);
+
+    const list = await runCli(["approvals", "list", task.id, "--json"], dbPath);
+    expect(JSON.parse(list.stdout)).toHaveLength(1);
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

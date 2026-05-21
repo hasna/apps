@@ -308,6 +308,50 @@ describe("MCP tool operations", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("approval gate tools manage manual checkpoints", async () => {
+    const { getTaskRunLedger, startTaskRun } = await import("../db/task-runs.js");
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Approval via MCP" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp" }, db);
+
+    const missingTool = tools.get("check_approval_gate")!;
+    const missing = await missingTool.handler({ task_id: task.id, gate: "deploy" }) as { isError?: boolean; content: { text: string }[] };
+    expect(missing.isError).toBe(true);
+    expect(JSON.parse(missing.content[0]!.text).allowed).toBe(false);
+
+    const requestedResult = await callCapturedTool(tools, "require_approval_gate", {
+      task_id: task.id.slice(0, 8),
+      gate: "deploy",
+      requester: "codex",
+      reviewer: "reviewer",
+      reason: "production-affecting action",
+      run_id: run.id.slice(0, 8),
+    });
+    const requested = JSON.parse(requestedResult.content[0]!.text);
+    expect(requested.status).toBe("pending");
+    expect(requested.run_id).toBe(run.id);
+
+    await callCapturedTool(tools, "approve_approval_gate", {
+      task_id: task.id,
+      gate: "deploy",
+      reviewer: "reviewer",
+      note: "approved",
+    });
+
+    const checkResult = await callCapturedTool(tools, "check_approval_gate", {
+      task_id: task.id,
+      gate: "deploy",
+    });
+    expect(JSON.parse(checkResult.content[0]!.text).allowed).toBe(true);
+
+    const listResult = await callCapturedTool(tools, "list_approval_gates", { task_id: task.id });
+    expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+    expect(getTaskRunLedger(run.id, db).events.map((event) => event.message)).toEqual(expect.arrayContaining([
+      "approval gate requested: deploy",
+      "approval gate approved: deploy",
+    ]));
+  });
+
   it("version-based optimistic locking via update_task", () => {
     const task = createTask({ title: "Lockable" }, db);
     const { updateTask } = require("./../../src/db/tasks.js");

@@ -8,6 +8,7 @@ export type TodosCliMcpParityDomain =
   | "workspace-trust"
   | "runner-sandbox"
   | "policy-packs"
+  | "approval-gates"
   | "agent-runs"
   | "runs"
   | "comments"
@@ -250,6 +251,32 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos policies validate release 1234abcd --json",
       mcpTool: "validate_policy_pack",
+    },
+  },
+  {
+    domain: "approval-gates",
+    cliCommands: [
+      "todos approvals require",
+      "todos approvals approve",
+      "todos approvals reject",
+      "todos approvals expire",
+      "todos approvals check",
+      "todos approvals list",
+    ],
+    mcpTools: [
+      "require_approval_gate",
+      "approve_approval_gate",
+      "reject_approval_gate",
+      "expire_approval_gate",
+      "check_approval_gate",
+      "list_approval_gates",
+    ],
+    jsonContracts: ["checkpoint", "audit_history", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos approvals check 1234abcd deploy --json",
+      mcpTool: "check_approval_gate",
     },
   },
   {

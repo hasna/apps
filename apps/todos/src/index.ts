@@ -453,6 +453,22 @@ export type {
   UpsertPolicyPackInput,
   ValidatePolicyPackInput,
 } from "./lib/policy-packs.js";
+export {
+  approveApprovalGate,
+  assertApprovalGate,
+  checkApprovalGate,
+  expireApprovalGate,
+  listApprovalGates,
+  rejectApprovalGate,
+  requestApprovalGate,
+} from "./lib/approval-gates.js";
+export type {
+  ApprovalGate,
+  ApprovalGateStatus,
+  CheckApprovalGateResult,
+  DecideApprovalGateInput,
+  RequestApprovalGateInput,
+} from "./lib/approval-gates.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

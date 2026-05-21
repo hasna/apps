@@ -25,6 +25,8 @@ structured error contracts.
   scopes, env allowlists, network policy, audit evidence, and dry-run explains.
 - `policy-packs`: local done-gate policies for required commands, forbidden
   evidence, commits, pull requests, approvals, runs, and artifacts.
+- `approval-gates`: local manual checkpoints for risky task, plan, and run work
+  with approve, reject, expire, check, and list flows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
@@ -84,6 +86,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "validate_policy_pack", "arguments": { "name": "release", "task_id": "1234abcd" } }
+```
+
+CLI approval gate check:
+
+```bash
+todos approvals check 1234abcd deploy --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "check_approval_gate", "arguments": { "task_id": "1234abcd", "gate": "deploy" } }
 ```
 
 CLI agent run queue:

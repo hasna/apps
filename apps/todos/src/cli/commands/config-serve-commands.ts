@@ -417,6 +417,123 @@ export function registerConfigServeCommands(program: Command) {
     .description("Dry-run explain output for local policy-pack validation")
     .action((name: string, taskId: string) => runPolicyValidation(name, taskId, true));
 
+  const approvals = program
+    .command("approvals")
+    .description("Manage local approval gates and manual checkpoints");
+
+  function printApprovalGate(gate: any, json: boolean) {
+    if (json) { output(gate, true); return; }
+    const color = gate.status === "approved" ? chalk.green : gate.status === "pending" ? chalk.yellow : chalk.red;
+    console.log(`${color(gate.status)} ${gate.gate} ${chalk.dim(gate.task_id.slice(0, 8))}`);
+    if (gate.reviewer) console.log(`  ${chalk.dim("Reviewer:")} ${gate.reviewer}`);
+    if (gate.reason) console.log(`  ${chalk.dim("Reason:")}   ${gate.reason}`);
+    if (gate.expires_at) console.log(`  ${chalk.dim("Expires:")}  ${gate.expires_at}`);
+  }
+
+  approvals
+    .command("require <task-id> <gate>")
+    .description("Require a local manual approval gate before risky work")
+    .option("--reviewer <name>", "Expected reviewer")
+    .option("--requester <name>", "Requester or agent creating the gate")
+    .option("--reason <text>", "Why this gate is required")
+    .option("--plan <id>", "Related local plan ID")
+    .option("--run <id>", "Related local run ledger ID")
+    .option("--expires-at <iso>", "ISO timestamp when this pending gate expires")
+    .action(async (taskId: string, gateName: string, opts: { reviewer?: string; requester?: string; reason?: string; plan?: string; run?: string; expiresAt?: string }) => {
+      const globalOpts = program.opts();
+      const { requestApprovalGate } = await import("../../lib/approval-gates.js");
+      const gate = requestApprovalGate({
+        task_id: resolveTaskId(taskId),
+        gate: gateName,
+        requester: opts.requester || globalOpts.agent,
+        reviewer: opts.reviewer,
+        reason: opts.reason,
+        plan_id: opts.plan,
+        run_id: opts.run,
+        expires_at: opts.expiresAt,
+      });
+      printApprovalGate(gate, globalOpts.json);
+    });
+
+  approvals
+    .command("approve <task-id> <gate>")
+    .description("Approve a local approval gate")
+    .option("--reviewer <name>", "Reviewer or approver")
+    .option("--note <text>", "Approval note")
+    .action(async (taskId: string, gateName: string, opts: { reviewer?: string; note?: string }) => {
+      const globalOpts = program.opts();
+      const { approveApprovalGate } = await import("../../lib/approval-gates.js");
+      const gate = approveApprovalGate({
+        task_id: resolveTaskId(taskId),
+        gate: gateName,
+        reviewer: opts.reviewer || globalOpts.agent || "cli",
+        note: opts.note,
+      });
+      printApprovalGate(gate, globalOpts.json);
+    });
+
+  approvals
+    .command("reject <task-id> <gate>")
+    .description("Reject a local approval gate")
+    .option("--reviewer <name>", "Reviewer or approver")
+    .option("--reason <text>", "Rejection reason")
+    .action(async (taskId: string, gateName: string, opts: { reviewer?: string; reason?: string }) => {
+      const globalOpts = program.opts();
+      const { rejectApprovalGate } = await import("../../lib/approval-gates.js");
+      const gate = rejectApprovalGate({
+        task_id: resolveTaskId(taskId),
+        gate: gateName,
+        reviewer: opts.reviewer || globalOpts.agent || "cli",
+        reason: opts.reason,
+      });
+      printApprovalGate(gate, globalOpts.json);
+    });
+
+  approvals
+    .command("expire <task-id> <gate>")
+    .description("Expire a pending local approval gate")
+    .option("--reviewer <name>", "Reviewer or agent expiring the gate")
+    .option("--reason <text>", "Expiration reason")
+    .action(async (taskId: string, gateName: string, opts: { reviewer?: string; reason?: string }) => {
+      const globalOpts = program.opts();
+      const { expireApprovalGate } = await import("../../lib/approval-gates.js");
+      const gate = expireApprovalGate({
+        task_id: resolveTaskId(taskId),
+        gate: gateName,
+        reviewer: opts.reviewer || globalOpts.agent || "cli",
+        reason: opts.reason,
+      });
+      printApprovalGate(gate, globalOpts.json);
+    });
+
+  approvals
+    .command("check <task-id> <gate>")
+    .description("Check whether a local approval gate allows work to proceed")
+    .action(async (taskId: string, gateName: string) => {
+      const globalOpts = program.opts();
+      const { checkApprovalGate } = await import("../../lib/approval-gates.js");
+      const result = checkApprovalGate(resolveTaskId(taskId), gateName);
+      if (!result.allowed) process.exitCode = 1;
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(result.allowed ? chalk.green("Approval gate passed") : chalk.red("Approval gate blocked"));
+      for (const reason of result.reasons) console.log(`  - ${reason}`);
+    });
+
+  approvals
+    .command("list <task-id>")
+    .description("List local approval gates for a task")
+    .action(async (taskId: string) => {
+      const globalOpts = program.opts();
+      const { listApprovalGates } = await import("../../lib/approval-gates.js");
+      const gates = listApprovalGates(resolveTaskId(taskId));
+      if (globalOpts.json) { output(gates, true); return; }
+      if (gates.length === 0) {
+        console.log(chalk.dim("No approval gates recorded."));
+        return;
+      }
+      for (const gate of gates) printApprovalGate(gate, false);
+    });
+
   // serve (web dashboard)
   program
     .command("serve")

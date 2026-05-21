@@ -99,6 +99,25 @@ MCP clients can use `set_policy_pack`, `list_policy_packs`,
 Validation is a dry local read of recorded task evidence; it never calls a
 hosted enforcement service.
 
+## Local Approval Gates
+
+Approval gates are manual checkpoints stored in the local task database. Agents
+can require, approve, reject, expire, list, and check gates before risky plan or
+run work. Blocked checks exit nonzero, including JSON mode, so local automation
+cannot silently bypass a missing or denied checkpoint:
+
+```bash
+todos approvals require <task-id> deploy --requester codex --reviewer reviewer --run <run-id> --reason "production-affecting action"
+todos approvals check <task-id> deploy --json
+todos approvals approve <task-id> deploy --reviewer reviewer --note "safe to proceed"
+todos approvals list <task-id> --json
+```
+
+MCP clients can use `require_approval_gate`, `approve_approval_gate`,
+`reject_approval_gate`, `expire_approval_gate`, `check_approval_gate`, and
+`list_approval_gates`. Gate events are written to task audit history and, when
+a run is linked, to the local run ledger.
+
 ## Local Agent Run Queue
 
 Agent run adapters and queue entries are local. Queueing a task creates a run
