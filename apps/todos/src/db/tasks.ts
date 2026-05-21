@@ -66,6 +66,7 @@ export {
   getArchivedTasks,
   unarchiveTask,
   getOverdueTasks,
+  getEscalatedTasks,
   notifyUpcomingDeadlines,
   getBlockedTasks,
   getBlockingTasks,
@@ -79,7 +80,7 @@ export {
   logCost,
 } from "./task-relations.js";
 
-export type { BulkCreateTaskInput, LogTimeInput } from "./task-relations.ts";
+export type { BulkCreateTaskInput, EscalatedTask, LogTimeInput } from "./task-relations.ts";
 
 // Re-export types that were previously exported from this file
 export type { TaskFilter } from "../types/index.js";

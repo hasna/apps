@@ -58,8 +58,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
@@ -82,6 +82,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           timestamp,
           input.due_at || null,
           input.estimated_minutes || null,
+          input.sla_minutes ?? null,
           input.confidence ?? null,
           input.retry_count ?? 0,
           input.max_retries ?? 3,
@@ -482,6 +483,10 @@ export function updateTask(
     sets.push("estimated_minutes = ?");
     params.push(input.estimated_minutes);
   }
+  if (input.sla_minutes !== undefined) {
+    sets.push("sla_minutes = ?");
+    params.push(input.sla_minutes);
+  }
   if (input.actual_minutes !== undefined) {
     sets.push("actual_minutes = ?");
     params.push(input.actual_minutes);
@@ -575,6 +580,7 @@ export function updateTask(
     version: task.version + 1,
     updated_at: timestamp,
     completed_at: input.status === "completed" ? completionTimestamp : input.completed_at !== undefined ? input.completed_at : task.completed_at,
+    sla_minutes: input.sla_minutes !== undefined ? input.sla_minutes : task.sla_minutes,
     actual_minutes: input.actual_minutes ?? task.actual_minutes,
     confidence: input.confidence !== undefined ? input.confidence : task.confidence,
     retry_count: input.retry_count ?? task.retry_count,

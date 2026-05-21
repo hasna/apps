@@ -381,6 +381,7 @@ export interface CreateTaskInput {
   metadata?: Record<string, unknown>;
   due_at?: string;
   estimated_minutes?: number;
+  sla_minutes?: number;
   confidence?: number;
   retry_count?: number;
   max_retries?: number;
@@ -410,6 +411,7 @@ export interface UpdateTaskInput {
   metadata?: Record<string, unknown>;
   due_at?: string | null;
   estimated_minutes?: number;
+  sla_minutes?: number | null;
   actual_minutes?: number;
   completed_at?: string | null;
   confidence?: number | null;

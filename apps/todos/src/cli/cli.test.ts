@@ -1009,6 +1009,25 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-overdue.db"); } catch {}
   });
 
+  it("should create and list local SLA escalations", async () => {
+    const dbPath = "/tmp/test-cli-sla.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const created = await runCli(["add", "Escalate me", "--due", "2026-05-20", "--sla-minutes", "1", "--json"], dbPath);
+    const task = JSON.parse(created.stdout);
+    expect(task.sla_minutes).toBe(1);
+
+    const escalations = JSON.parse((await runCli(["sla", "--json"], dbPath)).stdout);
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0].task.id).toBe(task.id);
+    expect(escalations[0].reasons).toContain("overdue");
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should manage local workspace trust profiles", async () => {
     const dbPath = "/tmp/test-cli-trust.db";
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");

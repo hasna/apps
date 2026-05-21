@@ -541,6 +541,7 @@ describe("MCP tool wrappers", () => {
       priority: "critical",
       deadline: "2026-05-07T00:00:00.000Z",
       estimate: 45,
+      sla_minutes: 120,
       confidence: 0.8,
       retry_count: 5,
       tags: ["mcp"],
@@ -550,6 +551,7 @@ describe("MCP tool wrappers", () => {
     expect(task.priority).toBe("critical");
     expect(task.due_at).toBe("2026-05-07T00:00:00.000Z");
     expect(task.estimated_minutes).toBe(45);
+    expect(task.sla_minutes).toBe(120);
     expect(task.confidence).toBe(0.8);
     expect(task.max_retries).toBe(5);
   });
@@ -608,6 +610,7 @@ describe("MCP tool wrappers", () => {
       title: "Updated via MCP",
       deadline: "2026-05-08T00:00:00.000Z",
       estimate: 60,
+      sla_minutes: 180,
       actual_minutes: 70,
       confidence: 0.7,
     });
@@ -616,6 +619,7 @@ describe("MCP tool wrappers", () => {
     expect(updated.title).toBe("Updated via MCP");
     expect(updated.due_at).toBe("2026-05-08T00:00:00.000Z");
     expect(updated.estimated_minutes).toBe(60);
+    expect(updated.sla_minutes).toBe(180);
     expect(updated.actual_minutes).toBe(70);
     expect(updated.confidence).toBe(0.7);
   });

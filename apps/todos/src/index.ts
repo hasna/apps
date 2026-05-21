@@ -132,10 +132,11 @@ export {
   setTaskPriority,
   redistributeStaleTasks,
   getOverdueTasks,
+  getEscalatedTasks,
   archiveTasks,
   unarchiveTask,
 } from "./db/tasks.js";
-export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus } from "./db/tasks.js";
+export type { TaskGraphNode, TaskGraph, BulkCreateTaskInput, EscalatedTask, ActiveWorkItem, StatusSummary, DecomposeSubtaskInput, StaleTaskQuery, TaskLockStatus } from "./db/tasks.js";
 
 // Cycles
 export {

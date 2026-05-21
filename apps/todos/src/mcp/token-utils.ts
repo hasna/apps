@@ -45,6 +45,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "get_blocking_tasks",
     "get_my_tasks",
     "get_review_queue",
+    "get_sla_breaches",
     "get_stale_tasks",
     "get_task_contract",
     "check_task_lock",
@@ -270,7 +271,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "machines_set_primary",
     "machines_unarchive",
   ],
-  maintenance: ["extract_todos", "notify_upcoming_deadlines", "run_doctor", "score_task"],
+  maintenance: ["extract_todos", "get_sla_breaches", "notify_upcoming_deadlines", "run_doctor", "score_task"],
 };
 
 export const MCP_PROFILE_GROUPS: Record<string, readonly string[]> = {

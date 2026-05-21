@@ -125,6 +125,9 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
       started_at: nullableIsoDateField,
       completed_at: nullableIsoDateField,
       due_at: nullableIsoDateField,
+      recurrence_rule: field(["string", "null"], "Local recurrence rule such as every day or every week.", true),
+      recurrence_parent_id: nullableIdField,
+      sla_minutes: field(["integer", "null"], "Local SLA threshold in minutes before escalation.", true),
     },
   }),
   contract({

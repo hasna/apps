@@ -377,6 +377,26 @@ local SQLite store and local bridge exports already include the underlying
 comments, runs, run evidence, files, commits, and verification records needed to
 rebuild the same timeline after import.
 
+## Local Scheduling and SLA Escalation
+
+Tasks can carry local due dates, recurrence rules, and SLA thresholds without a
+hosted scheduler. Recurring tasks spawn their next local task from the previous
+scheduled due date, preserving cadence even when completion happens late:
+
+```bash
+todos add "Weekly review" --due 2026-06-01 --recurrence "every week" --sla-minutes 120 --json
+todos update <task-id> --due 2026-06-08 --recurrence "every monday" --sla 90 --json
+todos overdue --json
+todos sla --json
+```
+
+`todos overdue` returns unfinished tasks past `due_at`. `todos sla` returns
+unfinished tasks that are past `due_at` or whose `sla_minutes` threshold has
+elapsed from `started_at` when present, otherwise `created_at`. MCP clients use
+`create_task` and `update_task` with `deadline`, `recurrence_rule`, and
+`sla_minutes`, and can call `get_sla_breaches` for the same local escalation
+view.
+
 ## Local Task Fields
 
 Tasks can carry local labels, severity, owner, area, and custom metadata while

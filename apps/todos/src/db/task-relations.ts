@@ -202,15 +202,77 @@ export function unarchiveTask(id: string, db?: Database): Task | null {
   return getTask(id, d);
 }
 
-export function getOverdueTasks(projectId?: string, db?: Database): Task[] {
+export function getOverdueTasks(projectId?: string, db?: Database, at: Date = new Date()): Task[] {
   const d = db || getDatabase();
-  const nowStr = new Date().toISOString();
-  let query = `SELECT * FROM tasks WHERE due_at IS NOT NULL AND due_at < ? AND status NOT IN ('completed', 'cancelled', 'failed')`;
+  const nowStr = at.toISOString();
+  let query = `SELECT * FROM tasks WHERE archived_at IS NULL AND due_at IS NOT NULL AND due_at < ? AND status NOT IN ('completed', 'cancelled', 'failed')`;
   const params: any[] = [nowStr];
   if (projectId) { query += ` AND project_id = ?`; params.push(projectId); }
   query += ` ORDER BY due_at ASC`;
   const rows = d.query(query).all(...params) as TaskRow[];
   return rows.map(rowToTask);
+}
+
+export interface EscalatedTask {
+  task: Task;
+  reasons: Array<"overdue" | "sla_breached">;
+  breached_at: string;
+}
+
+export function getEscalatedTasks(
+  opts: { project_id?: string; agent_id?: string } = {},
+  db?: Database,
+  at: Date = new Date(),
+): EscalatedTask[] {
+  const d = db || getDatabase();
+  const nowMs = at.getTime();
+  const conditions = [
+    "archived_at IS NULL",
+    "status NOT IN ('completed', 'cancelled', 'failed')",
+    "(due_at IS NOT NULL OR sla_minutes IS NOT NULL)",
+  ];
+  const params: SQLQueryBindings[] = [];
+  if (opts.project_id) {
+    conditions.push("project_id = ?");
+    params.push(opts.project_id);
+  }
+  if (opts.agent_id) {
+    conditions.push("assigned_to = ?");
+    params.push(opts.agent_id);
+  }
+
+  const rows = d
+    .query(`SELECT * FROM tasks WHERE ${conditions.join(" AND ")} ORDER BY due_at ASC, created_at ASC`)
+    .all(...params) as TaskRow[];
+
+  return rows
+    .map(rowToTask)
+    .map((task) => {
+      const reasons: EscalatedTask["reasons"] = [];
+      const breachedTimes: number[] = [];
+      if (task.due_at) {
+        const dueMs = new Date(task.due_at).getTime();
+        if (Number.isFinite(dueMs) && dueMs < nowMs) {
+          reasons.push("overdue");
+          breachedTimes.push(dueMs);
+        }
+      }
+      if (task.sla_minutes != null) {
+        const startMs = new Date(task.started_at ?? task.created_at).getTime();
+        const breachedMs = startMs + task.sla_minutes * 60_000;
+        if (Number.isFinite(breachedMs) && breachedMs < nowMs) {
+          reasons.push("sla_breached");
+          breachedTimes.push(breachedMs);
+        }
+      }
+      if (reasons.length === 0) return null;
+      return {
+        task,
+        reasons,
+        breached_at: new Date(Math.min(...breachedTimes)).toISOString(),
+      };
+    })
+    .filter((item): item is EscalatedTask => item !== null);
 }
 
 export function notifyUpcomingDeadlines(

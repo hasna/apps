@@ -217,6 +217,34 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
     );
   }
 
+  if (shouldRegisterTool("get_sla_breaches")) {
+    server.tool(
+      "get_sla_breaches",
+      "List unfinished local tasks that are overdue or past their SLA minutes and should be escalated.",
+      {
+        project_id: z.string().optional().describe("Filter by project"),
+        agent_id: z.string().optional().describe("Filter by assignee"),
+        limit: z.number().optional().describe("Max results (default: 50)"),
+      },
+      async ({ project_id, agent_id, limit }) => {
+        try {
+          const { getEscalatedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
+          const resolvedAgentId = agent_id ? resolveId(agent_id, "agents") : undefined;
+          const escalations = getEscalatedTasks({ project_id: resolvedProjectId, agent_id: resolvedAgentId }).slice(0, limit || 50);
+          if (escalations.length === 0) return { content: [{ type: "text" as const, text: "No SLA breaches or overdue tasks." }] };
+          const lines = escalations.map((item: any) => {
+            const task = item.task;
+            return `${task.short_id || task.id.slice(0, 8)} ${task.title} ${item.reasons.join(",")} breached ${item.breached_at}`;
+          });
+          return { content: [{ type: "text" as const, text: `${escalations.length} escalation(s):\n${lines.join("\n")}` }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("get_stale_tasks")) {
     server.tool(
       "get_stale_tasks",

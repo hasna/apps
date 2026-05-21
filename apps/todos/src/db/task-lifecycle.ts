@@ -164,7 +164,7 @@ export function completeTask(
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
   if (task.recurrence_rule && !options?.skip_recurrence) {
-    spawnedTask = spawnNextRecurrence(task, d);
+    spawnedTask = spawnNextRecurrence(task, d, timestamp);
   }
 
   // Auto-spawn next task from template (pipeline/handoff chains)
@@ -642,8 +642,9 @@ export function claimOrSteal(
 
 // Internal helper — spawn next recurring task
 
-function spawnNextRecurrence(completedTask: Task, db: Database): Task {
-  const dueAt = nextOccurrence(completedTask.recurrence_rule!, new Date());
+function spawnNextRecurrence(completedTask: Task, db: Database, completedAt: string): Task {
+  const recurrenceBase = completedTask.due_at ? new Date(completedTask.due_at) : new Date(completedAt);
+  const dueAt = nextOccurrence(completedTask.recurrence_rule!, recurrenceBase);
 
   // Strip short_id prefix from title if present
   let title = completedTask.title;
@@ -665,6 +666,7 @@ function spawnNextRecurrence(completedTask: Task, db: Database): Task {
     tags: completedTask.tags,
     metadata: completedTask.metadata,
     estimated_minutes: completedTask.estimated_minutes ?? undefined,
+    sla_minutes: completedTask.sla_minutes ?? undefined,
     recurrence_rule: completedTask.recurrence_rule!,
     recurrence_parent_id: recurrenceParentId,
     due_at: dueAt,

@@ -12,6 +12,7 @@ import {
   getStaleTasks,
   redistributeStaleTasks,
   getTask,
+  getEscalatedTasks,
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
 import { acknowledgeHandoff, createHandoff, createSessionRecoveryHandoff, getHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
@@ -904,6 +905,36 @@ export function registerQueryCommands(program: Command) {
         const daysOverdue = Math.floor((Date.now() - new Date(t.due_at!).getTime()) / 86400000);
         const urgency = daysOverdue > 7 ? chalk.bgRed.white(` ${daysOverdue}d `) : chalk.red(`${daysOverdue}d`);
         console.log(`  ${urgency} ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""} ${chalk.dim(`(due ${dueDate})`)}`);
+      }
+    });
+
+  program
+    .command("sla")
+    .description("Show overdue or SLA-breached tasks that need escalation")
+    .option("-j, --json", "Output as JSON")
+    .option("--project <id>", "Filter to project")
+    .option("--agent <id>", "Filter to assigned agent")
+    .option("--limit <n>", "Max tasks to show", "50")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const projectId = autoProject(globalOpts) || opts.project || undefined;
+      const escalations = getEscalatedTasks({
+        project_id: projectId,
+        agent_id: opts.agent,
+      }).slice(0, parseInt(opts.limit, 10));
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(escalations));
+        return;
+      }
+      if (escalations.length === 0) {
+        console.log(chalk.green("  No SLA breaches or overdue tasks."));
+        return;
+      }
+      console.log(chalk.bold.red(`Escalations (${escalations.length}):\n`));
+      for (const item of escalations) {
+        const task = item.task;
+        const reasons = item.reasons.map((reason) => reason === "sla_breached" ? "SLA" : "overdue").join(",");
+        console.log(`  ${chalk.red(reasons)} ${chalk.cyan(task.short_id || task.id.slice(0, 8))} ${task.title}${task.assigned_to ? chalk.dim(` — ${task.assigned_to}`) : ""} ${chalk.dim(`since ${item.breached_at}`)}`);
       }
     });
 
