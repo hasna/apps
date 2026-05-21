@@ -508,6 +508,127 @@ exit 0
       }
     });
 
+  const contracts = program
+    .command("contracts")
+    .description("Manage local task contracts, acceptance criteria, and review gates");
+
+  contracts
+    .command("set <task-id>")
+    .description("Set acceptance criteria, required verification, artifacts, files, risk, and done definition")
+    .option("--criteria <items>", "Semicolon-separated acceptance criteria")
+    .option("--verify <items>", "Semicolon-separated required verification commands")
+    .option("--artifact <items>", "Comma-separated expected artifact paths")
+    .option("--file <items>", "Comma-separated relevant file paths")
+    .option("--risk <level>", "Risk level: low, medium, high, or critical")
+    .option("--done <items>", "Semicolon-separated done-definition checklist items")
+    .action(async (taskId: string, opts: { criteria?: string; verify?: string; artifact?: string; file?: string; risk?: string; done?: string }) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      const splitSemi = (value?: string) => value?.split(";").map((item) => item.trim()).filter(Boolean);
+      if (opts.risk && !["low", "medium", "high", "critical"].includes(opts.risk)) {
+        console.error(chalk.red("--risk must be low, medium, high, or critical"));
+        process.exit(1);
+      }
+      const { setTaskContract } = await import("../../lib/task-contracts.js");
+      const contract = setTaskContract({
+        task_id: resolvedId,
+        acceptance_criteria: splitSemi(opts.criteria),
+        verification_commands: splitSemi(opts.verify),
+        expected_artifacts: listOption(opts.artifact),
+        relevant_files: listOption(opts.file),
+        risk_level: opts.risk as Parameters<typeof setTaskContract>[0]["risk_level"],
+        done_definition: splitSemi(opts.done),
+      });
+      if (globalOpts.json) { output(contract, true); return; }
+      console.log(chalk.green(`Saved contract for task ${taskId}`));
+      if (contract.acceptance_criteria.length > 0) console.log(`  ${chalk.dim("Criteria:")} ${contract.acceptance_criteria.length}`);
+      if (contract.verification_commands.length > 0) console.log(`  ${chalk.dim("Required checks:")} ${contract.verification_commands.length}`);
+    });
+
+  contracts
+    .command("show <task-id>")
+    .description("Show the local task contract and review state")
+    .action(async (taskId: string) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      const { getTaskContract, getTaskReview } = await import("../../lib/task-contracts.js");
+      const result = { contract: getTaskContract(resolvedId), review: getTaskReview(resolvedId) };
+      if (globalOpts.json) { output(result, true); return; }
+      if (!result.contract && !result.review) {
+        console.log(chalk.dim(`No contract or review state recorded for ${taskId}.`));
+        return;
+      }
+      if (result.contract) {
+        console.log(chalk.bold(`Contract: ${taskId}`));
+        for (const item of result.contract.acceptance_criteria) console.log(`  - ${item}`);
+        if (result.contract.verification_commands.length > 0) console.log(chalk.dim(`  Checks: ${result.contract.verification_commands.join("; ")}`));
+      }
+      if (result.review) console.log(`${chalk.dim("Review:")} ${result.review.state}${result.review.reviewer ? ` by ${result.review.reviewer}` : ""}`);
+    });
+
+  contracts
+    .command("request-review <task-id>")
+    .description("Request local review for a task")
+    .option("--requester <name>", "Requester agent")
+    .option("--reviewer <name>", "Reviewer agent or human")
+    .option("--notes <text>", "Review notes")
+    .action(async (taskId: string, opts: { requester?: string; reviewer?: string; notes?: string }) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      const { requestTaskReview } = await import("../../lib/task-contracts.js");
+      const review = requestTaskReview({
+        task_id: resolvedId,
+        requester: opts.requester || globalOpts.agent || "cli",
+        reviewer: opts.reviewer,
+        notes: opts.notes,
+      });
+      if (globalOpts.json) { output(review, true); return; }
+      console.log(chalk.green(`Review requested for task ${taskId}`));
+    });
+
+  contracts
+    .command("review <task-id>")
+    .description("Record local review approval, requested changes, or reopen state")
+    .requiredOption("--state <state>", "approved, changes_requested, or reopened")
+    .option("--reviewer <name>", "Reviewer agent or human")
+    .option("--notes <text>", "Review notes")
+    .option("--changes <items>", "Semicolon-separated requested changes")
+    .action(async (taskId: string, opts: { state: string; reviewer?: string; notes?: string; changes?: string }) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      if (!["approved", "changes_requested", "reopened"].includes(opts.state)) {
+        console.error(chalk.red("--state must be approved, changes_requested, or reopened"));
+        process.exit(1);
+      }
+      const { recordTaskReview } = await import("../../lib/task-contracts.js");
+      const review = recordTaskReview({
+        task_id: resolvedId,
+        state: opts.state as Parameters<typeof recordTaskReview>[0]["state"],
+        reviewer: opts.reviewer || globalOpts.agent || "cli",
+        notes: opts.notes,
+        changes_requested: opts.changes?.split(";").map((item) => item.trim()).filter(Boolean),
+      });
+      if (globalOpts.json) { output(review, true); return; }
+      console.log(chalk.green(`Review state for task ${taskId}: ${review.state}`));
+    });
+
+  contracts
+    .command("check <task-id>")
+    .description("Check whether local task evidence satisfies the task contract")
+    .action(async (taskId: string) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(taskId);
+      const { checkTaskDoneContract } = await import("../../lib/task-contracts.js");
+      const result = checkTaskDoneContract(resolvedId);
+      if (globalOpts.json) { output(result, true); return; }
+      if (result.ok) {
+        console.log(chalk.green(`Task ${taskId} satisfies its local contract.`));
+        return;
+      }
+      console.log(chalk.yellow(`Task ${taskId} is missing contract evidence:`));
+      for (const missing of result.missing) console.log(`  - ${missing}`);
+    });
+
   const verificationProviders = program
     .command("verify-providers")
     .description("Manage optional local verification provider adapters");

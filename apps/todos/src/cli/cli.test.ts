@@ -1085,6 +1085,56 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should manage local task contracts and review gates from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-task-contracts.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Contract task", "--approval", "--json"], dbPath)).stdout);
+    const set = await runCli([
+      "contracts",
+      "set",
+      task.id,
+      "--criteria",
+      "Parser handles quotes;Parser rejects malformed checkboxes",
+      "--verify",
+      "bun test src/parser.test.ts",
+      "--artifact",
+      "logs/parser.txt",
+      "--risk",
+      "medium",
+      "--done",
+      "review approved",
+      "--json",
+    ], dbPath);
+    expect(set.exitCode).toBe(0);
+    expect(JSON.parse(set.stdout).acceptance_criteria).toHaveLength(2);
+
+    const invalidRisk = await runCli(["contracts", "set", task.id, "--risk", "unknown"], dbPath);
+    expect(invalidRisk.exitCode).toBe(1);
+    expect(invalidRisk.stderr).toContain("--risk must be low, medium, high, or critical");
+
+    const requested = await runCli(["contracts", "request-review", task.id, "--requester", "codex", "--reviewer", "reviewer", "--json"], dbPath);
+    expect(requested.exitCode).toBe(0);
+    expect(JSON.parse(requested.stdout).state).toBe("requested");
+
+    const missing = await runCli(["contracts", "check", task.id, "--json"], dbPath);
+    expect(missing.exitCode).toBe(0);
+    expect(JSON.parse(missing.stdout).missing).toEqual(expect.arrayContaining(["task_status_completed", "review_approved"]));
+
+    expect((await runCli(["record-verification", task.id, "bun test src/parser.test.ts", "--status", "passed", "--artifact", "logs/parser.txt"], dbPath)).exitCode).toBe(0);
+    expect((await runCli(["update", task.id, "--status", "completed"], dbPath)).exitCode).toBe(0);
+    const reviewed = await runCli(["contracts", "review", task.id, "--state", "approved", "--reviewer", "reviewer", "--json"], dbPath);
+    expect(reviewed.exitCode).toBe(0);
+    expect(JSON.parse(reviewed.stdout).state).toBe("approved");
+
+    const passed = await runCli(["contracts", "check", task.id, "--json"], dbPath);
+    expect(passed.exitCode).toBe(0);
+    expect(JSON.parse(passed.stdout).ok).toBe(true);
+
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should manage local approval gates and block failed checks in json mode", async () => {
     const dbPath = "/tmp/test-cli-approval-gates.db";
     const { unlinkSync } = await import("node:fs");

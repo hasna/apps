@@ -99,6 +99,32 @@ MCP clients can use `set_policy_pack`, `list_policy_packs`,
 Validation is a dry local read of recorded task evidence; it never calls a
 hosted enforcement service.
 
+## Task Contracts and Reviews
+
+Task contracts make acceptance criteria, required verification, expected
+artifacts, relevant files, risk, and review state machine-readable for agents:
+
+```bash
+todos contracts set <task-id> \
+  --criteria "Parser handles quotes;Parser rejects malformed checkboxes" \
+  --verify "bun test src/parser.test.ts" \
+  --artifact logs/parser.txt \
+  --file src/parser.ts \
+  --risk medium \
+  --done "review approved" \
+  --json
+todos contracts request-review <task-id> --requester codex --reviewer reviewer
+todos record-verification <task-id> "bun test src/parser.test.ts" --status passed --artifact logs/parser.txt
+todos contracts review <task-id> --state approved --reviewer reviewer
+todos contracts check <task-id> --json
+```
+
+Contracts are stored in local task metadata, mirror acceptance criteria for
+context packs, and are checked only against local status, review state, and
+recorded verification evidence. MCP clients can use `set_task_contract`,
+`get_task_contract`, `request_task_review`, `record_task_review`, and
+`check_task_done_contract`.
+
 ## Local Approval Gates
 
 Approval gates are manual checkpoints stored in the local task database. Agents

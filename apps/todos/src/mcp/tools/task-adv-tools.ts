@@ -395,6 +395,110 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
     );
   }
 
+  if (shouldRegisterTool("set_task_contract")) {
+    server.tool(
+      "set_task_contract",
+      "Set local task acceptance criteria, required verification commands, expected artifacts, relevant files, risk, and done definition.",
+      {
+        task_id: z.string().describe("Task ID"),
+        acceptance_criteria: z.array(z.string()).optional(),
+        verification_commands: z.array(z.string()).optional(),
+        expected_artifacts: z.array(z.string()).optional(),
+        relevant_files: z.array(z.string()).optional(),
+        risk_level: z.enum(["low", "medium", "high", "critical"]).optional(),
+        done_definition: z.array(z.string()).optional(),
+      },
+      async (input) => {
+        try {
+          const { setTaskContract } = require("../../lib/task-contracts.js") as typeof import("../../lib/task-contracts.js");
+          const result = setTaskContract({ ...input, task_id: resolveId(input.task_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_task_contract")) {
+    server.tool(
+      "get_task_contract",
+      "Get local task contract and review state.",
+      { task_id: z.string().describe("Task ID") },
+      async ({ task_id }) => {
+        try {
+          const resolvedId = resolveId(task_id);
+          const { getTaskContract, getTaskReview } = require("../../lib/task-contracts.js") as typeof import("../../lib/task-contracts.js");
+          return { content: [{ type: "text" as const, text: JSON.stringify({ contract: getTaskContract(resolvedId), review: getTaskReview(resolvedId) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("request_task_review")) {
+    server.tool(
+      "request_task_review",
+      "Request local review for a task.",
+      {
+        task_id: z.string().describe("Task ID"),
+        requester: z.string().describe("Requester agent or user"),
+        reviewer: z.string().optional().describe("Reviewer agent or user"),
+        notes: z.string().optional().describe("Review notes"),
+      },
+      async (input) => {
+        try {
+          const { requestTaskReview } = require("../../lib/task-contracts.js") as typeof import("../../lib/task-contracts.js");
+          const review = requestTaskReview({ ...input, task_id: resolveId(input.task_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(review, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("record_task_review")) {
+    server.tool(
+      "record_task_review",
+      "Record local task review approval, requested changes, or reopen state.",
+      {
+        task_id: z.string().describe("Task ID"),
+        state: z.enum(["approved", "changes_requested", "reopened"]).describe("Review state"),
+        reviewer: z.string().describe("Reviewer agent or user"),
+        notes: z.string().optional().describe("Review notes"),
+        changes_requested: z.array(z.string()).optional().describe("Requested changes"),
+      },
+      async (input) => {
+        try {
+          const { recordTaskReview } = require("../../lib/task-contracts.js") as typeof import("../../lib/task-contracts.js");
+          const review = recordTaskReview({ ...input, task_id: resolveId(input.task_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(review, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("check_task_done_contract")) {
+    server.tool(
+      "check_task_done_contract",
+      "Check whether local task status, verification evidence, artifacts, and review state satisfy the task contract.",
+      { task_id: z.string().describe("Task ID") },
+      async ({ task_id }) => {
+        try {
+          const { checkTaskDoneContract } = require("../../lib/task-contracts.js") as typeof import("../../lib/task-contracts.js");
+          const result = checkTaskDoneContract(resolveId(task_id));
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("extend_task")) {
     server.tool(
       "extend_task",

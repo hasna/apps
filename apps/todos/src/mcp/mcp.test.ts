@@ -970,6 +970,36 @@ describe("MCP tool wrappers", () => {
     expect(result.content[0]!.text).toContain("Needle wrapper task");
   });
 
+  it("task contract wrappers expose acceptance criteria and review gates", async () => {
+    const tools = captureTools(registerTaskAdvTools);
+    const task = createTask({ title: "Contract via MCP" }, db);
+
+    const contractResult = await callCapturedTool(tools, "set_task_contract", {
+      task_id: task.id,
+      acceptance_criteria: ["MCP stores criteria"],
+      verification_commands: ["bun test src/mcp/mcp.test.ts"],
+      expected_artifacts: ["logs/mcp.txt"],
+      risk_level: "high",
+      done_definition: ["review approved"],
+    });
+    expect(contractResult.content[0]!.text).toContain("MCP stores criteria");
+
+    const reviewResult = await callCapturedTool(tools, "request_task_review", {
+      task_id: task.id,
+      requester: "codex",
+      reviewer: "reviewer",
+    });
+    expect(reviewResult.content[0]!.text).toContain("\"state\": \"requested\"");
+
+    const checkResult = await callCapturedTool(tools, "check_task_done_contract", { task_id: task.id });
+    const check = JSON.parse(checkResult.content[0]!.text);
+    expect(check.ok).toBe(false);
+    expect(check.missing).toEqual(expect.arrayContaining(["task_status_completed", "review_approved"]));
+
+    const showResult = await callCapturedTool(tools, "get_task_contract", { task_id: task.id });
+    expect(showResult.content[0]!.text).toContain("\"reviewer\": \"reviewer\"");
+  });
+
   it("auto tools report deadlines and health without dead imports", async () => {
     const tools = captureTools(registerTaskAutoTools);
     createTask({

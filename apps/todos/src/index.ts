@@ -763,6 +763,26 @@ export type {
   DoctorSummary,
   RunTodosDoctorOptions,
 } from "./lib/doctor.js";
+export {
+  checkTaskDoneContract,
+  getTaskContract,
+  getTaskReview,
+  recordTaskReview,
+  requestTaskReview,
+  setTaskContract,
+} from "./lib/task-contracts.js";
+export type {
+  RecordTaskReviewInput,
+  RecordableTaskReviewState,
+  RequestTaskReviewInput,
+  SetTaskContractInput,
+  TaskContract,
+  TaskDoneContractResult,
+  TaskReview,
+  TaskReviewHistoryEntry,
+  TaskReviewState,
+  TaskRiskLevel,
+} from "./lib/task-contracts.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";
