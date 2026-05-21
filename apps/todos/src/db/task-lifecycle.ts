@@ -11,6 +11,7 @@ import {
 } from "../types/index.js";
 import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
 import { dispatchWebhook } from "./webhooks.js";
@@ -57,6 +58,15 @@ export function startTask(
   const blocking = getBlockingDeps(id, d);
   if (blocking.length > 0) {
     const blockerIds = blocking.map(b => b.id.slice(0, 8)).join(", ");
+    emitLocalEventHooksQuiet({
+      type: "task.blocked",
+      payload: {
+        id,
+        agent_id: agentId,
+        title: task.title,
+        blockers: blocking.map((b) => ({ id: b.id, short_id: b.short_id, title: b.title, status: b.status })),
+      },
+    });
     throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
   }
 
@@ -80,6 +90,7 @@ export function startTask(
 
   logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
   dispatchWebhook("task.started", { id, agent_id: agentId, title: task.title }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.started", payload: { id, agent_id: agentId, title: task.title } });
 
   // Return constructed result — no re-fetch
   return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
@@ -148,6 +159,7 @@ export function completeTask(
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
   dispatchWebhook("task.completed", { id, agent_id: agentId, title: task.title, completed_at: timestamp }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.completed", payload: { id, agent_id: agentId, title: task.title, completed_at: timestamp } });
 
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
@@ -204,6 +216,7 @@ export function completeTask(
     (meta as Record<string, unknown>)._unblocked = unblockedDeps.map(d => ({ id: d.id, short_id: d.short_id, title: d.title }));
     for (const dep of unblockedDeps) {
       dispatchWebhook("task.unblocked", { id: dep.id, unblocked_by: id, title: dep.title }, d).catch(() => {});
+      emitLocalEventHooksQuiet({ type: "task.unblocked", payload: { id: dep.id, unblocked_by: id, title: dep.title } });
     }
   }
 
@@ -470,6 +483,7 @@ export function failTask(
 
   logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
   dispatchWebhook("task.failed", { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.failed", payload: { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title } });
 
   const failedTask: Task = {
     ...task,
@@ -597,6 +611,7 @@ export function stealTask(
   logTaskChange(target.id, "steal", "assigned_to", target.assigned_to, agentId, agentId, d);
   logTaskChange(target.id, "steal", "locked_by", target.locked_by, agentId, agentId, d);
   dispatchWebhook("task.assigned", { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to }, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.assigned", payload: { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to } });
 
   return { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
 }

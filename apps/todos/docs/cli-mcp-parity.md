@@ -27,6 +27,8 @@ structured error contracts.
   evidence, commits, pull requests, approvals, runs, and artifacts.
 - `approval-gates`: local manual checkpoints for risky task, plan, and run work
   with approve, reject, expire, check, and list flows.
+- `local-event-hooks`: local-only event hooks for task, plan, run, approval,
+  import, and export events with stdout, file, socket, and script targets.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
@@ -100,6 +102,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "check_approval_gate", "arguments": { "task_id": "1234abcd", "gate": "deploy" } }
+```
+
+CLI local event hook:
+
+```bash
+todos event-hooks set audit --event task.completed --target file --file .todos/events.jsonl --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "set_local_event_hook", "arguments": { "name": "audit", "events": ["task.completed"], "target": "file", "file_path": ".todos/events.jsonl" } }
 ```
 
 CLI agent run queue:

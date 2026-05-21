@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { storeArtifactContent, verifyStoredArtifact, type ArtifactIntegrityReport } from "../lib/artifact-store.js";
+import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { redactEvidenceText, redactValue } from "../lib/redaction.js";
 import { TaskNotFoundError } from "../types/index.js";
 import { addComment } from "./comments.js";
@@ -196,7 +197,9 @@ export function startTaskRun(input: StartTaskRunInput, db?: Database): TaskRun {
     }, d);
   }
 
-  return getTaskRun(id, d)!;
+  const run = getTaskRun(id, d)!;
+  emitLocalEventHooksQuiet({ type: "run.started", payload: { id: run.id, task_id: run.task_id, agent_id: run.agent_id, title: run.title } });
+  return run;
 }
 
 export interface AddTaskRunEventInput {
@@ -430,7 +433,12 @@ export function finishTaskRun(input: FinishTaskRunInput, db?: Database): TaskRun
     agent_id: input.agent_id ?? run.agent_id ?? undefined,
     created_at: timestamp,
   }, d);
-  return getTaskRun(run.id, d)!;
+  const updated = getTaskRun(run.id, d)!;
+  emitLocalEventHooksQuiet({
+    type: `run.${input.status}`,
+    payload: { id: updated.id, task_id: updated.task_id, agent_id: updated.agent_id, status: updated.status, summary: updated.summary, completed_at: timestamp },
+  });
+  return updated;
 }
 
 export function listTaskRuns(taskId?: string, db?: Database): TaskRun[] {

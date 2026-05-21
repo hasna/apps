@@ -25,6 +25,8 @@ The stable contracts cover these object IDs:
 - `audit_history`
 - `status_summary`
 - `context_pack`
+- `local_event_hook`
+- `local_event_hook_delivery`
 - `structured_error`
 - `api_error`
 - `local_bridge_bundle`
@@ -65,6 +67,13 @@ when present.
 `todos context-pack --format json` and `build_agent_context_pack`. It includes
 selected task, project, plan, dependency, comment, file, verification, and run
 evidence plus a profile-specific prompt bundle for local agents.
+
+## Local Event Hooks
+
+`local_event_hook` is the stable config object returned by
+`todos event-hooks list`, `todos event-hooks set`, `list_local_event_hooks`,
+and `set_local_event_hook`. `local_event_hook_delivery` is the stable delivery
+result returned by `todos event-hooks test` and `test_local_event_hook`.
 
 ## Local Bridge Bundles
 

@@ -20,6 +20,7 @@ const expectedDomains = [
   "approval-gates",
   "runs",
   "agent-runs",
+  "local-event-hooks",
   "comments",
   "search",
   "context-packs",
@@ -129,6 +130,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("create_task");
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");
+    expect(docs).toContain("todos event-hooks set audit --event task.completed");
     expect(docs).toContain("intentionally CLI-only");
   });
 

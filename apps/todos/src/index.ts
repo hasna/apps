@@ -385,6 +385,9 @@ export type {
   AgentRunAdapterConfig,
   CompletionGuardConfig,
   LocalApiConfig,
+  LocalEventHookConfig,
+  LocalEventHookRetryConfig,
+  LocalEventHookTarget,
   PolicyPackConfig,
   RunnerSandboxNetworkPolicy,
   RunnerSandboxProfile,
@@ -469,6 +472,23 @@ export type {
   DecideApprovalGateInput,
   RequestApprovalGateInput,
 } from "./lib/approval-gates.js";
+export {
+  LOCAL_EVENT_TYPES,
+  emitLocalEventHooks,
+  emitLocalEventHooksQuiet,
+  getLocalEventHook,
+  listLocalEventHooks,
+  removeLocalEventHook,
+  testLocalEventHook,
+  upsertLocalEventHook,
+} from "./lib/event-hooks.js";
+export type {
+  LocalEventEnvelope,
+  LocalEventHookDispatchInput,
+  LocalEventHookDispatchResult,
+  LocalEventHookInput,
+  LocalEventType,
+} from "./lib/event-hooks.js";
 export {
   createAgentContextPack,
   renderAgentContextPack,

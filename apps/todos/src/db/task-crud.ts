@@ -13,6 +13,7 @@ import {
 } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
@@ -555,9 +556,14 @@ export function updateTask(
   // Webhook dispatch for assignment and status changes
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) {
     dispatchWebhook("task.assigned", { id, assigned_to: input.assigned_to, title: task.title }, d).catch(() => {});
+    emitLocalEventHooksQuiet({ type: "task.assigned", payload: { id, assigned_to: input.assigned_to, title: task.title } });
   }
   if (input.status !== undefined && input.status !== task.status) {
     dispatchWebhook("task.status_changed", { id, old_status: task.status, new_status: input.status, title: task.title }, d).catch(() => {});
+    emitLocalEventHooksQuiet({ type: "task.status_changed", payload: { id, old_status: task.status, new_status: input.status, title: task.title } });
+  }
+  if (input.approved_by !== undefined) {
+    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title } });
   }
 
   // Return updated task without re-fetching from DB

@@ -352,6 +352,47 @@ describe("MCP tool operations", () => {
     ]));
   });
 
+  it("local event hook tools manage local automation triggers", async () => {
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-event-hooks-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+    const eventPath = join(home, "events.jsonl");
+
+    try {
+      const savedResult = await callCapturedTool(tools, "set_local_event_hook", {
+        name: "audit",
+        events: ["task.completed"],
+        target: "file",
+        file_path: eventPath,
+      });
+      expect(JSON.parse(savedResult.content[0]!.text).name).toBe("audit");
+
+      const testResult = await callCapturedTool(tools, "test_local_event_hook", {
+        name: "audit",
+        event: "task.completed",
+        payload: { id: "task-1" },
+      });
+      expect(JSON.parse(testResult.content[0]!.text)[0].status).toBe("delivered");
+      expect(JSON.parse(readFileSync(eventPath, "utf-8").trim()).type).toBe("task.completed");
+
+      const listResult = await callCapturedTool(tools, "list_local_event_hooks", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+
+      const removeResult = await callCapturedTool(tools, "remove_local_event_hook", { name: "audit" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("agent context pack tool returns local JSON and Markdown bundles", async () => {
     const tools = captureTools(registerTaskAdvTools);
     const task = createTask({
