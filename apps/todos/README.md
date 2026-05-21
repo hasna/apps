@@ -184,6 +184,15 @@ Created tasks are tagged with `extracted` and linked back to the source file.
 MCP clients can call `extract_todos` and `watch_source_todos` for the same
 offline workflow; no hosted code search, cloud sync, or telemetry is used.
 
+## Local Editor Integrations
+
+Editor recipes live in `docs/editor-integrations.md` and
+`examples/editor-integrations/`. They include VS Code task definitions,
+JetBrains external tool recipes, Neovim Lua helpers, a shell statusline snippet,
+and a Bun task picker. Every example uses only `todos` CLI JSON output or MCP
+tool names, so editors can claim tasks, inspect local queues, build context
+packs, and link source files without importing private modules or hosted code.
+
 ## Task Contracts and Reviews
 
 Task contracts make acceptance criteria, required verification, expected
