@@ -393,6 +393,52 @@ describe("MCP tool operations", () => {
     }
   });
 
+  it("local encryption tools manage profiles and JSON values", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const previousKey = process.env["TODOS_TEST_ENCRYPTION_KEY"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-encryption-"));
+    process.env["HOME"] = home;
+    process.env["TODOS_TEST_ENCRYPTION_KEY"] = "local mcp encryption key material";
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+
+    try {
+      const savedResult = await callCapturedTool(tools, "set_encryption_profile", {
+        name: "secure",
+        key_env: "TODOS_TEST_ENCRYPTION_KEY",
+      });
+      expect(JSON.parse(savedResult.content[0]!.text).key_env).toBe("TODOS_TEST_ENCRYPTION_KEY");
+
+      const statusResult = await callCapturedTool(tools, "get_encryption_status", { name: "secure" });
+      expect(JSON.parse(statusResult.content[0]!.text).locked).toBe(false);
+
+      const encryptedResult = await callCapturedTool(tools, "encrypt_local_value", {
+        profile: "secure",
+        value: { note: "private evidence" },
+      });
+      const envelope = JSON.parse(encryptedResult.content[0]!.text);
+      expect(JSON.stringify(envelope)).not.toContain("private evidence");
+
+      const decryptedResult = await callCapturedTool(tools, "decrypt_local_value", { envelope });
+      expect(JSON.parse(decryptedResult.content[0]!.text)).toEqual({ note: "private evidence" });
+
+      const listResult = await callCapturedTool(tools, "list_encryption_profiles", {});
+      expect(JSON.parse(listResult.content[0]!.text)).toHaveLength(1);
+      const removeResult = await callCapturedTool(tools, "remove_encryption_profile", { name: "secure" });
+      expect(JSON.parse(removeResult.content[0]!.text).removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousKey === undefined) delete process.env["TODOS_TEST_ENCRYPTION_KEY"];
+      else process.env["TODOS_TEST_ENCRYPTION_KEY"] = previousKey;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("agent context pack tool returns local JSON and Markdown bundles", async () => {
     const tools = captureTools(registerTaskAdvTools);
     const task = createTask({
@@ -710,18 +756,18 @@ describe("MCP tool wrappers", () => {
     const tools = captureTools(registerTaskResources);
 
     const createdResult = await callCapturedTool(tools, "create_inbox_item", {
-      body: "GitHub Actions failed\nTOKEN=secret-token-value",
+      body: "GitHub Actions failed\nbearer abcdefghijklmnopqrstuvwxyz",
       source_type: "ci_log",
       metadata: { secret: "hidden" },
     });
     const created = JSON.parse(createdResult.content[0]!.text);
     expect(created.item.source_type).toBe("ci_log");
-    expect(created.item.body).not.toContain("secret-token-value");
+    expect(created.item.body).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(created.item.metadata.secret).toBe("[REDACTED]");
     expect(created.task.tags).toContain("ci_log");
 
     const duplicateResult = await callCapturedTool(tools, "create_inbox_item", {
-      body: "GitHub Actions failed\nTOKEN=secret-token-value",
+      body: "GitHub Actions failed\nbearer abcdefghijklmnopqrstuvwxyz",
       source_type: "ci_log",
     });
     const duplicate = JSON.parse(duplicateResult.content[0]!.text);

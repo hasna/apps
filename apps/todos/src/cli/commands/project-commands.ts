@@ -424,6 +424,9 @@ export function registerProjectCommands(program: Command) {
     .description("Export tasks")
     .option("-f, --format <format>", "Format: json, md, or bridge", "json")
     .option("-o, --output <path>", "Write export output to a file")
+    .option("--encrypt", "Encrypt bridge exports with a local encryption profile")
+    .option("--encryption-profile <name>", "Encryption profile name", "default")
+    .option("--allow-plaintext-sensitive", "Suppress plaintext bridge export warning")
     .action(async (opts) => {
       const { listTasks } = await import("../../db/tasks.js");
       const globalOpts = program.opts();
@@ -439,13 +442,20 @@ export function registerProjectCommands(program: Command) {
 
       if (opts.format === "bridge") {
         const { createLocalBridgeBundle } = await import("../../lib/local-bridge.js");
+        const { createEncryptedBridgeBundle } = await import("../../lib/local-encryption.js");
         const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
         const bundle = createLocalBridgeBundle({ project_id: projectId ?? undefined });
-        const json = JSON.stringify(bundle, null, 2);
+        const exported = opts.encrypt
+          ? createEncryptedBridgeBundle(bundle, { profile: opts.encryptionProfile })
+          : bundle;
+        const json = JSON.stringify(exported, null, 2);
         await writeOutput(json);
-        emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: "bridge", project_id: projectId, output: opts.output ? resolve(opts.output) : null, stats: bundle.stats } });
+        emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: "bridge", encrypted: Boolean(opts.encrypt), project_id: projectId, output: opts.output ? resolve(opts.output) : null, stats: bundle.stats } });
+        if (!opts.encrypt && !opts.allowPlaintextSensitive) {
+          console.error(chalk.yellow("Warning: bridge exports are plaintext JSON. Use --encrypt for sensitive metadata, evidence, and artifact bundles."));
+        }
         if (opts.output && !globalOpts.json) {
-          console.log(chalk.green(`Bridge export written to ${resolve(opts.output)}`));
+          console.log(chalk.green(`${opts.encrypt ? "Encrypted bridge export" : "Bridge export"} written to ${resolve(opts.output)}`));
         }
         return;
       }
@@ -471,12 +481,17 @@ export function registerProjectCommands(program: Command) {
     .command("bridge-import <file>")
     .description("Dry-run or apply a local hasna/todos bridge export bundle")
     .option("--apply", "Apply the import. Defaults to dry-run.")
+    .option("--decrypt", "Decrypt an encrypted bridge export before importing")
     .action(async (file: string, opts) => {
       const globalOpts = program.opts();
       try {
         const { readFileSync } = await import("node:fs");
         const { importLocalBridgeBundle } = await import("../../lib/local-bridge.js");
-        const bundle = JSON.parse(readFileSync(resolve(file), "utf-8"));
+        const { decryptBridgeBundle, isEncryptedBridgeBundle } = await import("../../lib/local-encryption.js");
+        const parsed = JSON.parse(readFileSync(resolve(file), "utf-8"));
+        const bundle = isEncryptedBridgeBundle(parsed)
+          ? (opts.decrypt ? decryptBridgeBundle(parsed) : (() => { throw new Error("Bridge bundle is encrypted. Re-run with --decrypt and the configured key environment variable set."); })())
+          : parsed;
         const result = importLocalBridgeBundle(bundle, { dryRun: !opts.apply });
         const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
         emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, conflicts: result.conflicts.length, issues: result.issues.length } });

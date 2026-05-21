@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 
-async function runCli(args: string[], dbPath: string) {
+async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
-    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    env: { ...process.env, ...extraEnv, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -386,7 +386,7 @@ describe("CLI integration", () => {
     const artifactDir = mkdtempSync(join(tmpdir(), "todos-cli-artifacts-"));
     process.env["HASNA_TODOS_ARTIFACTS_DIR"] = artifactDir;
     const logPath = join(artifactDir, "run-ledger.txt");
-    writeFileSync(logPath, "run ledger tests passed\nTOKEN=super-secret-token-value\n");
+    writeFileSync(logPath, "run ledger tests passed\nbearer abcdefghijklmnopqrstuvwxyz\n");
 
     const task = JSON.parse((await runCli(["add", "Run ledger task", "--json"], dbPath)).stdout);
     const started = await runCli([
@@ -456,12 +456,12 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
     try { unlinkSync(filePath); } catch {}
 
-    writeFileSync(filePath, "bun test failed\nTypeError: broken\nTOKEN=secret-token-value");
+    writeFileSync(filePath, "bun test failed\nTypeError: broken\nbearer abcdefghijklmnopqrstuvwxyz");
     const created = await runCli(["inbox", "add", "--file", filePath, "--source-type", "ci_log", "--json"], dbPath);
     expect(created.exitCode).toBe(0);
     const first = JSON.parse(created.stdout);
     expect(first.item.source_type).toBe("ci_log");
-    expect(first.item.body).not.toContain("secret-token-value");
+    expect(first.item.body).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(first.task.tags).toContain("ci_log");
 
     const duplicate = JSON.parse((await runCli(["inbox", "add", "--file", filePath, "--source-type", "ci_log", "--json"], dbPath)).stdout);
@@ -521,6 +521,49 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
+  });
+
+  it("should encrypt and decrypt local bridge bundles through the CLI", async () => {
+    const sourceDb = "/tmp/test-cli-bridge-encrypted-source.db";
+    const targetDb = "/tmp/test-cli-bridge-encrypted-target.db";
+    const bundlePath = "/tmp/test-cli-bridge-bundle.enc.json";
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-encryption-home-"));
+    const env = {
+      HOME: home,
+      TODOS_TEST_ENCRYPTION_KEY: "local cli encryption key material",
+    };
+    for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    await runCli(["encryption", "set", "secure", "--key-env", "TODOS_TEST_ENCRYPTION_KEY", "--json"], sourceDb, env);
+    const task = JSON.parse((await runCli(["add", "Encrypted bridge task", "--json"], sourceDb, env)).stdout);
+    const exported = await runCli(["export", "--format", "bridge", "--encrypt", "--encryption-profile", "secure", "--output", bundlePath], sourceDb, env);
+    expect(exported.exitCode).toBe(0);
+    expect(exported.stdout).toContain("Encrypted bridge export written");
+
+    const encryptedText = await Bun.file(bundlePath).text();
+    expect(encryptedText).toContain("hasna.todos.encrypted-bridge");
+    expect(encryptedText).not.toContain("Encrypted bridge task");
+
+    const locked = await runCli(["bridge-import", bundlePath, "--json"], targetDb, env);
+    expect(locked.exitCode).not.toBe(0);
+    expect(locked.stderr).toContain("Bridge bundle is encrypted");
+
+    const applied = await runCli(["bridge-import", bundlePath, "--decrypt", "--apply", "--json"], targetDb, env);
+    expect(applied.exitCode).toBe(0);
+    expect(JSON.parse(applied.stdout).inserted.tasks).toBe(1);
+    const tasks = JSON.parse((await runCli(["list", "--json"], targetDb, env)).stdout);
+    expect(tasks[0].id).toBe(task.id);
+    expect(tasks[0].title).toBe("Encrypted bridge task");
+
+    for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("should create all tasks and dependencies from a reusable plan template", async () => {

@@ -21,6 +21,7 @@ const expectedDomains = [
   "runs",
   "agent-runs",
   "local-event-hooks",
+  "encryption",
   "comments",
   "search",
   "context-packs",

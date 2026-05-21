@@ -136,6 +136,30 @@ MCP clients can use `set_local_event_hook`, `list_local_event_hooks`,
 `test_local_event_hook`, and `remove_local_event_hook`. Hook delivery is
 local-only; it does not call hosted webhooks or cloud automation services.
 
+## Local Encryption Profiles
+
+Encryption profiles are optional local config entries for sensitive fields and
+secure bridge exports. Profiles store algorithm metadata, a nonsecret salt, and
+the name of the environment variable that contains key material. The key itself
+is never written to config, bundles, artifacts, or logs:
+
+```bash
+export TODOS_ENCRYPTION_KEY="use a strong local passphrase from your secret manager"
+todos encryption set default --key-env TODOS_ENCRYPTION_KEY
+todos encryption status default --json
+todos encryption test default --json
+todos export --format bridge --encrypt --output todos-bridge.enc.json
+todos bridge-import todos-bridge.enc.json --decrypt --json
+todos bridge-import todos-bridge.enc.json --decrypt --apply
+```
+
+Plain bridge exports are still supported for compatibility, but the CLI prints
+a warning because bridge bundles may contain task metadata, evidence summaries,
+comments, and stored artifact content. MCP clients can use
+`set_encryption_profile`, `list_encryption_profiles`,
+`get_encryption_status`, `encrypt_local_value`, `decrypt_local_value`, and
+`remove_encryption_profile` for local-only encrypted field workflows.
+
 ## Local Agent Run Queue
 
 Agent run adapters and queue entries are local. Queueing a task creates a run
@@ -300,6 +324,7 @@ hand-off to another local store:
 
 ```bash
 todos export --format bridge --output todos-bridge.json
+todos export --format bridge --encrypt --output todos-bridge.enc.json
 todos bridge-import todos-bridge.json --json
 todos bridge-import todos-bridge.json --apply
 ```

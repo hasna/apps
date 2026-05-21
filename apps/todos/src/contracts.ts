@@ -14,6 +14,26 @@ export {
   importLocalBridgeBundle,
   validateLocalBridgeBundle,
 } from "./lib/local-bridge.js";
+export {
+  DEFAULT_ENCRYPTION_KEY_ENV,
+  DEFAULT_ENCRYPTION_PROFILE,
+  TODOS_ENCRYPTED_BRIDGE_KIND,
+  TODOS_ENCRYPTED_VALUE_KIND,
+  TODOS_ENCRYPTION_SCHEMA_VERSION,
+  createEncryptedBridgeBundle,
+  decryptBridgeBundle,
+  decryptString,
+  decryptValue,
+  encryptSensitiveFields,
+  encryptString,
+  encryptValue,
+  encryptionProfileStatus,
+  isEncryptedBridgeBundle,
+  isEncryptedValue,
+  listEncryptionProfiles,
+  removeEncryptionProfile,
+  upsertEncryptionProfile,
+} from "./lib/local-encryption.js";
 export type {
   CreateJsonContractsManifestOptions,
   JsonContractValidationIssue,
@@ -36,6 +56,11 @@ export type {
   TodosLocalBridgePackageSource,
   TodosLocalBridgeSource,
 } from "./lib/local-bridge.js";
+export type {
+  EncryptedLocalBridgeBundle,
+  LocalEncryptionEnvelope,
+  UpsertEncryptionProfileInput,
+} from "./lib/local-encryption.js";
 import {
   AgentNotFoundError,
   CompletionGuardError,

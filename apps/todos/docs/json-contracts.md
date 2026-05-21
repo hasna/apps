@@ -27,6 +27,9 @@ The stable contracts cover these object IDs:
 - `context_pack`
 - `local_event_hook`
 - `local_event_hook_delivery`
+- `local_encryption_profile`
+- `local_encryption_envelope`
+- `encrypted_local_bridge_bundle`
 - `structured_error`
 - `api_error`
 - `local_bridge_bundle`
@@ -74,6 +77,18 @@ evidence plus a profile-specific prompt bundle for local agents.
 `todos event-hooks list`, `todos event-hooks set`, `list_local_event_hooks`,
 and `set_local_event_hook`. `local_event_hook_delivery` is the stable delivery
 result returned by `todos event-hooks test` and `test_local_event_hook`.
+
+## Local Encryption
+
+`local_encryption_profile` is the stable config object returned by
+`todos encryption list`, `todos encryption set`, `list_encryption_profiles`,
+and `set_encryption_profile`. Profiles store algorithm metadata, a nonsecret
+salt, and the environment variable name that supplies key material.
+
+`local_encryption_envelope` is the encrypted JSON value shape returned by local
+field encryption helpers and MCP value tools. `encrypted_local_bridge_bundle`
+wraps a bridge export so tasks, evidence, artifact content, and metadata are not
+stored as plaintext JSON.
 
 ## Local Bridge Bundles
 
