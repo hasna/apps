@@ -950,4 +950,37 @@ describe("CLI integration", () => {
     expect(JSON.parse(removed.stdout).removed).toBe(true);
     try { unlinkSync(dbPath); } catch {}
   });
+
+  it("should manage local event hooks from the CLI", async () => {
+    const { mkdtempSync, readFileSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-event-hooks-"));
+    process.env["HOME"] = home;
+    const dbPath = join(home, "todos.db");
+    const eventPath = join(home, "events.jsonl");
+
+    try {
+      const saved = await runCli(["event-hooks", "set", "audit", "--event", "task.completed", "--target", "file", "--file", eventPath, "--json"], dbPath);
+      expect(saved.exitCode).toBe(0);
+      expect(JSON.parse(saved.stdout).name).toBe("audit");
+
+      const test = await runCli(["event-hooks", "test", "audit", "--event", "task.completed", "--payload", "{\"id\":\"task-1\"}", "--json"], dbPath);
+      expect(test.exitCode).toBe(0);
+      expect(JSON.parse(test.stdout)[0].status).toBe("delivered");
+      expect(JSON.parse(readFileSync(eventPath, "utf-8").trim()).type).toBe("task.completed");
+
+      const list = await runCli(["event-hooks", "list", "--json"], dbPath);
+      expect(JSON.parse(list.stdout)).toHaveLength(1);
+
+      const removed = await runCli(["event-hooks", "remove", "audit", "--json"], dbPath);
+      expect(JSON.parse(removed.stdout).removed).toBe(true);
+      try { unlinkSync(dbPath); } catch {}
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

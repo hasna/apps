@@ -118,6 +118,24 @@ MCP clients can use `require_approval_gate`, `approve_approval_gate`,
 `list_approval_gates`. Gate events are written to task audit history and, when
 a run is linked, to the local run ledger.
 
+## Local Event Hooks
+
+Event hooks are local subscriptions for task, plan, run, approval, import, and
+export events. They can append redacted JSONL to a file, deliver to a Unix
+socket, expose a stdout test payload, or run a sandbox-checked local script with
+retry/backoff and SHA-256 integrity metadata:
+
+```bash
+todos event-hooks set audit --event task.completed,run.failed --target file --file .todos/events.jsonl
+todos event-hooks set notify --event task.blocked --target script --command "notify-send \"$TODOS_EVENT_TYPE\"" --sandbox codex --attempts 2
+todos event-hooks test audit --event task.completed --payload '{"id":"demo"}' --json
+todos event-hooks list --json
+```
+
+MCP clients can use `set_local_event_hook`, `list_local_event_hooks`,
+`test_local_event_hook`, and `remove_local_event_hook`. Hook delivery is
+local-only; it does not call hosted webhooks or cloud automation services.
+
 ## Local Agent Run Queue
 
 Agent run adapters and queue entries are local. Queueing a task creates a run

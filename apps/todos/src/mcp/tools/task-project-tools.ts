@@ -56,6 +56,12 @@ import {
   rejectApprovalGate,
   requestApprovalGate,
 } from "../../lib/approval-gates.js";
+import {
+  listLocalEventHooks,
+  removeLocalEventHook,
+  testLocalEventHook,
+  upsertLocalEventHook,
+} from "../../lib/event-hooks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -484,6 +490,84 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         try {
           const result = listApprovalGates(resolveId(task_id));
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  // === LOCAL EVENT HOOKS ===
+
+  if (shouldRegisterTool("list_local_event_hooks")) {
+    server.tool("list_local_event_hooks", "List configured local event hooks and automation triggers.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listLocalEventHooks(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("set_local_event_hook")) {
+    server.tool(
+      "set_local_event_hook",
+      "Create or update a local event hook for task, plan, run, approval, import, or export events.",
+      {
+        name: z.string().describe("Hook name"),
+        events: z.array(z.string()).describe("Event names, or *"),
+        target: z.enum(["stdout", "file", "socket", "script"]).describe("Local delivery target"),
+        enabled: z.boolean().optional(),
+        file_path: z.string().optional(),
+        socket_path: z.string().optional(),
+        command: z.string().optional(),
+        cwd: z.string().optional(),
+        sandbox: z.string().optional(),
+        env: z.record(z.string()).optional(),
+        retry: z.object({ attempts: z.number().optional(), backoff_ms: z.number().optional() }).optional(),
+      },
+      async (input) => {
+        try {
+          const hook = upsertLocalEventHook(input as Parameters<typeof upsertLocalEventHook>[0]);
+          return { content: [{ type: "text" as const, text: JSON.stringify(hook, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("remove_local_event_hook")) {
+    server.tool(
+      "remove_local_event_hook",
+      "Remove a configured local event hook.",
+      { name: z.string().describe("Hook name") },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeLocalEventHook(name) }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("test_local_event_hook")) {
+    server.tool(
+      "test_local_event_hook",
+      "Deliver a test event to one configured local event hook.",
+      {
+        name: z.string().describe("Hook name"),
+        event: z.string().optional().describe("Event type. Defaults to task.completed."),
+        payload: z.record(z.unknown()).optional(),
+        task_id: z.string().optional().describe("Optional task ID or prefix to include as payload.id"),
+      },
+      async ({ name, event, payload, task_id }) => {
+        try {
+          const resolvedPayload = { ...(payload || {}) } as Record<string, unknown>;
+          if (task_id) resolvedPayload.id = resolveId(task_id);
+          const results = await testLocalEventHook(name, { type: event || "task.completed", payload: resolvedPayload });
+          return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

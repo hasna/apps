@@ -69,6 +69,8 @@ describe("stable JSON contracts", () => {
       "audit_history",
       "status_summary",
       "context_pack",
+      "local_event_hook",
+      "local_event_hook_delivery",
       "structured_error",
       "api_error",
       "local_bridge_bundle",
@@ -152,6 +154,22 @@ describe("stable JSON contracts", () => {
     expectValid("audit_history", history);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
+    expectValid("local_event_hook", {
+      name: "audit",
+      enabled: true,
+      events: ["task.completed"],
+      target: "file",
+      file_path: ".todos/events.jsonl",
+    });
+    expectValid("local_event_hook_delivery", {
+      hook: "audit",
+      event_id: "evt-1",
+      event_type: "task.completed",
+      target: "file",
+      status: "delivered",
+      attempts: 1,
+      integrity: { algorithm: "sha256", digest: "abc" },
+    });
     expectValid("structured_error", {
       code: "TASK_NOT_FOUND",
       message: "Task not found",

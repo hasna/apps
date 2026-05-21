@@ -439,9 +439,11 @@ export function registerProjectCommands(program: Command) {
 
       if (opts.format === "bridge") {
         const { createLocalBridgeBundle } = await import("../../lib/local-bridge.js");
+        const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
         const bundle = createLocalBridgeBundle({ project_id: projectId ?? undefined });
         const json = JSON.stringify(bundle, null, 2);
         await writeOutput(json);
+        emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: "bridge", project_id: projectId, output: opts.output ? resolve(opts.output) : null, stats: bundle.stats } });
         if (opts.output && !globalOpts.json) {
           console.log(chalk.green(`Bridge export written to ${resolve(opts.output)}`));
         }
@@ -461,6 +463,8 @@ export function registerProjectCommands(program: Command) {
       } else {
         await writeOutput(JSON.stringify(tasks, null, 2));
       }
+      const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+      emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: opts.format, project_id: projectId, output: opts.output ? resolve(opts.output) : null, count: tasks.length } });
     });
 
   program
@@ -474,6 +478,8 @@ export function registerProjectCommands(program: Command) {
         const { importLocalBridgeBundle } = await import("../../lib/local-bridge.js");
         const bundle = JSON.parse(readFileSync(resolve(file), "utf-8"));
         const result = importLocalBridgeBundle(bundle, { dryRun: !opts.apply });
+        const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
+        emitLocalEventHooksQuiet({ type: "import.finished", payload: { file: resolve(file), dry_run: result.dry_run, ok: result.ok, inserted: result.inserted, skipped: result.skipped, conflicts: result.conflicts.length, issues: result.issues.length } });
         if (globalOpts.json) {
           output(result, true);
           return;

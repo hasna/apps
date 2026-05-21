@@ -87,6 +87,29 @@ export interface PolicyPackConfig {
   updated_at?: string;
 }
 
+export type LocalEventHookTarget = "stdout" | "file" | "socket" | "script";
+
+export interface LocalEventHookRetryConfig {
+  attempts?: number;
+  backoff_ms?: number;
+}
+
+export interface LocalEventHookConfig {
+  name: string;
+  enabled: boolean;
+  events: string[];
+  target: LocalEventHookTarget;
+  file_path?: string;
+  socket_path?: string;
+  command?: string;
+  cwd?: string;
+  sandbox?: string;
+  env?: Record<string, string>;
+  retry?: LocalEventHookRetryConfig;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
@@ -111,6 +134,8 @@ export interface TodosConfig {
   agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
   /** Local policy packs for task done gates, keyed by pack name. */
   policy_packs?: Record<string, PolicyPackConfig>;
+  /** Local event hooks and automation triggers, keyed by hook name. */
+  local_event_hooks?: Record<string, LocalEventHookConfig>;
 }
 
 function getTodosGlobalDir(): string {

@@ -80,6 +80,17 @@ export function registerConfigServeCommands(program: Command) {
     return value?.split(",").map((item) => item.trim()).filter(Boolean);
   }
 
+  function recordOption(value: string | undefined): Record<string, string> | undefined {
+    const entries = listOption(value);
+    if (!entries || entries.length === 0) return undefined;
+    const pairs = entries.flatMap((entry) => {
+      const [rawKey, ...rest] = entry.split("=");
+      const key = rawKey?.trim();
+      return key ? [[key, rest.join("=").trim()] as const] : [];
+    });
+    return pairs.length > 0 ? Object.fromEntries(pairs) : undefined;
+  }
+
   trust
     .command("list")
     .description("List local workspace trust profiles")
@@ -532,6 +543,96 @@ export function registerConfigServeCommands(program: Command) {
         return;
       }
       for (const gate of gates) printApprovalGate(gate, false);
+    });
+
+  const eventHooks = program
+    .command("event-hooks")
+    .description("Manage local event hooks and automation triggers");
+
+  eventHooks
+    .command("list")
+    .description("List local event hooks")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listLocalEventHooks } = await import("../../lib/event-hooks.js");
+      const hooks = listLocalEventHooks();
+      if (globalOpts.json) { output(hooks, true); return; }
+      if (hooks.length === 0) {
+        console.log(chalk.dim("No local event hooks configured."));
+        return;
+      }
+      for (const hook of hooks) {
+        const status = hook.enabled === false ? chalk.yellow("disabled") : chalk.green("enabled ");
+        console.log(`${status} ${hook.name.padEnd(14)} ${hook.target.padEnd(6)} ${hook.events.join(",")}`);
+      }
+    });
+
+  eventHooks
+    .command("set <name>")
+    .description("Add or update a local event hook")
+    .requiredOption("--event <list>", "Comma-separated events, or *")
+    .option("--target <target>", "stdout, file, socket, or script", "file")
+    .option("--file <path>", "Append JSONL events to this file for file targets")
+    .option("--socket <path>", "Unix socket path for socket targets")
+    .option("--command <command>", "Local script command for script targets")
+    .option("--cwd <path>", "Working directory for script targets")
+    .option("--sandbox <name>", "Runner sandbox profile used before script execution")
+    .option("--env <list>", "Comma-separated KEY=value environment entries for script targets")
+    .option("--attempts <number>", "Delivery attempts for socket/script targets", "1")
+    .option("--backoff-ms <number>", "Backoff between retry attempts in milliseconds", "0")
+    .option("--disabled", "Store hook disabled")
+    .action(async (name: string, opts: { event: string; target?: string; file?: string; socket?: string; command?: string; cwd?: string; sandbox?: string; env?: string; attempts?: string; backoffMs?: string; disabled?: boolean }) => {
+      const globalOpts = program.opts();
+      const { upsertLocalEventHook } = await import("../../lib/event-hooks.js");
+      const hook = upsertLocalEventHook({
+        name,
+        events: listOption(opts.event) || [],
+        target: (opts.target || "file") as any,
+        enabled: opts.disabled ? false : true,
+        file_path: opts.file,
+        socket_path: opts.socket,
+        command: opts.command,
+        cwd: opts.cwd,
+        sandbox: opts.sandbox,
+        env: recordOption(opts.env),
+        retry: {
+          attempts: Number.parseInt(opts.attempts || "1", 10),
+          backoff_ms: Number.parseInt(opts.backoffMs || "0", 10),
+        },
+      });
+      if (globalOpts.json) { output(hook, true); return; }
+      console.log(chalk.green(`Event hook ${hook.name} saved for ${hook.events.join(",")}`));
+    });
+
+  eventHooks
+    .command("remove <name>")
+    .description("Remove a local event hook")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeLocalEventHook } = await import("../../lib/event-hooks.js");
+      const removed = removeLocalEventHook(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Event hook removed.") : chalk.dim("No event hook matched."));
+    });
+
+  eventHooks
+    .command("test <name>")
+    .description("Deliver a test event to one local event hook")
+    .option("--event <event>", "Event type to emit", "task.completed")
+    .option("--payload <json>", "JSON payload for the test event")
+    .option("--task <id>", "Task ID to include in the payload")
+    .action(async (name: string, opts: { event?: string; payload?: string; task?: string }) => {
+      const globalOpts = program.opts();
+      const { testLocalEventHook } = await import("../../lib/event-hooks.js");
+      const payload = opts.payload ? JSON.parse(opts.payload) : {};
+      if (opts.task) (payload as Record<string, unknown>).id = resolveTaskId(opts.task);
+      const results = await testLocalEventHook(name, { type: opts.event || "task.completed", payload });
+      if (globalOpts.json) { output(results, true); return; }
+      for (const result of results) {
+        const color = result.status === "delivered" ? chalk.green : result.status === "skipped" ? chalk.yellow : chalk.red;
+        console.log(`${color(result.status)} ${result.hook} ${result.event_type} ${result.integrity.digest.slice(0, 12)}`);
+        if (result.error) console.log(`  ${chalk.red(result.error)}`);
+      }
     });
 
   // serve (web dashboard)

@@ -1,6 +1,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { CreatePlanInput, Plan, UpdatePlanInput } from "../types/index.js";
 import { PlanNotFoundError } from "../types/index.js";
+import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { getDatabase, now, uuid } from "./database.js";
 
 export function createPlan(input: CreatePlanInput, db?: Database): Plan {
@@ -81,7 +82,12 @@ export function updatePlan(
   params.push(id);
   d.run(`UPDATE plans SET ${sets.join(", ")} WHERE id = ?`, params);
 
-  return getPlan(id, d)!;
+  const updated = getPlan(id, d)!;
+  emitLocalEventHooksQuiet({
+    type: "plan.updated",
+    payload: { id, old_status: plan.status, new_status: updated.status, name: updated.name, project_id: updated.project_id },
+  });
+  return updated;
 }
 
 export function deletePlan(id: string, db?: Database): boolean {

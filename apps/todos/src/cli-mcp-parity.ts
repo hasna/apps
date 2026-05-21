@@ -9,6 +9,7 @@ export type TodosCliMcpParityDomain =
   | "runner-sandbox"
   | "policy-packs"
   | "approval-gates"
+  | "local-event-hooks"
   | "agent-runs"
   | "runs"
   | "comments"
@@ -340,6 +341,28 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos agent-runs queue 1234abcd --adapter codex --json",
       mcpTool: "queue_agent_run",
+    },
+  },
+  {
+    domain: "local-event-hooks",
+    cliCommands: [
+      "todos event-hooks list",
+      "todos event-hooks set",
+      "todos event-hooks remove",
+      "todos event-hooks test",
+    ],
+    mcpTools: [
+      "list_local_event_hooks",
+      "set_local_event_hook",
+      "remove_local_event_hook",
+      "test_local_event_hook",
+    ],
+    jsonContracts: ["local_event_hook", "local_event_hook_delivery", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos event-hooks set audit --event task.completed --target file --file .todos/events.jsonl --json",
+      mcpTool: "set_local_event_hook",
     },
   },
   {
