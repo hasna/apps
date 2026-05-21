@@ -35,7 +35,8 @@ structured error contracts.
   previews, cancellation, retries, and run-ledger evidence.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
   finish records.
-- `comments`: task comments, progress notes, and activity entries.
+- `comments`: task comments, progress notes, and unified local activity
+  timelines across task history and run evidence.
 - `search`: search, status, standup, report, graph, context, and recent
   activity workflows.
 - `context-packs`: deterministic Markdown/JSON local context bundles for agent

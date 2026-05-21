@@ -3,6 +3,7 @@ import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../
 import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
 import { addComment, listComments } from "../db/comments.js";
+import { addTaskRunEvent, startTaskRun } from "../db/task-runs.js";
 import { resetConfig } from "../lib/config.js";
 import { searchTasks } from "../lib/search.js";
 import type { Task } from "../types/index.js";
@@ -805,6 +806,24 @@ describe("MCP tool wrappers", () => {
 
     const result = await callCapturedTool(advTools, "get_comments", { task_id: task.id });
     expect(result.content[0]!.text).toContain("Alias comment body");
+  });
+
+  it("activity timeline wrapper returns redacted local task and run events", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Timeline via MCP" }, db);
+    addComment({ task_id: task.id, content: "Bearer abcdefghijklmnop should redact" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "codex" }, db);
+    addTaskRunEvent({ run_id: run.id, event_type: "progress", message: "Bearer bcdefghijklmnopq" }, db);
+
+    const result = await callCapturedTool(tools, "get_activity_timeline", {
+      entity_type: "task",
+      entity_id: task.id,
+      order: "asc",
+    });
+    const timeline = JSON.parse(result.content[0]!.text);
+    expect(timeline.entries.map((entry: { source: string }) => entry.source)).toEqual(expect.arrayContaining(["comment", "run_event"]));
+    expect(JSON.stringify(timeline.entries)).toContain("[REDACTED]");
+    expect(JSON.stringify(timeline.entries)).not.toContain("abcdefghijklmnop");
   });
 
   it("search_tasks wrapper calls the search library", async () => {

@@ -23,6 +23,7 @@ The stable contracts cover these object IDs:
 - `checkpoint`
 - `dispatch`
 - `audit_history`
+- `local_activity_timeline_entry`
 - `status_summary`
 - `context_pack`
 - `local_event_hook`

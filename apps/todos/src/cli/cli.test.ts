@@ -963,6 +963,25 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should show a redacted local activity timeline from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-activity-timeline.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const task = JSON.parse((await runCli(["add", "Timeline task", "--json"], dbPath)).stdout);
+    expect((await runCli(["comment", task.id, "Bearer abcdefghijklmnop should redact"], dbPath)).exitCode).toBe(0);
+    const run = JSON.parse((await runCli(["runs", "start", task.id, "--agent", "codex", "--json"], dbPath)).stdout);
+    expect((await runCli(["runs", "event", run.id, "progress", "Bearer bcdefghijklmnopq", "--json"], dbPath)).exitCode).toBe(0);
+
+    const result = await runCli(["timeline", "--task", task.id, "--order", "asc", "--json"], dbPath);
+    expect(result.exitCode).toBe(0);
+    const timeline = JSON.parse(result.stdout);
+    expect(timeline.entries.map((entry: { source: string }) => entry.source)).toEqual(expect.arrayContaining(["comment", "run_event"]));
+    expect(JSON.stringify(timeline.entries)).not.toContain("abcdefghijklmnop");
+    expect(JSON.stringify(timeline.entries)).toContain("[REDACTED]");
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should queue and run local agent dispatches", async () => {
     const dbPath = "/tmp/test-cli-agent-runs.db";
     const { unlinkSync } = await import("node:fs");

@@ -26,6 +26,7 @@ import {
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
+import { resolveTaskRunId } from "../../db/task-runs.js";
 import { bootstrapProject } from "../../lib/project-bootstrap.js";
 import {
   checkWorkspacePermission,
@@ -70,6 +71,7 @@ import {
   removeEncryptionProfile,
   upsertEncryptionProfile,
 } from "../../lib/local-encryption.js";
+import { getLocalActivityTimeline } from "../../lib/activity-timeline.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 
 interface TaskProjectContext {
@@ -1675,6 +1677,43 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
           const lines = comments.map(c => `[${c.agent_id || "unknown"}] ${c.created_at?.slice(0, 16)}:\n  ${c.content}`);
           return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("get_activity_timeline")) {
+    server.tool(
+      "get_activity_timeline",
+      "Get a unified local activity timeline across comments, task history, and run evidence.",
+      {
+        entity_type: z.enum(["all", "task", "project", "plan", "run"]).optional().describe("Scope type. Defaults to all."),
+        entity_id: z.string().optional().describe("ID for task/project/plan/run scope."),
+        limit: z.number().optional().describe("Max entries, default 50."),
+        offset: z.number().optional().describe("Entries to skip for pagination."),
+        order: z.enum(["asc", "desc"]).optional().describe("Sort order, default desc."),
+        since: z.string().optional().describe("Only entries at or after this ISO timestamp."),
+        until: z.string().optional().describe("Only entries at or before this ISO timestamp."),
+      },
+      async (input) => {
+        try {
+          let entityId = input.entity_id;
+          if (input.entity_type === "task" && entityId) entityId = resolveId(entityId);
+          if (input.entity_type === "project" && entityId) entityId = resolveId(entityId, "projects");
+          if (input.entity_type === "plan" && entityId) entityId = resolveId(entityId, "plans");
+          if (input.entity_type === "run" && entityId) entityId = resolveTaskRunId(entityId);
+          const timeline = getLocalActivityTimeline({
+            entity_type: input.entity_type,
+            entity_id: entityId,
+            limit: input.limit,
+            offset: input.offset,
+            order: input.order,
+            since: input.since,
+            until: input.until,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(timeline, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
