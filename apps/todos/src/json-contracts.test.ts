@@ -69,6 +69,8 @@ describe("stable JSON contracts", () => {
       "status_summary",
       "structured_error",
       "api_error",
+      "local_bridge_bundle",
+      "local_bridge_import_result",
     ]);
     expect(TODOS_JSON_CONTRACTS_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });

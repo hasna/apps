@@ -483,6 +483,23 @@ export {
   listInboxItems,
 } from "./db/inbox.js";
 export type { CreateInboxItemInput, InboxItem, InboxSourceType, InboxStatus } from "./db/inbox.js";
+export {
+  TODOS_LOCAL_BRIDGE_KIND,
+  TODOS_LOCAL_BRIDGE_SCHEMA_VERSION,
+  createLocalBridgeBundle,
+  importLocalBridgeBundle,
+  validateLocalBridgeBundle,
+} from "./lib/local-bridge.js";
+export type {
+  ExportLocalBridgeOptions,
+  LocalBridgeImportConflict,
+  LocalBridgeImportResult,
+  LocalBridgeValidationResult,
+  TodosLocalBridgeBundle,
+  TodosLocalBridgeData,
+  TodosLocalBridgePackageSource,
+  TodosLocalBridgeSource,
+} from "./lib/local-bridge.js";
 
 // Dispatch formatter
 export { formatDispatchMessage, formatSingleTask } from "./lib/dispatch-formatter.js";

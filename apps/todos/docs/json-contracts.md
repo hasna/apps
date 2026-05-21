@@ -26,6 +26,8 @@ The stable contracts cover these object IDs:
 - `status_summary`
 - `structured_error`
 - `api_error`
+- `local_bridge_bundle`
+- `local_bridge_import_result`
 
 ## Evolution Rules
 
@@ -53,3 +55,15 @@ Two error shapes are stable:
 New machine-readable fields may be added to either error object. Existing
 clients should keep displaying the string message and use stable `code` values
 when present.
+
+## Local Bridge Bundles
+
+`local_bridge_bundle` is the stable offline import/export shape for moving local
+`@hasna/todos` data between stores. It contains versioned package metadata,
+source scope, grouped records for projects, task lists, plans, tasks,
+dependencies, comments, runs, run evidence, file evidence, git refs, commits,
+and verification records.
+
+`local_bridge_import_result` is returned by dry-run and applied imports. It
+reports inserted counts, skipped counts, conflicts, and validation issues so a
+caller can inspect what would change before writing to local SQLite.

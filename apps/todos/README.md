@@ -112,6 +112,23 @@ todos inbox list
 Inbox bodies and metadata are redacted before storage. Repeated input resolves
 to the existing inbox item instead of creating duplicate tasks.
 
+## Local Bridge Import/Export
+
+Export a versioned local bridge bundle for migration, backup, or explicit
+hand-off to another local store:
+
+```bash
+todos export --format bridge --output todos-bridge.json
+todos bridge-import todos-bridge.json --json
+todos bridge-import todos-bridge.json --apply
+```
+
+Bridge bundles include local projects, task lists, plans, tasks, dependencies,
+comments, run ledgers, command evidence, file evidence, artifacts, commits,
+refs, and verification records. Imports default to dry-run mode and report
+conflicts before writing. The package does not upload bundles or call hosted
+services; any hosted sync must consume the exported JSON explicitly.
+
 ## MCP Server
 
 ```bash

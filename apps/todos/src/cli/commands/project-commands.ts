@@ -381,22 +381,75 @@ export function registerProjectCommands(program: Command) {
   program
     .command("export")
     .description("Export tasks")
-    .option("-f, --format <format>", "Format: json or md", "json")
+    .option("-f, --format <format>", "Format: json, md, or bridge", "json")
+    .option("-o, --output <path>", "Write export output to a file")
     .action(async (opts) => {
       const { listTasks } = await import("../../db/tasks.js");
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts);
+      const writeOutput = async (content: string) => {
+        if (opts.output) {
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(resolve(opts.output), content.endsWith("\n") ? content : `${content}\n`);
+        } else {
+          console.log(content);
+        }
+      };
+
+      if (opts.format === "bridge") {
+        const { createLocalBridgeBundle } = await import("../../lib/local-bridge.js");
+        const bundle = createLocalBridgeBundle({ project_id: projectId ?? undefined });
+        const json = JSON.stringify(bundle, null, 2);
+        await writeOutput(json);
+        if (opts.output && !globalOpts.json) {
+          console.log(chalk.green(`Bridge export written to ${resolve(opts.output)}`));
+        }
+        return;
+      }
+
       const tasks = listTasks(projectId ? { project_id: projectId } : {});
 
       if (opts.format === "md") {
-        console.log("# Tasks\n");
+        const lines = ["# Tasks", ""];
         for (const t of tasks) {
           const check = t.status === "completed" ? "x" : " ";
-          console.log(`- [${check}] **${t.title}** (${t.priority}) ${t.status}`);
-          if (t.description) console.log(`  ${t.description}`);
+          lines.push(`- [${check}] **${t.title}** (${t.priority}) ${t.status}`);
+          if (t.description) lines.push(`  ${t.description}`);
         }
+        await writeOutput(lines.join("\n"));
       } else {
-        console.log(JSON.stringify(tasks, null, 2));
+        await writeOutput(JSON.stringify(tasks, null, 2));
+      }
+    });
+
+  program
+    .command("bridge-import <file>")
+    .description("Dry-run or apply a local hasna/todos bridge export bundle")
+    .option("--apply", "Apply the import. Defaults to dry-run.")
+    .action(async (file: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { readFileSync } = await import("node:fs");
+        const { importLocalBridgeBundle } = await import("../../lib/local-bridge.js");
+        const bundle = JSON.parse(readFileSync(resolve(file), "utf-8"));
+        const result = importLocalBridgeBundle(bundle, { dryRun: !opts.apply });
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+        const mode = result.dry_run ? "Dry-run" : "Import";
+        console.log(chalk.bold(`${mode} ${result.ok ? "ready" : "has issues"}`));
+        for (const [key, count] of Object.entries(result.inserted)) {
+          if (count > 0) console.log(`  ${key}: ${count}`);
+        }
+        if (result.conflicts.length > 0) {
+          console.log(chalk.yellow(`  conflicts: ${result.conflicts.length}`));
+        }
+        for (const issue of result.issues) {
+          console.error(chalk.red(`  ${issue}`));
+        }
+      } catch (e) {
+        handleError(e);
       }
     });
 
