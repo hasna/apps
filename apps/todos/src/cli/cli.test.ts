@@ -989,6 +989,57 @@ describe("CLI integration", () => {
     try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
+  it("should export and import local handoff bundles from the CLI", async () => {
+    const { unlinkSync, mkdtempSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "todos-cli-handoff-bundle-"));
+    const sourceDb = join(dir, "source.db");
+    const targetDb = join(dir, "target.db");
+    const bundlePath = join(dir, "handoff.json");
+
+    const task = JSON.parse((await runCli(["add", "Bundle handoff task", "--json"], sourceDb)).stdout);
+    const created = await runCli([
+      "handoff",
+      "--create",
+      "--agent",
+      "codex",
+      "--session",
+      "session-bundle",
+      "--summary",
+      "Bundle handoff",
+      "--tasks",
+      task.id,
+      "--files",
+      "src/bundle.ts",
+      "--runs",
+      "run-bundle",
+      "--json",
+    ], sourceDb);
+    const handoff = JSON.parse(created.stdout);
+
+    const exported = await runCli(["handoff", "--export", handoff.id, "--output", bundlePath, "--json"], sourceDb);
+    expect(exported.exitCode).toBe(0);
+    expect(JSON.parse(exported.stdout).path).toBe(bundlePath);
+
+    const preview = await runCli(["handoff", "--import", bundlePath, "--json"], targetDb);
+    expect(preview.exitCode).toBe(0);
+    expect(JSON.parse(preview.stdout).applied).toBe(false);
+
+    const applied = await runCli(["handoff", "--import", bundlePath, "--apply", "--json"], targetDb);
+    expect(applied.exitCode).toBe(0);
+    expect(JSON.parse(applied.stdout).created).toBe(true);
+
+    const read = await runCli(["handoff", "--read", handoff.id, "--json"], targetDb);
+    expect(JSON.parse(read.stdout).summary).toBe("Bundle handoff");
+
+    for (const path of [sourceDb, targetDb, bundlePath]) {
+      try { unlinkSync(path); } catch {}
+      try { unlinkSync(`${path}-shm`); } catch {}
+      try { unlinkSync(`${path}-wal`); } catch {}
+    }
+  });
+
   it("should run overdue command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "overdue", "--json"],

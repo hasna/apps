@@ -312,11 +312,20 @@ export {
   acknowledgeHandoff,
   createHandoff,
   createSessionRecoveryHandoff,
+  exportHandoffBundle,
   getHandoff,
   getLatestHandoff,
+  importHandoffBundle,
   listHandoffs,
 } from "./db/handoffs.js";
-export type { CreateHandoffInput, CreateSessionRecoveryHandoffInput, Handoff, ListHandoffsOptions } from "./db/handoffs.js";
+export type {
+  CreateHandoffInput,
+  CreateSessionRecoveryHandoffInput,
+  Handoff,
+  HandoffBundle,
+  ImportHandoffBundleResult,
+  ListHandoffsOptions,
+} from "./db/handoffs.js";
 
 // Task Files
 export { addTaskFile, getTaskFile, listTaskFiles, findTasksByFile, updateTaskFileStatus, removeTaskFile, bulkAddTaskFiles } from "./db/task-files.js";

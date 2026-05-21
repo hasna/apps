@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { readFileSync, writeFileSync } from "node:fs";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import {
   listTasks,
@@ -15,7 +16,16 @@ import {
   getEscalatedTasks,
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
-import { acknowledgeHandoff, createHandoff, createSessionRecoveryHandoff, getHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
+import {
+  acknowledgeHandoff,
+  createHandoff,
+  createSessionRecoveryHandoff,
+  exportHandoffBundle,
+  getHandoff,
+  importHandoffBundle,
+  listHandoffs,
+  getLatestHandoff,
+} from "../../db/handoffs.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
 import type { LocalTaskFieldQuery, SetTaskLocalFieldsInput } from "../../lib/local-fields.js";
@@ -1270,6 +1280,10 @@ export function registerQueryCommands(program: Command) {
     .description("Create or view agent session handoffs")
     .option("--create", "Create a new handoff")
     .option("--read <id>", "Read one handoff by ID or prefix")
+    .option("--export <id>", "Export one handoff bundle by ID or prefix")
+    .option("--import <file>", "Import a handoff bundle from a JSON file")
+    .option("--output <path>", "Write exported handoff bundle to a file")
+    .option("--apply", "Apply an imported handoff bundle; imports default to dry-run preview")
     .option("--ack <id>", "Acknowledge a handoff as read for an agent")
     .option("--recover", "Create a recovery handoff from active stale session context")
     .option("--agent <name>", "Agent name")
@@ -1294,6 +1308,30 @@ export function registerQueryCommands(program: Command) {
       const sessionId = opts.session || globalOpts.session || undefined;
 
       try {
+        if (opts.import) {
+          const bundle = JSON.parse(readFileSync(opts.import, "utf-8"));
+          const result = importHandoffBundle(bundle, { apply: opts.apply }, db);
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(result)); return; }
+          console.log(opts.apply
+            ? chalk.green(`  ✓ Handoff bundle imported: ${result.handoff_id.slice(0, 8)}`)
+            : chalk.cyan(`  Handoff bundle preview: ${result.handoff_id.slice(0, 8)}`));
+          if (result.warnings.length) for (const warning of result.warnings) console.log(chalk.yellow(`  ! ${warning}`));
+          return;
+        }
+
+        if (opts.export) {
+          const bundle = exportHandoffBundle(opts.export, db);
+          const json = JSON.stringify(bundle, null, 2);
+          if (opts.output) {
+            writeFileSync(opts.output, `${json}\n`);
+            if (opts.json || globalOpts.json) { console.log(JSON.stringify({ path: opts.output, handoff_id: bundle.handoff.id })); return; }
+            console.log(chalk.green(`  ✓ Handoff bundle written: ${opts.output}`));
+            return;
+          }
+          console.log(json);
+          return;
+        }
+
         if (opts.read) {
           const handoff = getHandoff(opts.read, db);
           if (!handoff) { console.error(chalk.red(`Handoff not found: ${opts.read}`)); process.exit(1); }

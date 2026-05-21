@@ -102,6 +102,43 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
     );
   }
 
+  if (shouldRegisterTool("export_handoff")) {
+    server.tool(
+      "export_handoff",
+      "Export one local handoff as a deterministic JSON bundle.",
+      { handoff_id: z.string().describe("Handoff ID or unique prefix") },
+      async ({ handoff_id }) => {
+        try {
+          const { exportHandoffBundle } = require("../../db/handoffs.js") as any;
+          const bundle = exportHandoffBundle(handoff_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(bundle, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("import_handoff")) {
+    server.tool(
+      "import_handoff",
+      "Preview or apply a deterministic local handoff bundle.",
+      {
+        bundle: z.any().describe("Handoff bundle JSON object from export_handoff"),
+        apply: z.boolean().optional().describe("Apply import; default false previews only"),
+      },
+      async ({ bundle, apply }) => {
+        try {
+          const { importHandoffBundle } = require("../../db/handoffs.js") as any;
+          const result = importHandoffBundle(bundle, { apply: !!apply });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("acknowledge_handoff")) {
     server.tool(
       "acknowledge_handoff",

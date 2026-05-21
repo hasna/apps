@@ -346,13 +346,19 @@ todos handoff --unread-for claude --json
 todos handoff --read <handoff-id> --json
 todos handoff --ack <handoff-id> --agent claude --json
 todos handoff --recover --agent codex --session codex-42 --json
+todos handoff --export <handoff-id> --output handoff.json --json
+todos handoff --import handoff.json --json
+todos handoff --import handoff.json --apply --json
 ```
 
 MCP clients can use `create_handoff`, `list_handoffs`, `read_handoff`,
-`acknowledge_handoff`, `recover_stale_session_handoff`, and
-`get_latest_handoff`. Recovery handoffs inspect local in-progress tasks, file
-links, and run evidence for the agent/session and create a deterministic
-continuation packet; no hosted queue or cloud service is involved.
+`export_handoff`, `import_handoff`, `acknowledge_handoff`,
+`recover_stale_session_handoff`, and `get_latest_handoff`. Recovery handoffs
+inspect local in-progress tasks, file links, and run evidence for the
+agent/session and create a deterministic continuation packet; no hosted queue
+or cloud service is involved. Handoff imports default to a dry-run preview;
+`--apply` writes the local handoff and preserves per-agent acknowledgement
+state.
 
 ## Local Run Ledger
 

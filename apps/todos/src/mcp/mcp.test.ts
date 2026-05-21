@@ -695,6 +695,13 @@ describe("MCP tool wrappers", () => {
     const recovery = JSON.parse(recoveryResult.content[0].text);
     expect(recovery.task_ids).toEqual([task.id]);
     expect(recovery.run_ids).toEqual([run.id]);
+
+    const exportResult = await callCapturedTool(tools, "export_handoff", { handoff_id: created.id });
+    const bundle = JSON.parse(exportResult.content[0]!.text);
+    expect(bundle.handoff.id).toBe(created.id);
+
+    const importPreview = await callCapturedTool(tools, "import_handoff", { bundle, apply: false });
+    expect(JSON.parse(importPreview.content[0]!.text).applied).toBe(false);
   });
 
   it("git traceability tools link refs, commits, and verification evidence", async () => {

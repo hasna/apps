@@ -49,6 +49,29 @@ export interface CreateSessionRecoveryHandoffInput {
   limit?: number;
 }
 
+export interface HandoffBundle {
+  schemaVersion: 1;
+  kind: "hasna.todos.handoff";
+  exported_at: string;
+  handoff: Handoff;
+  references: {
+    tasks: Array<Record<string, unknown>>;
+    files: Array<Record<string, unknown>>;
+    runs: Array<Record<string, unknown>>;
+    verifications: Array<Record<string, unknown>>;
+    commits: Array<Record<string, unknown>>;
+  };
+}
+
+export interface ImportHandoffBundleResult {
+  applied: boolean;
+  created: boolean;
+  existing: boolean;
+  handoff_id: string;
+  summary: string;
+  warnings: string[];
+}
+
 export function createHandoff(input: CreateHandoffInput, db?: Database): Handoff {
   const d = db || getDatabase();
   const id = uuid();
@@ -82,6 +105,159 @@ export function createHandoff(input: CreateHandoffInput, db?: Database): Handoff
     run_ids: input.run_ids || null,
     created_at: timestamp,
     acknowledged_by: [],
+  };
+}
+
+function stableRows<T extends Record<string, unknown>>(rows: T[], keys: string[]): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const next: Record<string, unknown> = {};
+    for (const key of keys) next[key] = row[key] ?? null;
+    return next;
+  });
+}
+
+function bindList(values: string[]): { clause: string; values: string[] } {
+  return { clause: values.map(() => "?").join(","), values };
+}
+
+function arrayOrNull(value: unknown): string[] | null {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : null;
+}
+
+function toOptionalArray(value: unknown): string[] | undefined {
+  return arrayOrNull(value) ?? undefined;
+}
+
+export function exportHandoffBundle(id: string, db?: Database, exportedAt: Date = new Date()): HandoffBundle {
+  const d = db || getDatabase();
+  const handoff = getHandoff(id, d);
+  if (!handoff) throw new Error(`Handoff not found: ${id}`);
+
+  const taskIds = handoff.task_ids ?? [];
+  const runIds = handoff.run_ids ?? [];
+  const filePaths = handoff.relevant_files ?? [];
+  const references: HandoffBundle["references"] = {
+    tasks: [],
+    files: [],
+    runs: [],
+    verifications: [],
+    commits: [],
+  };
+
+  if (taskIds.length) {
+    const bound = bindList(taskIds);
+    references.tasks = stableRows(
+      d.query(`SELECT id, short_id, title, status, priority, assigned_to, agent_id, session_id, updated_at, completed_at FROM tasks WHERE id IN (${bound.clause}) ORDER BY title, id`).all(...bound.values) as Array<Record<string, unknown>>,
+      ["id", "short_id", "title", "status", "priority", "assigned_to", "agent_id", "session_id", "updated_at", "completed_at"],
+    );
+    references.verifications = stableRows(
+      d.query(`SELECT id, task_id, command, status, output_summary, artifact_path, agent_id, run_at, created_at FROM task_verifications WHERE task_id IN (${bound.clause}) ORDER BY task_id, run_at DESC, created_at DESC`).all(...bound.values) as Array<Record<string, unknown>>,
+      ["id", "task_id", "command", "status", "output_summary", "artifact_path", "agent_id", "run_at", "created_at"],
+    );
+    references.commits = stableRows(
+      d.query(`SELECT id, task_id, sha, message, author, committed_at, files_changed, created_at FROM task_commits WHERE task_id IN (${bound.clause}) ORDER BY task_id, committed_at DESC, created_at DESC`).all(...bound.values) as Array<Record<string, unknown>>,
+      ["id", "task_id", "sha", "message", "author", "committed_at", "files_changed", "created_at"],
+    );
+  }
+
+  if (taskIds.length || filePaths.length) {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (taskIds.length) {
+      const bound = bindList(taskIds);
+      clauses.push(`task_id IN (${bound.clause})`);
+      params.push(...bound.values);
+    }
+    if (filePaths.length) {
+      const bound = bindList(filePaths);
+      clauses.push(`path IN (${bound.clause})`);
+      params.push(...bound.values);
+    }
+    references.files = stableRows(
+      d.query(`SELECT id, task_id, path, status, agent_id, note, updated_at FROM task_files WHERE ${clauses.join(" OR ")} ORDER BY path, task_id`).all(...params) as Array<Record<string, unknown>>,
+      ["id", "task_id", "path", "status", "agent_id", "note", "updated_at"],
+    );
+  }
+
+  if (runIds.length) {
+    const bound = bindList(runIds);
+    references.runs = stableRows(
+      d.query(`SELECT id, task_id, agent_id, title, status, summary, started_at, completed_at, updated_at FROM task_runs WHERE id IN (${bound.clause}) ORDER BY started_at DESC, created_at DESC`).all(...bound.values) as Array<Record<string, unknown>>,
+      ["id", "task_id", "agent_id", "title", "status", "summary", "started_at", "completed_at", "updated_at"],
+    );
+  }
+
+  return {
+    schemaVersion: 1,
+    kind: "hasna.todos.handoff",
+    exported_at: exportedAt.toISOString(),
+    handoff,
+    references,
+  };
+}
+
+export function importHandoffBundle(
+  bundle: HandoffBundle,
+  options: { apply?: boolean } = {},
+  db?: Database,
+): ImportHandoffBundleResult {
+  if (!bundle || bundle.schemaVersion !== 1 || bundle.kind !== "hasna.todos.handoff" || !bundle.handoff?.id) {
+    throw new Error("Invalid handoff bundle");
+  }
+  const d = db || getDatabase();
+  const handoff = bundle.handoff;
+  const existing = getHandoff(handoff.id, d);
+  const warnings: string[] = [];
+  const missingTaskIds = (handoff.task_ids ?? []).filter((taskId) => !d.query("SELECT id FROM tasks WHERE id = ?").get(taskId));
+  if (missingTaskIds.length) warnings.push(`${missingTaskIds.length} referenced task(s) are not present locally`);
+
+  if (!options.apply) {
+    return {
+      applied: false,
+      created: false,
+      existing: !!existing,
+      handoff_id: handoff.id,
+      summary: handoff.summary,
+      warnings,
+    };
+  }
+
+  if (!existing) {
+    d.run(
+      `INSERT INTO handoffs (id, agent_id, project_id, session_id, summary, completed, in_progress, blockers, next_steps, task_ids, relevant_files, run_ids, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        handoff.id,
+        handoff.agent_id,
+        handoff.project_id,
+        handoff.session_id,
+        redactEvidenceText(handoff.summary),
+        toJson(toOptionalArray(handoff.completed)),
+        toJson(toOptionalArray(handoff.in_progress)),
+        toJson(toOptionalArray(handoff.blockers)),
+        toJson(toOptionalArray(handoff.next_steps)),
+        toJson(toOptionalArray(handoff.task_ids)),
+        toJson(toOptionalArray(handoff.relevant_files)),
+        toJson(toOptionalArray(handoff.run_ids)),
+        handoff.created_at,
+      ],
+    );
+  }
+
+  for (const agentId of handoff.acknowledged_by ?? []) {
+    d.run(
+      "INSERT OR REPLACE INTO handoff_acknowledgements (handoff_id, agent_id, acknowledged_at) VALUES (?, ?, ?)",
+      [handoff.id, agentId, now()],
+    );
+  }
+
+  return {
+    applied: true,
+    created: !existing,
+    existing: !!existing,
+    handoff_id: handoff.id,
+    summary: handoff.summary,
+    warnings,
   };
 }
 
