@@ -114,7 +114,7 @@ describe("package subpath exports", () => {
       expect.arrayContaining(["TASK_NOT_FOUND", "VERSION_CONFLICT", "COMPLETION_BLOCKED"]),
     );
     expect(manifest.jsonOutputs.contracts.map((contract) => contract.id)).toEqual(
-      expect.arrayContaining(["task", "project", "agent", "template", "task_list", "comment", "checkpoint", "dispatch", "audit_history", "status_summary", "structured_error", "api_error", "cli_mcp_parity_manifest", "project_bootstrap_result"]),
+      expect.arrayContaining(["task", "project", "agent", "template", "task_list", "comment", "checkpoint", "dispatch", "handoff", "audit_history", "status_summary", "structured_error", "api_error", "cli_mcp_parity_manifest", "project_bootstrap_result"]),
     );
     expect(manifest.jsonOutputs.generatedAt).toBe(manifest.generatedAt);
     expect(TODOS_ERROR_CODES).toHaveLength(manifest.errorCodes.length);
@@ -143,7 +143,7 @@ describe("package subpath exports", () => {
     expect(registry.mcp.package.version).toBe("1.2.3");
     expect(registry.cliMcpParity.package.version).toBe("1.2.3");
     expect(registry.cliMcpParity.parity.map((entry) => entry.domain)).toEqual(
-      expect.arrayContaining(["tasks", "projects", "plans", "runs", "comments", "search", "imports", "exports"]),
+      expect.arrayContaining(["tasks", "projects", "plans", "runs", "handoffs", "comments", "search", "imports", "exports"]),
     );
     expect(TODOS_REGISTRY.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });

@@ -19,6 +19,7 @@ import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
+import { createHandoff } from "./db/handoffs.js";
 import {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
@@ -83,6 +84,7 @@ describe("stable JSON contracts", () => {
       "verification_provider",
       "verification_provider_result",
       "agent",
+      "handoff",
       "template",
       "task_list",
       "comment",
@@ -173,6 +175,15 @@ describe("stable JSON contracts", () => {
       session_id: "json-contract-session",
       working_dir: "/tmp/json-contracts",
     }, db);
+    const handoff = createHandoff({
+      agent_id: "jsoncontractagent",
+      session_id: "json-contract-session",
+      summary: "Continue JSON contract task",
+      task_ids: [task.id],
+      relevant_files: ["src/json-contracts.ts"],
+      run_ids: [],
+      next_steps: ["validate contract"],
+    }, db);
     const template = createTemplate({
       name: "Contract Template",
       title_pattern: "Build {thing}",
@@ -217,6 +228,7 @@ describe("stable JSON contracts", () => {
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
     expectValid("agent", agent);
+    expectValid("handoff", handoff);
     expectValid("template", template);
     expectValid("comment", comment);
     expectValid("checkpoint", checkpoint);

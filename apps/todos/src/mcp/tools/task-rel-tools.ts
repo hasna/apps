@@ -34,15 +34,118 @@ export function registerTaskRelTools(server: McpServer, ctx: TaskRelContext) {
         in_progress: z.array(z.string()).optional().describe("Items still in progress"),
         blockers: z.array(z.string()).optional().describe("Blocking issues"),
         next_steps: z.array(z.string()).optional().describe("Recommended next actions"),
+        session_id: z.string().optional().describe("Agent session ID this handoff belongs to"),
+        task_ids: z.array(z.string()).optional().describe("Task IDs referenced by the handoff"),
+        relevant_files: z.array(z.string()).optional().describe("Relevant local files"),
+        run_ids: z.array(z.string()).optional().describe("Task run IDs with useful evidence"),
       },
-      async ({ agent_id, project_id, summary, completed, in_progress, blockers, next_steps }) => {
+      async ({ agent_id, project_id, summary, completed, in_progress, blockers, next_steps, session_id, task_ids, relevant_files, run_ids }) => {
         try {
           const { createHandoff } = require("../../db/handoffs.js") as any;
           const handoff = createHandoff({
             agent_id, project_id: project_id ? resolveId(project_id, "projects") : undefined,
-            summary, completed, in_progress, blockers, next_steps,
+            summary, completed, in_progress, blockers, next_steps, session_id,
+            task_ids: task_ids?.map((id: string) => resolveId(id, "tasks")),
+            relevant_files,
+            run_ids,
           });
-          return { content: [{ type: "text" as const, text: `Handoff created: ${handoff.id.slice(0, 8)} by ${handoff.agent_id || "unknown"}` }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_handoffs")) {
+    server.tool(
+      "list_handoffs",
+      "List local session handoffs, optionally only unread for an agent.",
+      {
+        agent_id: z.string().optional().describe("Filter by handoff author"),
+        project_id: z.string().optional().describe("Filter by project"),
+        unread_for: z.string().optional().describe("Only handoffs not acknowledged by this agent"),
+        limit: z.number().optional().describe("Maximum handoffs to return"),
+      },
+      async ({ agent_id, project_id, unread_for, limit }) => {
+        try {
+          const { listHandoffs } = require("../../db/handoffs.js") as any;
+          const handoffs = listHandoffs({
+            agent_id,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            unread_for,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoffs, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("read_handoff")) {
+    server.tool(
+      "read_handoff",
+      "Read one local handoff by ID or prefix.",
+      { handoff_id: z.string().describe("Handoff ID or unique prefix") },
+      async ({ handoff_id }) => {
+        try {
+          const { getHandoff } = require("../../db/handoffs.js") as any;
+          const handoff = getHandoff(handoff_id);
+          if (!handoff) return { content: [{ type: "text" as const, text: "No handoff found." }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("acknowledge_handoff")) {
+    server.tool(
+      "acknowledge_handoff",
+      "Mark a local handoff as read for one agent.",
+      {
+        handoff_id: z.string().describe("Handoff ID or unique prefix"),
+        agent_id: z.string().describe("Agent acknowledging the handoff"),
+      },
+      async ({ handoff_id, agent_id }) => {
+        try {
+          const { acknowledgeHandoff } = require("../../db/handoffs.js") as any;
+          const handoff = acknowledgeHandoff(handoff_id, agent_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("recover_stale_session_handoff")) {
+    server.tool(
+      "recover_stale_session_handoff",
+      "Create a local recovery handoff from an agent's active stale session context.",
+      {
+        agent_id: z.string().describe("Agent whose active session context should be captured"),
+        session_id: z.string().optional().describe("Optional session ID to narrow recovery"),
+        project_id: z.string().optional().describe("Optional project filter"),
+        recovered_by: z.string().optional().describe("Agent creating the recovery handoff"),
+        reason: z.string().optional().describe("Recovery reason"),
+        limit: z.number().optional().describe("Maximum tasks/files/runs to capture"),
+      },
+      async ({ agent_id, session_id, project_id, recovered_by, reason, limit }) => {
+        try {
+          const { createSessionRecoveryHandoff } = require("../../db/handoffs.js") as any;
+          const handoff = createSessionRecoveryHandoff({
+            agent_id,
+            session_id,
+            project_id: project_id ? resolveId(project_id, "projects") : undefined,
+            recovered_by,
+            reason,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(handoff, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

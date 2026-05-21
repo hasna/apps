@@ -14,7 +14,7 @@ import {
   getTask,
 } from "../../db/tasks.js";
 import { getRecap } from "../../db/audit.js";
-import { createHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
+import { acknowledgeHandoff, createHandoff, createSessionRecoveryHandoff, getHandoff, listHandoffs, getLatestHandoff } from "../../db/handoffs.js";
 import { isValidRecurrenceRule } from "../../lib/recurrence.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "../../lib/task-dedupe.js";
 import { getTaskLocalFields, queryTasksByLocalFields, setTaskLocalFields } from "../../lib/local-fields.js";
@@ -1250,62 +1250,126 @@ export function registerQueryCommands(program: Command) {
     .command("handoff")
     .description("Create or view agent session handoffs")
     .option("--create", "Create a new handoff")
+    .option("--read <id>", "Read one handoff by ID or prefix")
+    .option("--ack <id>", "Acknowledge a handoff as read for an agent")
+    .option("--recover", "Create a recovery handoff from active stale session context")
     .option("--agent <name>", "Agent name")
+    .option("--session <id>", "Session ID for handoff or recovery context")
     .option("--summary <text>", "Handoff summary")
     .option("--completed <items>", "Comma-separated completed items")
     .option("--in-progress <items>", "Comma-separated in-progress items")
     .option("--blockers <items>", "Comma-separated blockers")
     .option("--next <items>", "Comma-separated next steps")
+    .option("--tasks <ids>", "Comma-separated task IDs or prefixes")
+    .option("--files <paths>", "Comma-separated relevant files")
+    .option("--runs <ids>", "Comma-separated run IDs")
+    .option("--unread-for <agent>", "Only list handoffs not acknowledged by this agent")
+    .option("--reason <text>", "Recovery reason")
     .option("-j, --json", "Output as JSON")
     .option("--limit <n>", "Number of handoffs to show", "5")
     .action(async (opts) => {
       const globalOpts = program.opts();
       const db = getDatabase();
       const projectId = autoProject(globalOpts) || undefined;
+      const actor = opts.agent || globalOpts.agent || undefined;
+      const sessionId = opts.session || globalOpts.session || undefined;
 
-      if (opts.create || opts.summary) {
-        if (!opts.summary) { console.error(chalk.red("  --summary is required for creating a handoff")); process.exit(1); }
-        const handoff = createHandoff({
-          agent_id: opts.agent || globalOpts.agent || undefined,
+      try {
+        if (opts.read) {
+          const handoff = getHandoff(opts.read, db);
+          if (!handoff) { console.error(chalk.red(`Handoff not found: ${opts.read}`)); process.exit(1); }
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
+          printHandoff(handoff);
+          return;
+        }
+
+        if (opts.ack) {
+          if (!actor) { console.error(chalk.red("  --agent is required with --ack")); process.exit(1); }
+          const handoff = acknowledgeHandoff(opts.ack, actor, db);
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
+          console.log(chalk.green(`  ✓ Handoff ${handoff.id.slice(0, 8)} acknowledged by ${actor}`));
+          return;
+        }
+
+        if (opts.recover) {
+          if (!actor) { console.error(chalk.red("  --agent is required with --recover")); process.exit(1); }
+          const handoff = createSessionRecoveryHandoff({
+            agent_id: actor,
+            session_id: sessionId,
+            project_id: projectId,
+            recovered_by: globalOpts.agent || actor,
+            reason: opts.reason,
+            limit: parseInt(opts.limit, 10),
+          }, db);
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
+          console.log(chalk.green(`  ✓ Recovery handoff created for ${actor}`));
+          return;
+        }
+
+        if (opts.create || opts.summary) {
+          if (!opts.summary) { console.error(chalk.red("  --summary is required for creating a handoff")); process.exit(1); }
+          const handoff = createHandoff({
+            agent_id: actor,
+            project_id: projectId,
+            session_id: sessionId,
+            summary: opts.summary,
+            completed: parseCsvOption(opts.completed),
+            in_progress: parseCsvOption(opts.inProgress),
+            blockers: parseCsvOption(opts.blockers),
+            next_steps: parseCsvOption(opts.next),
+            task_ids: parseCsvOption(opts.tasks)?.map((id) => resolveTaskId(id)),
+            relevant_files: parseCsvOption(opts.files),
+            run_ids: parseCsvOption(opts.runs),
+          }, db);
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
+          console.log(chalk.green(`  ✓ Handoff created by ${handoff.agent_id || "unknown"}`));
+          return;
+        }
+
+        // View mode — show recent handoffs
+        const handoffs: any[] = listHandoffs({
           project_id: projectId,
-          summary: opts.summary,
-          completed: opts.completed ? opts.completed.split(",").map((s: string) => s.trim()) : undefined,
-          in_progress: opts.inProgress ? opts.inProgress.split(",").map((s: string) => s.trim()) : undefined,
-          blockers: opts.blockers ? opts.blockers.split(",").map((s: string) => s.trim()) : undefined,
-          next_steps: opts.next ? opts.next.split(",").map((s: string) => s.trim()) : undefined,
+          agent_id: opts.agent && !opts.unreadFor ? opts.agent : undefined,
+          unread_for: opts.unreadFor,
+          limit: parseInt(opts.limit, 10),
         }, db);
-        if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
-        console.log(chalk.green(`  ✓ Handoff created by ${handoff.agent_id || "unknown"}`));
-        return;
-      }
+        if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoffs)); return; }
+        if (handoffs.length === 0) { console.log(chalk.dim("  No handoffs yet.")); return; }
 
-      // View mode — show recent handoffs
-      const handoffs: any[] = listHandoffs(projectId, parseInt(opts.limit, 10), db);
-      if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoffs)); return; }
-      if (handoffs.length === 0) { console.log(chalk.dim("  No handoffs yet.")); return; }
-
-      for (const h of handoffs) {
-        const time = h.created_at.slice(0, 16).replace("T", " ");
-        console.log(chalk.bold(`\n  ${time} ${h.agent_id || "unknown"}`));
-        console.log(`  ${h.summary}`);
-        if (h.completed?.length) {
-          console.log(chalk.green(`  + Completed:`));
-          for (const c of h.completed) console.log(`    - ${c}`);
-        }
-        if (h.in_progress?.length) {
-          console.log(chalk.blue(`  > In progress:`));
-          for (const c of h.in_progress) console.log(`    - ${c}`);
-        }
-        if (h.blockers?.length) {
-          console.log(chalk.red(`  x Blockers:`));
-          for (const c of h.blockers) console.log(`    - ${c}`);
-        }
-        if (h.next_steps?.length) {
-          console.log(chalk.cyan(`  -> Next steps:`));
-          for (const c of h.next_steps) console.log(`    - ${c}`);
-        }
+        for (const h of handoffs) printHandoff(h);
+      } catch (error) {
+        handleError(error);
       }
     });
+
+  function printHandoff(h: any): void {
+    const time = h.created_at.slice(0, 16).replace("T", " ");
+    console.log(chalk.bold(`\n  ${time} ${h.agent_id || "unknown"}`));
+    console.log(`  ${h.summary}`);
+    if (h.session_id) console.log(chalk.dim(`  session: ${h.session_id}`));
+    if (h.completed?.length) {
+      console.log(chalk.green(`  + Completed:`));
+      for (const c of h.completed) console.log(`    - ${c}`);
+    }
+    if (h.in_progress?.length) {
+      console.log(chalk.blue(`  > In progress:`));
+      for (const c of h.in_progress) console.log(`    - ${c}`);
+    }
+    if (h.blockers?.length) {
+      console.log(chalk.red(`  x Blockers:`));
+      for (const c of h.blockers) console.log(`    - ${c}`);
+    }
+    if (h.next_steps?.length) {
+      console.log(chalk.cyan(`  -> Next steps:`));
+      for (const c of h.next_steps) console.log(`    - ${c}`);
+    }
+    if (h.task_ids?.length || h.relevant_files?.length || h.run_ids?.length) {
+      console.log(chalk.dim(`  context: ${h.task_ids?.length || 0} tasks · ${h.relevant_files?.length || 0} files · ${h.run_ids?.length || 0} runs`));
+    }
+    if (h.acknowledged_by?.length) {
+      console.log(chalk.dim(`  read by: ${h.acknowledged_by.join(", ")}`));
+    }
+  }
 
   // priorities
   program

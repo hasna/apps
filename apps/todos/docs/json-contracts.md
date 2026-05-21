@@ -22,6 +22,7 @@ The stable contracts cover these object IDs:
 - `verification_provider`
 - `verification_provider_result`
 - `agent`
+- `handoff`
 - `template`
 - `task_list`
 - `comment`
@@ -97,6 +98,14 @@ task, duplicate relationship id, and moved evidence counts.
 and `run_verification_provider`. It includes provider name, kind, status,
 attempt count, redacted output summary, optional artifact path, and task id when
 evidence was recorded.
+
+## Agent Handoffs
+
+`handoff` is the stable local continuation record returned by
+`todos handoff --json`, `create_handoff`, `list_handoffs`, `read_handoff`,
+`acknowledge_handoff`, and `recover_stale_session_handoff`. It includes the
+session id, summary, completed/in-progress/blocker/next-step lists, referenced
+task ids, relevant local files, run ids, and per-agent acknowledgement state.
 
 ## Agent Context Packs
 
