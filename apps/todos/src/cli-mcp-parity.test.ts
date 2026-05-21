@@ -30,6 +30,7 @@ const expectedDomains = [
   "comments",
   "search",
   "context-packs",
+  "environment-snapshots",
   "imports",
   "exports",
 ];
@@ -146,6 +147,14 @@ describe("CLI/MCP parity manifest", () => {
       "export_template",
       "import_template",
     ]));
+    expect(byDomain.get("environment-snapshots")?.mcpTools).toEqual(expect.arrayContaining([
+      "capture_environment_snapshot",
+      "compare_environment_snapshots",
+    ]));
+    expect(byDomain.get("environment-snapshots")?.jsonContracts).toEqual(expect.arrayContaining([
+      "environment_snapshot",
+      "environment_snapshot_comparison",
+    ]));
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
   });
@@ -174,6 +183,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");
     expect(docs).toContain("todos event-hooks set audit --event task.completed");
+    expect(docs).toContain("todos env-snapshot capture --task 1234abcd --json");
     expect(docs).toContain("intentionally CLI-only");
   });
 

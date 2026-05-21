@@ -130,6 +130,8 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "check_file_lock",
     "create_comment",
     "create_handoff",
+    "capture_environment_snapshot",
+    "compare_environment_snapshots",
     "create_inbox_item",
     "delete_comment",
     "detect_file_relationships",

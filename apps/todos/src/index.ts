@@ -791,6 +791,23 @@ export type {
   RunTodosDoctorOptions,
 } from "./lib/doctor.js";
 export {
+  captureEnvironmentSnapshot,
+  compareEnvironmentSnapshotFiles,
+  compareEnvironmentSnapshots,
+  readEnvironmentSnapshot,
+  recordEnvironmentSnapshot,
+  writeEnvironmentSnapshot,
+} from "./lib/environment-snapshots.js";
+export type {
+  CaptureEnvironmentSnapshotInput,
+  EnvironmentSnapshot,
+  EnvironmentSnapshotComparison,
+  EnvironmentSnapshotFile,
+  EnvironmentSnapshotManifest,
+  RecordedEnvironmentSnapshot,
+  RecordEnvironmentSnapshotInput,
+} from "./lib/environment-snapshots.js";
+export {
   checkTaskDoneContract,
   getTaskContract,
   getTaskReview,

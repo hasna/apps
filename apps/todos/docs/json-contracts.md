@@ -129,6 +129,17 @@ task ids, relevant local files, run ids, and per-agent acknowledgement state.
 selected task, project, plan, dependency, comment, file, verification, and run
 evidence plus a profile-specific prompt bundle for local agents.
 
+## Environment Snapshots
+
+`environment_snapshot` is the stable local reproducibility bundle returned by
+`todos env-snapshot capture` and `capture_environment_snapshot`. It includes
+Bun and Node versions, package-manager state, git status, config hashes,
+command environment metadata, and redacted dependency manifests.
+
+`environment_snapshot_comparison` is returned by `todos env-snapshot compare`
+and `compare_environment_snapshots` to explain drift between two local task or
+run verification contexts.
+
 ## Local Event Hooks
 
 `local_event_hook` is the stable config object returned by

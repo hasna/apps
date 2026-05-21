@@ -15,6 +15,7 @@ import { createTask } from "./db/task-crud.js";
 import { createTemplate } from "./db/templates.js";
 import { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 import { createAgentContextPack } from "./lib/context-packs.js";
+import { captureEnvironmentSnapshot, compareEnvironmentSnapshots } from "./lib/environment-snapshots.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
@@ -94,6 +95,8 @@ describe("stable JSON contracts", () => {
       "local_activity_timeline_entry",
       "status_summary",
       "context_pack",
+      "environment_snapshot",
+      "environment_snapshot_comparison",
       "local_event_hook",
       "local_event_hook_delivery",
       "local_encryption_profile",
@@ -220,6 +223,8 @@ describe("stable JSON contracts", () => {
     const timeline = getLocalActivityTimeline({ entity_type: "task", entity_id: task.id }, db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
     const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
+    const environmentSnapshot = captureEnvironmentSnapshot({ root: import.meta.dir, task_id: task.id, now: "2026-01-02T03:04:05.000Z" });
+    const environmentComparison = compareEnvironmentSnapshots(environmentSnapshot, environmentSnapshot);
 
     expectValid("project", project);
     expectValid("task_list", taskList);
@@ -239,6 +244,8 @@ describe("stable JSON contracts", () => {
     expectValid("local_activity_timeline_entry", timeline.entries[0]);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
+    expectValid("environment_snapshot", environmentSnapshot);
+    expectValid("environment_snapshot_comparison", environmentComparison);
     expectValid("local_event_hook", {
       name: "audit",
       enabled: true,

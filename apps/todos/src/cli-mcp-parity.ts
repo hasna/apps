@@ -21,6 +21,7 @@ export type TodosCliMcpParityDomain =
   | "comments"
   | "search"
   | "context-packs"
+  | "environment-snapshots"
   | "imports"
   | "exports";
 
@@ -583,6 +584,18 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos context-pack 1234abcd --profile codex --format markdown",
       mcpTool: "build_agent_context_pack",
+    },
+  },
+  {
+    domain: "environment-snapshots",
+    cliCommands: ["todos env-snapshot"],
+    mcpTools: ["capture_environment_snapshot", "compare_environment_snapshots"],
+    jsonContracts: ["environment_snapshot", "environment_snapshot_comparison", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos env-snapshot capture --task 1234abcd --json",
+      mcpTool: "capture_environment_snapshot",
     },
   },
   {

@@ -247,6 +247,23 @@ Matching MCP tool:
 { "tool": "build_agent_context_pack", "arguments": { "task_id": "1234abcd", "profile": "codex", "format": "markdown" } }
 ```
 
+CLI environment snapshot:
+
+```bash
+todos env-snapshot capture --task 1234abcd --json
+todos env-snapshot compare before.json after.json --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "capture_environment_snapshot", "arguments": { "task_id": "1234abcd", "command": "bun test" } }
+```
+
+```json
+{ "tool": "compare_environment_snapshots", "arguments": { "left_path": "before.json", "right_path": "after.json" } }
+```
+
 CLI session handoff:
 
 ```bash

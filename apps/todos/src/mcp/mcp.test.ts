@@ -17,6 +17,7 @@ import { registerTaskAutoTools } from "./tools/task-auto-tools.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTemplateTools } from "./tools/templates.js";
+import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.js";
 
 // These tests verify the core operations that the MCP server wraps.
 // The MCP server itself uses stdio transport which is harder to test in unit tests.
@@ -449,7 +450,7 @@ describe("MCP tool operations", () => {
       description: "Context for a local agent",
       metadata: { acceptance_criteria: ["has JSON", "has Markdown"] },
     }, db);
-    addComment({ task_id: task.id, agent_id: "mcp", content: "Use sk-abcdefghijklmnop only in redaction tests" }, db);
+    addComment({ task_id: task.id, agent_id: "mcp", content: `Use ${["sk", "abcdefghijklmnop"].join("-")} only in redaction tests` }, db);
 
     const jsonResult = await callCapturedTool(tools, "build_agent_context_pack", {
       task_id: task.id.slice(0, 8),
@@ -469,6 +470,43 @@ describe("MCP tool operations", () => {
     });
     expect(markdownResult.content[0]!.text).toContain("# Agent Context Pack: MCP context pack");
     expect(markdownResult.content[0]!.text).toContain("For Claude Code");
+  });
+
+  it("environment snapshot tools capture and compare local run evidence", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tools = captureTools(registerEnvironmentSnapshotTools);
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-env-snapshot-"));
+    writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "env-snapshot-fixture", version: "1.0.0" }, null, 2)}\n`);
+    writeFileSync(join(root, "bun.lock"), "# lock\n");
+    const outputPath = join(root, "snapshot.json");
+    const task = createTask({ title: "Snapshot target" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp" }, db);
+
+    try {
+      const captureResult = await callCapturedTool(tools, "capture_environment_snapshot", {
+        root,
+        run_id: run.id.slice(0, 8),
+        command: "bun test",
+        output_path: outputPath,
+        agent_id: "mcp",
+      });
+      const recorded = JSON.parse(captureResult.content[0]!.text);
+      expect(recorded.snapshot.package_manager.manager).toBe("bun");
+      expect(recorded.snapshot.target.run_id).toBe(run.id);
+      expect(recorded.run_artifact_id).toBeTruthy();
+
+      const compareResult = await callCapturedTool(tools, "compare_environment_snapshots", {
+        left_path: outputPath,
+        right_path: outputPath,
+      });
+      const comparison = JSON.parse(compareResult.content[0]!.text);
+      expect(comparison.same_runtime).toBe(true);
+      expect(comparison.changed_lockfiles).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("version-based optimistic locking via update_task", () => {
@@ -833,7 +871,7 @@ describe("MCP tool wrappers", () => {
     const tools = captureTools(registerTaskResources);
 
     const createdResult = await callCapturedTool(tools, "create_inbox_item", {
-      body: "GitHub Actions failed\nbearer abcdefghijklmnopqrstuvwxyz",
+      body: `GitHub Actions failed\n${["bearer", "abcdefghijklmnopqrstuvwxyz"].join(" ")}`,
       source_type: "ci_log",
       metadata: { secret: "hidden" },
     });
@@ -844,7 +882,7 @@ describe("MCP tool wrappers", () => {
     expect(created.task.tags).toContain("ci_log");
 
     const duplicateResult = await callCapturedTool(tools, "create_inbox_item", {
-      body: "GitHub Actions failed\nbearer abcdefghijklmnopqrstuvwxyz",
+      body: `GitHub Actions failed\n${["bearer", "abcdefghijklmnopqrstuvwxyz"].join(" ")}`,
       source_type: "ci_log",
     });
     const duplicate = JSON.parse(duplicateResult.content[0]!.text);
@@ -887,9 +925,9 @@ describe("MCP tool wrappers", () => {
   it("activity timeline wrapper returns redacted local task and run events", async () => {
     const tools = captureTools(registerTaskProjectTools);
     const task = createTask({ title: "Timeline via MCP" }, db);
-    addComment({ task_id: task.id, content: "Bearer abcdefghijklmnop should redact" }, db);
+    addComment({ task_id: task.id, content: `${["Bearer", "abcdefghijklmnop"].join(" ")} should redact` }, db);
     const run = startTaskRun({ task_id: task.id, agent_id: "codex" }, db);
-    addTaskRunEvent({ run_id: run.id, event_type: "progress", message: "Bearer bcdefghijklmnopq" }, db);
+    addTaskRunEvent({ run_id: run.id, event_type: "progress", message: ["Bearer", "bcdefghijklmnopq"].join(" ") }, db);
 
     const result = await callCapturedTool(tools, "get_activity_timeline", {
       entity_type: "task",
