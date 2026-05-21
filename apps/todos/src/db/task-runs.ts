@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { storeArtifactContent, verifyStoredArtifact, type ArtifactIntegrityReport } from "../lib/artifact-store.js";
+import { redactEvidenceText, redactValue } from "../lib/redaction.js";
 import { TaskNotFoundError } from "../types/index.js";
 import { addComment } from "./comments.js";
 import { getDatabase, now, uuid } from "./database.js";
@@ -105,31 +107,7 @@ function parseObject(value: string | null): Record<string, unknown> {
   }
 }
 
-export function redactEvidenceText(value: string): string {
-  return value
-    .replace(/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED_AWS_KEY]")
-    .replace(/-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
-    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED_TOKEN]")
-    .replace(/\b([A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)\s*=\s*['"]?[^'"\s]{8,}/gi, "$1=[REDACTED]")
-    .replace(/\b(bearer)\s+[A-Za-z0-9._~+/=-]{12,}/gi, "$1 [REDACTED]");
-}
-
-function redactValue<T>(value: T): T {
-  if (typeof value === "string") return redactEvidenceText(value) as T;
-  if (Array.isArray(value)) return value.map(redactValue) as T;
-  if (value && typeof value === "object") {
-    const redacted: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (/api[_-]?key|token|secret|password/i.test(key)) {
-        redacted[key] = "[REDACTED]";
-      } else {
-        redacted[key] = redactValue(child);
-      }
-    }
-    return redacted as T;
-  }
-  return value;
-}
+export { redactEvidenceText } from "../lib/redaction.js";
 
 function rowToRun(row: TaskRunRow): TaskRun {
   return { ...row, metadata: parseObject(row.metadata) };
@@ -360,6 +338,8 @@ export interface AddTaskRunArtifactInput {
   size_bytes?: number;
   sha256?: string;
   metadata?: Record<string, unknown>;
+  store_content?: boolean;
+  retention_days?: number;
   agent_id?: string;
 }
 
@@ -372,6 +352,19 @@ export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database
   const timestamp = now();
   const path = redactEvidenceText(input.path);
   const description = input.description ? redactEvidenceText(input.description) : null;
+  const metadata = redactValue(input.metadata || {});
+  let sizeBytes = input.size_bytes ?? null;
+  let digest = input.sha256 ?? null;
+  const stored = input.store_content !== false
+    ? storeArtifactContent({ path: input.path, metadata, retention_days: input.retention_days, created_at: timestamp })
+    : null;
+  if (stored) {
+    sizeBytes = stored.size_bytes;
+    digest = stored.sha256;
+    metadata["artifact_store"] = stored.store;
+  } else if (input.store_content === true) {
+    throw new Error(`Artifact file not found: ${input.path}`);
+  }
   d.run(
     "INSERT INTO task_run_artifacts (id, run_id, task_id, path, artifact_type, description, size_bytes, sha256, metadata, agent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
@@ -381,9 +374,9 @@ export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database
       path,
       input.artifact_type ?? null,
       description,
-      input.size_bytes ?? null,
-      input.sha256 ?? null,
-      JSON.stringify(redactValue(input.metadata || {})),
+      sizeBytes,
+      digest,
+      JSON.stringify(metadata),
       input.agent_id ?? run.agent_id,
       timestamp,
     ],
@@ -392,11 +385,22 @@ export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database
     run_id: run.id,
     event_type: "artifact",
     message: description || path,
-    data: { path, artifact_type: input.artifact_type, size_bytes: input.size_bytes ?? null, sha256: input.sha256 ?? null },
+    data: { path, artifact_type: input.artifact_type, size_bytes: sizeBytes, sha256: digest, stored: Boolean(stored) },
     agent_id: input.agent_id ?? run.agent_id ?? undefined,
     created_at: timestamp,
   }, d);
   return rowToArtifact(d.query("SELECT * FROM task_run_artifacts WHERE id = ?").get(id) as TaskRunArtifactRow);
+}
+
+export function verifyTaskRunArtifacts(runId: string, db?: Database): ArtifactIntegrityReport[] {
+  const ledger = getTaskRunLedger(runId, db);
+  return ledger.artifacts.map((artifact) => verifyStoredArtifact({
+    id: artifact.id,
+    path: artifact.path,
+    size_bytes: artifact.size_bytes,
+    sha256: artifact.sha256,
+    metadata: artifact.metadata,
+  }));
 }
 
 export interface FinishTaskRunInput {

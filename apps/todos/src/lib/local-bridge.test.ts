@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { addComment } from "../db/comments.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createPlan } from "../db/plans.js";
@@ -6,7 +9,7 @@ import { createProject } from "../db/projects.js";
 import { createTaskList } from "../db/task-lists.js";
 import { linkTaskGitRef, linkTaskToCommit } from "../db/task-commits.js";
 import { addDependency, createTask, getTask, listTasks } from "../db/tasks.js";
-import { addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun } from "../db/task-runs.js";
+import { addTaskRunArtifact, addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun, verifyTaskRunArtifacts } from "../db/task-runs.js";
 import {
   TODOS_LOCAL_BRIDGE_KIND,
   createLocalBridgeBundle,
@@ -16,13 +19,16 @@ import {
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
+  process.env["HASNA_TODOS_ARTIFACTS_DIR"] = mkdtempSync(join(tmpdir(), "todos-bridge-artifacts-"));
   resetDatabase();
   getDatabase();
 });
 
 afterEach(() => {
   closeDatabase();
+  rmSync(process.env["HASNA_TODOS_ARTIFACTS_DIR"] || "", { recursive: true, force: true });
   delete process.env["TODOS_DB_PATH"];
+  delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
 });
 
 describe("local bridge import/export", () => {
@@ -51,6 +57,9 @@ describe("local bridge import/export", () => {
     const run = startTaskRun({ task_id: first.id, agent_id: "agent", title: "bridge run" }, db);
     addTaskRunCommand({ run_id: run.id, command: "bun test", status: "passed", output_summary: "ok" }, db);
     addTaskRunFile({ run_id: run.id, path: "src/lib/local-bridge.ts" }, db);
+    const artifactPath = join(process.env["HASNA_TODOS_ARTIFACTS_DIR"]!, "bridge.log");
+    writeFileSync(artifactPath, "bridge ok\n");
+    addTaskRunArtifact({ run_id: run.id, path: artifactPath, artifact_type: "log", store_content: true }, db);
     finishTaskRun({ run_id: run.id, status: "completed", summary: "done" }, db);
     linkTaskToCommit({ task_id: first.id, sha: "abcdef123456", message: "feat: bridge" }, db);
     linkTaskGitRef({ task_id: first.id, ref_type: "branch", name: "task/bridge" }, db);
@@ -82,6 +91,7 @@ describe("local bridge import/export", () => {
       task_git_refs: 1,
       task_verifications: 1,
     });
+    expect(bundle.artifact_contents).toHaveLength(1);
     expect(validateLocalBridgeBundle(bundle).ok).toBe(true);
   });
 
@@ -126,6 +136,29 @@ describe("local bridge import/export", () => {
       id: task.id,
       reason: "already_exists",
     });
+  });
+
+  test("imports exported local artifact store content", () => {
+    const sourceDb = getDatabase();
+    const project = createProject({ name: "Bridge artifacts", path: "/tmp/bridge-artifacts" }, sourceDb);
+    const task = createTask({ title: "Portable artifact", project_id: project.id }, sourceDb);
+    const run = startTaskRun({ task_id: task.id, agent_id: "agent" }, sourceDb);
+    const sourceFile = join(process.env["HASNA_TODOS_ARTIFACTS_DIR"]!, "portable.log");
+    writeFileSync(sourceFile, "portable artifact\nTOKEN=secret-token-value\n");
+    addTaskRunArtifact({ run_id: run.id, path: sourceFile, artifact_type: "log", store_content: true }, sourceDb);
+    const bundle = createLocalBridgeBundle({ project_id: project.id }, sourceDb);
+    expect(bundle.artifact_contents).toHaveLength(1);
+
+    closeDatabase();
+    rmSync(process.env["HASNA_TODOS_ARTIFACTS_DIR"]!, { recursive: true, force: true });
+    process.env["HASNA_TODOS_ARTIFACTS_DIR"] = mkdtempSync(join(tmpdir(), "todos-bridge-import-artifacts-"));
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    const targetDb = getDatabase();
+
+    const applied = importLocalBridgeBundle(bundle, { dryRun: false }, targetDb);
+    expect(applied.ok).toBe(true);
+    expect(verifyTaskRunArtifacts(run.id, targetDb)[0]).toMatchObject({ status: "ok" });
   });
 
   test("rejects malformed or incompatible bridge bundles", () => {

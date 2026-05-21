@@ -110,6 +110,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "get_related_entities",
     "get_task_git_refs",
     "get_task_run_ledger",
+    "verify_task_run_artifacts",
     "get_task_traceability",
     "get_task_commits",
     "get_task_dependencies",

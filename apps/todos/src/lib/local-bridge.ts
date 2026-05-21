@@ -1,6 +1,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getPackageVersion } from "./package-version.js";
 import { getDatabase, now } from "../db/database.js";
+import { exportStoredArtifactContent, importStoredArtifactContent, type ExportedArtifactContent } from "./artifact-store.js";
 import type { Project, Plan, Task, TaskComment, TaskDependency, TaskList } from "../types/index.js";
 import type { TaskCommit, TaskGitRef, TaskVerification } from "../db/task-commits.js";
 import type { TaskFile } from "../db/task-files.js";
@@ -44,6 +45,7 @@ export interface TodosLocalBridgeBundle {
   package: TodosLocalBridgePackageSource;
   source: TodosLocalBridgeSource;
   data: TodosLocalBridgeData;
+  artifact_contents?: ExportedArtifactContent[];
   stats: Record<keyof TodosLocalBridgeData, number>;
 }
 
@@ -296,6 +298,16 @@ export function createLocalBridgeBundle(
     ),
   };
 
+  const artifactContents = data.run_artifacts
+    .map((artifact) => exportStoredArtifactContent({
+      id: artifact.id,
+      path: artifact.path,
+      size_bytes: artifact.size_bytes,
+      sha256: artifact.sha256,
+      metadata: artifact.metadata,
+    }))
+    .filter((content): content is ExportedArtifactContent => Boolean(content));
+
   return {
     schemaVersion: TODOS_LOCAL_BRIDGE_SCHEMA_VERSION,
     kind: TODOS_LOCAL_BRIDGE_KIND,
@@ -306,6 +318,7 @@ export function createLocalBridgeBundle(
       project_path: project?.path ?? null,
     },
     data,
+    artifact_contents: artifactContents,
     stats: bridgeStats(data),
   };
 }
@@ -331,6 +344,9 @@ export function validateLocalBridgeBundle(value: unknown): LocalBridgeValidation
     for (const key of dataKeys) {
       if (!Array.isArray(data[key])) issues.push(`data.${key} must be an array`);
     }
+  }
+  if (record.artifact_contents !== undefined && !Array.isArray(record.artifact_contents)) {
+    issues.push("artifact_contents must be an array when present");
   }
   return { ok: issues.length === 0, issues };
 }
@@ -410,6 +426,7 @@ export function importLocalBridgeBundle(
   const inserted = emptyCounts();
   const skipped = emptyCounts();
   const conflicts: LocalBridgeImportConflict[] = [];
+  const issues: string[] = [];
   if (!validation.ok) {
     return { ok: false, dry_run: options.dryRun !== false, inserted, skipped, conflicts, issues: validation.issues };
   }
@@ -447,6 +464,11 @@ export function importLocalBridgeBundle(
 
   if (dryRun) {
     for (const key of dataKeys) inserted[key] = data[key].length - skipped[key];
+  } else if (Array.isArray(bundle.artifact_contents)) {
+    for (const content of bundle.artifact_contents) {
+      const report = importStoredArtifactContent(content);
+      if (report.status !== "ok") issues.push(`artifact ${content.artifact_id}: ${report.message}`);
+    }
   }
-  return { ok: conflicts.every((conflict) => conflict.reason !== "missing_dependency"), dry_run: dryRun, inserted, skipped, conflicts, issues: [] };
+  return { ok: conflicts.every((conflict) => conflict.reason !== "missing_dependency") && issues.length === 0, dry_run: dryRun, inserted, skipped, conflicts, issues };
 }

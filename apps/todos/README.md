@@ -121,7 +121,8 @@ RUN_ID=$(todos runs start <task-id> --agent codex --title "Parser fix" --claim -
 todos runs event "$RUN_ID" progress "writing regression tests"
 todos runs command "$RUN_ID" "bun test src/parser.test.ts" --status passed --summary "14 pass"
 todos runs file "$RUN_ID" src/parser.ts --status modified
-todos runs artifact "$RUN_ID" logs/parser-test.txt --type log --description "focused test output"
+todos runs artifact "$RUN_ID" logs/parser-test.txt --type log --description "focused test output" --require-file
+todos runs artifact-verify "$RUN_ID"
 todos runs finish "$RUN_ID" --status completed --summary "parser fixed and verified"
 todos runs show "$RUN_ID"
 ```
@@ -129,7 +130,11 @@ todos runs show "$RUN_ID"
 Run command evidence is also mirrored into task verification evidence, file
 events are linked to task file tracking, and comments can be recorded into the
 task timeline. Sensitive-looking tokens, keys, passwords, and bearer values are
-redacted before evidence is stored.
+redacted before evidence is stored. Artifact files are copied into a local
+content-addressed store beside the SQLite database, with SHA-256 integrity
+metadata, redaction status, retention metadata, and metadata-only fallback when
+the original path is unavailable. Use `--no-store` to record only artifact
+metadata.
 
 ## Local Inbox Intake
 
@@ -159,10 +164,11 @@ todos bridge-import todos-bridge.json --apply
 ```
 
 Bridge bundles include local projects, task lists, plans, tasks, dependencies,
-comments, run ledgers, command evidence, file evidence, artifacts, commits,
-refs, and verification records. Imports default to dry-run mode and report
-conflicts before writing. The package does not upload bundles or call hosted
-services; any hosted sync must consume the exported JSON explicitly.
+comments, run ledgers, command evidence, file evidence, artifacts, stored
+artifact contents, commits, refs, and verification records. Imports default to
+dry-run mode and report conflicts before writing. The package does not upload
+bundles or call hosted services; any hosted sync must consume the exported JSON
+explicitly.
 
 ## MCP Server
 

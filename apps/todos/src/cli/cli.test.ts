@@ -377,10 +377,16 @@ describe("CLI integration", () => {
 
   it("should record a local run ledger with command, file, artifact, and finish evidence", async () => {
     const dbPath = "/tmp/test-cli-run-ledger.db";
-    const { unlinkSync } = await import("node:fs");
+    const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
     try { unlinkSync(`${dbPath}-wal`); } catch {}
+    const artifactDir = mkdtempSync(join(tmpdir(), "todos-cli-artifacts-"));
+    process.env["HASNA_TODOS_ARTIFACTS_DIR"] = artifactDir;
+    const logPath = join(artifactDir, "run-ledger.txt");
+    writeFileSync(logPath, "run ledger tests passed\nTOKEN=super-secret-token-value\n");
 
     const task = JSON.parse((await runCli(["add", "Run ledger task", "--json"], dbPath)).stdout);
     const started = await runCli([
@@ -415,7 +421,14 @@ describe("CLI integration", () => {
       "--json",
     ], dbPath)).exitCode).toBe(0);
     expect((await runCli(["runs", "file", run.id, "src/db/task-runs.ts", "--status", "modified", "--json"], dbPath)).exitCode).toBe(0);
-    expect((await runCli(["runs", "artifact", run.id, "logs/run-ledger.txt", "--type", "log", "--description", "Focused test output", "--json"], dbPath)).exitCode).toBe(0);
+    const artifactResult = await runCli(["runs", "artifact", run.id, logPath, "--type", "log", "--description", "Focused test output", "--require-file", "--retention-days", "7", "--json"], dbPath);
+    expect(artifactResult.exitCode).toBe(0);
+    const artifact = JSON.parse(artifactResult.stdout);
+    expect(artifact.metadata.artifact_store.stored).toBe(true);
+    expect(artifact.metadata.artifact_store.redaction.status).toBe("redacted");
+    const verifyResult = await runCli(["runs", "artifact-verify", run.id, "--json"], dbPath);
+    expect(verifyResult.exitCode).toBe(0);
+    expect(JSON.parse(verifyResult.stdout)[0].status).toBe("ok");
     expect((await runCli(["runs", "finish", run.id, "--status", "completed", "--summary", "done", "--json"], dbPath)).exitCode).toBe(0);
 
     const ledgerResult = await runCli(["runs", "show", run.id, "--json"], dbPath);
@@ -424,9 +437,11 @@ describe("CLI integration", () => {
     expect(ledger.run.status).toBe("completed");
     expect(ledger.commands[0].status).toBe("passed");
     expect(ledger.files[0].path).toBe("src/db/task-runs.ts");
-    expect(ledger.artifacts[0].path).toBe("logs/run-ledger.txt");
+    expect(ledger.artifacts[0].path).toBe(logPath);
     expect(ledger.events.map((event: { event_type: string }) => event.event_type)).toContain("comment");
 
+    delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+    rmSync(artifactDir, { recursive: true, force: true });
     try { unlinkSync(dbPath); } catch {}
     try { unlinkSync(`${dbPath}-shm`); } catch {}
     try { unlinkSync(`${dbPath}-wal`); } catch {}

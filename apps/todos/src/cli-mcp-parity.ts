@@ -185,6 +185,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "todos runs command",
       "todos runs file",
       "todos runs artifact",
+      "todos runs artifact-verify",
       "todos runs finish",
     ],
     mcpTools: [
@@ -195,6 +196,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "add_task_run_command",
       "add_task_run_file",
       "add_task_run_artifact",
+      "verify_task_run_artifacts",
       "finish_task_run",
     ],
     jsonContracts: ["checkpoint", "local_bridge_bundle", "structured_error", "api_error"],

@@ -377,7 +377,11 @@ describe("MCP tool wrappers", () => {
       path: "logs/mcp-run.txt",
       artifact_type: "log",
       description: "local log",
+      store_content: false,
     });
+    const artifactReportResult = await callCapturedTool(tools, "verify_task_run_artifacts", { run_id: run.id });
+    const artifactReports = JSON.parse(artifactReportResult.content[0]!.text);
+    expect(artifactReports[0].status).toBe("metadata_only");
     await callCapturedTool(tools, "finish_task_run", {
       run_id: run.id,
       status: "completed",

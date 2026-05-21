@@ -68,6 +68,10 @@ function getDbPath(): string {
   return newPath;
 }
 
+export function getDatabasePath(): string {
+  return getDbPath();
+}
+
 function ensureDir(filePath: string): void {
   if (isInMemoryDb(filePath)) return;
   const dir = dirname(resolve(filePath));

@@ -651,14 +651,17 @@ exit 0
 
   runs
     .command("artifact <run-id> <path>")
-    .description("Record local artifact metadata for a run without uploading it")
+    .description("Record a local artifact for a run in the content-addressed store")
     .option("--type <type>", "Artifact type, e.g. log, screenshot, report")
     .option("--description <text>", "Artifact description")
     .option("--size <bytes>", "Size in bytes")
     .option("--sha256 <hash>", "SHA-256 checksum")
     .option("--metadata <json>", "Additional JSON metadata")
+    .option("--no-store", "Record metadata only and do not copy local content")
+    .option("--require-file", "Fail if the artifact file cannot be stored")
+    .option("--retention-days <days>", "Retention period for stored content metadata")
     .option("--agent <name>", "Agent adding the artifact")
-    .action(async (runId: string, path: string, opts: { type?: string; description?: string; size?: string; sha256?: string; metadata?: string; agent?: string }) => {
+    .action(async (runId: string, path: string, opts: { type?: string; description?: string; size?: string; sha256?: string; metadata?: string; store?: boolean; requireFile?: boolean; retentionDays?: string; agent?: string }) => {
       const globalOpts = program.opts();
       const { addTaskRunArtifact } = await import("../../db/task-runs.js");
       const artifact = addTaskRunArtifact({
@@ -669,10 +672,30 @@ exit 0
         size_bytes: opts.size !== undefined ? Number.parseInt(opts.size, 10) : undefined,
         sha256: opts.sha256,
         metadata: parseJsonOption(opts.metadata, "--metadata"),
+        store_content: opts.requireFile ? true : opts.store,
+        retention_days: opts.retentionDays !== undefined ? Number.parseInt(opts.retentionDays, 10) : undefined,
         agent_id: opts.agent || globalOpts.agent,
       });
       if (globalOpts.json) { output(artifact, true); return; }
-      console.log(chalk.green(`Recorded artifact ${artifact.path} for run ${runId.slice(0, 8)}`));
+      const stored = artifact.metadata["artifact_store"] ? "stored" : "metadata only";
+      console.log(chalk.green(`Recorded artifact ${artifact.path} for run ${runId.slice(0, 8)} (${stored})`));
+    });
+
+  runs
+    .command("artifact-verify <run-id>")
+    .description("Verify locally stored run artifact content against recorded checksums")
+    .action(async (runId: string) => {
+      const globalOpts = program.opts();
+      const { verifyTaskRunArtifacts } = await import("../../db/task-runs.js");
+      const reports = verifyTaskRunArtifacts(runId);
+      if (globalOpts.json) { output(reports, true); return; }
+      for (const report of reports) {
+        const color = report.status === "ok" || report.status === "metadata_only" ? chalk.green : chalk.red;
+        console.log(color(`${report.status.padEnd(13)} ${report.path} ${report.message}`));
+      }
+      if (reports.some(report => report.status === "missing" || report.status === "mismatch")) {
+        process.exit(1);
+      }
     });
 
   runs

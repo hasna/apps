@@ -491,7 +491,23 @@ export {
   redactEvidenceText,
   resolveTaskRunId,
   startTaskRun,
+  verifyTaskRunArtifacts,
 } from "./db/task-runs.js";
+export {
+  artifactStorePath,
+  artifactStoreRoot,
+  exportStoredArtifactContent,
+  importStoredArtifactContent,
+  storeArtifactContent,
+  verifyStoredArtifact,
+} from "./lib/artifact-store.js";
+export type {
+  ArtifactIntegrityReport,
+  ArtifactIntegrityStatus,
+  ExportedArtifactContent,
+  StoredArtifactContent,
+  StoredArtifactMetadata,
+} from "./lib/artifact-store.js";
 export type {
   TaskRun,
   TaskRunArtifact,

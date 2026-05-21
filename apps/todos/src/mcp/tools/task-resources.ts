@@ -28,6 +28,7 @@ import {
   getTaskRunLedger,
   listTaskRuns,
   startTaskRun,
+  verifyTaskRunArtifacts,
 } from "../../db/task-runs.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
@@ -507,7 +508,7 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
   if (shouldRegisterTool("add_task_run_artifact")) {
     server.tool(
       "add_task_run_artifact",
-      "Record local artifact metadata for a run without uploading artifact content.",
+      "Record a local artifact for a run in the content-addressed store, or metadata only when content is unavailable.",
       {
         run_id: z.string().describe("Run ID or prefix"),
         path: z.string().describe("Local artifact path"),
@@ -516,12 +517,30 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         size_bytes: z.number().optional().describe("Artifact size in bytes"),
         sha256: z.string().optional().describe("SHA-256 checksum"),
         metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+        store_content: z.boolean().optional().describe("Copy local file content into the content-addressed store. true fails if the file is missing; false records metadata only."),
+        retention_days: z.number().optional().describe("Retention period for stored content metadata"),
         agent_id: z.string().optional().describe("Agent adding the artifact"),
       },
-      async ({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, agent_id }) => {
+      async ({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, store_content, retention_days, agent_id }) => {
         try {
-          const artifact = addTaskRunArtifact({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, agent_id });
+          const artifact = addTaskRunArtifact({ run_id, path, artifact_type, description, size_bytes, sha256, metadata, store_content, retention_days, agent_id });
           return { content: [{ type: "text" as const, text: JSON.stringify(artifact, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("verify_task_run_artifacts")) {
+    server.tool(
+      "verify_task_run_artifacts",
+      "Verify locally stored run artifact content against recorded checksums.",
+      {
+        run_id: z.string().describe("Run ID or prefix"),
+      },
+      async ({ run_id }) => {
+        try {
+          const reports = verifyTaskRunArtifacts(run_id);
+          return { content: [{ type: "text" as const, text: JSON.stringify(reports, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );
