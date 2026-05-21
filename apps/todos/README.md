@@ -405,6 +405,21 @@ MCP clients get the same local data through `link_task_to_commit`,
 `add_task_verification`, and `get_task_traceability`, so agents can explain
 which task changed a commit, branch, PR, file, or verification command.
 
+## Local Release Notes
+
+Generate changelogs from completed local tasks and their linked plans, commits,
+verification records, breaking-change notes, and migration notes:
+
+```bash
+todos release-notes --project . --format markdown
+todos release-notes --tag release --since 2026-01-01T00:00:00.000Z --json
+```
+
+Tasks can add release metadata through `metadata.breaking_change`,
+`metadata.breaking_changes`, `metadata.migration_note`, or
+`metadata.migration_notes`. MCP clients use `generate_release_notes` for the
+same deterministic JSON or Markdown output without hosted release tooling.
+
 ## Local Verification Providers
 
 Optional provider adapters let agents standardize local verification without a

@@ -19,6 +19,7 @@ import { captureEnvironmentSnapshot, compareEnvironmentSnapshots } from "./lib/e
 import { buildCodebaseIndex, extractTodos } from "./lib/extract.js";
 import { resetConfig } from "./lib/config.js";
 import { getTaskLocalFields, setTaskLocalFields } from "./lib/local-fields.js";
+import { generateReleaseNotes } from "./lib/release-notes.js";
 import { findDuplicateTasks, mergeDuplicateTask } from "./lib/task-dedupe.js";
 import { runVerificationProvider, upsertVerificationProvider } from "./lib/verification-providers.js";
 import { createHandoff } from "./db/handoffs.js";
@@ -96,6 +97,7 @@ describe("stable JSON contracts", () => {
       "local_activity_timeline_entry",
       "status_summary",
       "context_pack",
+      "release_notes",
       "source_todo_comment",
       "source_code_index",
       "calendar_event",
@@ -232,6 +234,16 @@ describe("stable JSON contracts", () => {
     const timeline = getLocalActivityTimeline({ entity_type: "task", entity_id: task.id }, db);
     const status = getStatus({ project_id: project.id }, undefined, { explain_blocked: true }, db);
     const contextPack = createAgentContextPack({ task_id: task.id, profile: "codex" }, db);
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ?, metadata = ? WHERE id = ?", [
+      "2026-01-02T03:30:00.000Z",
+      JSON.stringify({ breaking_change: "Contract output changed", migration_note: "Refresh contract fixtures" }),
+      task.id,
+    ]);
+    const releaseNotes = generateReleaseNotes({
+      project_id: project.id,
+      title: "Contracts Release",
+      generated_at: "2026-01-02T04:00:00.000Z",
+    }, db);
     const sourceRoot = mkdtempSync(join(tmpdir(), "todos-contract-source-"));
     writeFileSync(join(sourceRoot, "app.ts"), "function runPlan() {\n  // TODO: Verify source contracts\n}\n");
     const sourceComment = extractTodos({ path: sourceRoot, dry_run: true }).comments[0]!;
@@ -271,6 +283,7 @@ describe("stable JSON contracts", () => {
     expectValid("local_activity_timeline_entry", timeline.entries[0]);
     expectValid("status_summary", status);
     expectValid("context_pack", contextPack);
+    expectValid("release_notes", releaseNotes);
     expectValid("source_todo_comment", sourceComment);
     expectValid("source_code_index", sourceIndex);
     expectValid("calendar_event", calendarEvent);

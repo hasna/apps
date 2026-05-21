@@ -1615,6 +1615,52 @@ export function registerQueryCommands(program: Command) {
     });
 
   program
+    .command("release-notes")
+    .description("Generate local release notes and changelog output from completed tasks")
+    .option("--project <id>", "Project filter")
+    .option("--plan <id>", "Plan filter")
+    .option("--task <ids>", "Comma-separated task IDs or prefixes")
+    .option("--tag <tag>", "Only include completed tasks with a tag")
+    .option("--since <iso>", "Only include tasks completed at or after this ISO timestamp")
+    .option("--until <iso>", "Only include tasks completed at or before this ISO timestamp")
+    .option("--title <text>", "Release notes title", "Release Notes")
+    .option("--version <version>", "Release version label")
+    .option("--format <format>", "Output format: markdown or json", "markdown")
+    .option("--out <path>", "Write output to a local file")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const globalOpts = program.opts();
+        const format = (opts.json || globalOpts.json) ? "json" : opts.format;
+        if (!["markdown", "json"].includes(format)) {
+          console.error(chalk.red("Invalid --format. Allowed values: markdown, json."));
+          process.exit(1);
+        }
+        const { generateReleaseNotes, renderReleaseNotesMarkdown } = await import("../../lib/release-notes.js");
+        const projectInput = opts.project || globalOpts.project;
+        const document = generateReleaseNotes({
+          project_id: autoProject({ project: projectInput }) || resolveProjectOption(projectInput),
+          plan_id: resolveOptionalId("plans", opts.plan),
+          task_ids: opts.task ? String(opts.task).split(",").map((id) => resolveTaskId(id.trim())).filter(Boolean) : undefined,
+          tag: opts.tag,
+          since: opts.since,
+          until: opts.until,
+          title: opts.title,
+          version: opts.version,
+        });
+        const content = format === "json" ? JSON.stringify(document, null, 2) : renderReleaseNotesMarkdown(document);
+        if (opts.out) {
+          writeFileSync(opts.out, content);
+          if (format !== "json") console.log(chalk.green(`Wrote release notes to ${opts.out}`));
+          return;
+        }
+        console.log(content);
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
     .command("context-pack <task-id>")
     .description("Build a deterministic local agent context pack for a task")
     .option("--profile <profile>", "Agent profile: codex, claude, takumi, generic", "generic")

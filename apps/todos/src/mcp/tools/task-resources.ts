@@ -47,6 +47,10 @@ import {
   runVerificationProvider,
   upsertVerificationProvider,
 } from "../../lib/verification-providers.js";
+import {
+  generateReleaseNotes,
+  renderReleaseNotesMarkdown,
+} from "../../lib/release-notes.js";
 import { simulateAgentReplay } from "../../lib/agent-replay-simulator.js";
 import {
   inspectExtensionSource,
@@ -513,6 +517,38 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const trace = getTaskTraceability(resolveId(task_id));
           return { content: [{ type: "text" as const, text: JSON.stringify(trace, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("generate_release_notes")) {
+    server.tool(
+      "generate_release_notes",
+      "Generate deterministic local release notes or changelog JSON/Markdown from completed tasks, linked commits, plans, and verification evidence.",
+      {
+        project_id: z.string().optional().describe("Project ID"),
+        plan_id: z.string().optional().describe("Plan ID"),
+        task_ids: z.array(z.string()).optional().describe("Specific task IDs or prefixes"),
+        tag: z.string().optional().describe("Only include completed tasks with this tag"),
+        since: z.string().optional().describe("Only include tasks completed at or after this ISO timestamp"),
+        until: z.string().optional().describe("Only include tasks completed at or before this ISO timestamp"),
+        title: z.string().optional().describe("Release notes title"),
+        version: z.string().optional().describe("Release version label"),
+        format: z.enum(["json", "markdown"]).optional().describe("Response format"),
+      },
+      async (input) => {
+        try {
+          const document = generateReleaseNotes({
+            ...input,
+            project_id: input.project_id ? resolveId(input.project_id, "projects") : undefined,
+            plan_id: input.plan_id ? resolveId(input.plan_id, "plans") : undefined,
+            task_ids: input.task_ids?.map((id) => resolveId(id)),
+          });
+          const text = input.format === "markdown"
+            ? renderReleaseNotesMarkdown(document)
+            : JSON.stringify(document, null, 2);
+          return { content: [{ type: "text" as const, text }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

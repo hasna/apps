@@ -152,6 +152,15 @@ by `--include`, `--exclude`, or budget pruning. The estimate is intentionally
 simple and offline (`chars_div_4`) so CLI and MCP callers get repeatable compact
 JSON or Markdown without hosted summarization.
 
+## Release Notes
+
+`release_notes` is the stable local changelog document returned by
+`todos release-notes --json` and `generate_release_notes`. It is generated from
+completed local tasks plus linked plans, commits, verification records,
+breaking-change metadata, and migration-note metadata. Markdown rendering uses
+the same JSON object, so CLI, MCP, and SDK consumers can compare outputs
+deterministically without hosted release tooling.
+
 ## Local Calendar And ICS
 
 `calendar_event` is the stable event object returned by `todos calendar list

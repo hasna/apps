@@ -671,6 +671,17 @@ export type {
   CreateAgentContextPackInput,
 } from "./lib/context-packs.js";
 export {
+  generateReleaseNotes,
+  renderReleaseNotesMarkdown,
+} from "./lib/release-notes.js";
+export type {
+  GenerateReleaseNotesInput,
+  ReleaseNotesDocument,
+  ReleaseNotesPlan,
+  ReleaseNotesScope,
+  ReleaseNotesTask,
+} from "./lib/release-notes.js";
+export {
   renderAgentReplaySimulationMarkdown,
   simulateAgentReplay,
   simulateAgentReplayFile,

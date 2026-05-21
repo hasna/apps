@@ -83,6 +83,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             request_task_review: "request_task_review — Request review for a task. Params: task_id, requester, reviewer, notes",
             record_task_review: "record_task_review — Record approved, changes_requested, or reopened review state. Params: task_id, state, reviewer, notes, changes_requested",
             check_task_done_contract: "check_task_done_contract — Check status, verification evidence, artifacts, and review state against the local task contract. Params: task_id",
+            generate_release_notes: "generate_release_notes — Generate local release notes/changelog JSON or Markdown from completed tasks, plans, commits, and verification evidence. Params: project_id, plan_id, task_ids, tag, since, until, title, version, format",
             bootstrap_project: "bootstrap_project — Discover a local workspace and initialize project identity, default task list, and source metadata. Params: path, name, task_list_slug, dry_run",
             create_project: "create_project — Create a project. Params: name, description, status, short_id, metadata",
             list_projects: "list_projects — List projects. Params: status, limit",

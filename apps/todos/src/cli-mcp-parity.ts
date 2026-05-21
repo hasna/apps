@@ -28,6 +28,7 @@ export type TodosCliMcpParityDomain =
   | "comments"
   | "search"
   | "context-packs"
+  | "release-notes"
   | "environment-snapshots"
   | "imports"
   | "exports";
@@ -795,6 +796,18 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     gapReason: "Local bridge import can mutate many local records, so the CLI keeps it explicit with dry-run by default. MCP callers can still create inbox items and templates through smaller scoped tools.",
     example: {
       cli: "todos bridge-import todos-bridge.json --apply --json",
+    },
+  },
+  {
+    domain: "release-notes",
+    cliCommands: ["todos release-notes"],
+    mcpTools: ["generate_release_notes"],
+    jsonContracts: ["release_notes", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos release-notes --project . --format markdown",
+      mcpTool: "generate_release_notes",
     },
   },
   {

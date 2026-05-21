@@ -69,6 +69,8 @@ structured error contracts.
   report, graph, context, and recent activity workflows.
 - `context-packs`: deterministic Markdown/JSON local context bundles for agent
   run starts.
+- `release-notes`: local changelog generation from completed tasks, plans,
+  linked commits, verification records, breaking changes, and migration notes.
 - `imports`: template imports, inbox intake, and local bridge imports.
 - `exports`: template exports, traceability exports, verification records, and
   local bridge exports.
@@ -365,6 +367,19 @@ Matching MCP tools:
 
 ```json
 { "tool": "compare_environment_snapshots", "arguments": { "left_path": "before.json", "right_path": "after.json" } }
+```
+
+CLI release notes:
+
+```bash
+todos release-notes --project . --format markdown
+todos release-notes --tag release --since 2026-01-01T00:00:00.000Z --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "generate_release_notes", "arguments": { "tag": "release", "format": "json" } }
 ```
 
 CLI session handoff:

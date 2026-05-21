@@ -921,6 +921,48 @@ describe("MCP tool wrappers", () => {
     expect(refs[0].task_id).toBe(task.id);
   });
 
+  it("release notes tool renders local changelog evidence", async () => {
+    const tools = captureTools(registerTaskResources);
+    const project = createProject({ name: "MCP Release", path: "/tmp/mcp-release" }, db);
+    const task = createTask({
+      title: "Publish MCP release notes",
+      project_id: project.id,
+      tags: ["release"],
+      metadata: { migration_note: "Consumers should read release_notes JSON." },
+    }, db);
+    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [
+      "2026-01-02T03:04:05.000Z",
+      task.id,
+    ]);
+
+    await callCapturedTool(tools, "link_task_to_commit", {
+      task_id: task.id,
+      sha: "1111111222222223333333444444445555555566",
+      message: "Publish release notes",
+    });
+    await callCapturedTool(tools, "add_task_verification", {
+      task_id: task.id,
+      command: "bun test src/lib/release-notes.test.ts",
+      status: "passed",
+    });
+
+    const jsonResult = await callCapturedTool(tools, "generate_release_notes", {
+      project_id: project.id,
+      tag: "release",
+      title: "MCP Release Notes",
+    });
+    const payload = JSON.parse(jsonResult.content[0]!.text);
+    expect(payload.summary.tasks).toBe(1);
+    expect(payload.commits[0].sha).toBe("1111111222222223333333444444445555555566");
+
+    const markdownResult = await callCapturedTool(tools, "generate_release_notes", {
+      project_id: project.id,
+      format: "markdown",
+    });
+    expect(markdownResult.content[0]!.text).toContain("# Release Notes");
+    expect(markdownResult.content[0]!.text).toContain("Publish MCP release notes");
+  });
+
   it("verification provider tools manage local adapters and record evidence", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

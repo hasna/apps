@@ -144,6 +144,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "find_task_by_commit",
     "find_tasks_by_file",
     "find_tasks_by_git_ref",
+    "generate_release_notes",
     "add_task_verification",
     "add_task_run_artifact",
     "add_task_run_command",

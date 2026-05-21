@@ -39,6 +39,7 @@ const expectedDomains = [
   "context-packs",
   "environment-snapshots",
   "imports",
+  "release-notes",
   "exports",
 ];
 
@@ -162,6 +163,8 @@ describe("CLI/MCP parity manifest", () => {
       "environment_snapshot",
       "environment_snapshot_comparison",
     ]));
+    expect(byDomain.get("release-notes")?.mcpTools).toContain("generate_release_notes");
+    expect(byDomain.get("release-notes")?.jsonContracts).toContain("release_notes");
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
   });
@@ -191,6 +194,7 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");
     expect(docs).toContain("todos event-hooks set audit --event task.completed");
     expect(docs).toContain("todos env-snapshot capture --task 1234abcd --json");
+    expect(docs).toContain("todos release-notes --project . --format markdown");
     expect(docs).toContain("intentionally CLI-only");
   });
 
