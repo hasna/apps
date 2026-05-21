@@ -669,6 +669,42 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should export and import todos.md markdown through the CLI", async () => {
+    const sourceDb = "/tmp/test-cli-todos-md-source.db";
+    const targetDb = "/tmp/test-cli-todos-md-target.db";
+    const markdownPath = "/tmp/test-cli-todos.md";
+    const { unlinkSync } = await import("node:fs");
+    for (const path of [sourceDb, targetDb, markdownPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+
+    const task = JSON.parse((await runCli(["add", "Markdown portable task", "--tag", "md", "--json"], sourceDb)).stdout);
+    const exported = await runCli(["export", "--format", "todos.md", "--output", markdownPath], sourceDb);
+    expect(exported.exitCode).toBe(0);
+    const markdown = await Bun.file(markdownPath).text();
+    expect(markdown).toContain("schema: hasna.todos.md/v1");
+    expect(markdown).toContain("- [ ] Markdown portable task");
+    expect(markdown).toContain("hasna.todos.bridge");
+
+    const preview = await runCli(["todos-md-import", markdownPath, "--json"], targetDb);
+    expect(preview.exitCode).toBe(0);
+    const previewResult = JSON.parse(preview.stdout);
+    expect(previewResult.mode).toBe("embedded_bridge");
+    expect(previewResult.dry_run).toBe(true);
+    expect(previewResult.inserted.tasks).toBe(1);
+
+    const applied = await runCli(["todos-md-import", markdownPath, "--apply", "--json"], targetDb);
+    expect(applied.exitCode).toBe(0);
+    expect(JSON.parse(applied.stdout).inserted.tasks).toBe(1);
+    const tasks = JSON.parse((await runCli(["list", "--json"], targetDb)).stdout);
+    expect(tasks[0].id).toBe(task.id);
+    expect(tasks[0].title).toBe("Markdown portable task");
+
+    for (const path of [sourceDb, targetDb, markdownPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
+      try { unlinkSync(path); } catch {}
+    }
+  });
+
   it("should encrypt and decrypt local bridge bundles through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-bridge-encrypted-source.db";
     const targetDb = "/tmp/test-cli-bridge-encrypted-target.db";

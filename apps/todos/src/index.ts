@@ -737,6 +737,13 @@ export type {
   TodosLocalBridgePackageSource,
   TodosLocalBridgeSource,
 } from "./lib/local-bridge.js";
+export {
+  TODOS_MARKDOWN_BRIDGE_MARKER,
+  TODOS_MARKDOWN_SCHEMA,
+  exportTodosMarkdown,
+  importTodosMarkdown,
+} from "./lib/todos-md.js";
+export type { ImportTodosMarkdownOptions, TodosMarkdownImportResult } from "./lib/todos-md.js";
 export { getLocalActivityTimeline } from "./lib/activity-timeline.js";
 export type {
   LocalActivityTimelineEntityType,
