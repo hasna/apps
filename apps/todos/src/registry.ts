@@ -1,5 +1,7 @@
 import { createCapabilityManifest } from "./capabilities.js";
 import type { TodosCapabilityManifest } from "./capabilities.js";
+import { createCliMcpParityManifest } from "./cli-mcp-parity.js";
+import type { TodosCliMcpParityManifest } from "./cli-mcp-parity.js";
 import { createContractsManifest } from "./contracts.js";
 import type { TodosContractsManifest } from "./contracts.js";
 import { getPackageVersion } from "./lib/package-version.js";
@@ -34,6 +36,7 @@ export interface TodosRegistry {
   capabilities: TodosCapabilityManifest;
   contracts: TodosContractsManifest;
   mcp: TodosMcpManifest;
+  cliMcpParity: TodosCliMcpParityManifest;
 }
 
 export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
@@ -101,6 +104,7 @@ export function createTodosRegistry(options: CreateTodosRegistryOptions = {}): T
     capabilities: createCapabilityManifest({ version, generatedAt }),
     contracts: createContractsManifest({ version, generatedAt }),
     mcp: createMcpManifest({ version, generatedAt }),
+    cliMcpParity: createCliMcpParityManifest({ version, generatedAt }),
   };
 }
 

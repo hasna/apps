@@ -64,6 +64,22 @@ export type {
   TodosMcpToolContract,
 } from "./mcp.js";
 
+// CLI/MCP parity contract
+export {
+  TODOS_CLI_MCP_PARITY,
+  TODOS_CLI_MCP_PARITY_MANIFEST,
+  createCliMcpParityManifest,
+} from "./cli-mcp-parity.js";
+export type {
+  CreateCliMcpParityManifestOptions,
+  TodosCliMcpParityDomain,
+  TodosCliMcpParityEntry,
+  TodosCliMcpParityGap,
+  TodosCliMcpParityManifest,
+  TodosCliMcpParityPackageSource,
+  TodosCliMcpParityStatus,
+} from "./cli-mcp-parity.js";
+
 // Package registry manifest
 export { TODOS_PACKAGE_EXPORTS, TODOS_REGISTRY, createTodosRegistry } from "./registry.js";
 export type {

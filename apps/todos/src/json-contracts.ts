@@ -378,6 +378,22 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
     },
     optional: {},
   }),
+  contract({
+    id: "cli_mcp_parity_manifest",
+    name: "CLI/MCP Parity Manifest",
+    description: "Versioned local manifest mapping supported CLI domains to MCP tools, JSON contracts, and documented intentional gaps.",
+    surfaces: ["cli", "mcp", "sdk"],
+    stability: "stable",
+    required: {
+      schemaVersion: field("integer", "Parity manifest schema version."),
+      generatedAt: isoDateField,
+      package: field("object", "Package source metadata."),
+      localOnly: field("boolean", "True when the manifest describes local-only package behavior."),
+      noNetworkRequired: field("boolean", "True when manifest generation does not require network access."),
+      parity: field("array", "Domain-level CLI/MCP parity entries."),
+    },
+    optional: {},
+  }),
 ];
 
 function expectedTypes(contract: TodosJsonFieldContract): readonly TodosJsonFieldType[] {

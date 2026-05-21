@@ -28,6 +28,7 @@ The stable contracts cover these object IDs:
 - `api_error`
 - `local_bridge_bundle`
 - `local_bridge_import_result`
+- `cli_mcp_parity_manifest`
 
 ## Evolution Rules
 
@@ -67,3 +68,10 @@ and verification records.
 `local_bridge_import_result` is returned by dry-run and applied imports. It
 reports inserted counts, skipped counts, conflicts, and validation issues so a
 caller can inspect what would change before writing to local SQLite.
+
+## CLI/MCP Parity Manifest
+
+`cli_mcp_parity_manifest` is the stable machine-readable shape for the
+side-effect-free CLI/MCP parity registry. It records local-only package metadata,
+the covered task/project/plan/run/comment/search/import/export domains, matching
+MCP tools, JSON contracts, error contracts, and intentional gaps.
