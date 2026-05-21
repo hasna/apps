@@ -280,6 +280,27 @@ use `set_verification_provider`, `list_verification_providers`,
 `get_verification_provider_capabilities`, `run_verification_provider`, and
 `remove_verification_provider` for the same local-only workflow.
 
+## Local Agent Handoffs
+
+Handoffs let one local agent leave continuation context for another without a
+hosted inbox. A handoff records the session, referenced tasks, relevant files,
+run ids, completed work, current blockers, and next steps. Readers can filter
+for unread handoffs and acknowledge them per agent:
+
+```bash
+todos handoff --create --agent codex --session codex-42 --summary "Parser work ready for review" --tasks <task-id> --files src/parser.ts --runs <run-id> --next "Review failing fixture" --json
+todos handoff --unread-for claude --json
+todos handoff --read <handoff-id> --json
+todos handoff --ack <handoff-id> --agent claude --json
+todos handoff --recover --agent codex --session codex-42 --json
+```
+
+MCP clients can use `create_handoff`, `list_handoffs`, `read_handoff`,
+`acknowledge_handoff`, `recover_stale_session_handoff`, and
+`get_latest_handoff`. Recovery handoffs inspect local in-progress tasks, file
+links, and run evidence for the agent/session and create a deterministic
+continuation packet; no hosted queue or cloud service is involved.
+
 ## Local Run Ledger
 
 Agent runs can record local evidence without uploading artifacts or calling a

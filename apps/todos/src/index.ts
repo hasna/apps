@@ -297,8 +297,15 @@ export {
 } from "./db/checklists.js";
 
 // Handoffs
-export { createHandoff, listHandoffs, getLatestHandoff } from "./db/handoffs.js";
-export type { Handoff, CreateHandoffInput } from "./db/handoffs.js";
+export {
+  acknowledgeHandoff,
+  createHandoff,
+  createSessionRecoveryHandoff,
+  getHandoff,
+  getLatestHandoff,
+  listHandoffs,
+} from "./db/handoffs.js";
+export type { CreateHandoffInput, CreateSessionRecoveryHandoffInput, Handoff, ListHandoffsOptions } from "./db/handoffs.js";
 
 // Task Files
 export { addTaskFile, getTaskFile, listTaskFiles, findTasksByFile, updateTaskFileStatus, removeTaskFile, bulkAddTaskFiles } from "./db/task-files.js";

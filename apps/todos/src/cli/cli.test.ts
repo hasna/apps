@@ -810,42 +810,54 @@ describe("CLI integration", () => {
 
   it("should create and list handoffs", async () => {
     const { unlinkSync } = await import("node:fs");
-    try { unlinkSync("/tmp/test-cli-handoff.db"); } catch {}
-    try { unlinkSync("/tmp/test-cli-handoff.db-shm"); } catch {}
-    try { unlinkSync("/tmp/test-cli-handoff.db-wal"); } catch {}
+    const dbPath = "/tmp/test-cli-handoff.db";
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
 
-    const createProc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "handoff", "--create", "--agent", "test", "--summary", "Test handoff", "--json"],
-      {
-        cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-handoff.db", TODOS_AUTO_PROJECT: "false" },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const createOut = await new Response(createProc.stdout).text();
-    await createProc.exited;
-    const handoff = JSON.parse(createOut);
+    const taskResult = await runCli(["add", "Handoff task", "--json"], dbPath);
+    const task = JSON.parse(taskResult.stdout);
+    const createResult = await runCli([
+      "handoff",
+      "--create",
+      "--agent",
+      "test",
+      "--session",
+      "session-1",
+      "--summary",
+      "Test handoff",
+      "--tasks",
+      task.id,
+      "--files",
+      "src/cli/index.tsx",
+      "--runs",
+      "run-1",
+      "--json",
+    ], dbPath);
+    expect(createResult.exitCode).toBe(0);
+    const handoff = JSON.parse(createResult.stdout);
     expect(handoff.agent_id).toBe("test");
     expect(handoff.summary).toBe("Test handoff");
+    expect(handoff.session_id).toBe("session-1");
+    expect(handoff.task_ids).toEqual([task.id]);
+    expect(handoff.relevant_files).toEqual(["src/cli/index.tsx"]);
+    expect(handoff.run_ids).toEqual(["run-1"]);
 
-    const listProc = Bun.spawn(
-      ["bun", "run", "src/cli/index.tsx", "handoff", "--json"],
-      {
-        cwd: import.meta.dir + "/../..",
-        env: { ...process.env, TODOS_DB_PATH: "/tmp/test-cli-handoff.db", TODOS_AUTO_PROJECT: "false" },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const listOut = await new Response(listProc.stdout).text();
-    await listProc.exited;
-    const handoffs = JSON.parse(listOut);
+    const readResult = await runCli(["handoff", "--read", handoff.id.slice(0, 8), "--json"], dbPath);
+    expect(JSON.parse(readResult.stdout).id).toBe(handoff.id);
+
+    const listResult = await runCli(["handoff", "--unread-for", "reviewer", "--json"], dbPath);
+    const handoffs = JSON.parse(listResult.stdout);
     expect(handoffs.length).toBe(1);
 
-    try { unlinkSync("/tmp/test-cli-handoff.db"); } catch {}
-    try { unlinkSync("/tmp/test-cli-handoff.db-shm"); } catch {}
-    try { unlinkSync("/tmp/test-cli-handoff.db-wal"); } catch {}
+    const ackResult = await runCli(["handoff", "--ack", handoff.id, "--agent", "reviewer", "--json"], dbPath);
+    expect(JSON.parse(ackResult.stdout).acknowledged_by).toEqual(["reviewer"]);
+    const unreadResult = await runCli(["handoff", "--unread-for", "reviewer", "--json"], dbPath);
+    expect(JSON.parse(unreadResult.stdout)).toHaveLength(0);
+
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
   });
 
   it("should run overdue command", async () => {

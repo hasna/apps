@@ -15,6 +15,7 @@ export type TodosCliMcpParityDomain =
   | "local-event-hooks"
   | "encryption"
   | "agent-runs"
+  | "handoffs"
   | "runs"
   | "comments"
   | "search"
@@ -410,6 +411,32 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos agent-runs queue 1234abcd --adapter codex --json",
       mcpTool: "queue_agent_run",
+    },
+  },
+  {
+    domain: "handoffs",
+    cliCommands: [
+      "todos handoff",
+      "todos handoff --create",
+      "todos handoff --read",
+      "todos handoff --ack",
+      "todos handoff --recover",
+    ],
+    mcpTools: [
+      "create_handoff",
+      "list_handoffs",
+      "read_handoff",
+      "acknowledge_handoff",
+      "recover_stale_session_handoff",
+      "get_latest_handoff",
+    ],
+    jsonContracts: ["handoff", "task", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    intentionalGaps: [],
+    example: {
+      cli: "todos handoff --create --agent codex --summary \"Parser work ready for review\" --tasks 1234abcd --files src/parser.ts --runs run123 --json",
+      mcpTool: "create_handoff",
     },
   },
   {

@@ -39,6 +39,9 @@ structured error contracts.
   bridge export/import workflows.
 - `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
   previews, cancellation, retries, and run-ledger evidence.
+- `handoffs`: local session continuation records with referenced tasks, files,
+  runs, next steps, blockers, stale-session recovery, and per-agent
+  acknowledgement state.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
   finish records.
 - `comments`: task comments, progress notes, and unified local activity
@@ -207,6 +210,24 @@ Matching MCP tool:
 
 ```json
 { "tool": "build_agent_context_pack", "arguments": { "task_id": "1234abcd", "profile": "codex", "format": "markdown" } }
+```
+
+CLI session handoff:
+
+```bash
+todos handoff --create --agent codex --summary "Parser work ready for review" --tasks 1234abcd --files src/parser.ts --runs run123 --json
+todos handoff --unread-for reviewer --json
+todos handoff --ack handoff123 --agent reviewer --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "create_handoff", "arguments": { "agent_id": "codex", "summary": "Parser work ready for review", "task_ids": ["1234abcd"], "relevant_files": ["src/parser.ts"], "run_ids": ["run123"] } }
+```
+
+```json
+{ "tool": "acknowledge_handoff", "arguments": { "handoff_id": "handoff123", "agent_id": "reviewer" } }
 ```
 
 CLI bridge export:

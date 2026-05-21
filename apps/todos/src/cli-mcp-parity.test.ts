@@ -23,6 +23,7 @@ const expectedDomains = [
   "approval-gates",
   "runs",
   "agent-runs",
+  "handoffs",
   "local-event-hooks",
   "encryption",
   "comments",
@@ -128,6 +129,14 @@ describe("CLI/MCP parity manifest", () => {
       "run_verification_provider",
     ]));
     expect(byDomain.get("verification-providers")?.jsonContracts).toEqual(expect.arrayContaining(["verification_provider", "verification_provider_result"]));
+    expect(byDomain.get("handoffs")?.mcpTools).toEqual(expect.arrayContaining([
+      "create_handoff",
+      "list_handoffs",
+      "read_handoff",
+      "acknowledge_handoff",
+      "recover_stale_session_handoff",
+    ]));
+    expect(byDomain.get("handoffs")?.jsonContracts).toContain("handoff");
     expect(byDomain.get("search")?.mcpTools).toEqual(expect.arrayContaining(["search_tasks", "get_status"]));
     expect(byDomain.get("imports")?.jsonContracts).toContain("local_bridge_import_result");
     expect(byDomain.get("exports")?.jsonContracts).toContain("local_bridge_bundle");
@@ -150,6 +159,8 @@ describe("CLI/MCP parity manifest", () => {
     expect(docs).toContain("todos fields set 1234abcd --labels bug,cli --severity s1 --field component=parser --json");
     expect(docs).toContain("todos dedupe scan --threshold 0.8 --json");
     expect(docs).toContain("todos verify-providers run local --task 1234abcd --json");
+    expect(docs).toContain("todos handoff --create --agent codex");
+    expect(docs).toContain("acknowledge_handoff");
     expect(docs).toContain("create_task");
     expect(docs).toContain("todos export --format bridge --output todos-bridge.json --json");
     expect(docs).toContain("todos bridge-import todos-bridge.json --apply --json");

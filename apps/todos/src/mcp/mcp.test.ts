@@ -4,6 +4,7 @@ import { addDependency, createTask, getTask, listTasks, completeTask, startTask 
 import { createProject } from "../db/projects.js";
 import { addComment, listComments } from "../db/comments.js";
 import { addTaskRunEvent, startTaskRun } from "../db/task-runs.js";
+import { addTaskFile } from "../db/task-files.js";
 import { resetConfig } from "../lib/config.js";
 import { searchTasks } from "../lib/search.js";
 import type { Task } from "../types/index.js";
@@ -613,13 +614,43 @@ describe("MCP tool wrappers", () => {
 
   it("relationship tools resolve their database imports from the tools directory", async () => {
     const tools = captureTools(registerTaskRelTools);
+    const task = createTask({ title: "MCP handoff task", assigned_to: "mcp", agent_id: "mcp", session_id: "mcp-session" }, db);
+    startTask(task.id, "mcp", db);
+    addTaskFile({ task_id: task.id, path: "src/mcp/tools/task-rel-tools.ts", agent_id: "mcp" }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "mcp", title: "MCP handoff run" }, db);
 
-    await callCapturedTool(tools, "create_handoff", {
+    const createdResult = await callCapturedTool(tools, "create_handoff", {
       agent_id: "mcp",
       summary: "Wrapper handoff",
       completed: ["one"],
       next_steps: ["two"],
+      session_id: "mcp-session",
+      task_ids: [task.id],
+      relevant_files: ["src/mcp/tools/task-rel-tools.ts"],
+      run_ids: [run.id],
     });
+    const created = JSON.parse(createdResult.content[0].text);
+    expect(created.task_ids).toEqual([task.id]);
+    expect(created.relevant_files).toEqual(["src/mcp/tools/task-rel-tools.ts"]);
+
+    const listResult = await callCapturedTool(tools, "list_handoffs", { unread_for: "reviewer" });
+    expect(JSON.parse(listResult.content[0].text)).toHaveLength(1);
+
+    const readResult = await callCapturedTool(tools, "read_handoff", { handoff_id: created.id.slice(0, 8) });
+    expect(JSON.parse(readResult.content[0].text).id).toBe(created.id);
+
+    const ackResult = await callCapturedTool(tools, "acknowledge_handoff", { handoff_id: created.id, agent_id: "reviewer" });
+    expect(JSON.parse(ackResult.content[0].text).acknowledged_by).toEqual(["reviewer"]);
+
+    const recoveryResult = await callCapturedTool(tools, "recover_stale_session_handoff", {
+      agent_id: "mcp",
+      session_id: "mcp-session",
+      recovered_by: "reviewer",
+      reason: "wrapper recovery",
+    });
+    const recovery = JSON.parse(recoveryResult.content[0].text);
+    expect(recovery.task_ids).toEqual([task.id]);
+    expect(recovery.run_ids).toEqual([run.id]);
   });
 
   it("git traceability tools link refs, commits, and verification evidence", async () => {

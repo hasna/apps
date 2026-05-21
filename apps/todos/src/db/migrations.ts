@@ -979,4 +979,19 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items(status);
   INSERT OR IGNORE INTO _migrations (id) VALUES (53);
   `,
+  // Migration 54: Rich local handoffs and per-agent acknowledgement state
+  `
+  ALTER TABLE handoffs ADD COLUMN session_id TEXT;
+  ALTER TABLE handoffs ADD COLUMN task_ids TEXT;
+  ALTER TABLE handoffs ADD COLUMN relevant_files TEXT;
+  ALTER TABLE handoffs ADD COLUMN run_ids TEXT;
+  CREATE TABLE IF NOT EXISTS handoff_acknowledgements (
+    handoff_id TEXT NOT NULL REFERENCES handoffs(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    acknowledged_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (handoff_id, agent_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_handoff_acks_agent ON handoff_acknowledgements(agent_id, acknowledged_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (54);
+  `,
 ];

@@ -173,6 +173,31 @@ export function ensureSchema(db: Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
 
+  ensureTable("handoffs", `
+    CREATE TABLE handoffs (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      session_id TEXT,
+      summary TEXT NOT NULL,
+      completed TEXT,
+      in_progress TEXT,
+      blockers TEXT,
+      next_steps TEXT,
+      task_ids TEXT,
+      relevant_files TEXT,
+      run_ids TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureTable("handoff_acknowledgements", `
+    CREATE TABLE handoff_acknowledgements (
+      handoff_id TEXT NOT NULL REFERENCES handoffs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      acknowledged_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (handoff_id, agent_id)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_handoff_acks_agent ON handoff_acknowledgements(agent_id, acknowledged_at)");
+
   ensureTable("task_relationships", `
     CREATE TABLE task_relationships (
       id TEXT PRIMARY KEY,
@@ -497,6 +522,10 @@ export function ensureSchema(db: Database): void {
   ensureColumn("orgs", "synced_at", "TEXT");
   ensureColumn("handoffs", "machine_id", "TEXT");
   ensureColumn("handoffs", "synced_at", "TEXT");
+  ensureColumn("handoffs", "session_id", "TEXT");
+  ensureColumn("handoffs", "task_ids", "TEXT");
+  ensureColumn("handoffs", "relevant_files", "TEXT");
+  ensureColumn("handoffs", "run_ids", "TEXT");
   ensureColumn("task_checklists", "machine_id", "TEXT");
   ensureColumn("project_sources", "machine_id", "TEXT");
   ensureColumn("project_sources", "synced_at", "TEXT");
