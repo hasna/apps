@@ -144,6 +144,13 @@ export interface LocalEncryptionProfileConfig {
   updated_at?: string;
 }
 
+export interface SecretSafetyConfig {
+  /** Additional local regex patterns to redact from comments, evidence, and exports. */
+  redaction_patterns?: string[];
+  /** Additional metadata/object key names whose values should be fully redacted. */
+  redaction_keys?: string[];
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
@@ -174,6 +181,8 @@ export interface TodosConfig {
   local_event_hooks?: Record<string, LocalEventHookConfig>;
   /** Local encryption profiles. Profiles store key references and nonsecret KDF salt only. */
   encryption_profiles?: Record<string, LocalEncryptionProfileConfig>;
+  /** Local secret safety settings for offline redaction and export scanning. */
+  secret_safety?: SecretSafetyConfig;
 }
 
 function getTodosGlobalDir(): string {

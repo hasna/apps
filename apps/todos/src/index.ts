@@ -744,6 +744,19 @@ export {
   verifyTaskRunArtifacts,
 } from "./db/task-runs.js";
 export {
+  getSecretSafetyConfig,
+  hasSecretFindings,
+  listSecretFindings,
+  redactValue,
+  upsertSecretSafetyConfig,
+} from "./lib/redaction.js";
+export type {
+  SecretFinding,
+} from "./lib/redaction.js";
+export type {
+  SecretSafetyConfig,
+} from "./lib/config.js";
+export {
   artifactStorePath,
   artifactStoreRoot,
   exportStoredArtifactContent,

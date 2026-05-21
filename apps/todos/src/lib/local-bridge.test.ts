@@ -10,6 +10,7 @@ import { createTaskList } from "../db/task-lists.js";
 import { linkTaskGitRef, linkTaskToCommit } from "../db/task-commits.js";
 import { addDependency, createTask, getTask, listTasks } from "../db/tasks.js";
 import { addTaskRunArtifact, addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun, verifyTaskRunArtifacts } from "../db/task-runs.js";
+import { resetConfig, saveConfig } from "./config.js";
 import {
   TODOS_LOCAL_BRIDGE_KIND,
   createLocalBridgeBundle,
@@ -21,6 +22,7 @@ import { getSearchView, saveSearchView } from "./saved-search-views.js";
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
   process.env["HASNA_TODOS_ARTIFACTS_DIR"] = mkdtempSync(join(tmpdir(), "todos-bridge-artifacts-"));
+  resetConfig();
   resetDatabase();
   getDatabase();
 });
@@ -30,6 +32,7 @@ afterEach(() => {
   rmSync(process.env["HASNA_TODOS_ARTIFACTS_DIR"] || "", { recursive: true, force: true });
   delete process.env["TODOS_DB_PATH"];
   delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+  resetConfig();
 });
 
 describe("local bridge import/export", () => {
@@ -100,6 +103,38 @@ describe("local bridge import/export", () => {
     });
     expect(bundle.artifact_contents).toHaveLength(1);
     expect(validateLocalBridgeBundle(bundle).ok).toBe(true);
+  });
+
+  test("redacts configured secret patterns from bridge exports", () => {
+    saveConfig({
+      secret_safety: {
+        redaction_patterns: ["INTERNAL-[0-9]{4}"],
+        redaction_keys: ["license"],
+      },
+    });
+    const db = getDatabase();
+    const project = createProject({ name: "Bridge", path: "/tmp/bridge" }, db);
+    const task = createTask({
+      title: "Export safely",
+      project_id: project.id,
+      description: "contains INTERNAL-1234",
+      metadata: { license: "commercial-secret", note: "INTERNAL-5678" },
+    }, db);
+    db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "raw-comment",
+      task.id,
+      "legacy INTERNAL-9999",
+      "comment",
+      "2026-01-02T03:04:05.000Z",
+    ]);
+
+    const bundle = createLocalBridgeBundle({ project_id: project.id }, db);
+    const exported = JSON.stringify(bundle);
+
+    expect(exported).not.toContain("INTERNAL-");
+    expect(exported).not.toContain("commercial-secret");
+    expect(bundle.data.comments[0]!.content).toBe("legacy [REDACTED]");
+    expect(bundle.data.tasks[0]!.metadata.license).toBe("[REDACTED]");
   });
 
   test("previews conflicts without mutation and imports missing records when applied", () => {

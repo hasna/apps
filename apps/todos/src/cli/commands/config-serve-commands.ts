@@ -152,10 +152,6 @@ export function registerConfigServeCommands(program: Command) {
       console.log(result.ok ? chalk.green("Encryption profile works.") : chalk.red("Encryption profile failed."));
     });
 
-  const trust = program
-    .command("trust")
-    .description("Manage local workspace trust and permission profiles");
-
   function listOption(value: string | undefined): string[] | undefined {
     return value?.split(",").map((item) => item.trim()).filter(Boolean);
   }
@@ -170,6 +166,62 @@ export function registerConfigServeCommands(program: Command) {
     });
     return pairs.length > 0 ? Object.fromEntries(pairs) : undefined;
   }
+
+  const redaction = program
+    .command("redaction")
+    .description("Manage local secret redaction patterns and scans");
+
+  redaction
+    .command("status")
+    .description("Show local secret redaction configuration")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { getSecretSafetyConfig } = await import("../../lib/redaction.js");
+      const config = getSecretSafetyConfig();
+      if (globalOpts.json) { output(config, true); return; }
+      console.log(chalk.bold("Secret redaction"));
+      console.log(`  ${chalk.dim("Patterns:")} ${config.redaction_patterns?.join(", ") || "(defaults only)"}`);
+      console.log(`  ${chalk.dim("Keys:")}     ${config.redaction_keys?.join(", ") || "(defaults only)"}`);
+    });
+
+  redaction
+    .command("add")
+    .description("Add local secret redaction regex patterns or object key names")
+    .option("--pattern <list>", "Comma-separated regex patterns to redact from text")
+    .option("--key <list>", "Comma-separated metadata/object key names to redact")
+    .action(async (opts: { pattern?: string; key?: string }) => {
+      const globalOpts = program.opts();
+      const { upsertSecretSafetyConfig } = await import("../../lib/redaction.js");
+      const config = upsertSecretSafetyConfig({
+        redaction_patterns: listOption(opts.pattern),
+        redaction_keys: listOption(opts.key),
+      });
+      if (globalOpts.json) { output(config, true); return; }
+      console.log(chalk.green("Secret redaction config updated."));
+    });
+
+  redaction
+    .command("scan [text]")
+    .description("Scan text or a file for secret-like values without printing values")
+    .option("--file <path>", "File to scan")
+    .action(async (text: string | undefined, opts: { file?: string }) => {
+      const globalOpts = program.opts();
+      const { listSecretFindings } = await import("../../lib/redaction.js");
+      const value = opts.file ? readFileSync(opts.file, "utf-8") : text || "";
+      const findings = listSecretFindings(value);
+      if (globalOpts.json) { output({ ok: findings.length === 0, findings }, true); return; }
+      if (findings.length === 0) {
+        console.log(chalk.green("No secret-like values detected."));
+        return;
+      }
+      console.log(chalk.yellow(`${findings.length} secret pattern(s) detected.`));
+      for (const finding of findings) console.log(`  - ${finding.pattern}: ${finding.count}`);
+      process.exitCode = 1;
+    });
+
+  const trust = program
+    .command("trust")
+    .description("Manage local workspace trust and permission profiles");
 
   trust
     .command("list")

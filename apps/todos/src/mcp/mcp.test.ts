@@ -198,6 +198,41 @@ describe("MCP tool operations", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("secret safety tools manage local redaction and scan without exposing values", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-redaction-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    const tools = captureTools(registerTaskProjectTools);
+
+    const savedResult = await callCapturedTool(tools, "set_secret_safety", {
+      redaction_patterns: ["INTERNAL-[0-9]{4}"],
+      redaction_keys: ["license"],
+    });
+    expect(JSON.parse(savedResult.content[0]!.text).redaction_keys).toEqual(["license"]);
+
+    const statusResult = await callCapturedTool(tools, "get_secret_safety", {});
+    expect(JSON.parse(statusResult.content[0]!.text).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
+
+    const scanResult = await callCapturedTool(tools, "scan_secret_text", { text: "INTERNAL-1234 TOKEN=secretsecret" });
+    const scan = JSON.parse(scanResult.content[0]!.text);
+    expect(scan.ok).toBe(false);
+    expect(scan.findings.map((finding: { pattern: string }) => finding.pattern)).toEqual(expect.arrayContaining([
+      "custom:INTERNAL-[0-9]{4}",
+      "env-secret-assignment",
+    ]));
+    expect(scanResult.content[0]!.text).not.toContain("INTERNAL-1234");
+    expect(scanResult.content[0]!.text).not.toContain("secretsecret");
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
   it("runner sandbox tools manage local command safety profiles", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

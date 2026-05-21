@@ -29,6 +29,11 @@ import {
 import { resolveTaskRunId } from "../../db/task-runs.js";
 import { bootstrapProject } from "../../lib/project-bootstrap.js";
 import {
+  getSecretSafetyConfig,
+  listSecretFindings,
+  upsertSecretSafetyConfig,
+} from "../../lib/redaction.js";
+import {
   checkWorkspacePermission,
   getWorkspaceTrustStatus,
   listWorkspaceTrustProfiles,
@@ -87,6 +92,51 @@ interface TaskProjectContext {
 
 export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask } = ctx;
+
+  if (shouldRegisterTool("get_secret_safety")) {
+    server.tool("get_secret_safety", "Show local secret redaction configuration.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(getSecretSafetyConfig(), null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+      }
+    });
+  }
+
+  if (shouldRegisterTool("set_secret_safety")) {
+    server.tool(
+      "set_secret_safety",
+      "Add local secret redaction regex patterns or object key names.",
+      {
+        redaction_patterns: z.array(z.string()).optional(),
+        redaction_keys: z.array(z.string()).optional(),
+      },
+      async ({ redaction_patterns, redaction_keys }) => {
+        try {
+          const config = upsertSecretSafetyConfig({ redaction_patterns, redaction_keys });
+          return { content: [{ type: "text" as const, text: JSON.stringify(config, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("scan_secret_text")) {
+    server.tool(
+      "scan_secret_text",
+      "Scan text for secret-like values and return counts without exposing values.",
+      { text: z.string() },
+      async ({ text }) => {
+        try {
+          const findings = listSecretFindings(text);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: findings.length === 0, findings }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
 
   function versionFor(taskId: string, version?: number): number {
     const current = getTask(taskId);

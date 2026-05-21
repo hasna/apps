@@ -10,6 +10,7 @@ export type TodosCliMcpParityDomain =
   | "plans"
   | "templates"
   | "workspace-trust"
+  | "secret-safety"
   | "runner-sandbox"
   | "policy-packs"
   | "approval-gates"
@@ -309,6 +310,26 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos trust check . --command \"bun test\" --write src/index.ts --json",
       mcpTool: "check_workspace_permission",
+    },
+  },
+  {
+    domain: "secret-safety",
+    cliCommands: [
+      "todos redaction status",
+      "todos redaction add",
+      "todos redaction scan",
+    ],
+    mcpTools: [
+      "get_secret_safety",
+      "set_secret_safety",
+      "scan_secret_text",
+    ],
+    jsonContracts: ["structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos redaction scan \"TOKEN=value\" --json",
+      mcpTool: "scan_secret_text",
     },
   },
   {

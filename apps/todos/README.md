@@ -72,6 +72,13 @@ MCP clients can use `set_workspace_trust`, `get_workspace_trust`,
 return deterministic JSON showing whether an action is allowed, why it needs a
 prompt, and which environment keys should be redacted.
 
+Secret safety uses the same local config. Add project-specific regexes and
+metadata keys with `todos redaction add --pattern <regex> --key <name>`, then
+scan text or files with `todos redaction scan` without printing matched values.
+Comments, local run evidence, and bridge exports are redacted before storage or
+sharing. MCP clients can use `get_secret_safety`, `set_secret_safety`, and
+`scan_secret_text`.
+
 ## Local Runner Sandboxes
 
 Runner sandbox profiles also live in local config. They declare the commands a

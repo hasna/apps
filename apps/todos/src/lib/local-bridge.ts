@@ -9,6 +9,7 @@ import type { TaskFile } from "../db/task-files.js";
 import type { TaskRun, TaskRunArtifact, TaskRunCommand, TaskRunEvent } from "../db/task-runs.js";
 import type { SavedSearchView } from "./saved-search-views.js";
 import { appendSyncConflict } from "./sync-utils.js";
+import { redactValue } from "./redaction.js";
 
 export const TODOS_LOCAL_BRIDGE_KIND = "hasna.todos.local-bridge";
 export const TODOS_LOCAL_BRIDGE_SCHEMA_VERSION = 1;
@@ -256,7 +257,7 @@ export function createLocalBridgeBundle(
   const project = options.project_id
     ? d.query("SELECT * FROM projects WHERE id = ?").get(options.project_id) as Project | null
     : null;
-  const data: TodosLocalBridgeData = {
+  const data: TodosLocalBridgeData = redactValue({
     projects: options.project_id
       ? (project ? [project] : [])
       : d.query("SELECT * FROM projects ORDER BY name").all() as Project[],
@@ -320,7 +321,7 @@ export function createLocalBridgeBundle(
     saved_views: (options.project_id
       ? d.query("SELECT * FROM saved_search_views WHERE json_extract(filters, '$.project_id') = ? ORDER BY name").all(options.project_id) as Record<string, unknown>[]
       : d.query("SELECT * FROM saved_search_views ORDER BY name").all() as Record<string, unknown>[]).map(rowToSavedView),
-  };
+  }) as TodosLocalBridgeData;
 
   const artifactContents = data.run_artifacts
     .map((artifact) => exportStoredArtifactContent({

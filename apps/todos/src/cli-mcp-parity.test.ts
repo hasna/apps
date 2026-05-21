@@ -19,6 +19,7 @@ const expectedDomains = [
   "plans",
   "templates",
   "workspace-trust",
+  "secret-safety",
   "runner-sandbox",
   "policy-packs",
   "approval-gates",

@@ -90,6 +90,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "get_plan",
     "validate_policy_pack",
     "get_project",
+    "get_secret_safety",
     "get_task_list",
     "get_workspace_trust",
     "list_approval_gates",
@@ -109,6 +110,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "reject_approval_gate",
     "require_approval_gate",
     "set_focus",
+    "set_secret_safety",
     "set_encryption_profile",
     "set_local_event_hook",
     "set_policy_pack",
@@ -122,6 +124,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "get_encryption_status",
     "encrypt_local_value",
     "decrypt_local_value",
+    "scan_secret_text",
   ],
   resources: [
     "add_task_dependency",

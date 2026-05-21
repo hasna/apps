@@ -1129,6 +1129,37 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should manage local secret redaction from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-redaction.db";
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-redaction-home-"));
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    try { unlinkSync(dbPath); } catch {}
+
+    const added = await runCli(["redaction", "add", "--pattern", "INTERNAL-[0-9]{4}", "--key", "license", "--json"], dbPath);
+    expect(added.exitCode).toBe(0);
+    expect(JSON.parse(added.stdout).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
+
+    const scan = await runCli(["redaction", "scan", "INTERNAL-1234 TOKEN=secretsecret", "--json"], dbPath);
+    expect(scan.exitCode).toBe(0);
+    const payload = JSON.parse(scan.stdout);
+    expect(payload.ok).toBe(false);
+    expect(payload.findings.map((finding: { pattern: string }) => finding.pattern)).toEqual(expect.arrayContaining([
+      "custom:INTERNAL-[0-9]{4}",
+      "env-secret-assignment",
+    ]));
+    expect(scan.stdout).not.toContain("INTERNAL-1234");
+    expect(scan.stdout).not.toContain("secretsecret");
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    rmSync(home, { recursive: true, force: true });
+    try { unlinkSync(dbPath); } catch {}
+  });
+
   it("should manage local runner sandbox profiles and guard run commands", async () => {
     const dbPath = "/tmp/test-cli-sandbox.db";
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
