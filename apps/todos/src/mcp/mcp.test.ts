@@ -498,6 +498,40 @@ describe("MCP tool wrappers", () => {
     expect(runs[0].id).toBe(run.id);
   });
 
+  it("agent run dispatcher tools queue and dry-run local adapters", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-agent-runs-home-"));
+    process.env["HOME"] = home;
+    resetConfig();
+
+    const tools = captureTools(registerTaskResources);
+    const task = createTask({ title: "Queued from MCP" }, db);
+    const adapterResult = await callCapturedTool(tools, "set_agent_run_adapter", { name: "codex", command: "printf ok" });
+    expect(JSON.parse(adapterResult.content[0]!.text).name).toBe("codex");
+
+    const queuedResult = await callCapturedTool(tools, "queue_agent_run", { task_id: task.id, adapter: "codex", agent_id: "codex" });
+    const queued = JSON.parse(queuedResult.content[0]!.text);
+    expect(queued.dispatcher.state).toBe("queued");
+
+    const dryRunResult = await callCapturedTool(tools, "run_next_agent_dispatch", { dry_run: true });
+    expect(JSON.parse(dryRunResult.content[0]!.text).dry_run).toBe(true);
+
+    const listResult = await callCapturedTool(tools, "list_agent_run_queue", {});
+    expect(JSON.parse(listResult.content[0]!.text)[0].run.id).toBe(queued.run.id);
+
+    await callCapturedTool(tools, "cancel_agent_run_dispatch", { run_id: queued.run.id });
+    await callCapturedTool(tools, "retry_agent_run_dispatch", { run_id: queued.run.id });
+    await callCapturedTool(tools, "remove_agent_run_adapter", { name: "codex" });
+
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+    resetConfig();
+    rmSync(home, { recursive: true, force: true });
+  });
+
   it("inbox tools capture and dedupe local failure intake", async () => {
     const tools = captureTools(registerTaskResources);
 

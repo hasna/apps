@@ -747,6 +747,146 @@ exit 0
       console.log(chalk.green(`Finished run ${run.id.slice(0, 8)} as ${run.status}`));
     });
 
+  const agentRuns = program
+    .command("agent-runs")
+    .description("Queue and dispatch local agent runs");
+
+  agentRuns
+    .command("adapter-set <name>")
+    .description("Create or update a local agent run adapter")
+    .option("--command <command>", "Local command template. Supports {task_id}, {run_id}, and {agent_id}")
+    .option("--sandbox <name>", "Runner sandbox profile to check before launch")
+    .option("--cwd <path>", "Command working directory")
+    .option("--env <json>", "Static adapter environment as a JSON object")
+    .action(async (name: string, opts: { command?: string; sandbox?: string; cwd?: string; env?: string }) => {
+      const globalOpts = program.opts();
+      if (!opts.command) {
+        console.error(chalk.red("--command is required"));
+        process.exit(1);
+      }
+      const { upsertAgentRunAdapter } = await import("../../lib/agent-run-dispatcher.js");
+      const adapter = upsertAgentRunAdapter({
+        name,
+        command: opts.command,
+        sandbox: opts.sandbox,
+        cwd: opts.cwd,
+        env: parseJsonOption(opts.env, "--env") as Record<string, string> | undefined,
+      });
+      if (globalOpts.json) { output(adapter, true); return; }
+      console.log(chalk.green(`Saved agent run adapter ${adapter.name}`));
+    });
+
+  agentRuns
+    .command("adapters")
+    .description("List local agent run adapters")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listAgentRunAdapters } = await import("../../lib/agent-run-dispatcher.js");
+      const adapters = listAgentRunAdapters();
+      if (globalOpts.json) { output(adapters, true); return; }
+      if (adapters.length === 0) {
+        console.log(chalk.dim("No agent run adapters configured."));
+        return;
+      }
+      for (const adapter of adapters) console.log(`${adapter.name.padEnd(12)} ${adapter.command}`);
+    });
+
+  agentRuns
+    .command("adapter-remove <name>")
+    .description("Remove a local agent run adapter")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeAgentRunAdapter } = await import("../../lib/agent-run-dispatcher.js");
+      const removed = removeAgentRunAdapter(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Adapter removed.") : chalk.dim("No adapter matched."));
+    });
+
+  agentRuns
+    .command("queue <task-id>")
+    .description("Queue a local agent run for a task")
+    .option("--adapter <name>", "Configured adapter name")
+    .option("--command <command>", "Custom command template")
+    .option("--sandbox <name>", "Runner sandbox profile")
+    .option("--cwd <path>", "Command working directory")
+    .option("--agent <name>", "Agent identity for the run")
+    .option("--title <text>", "Run title")
+    .option("--summary <text>", "Run summary")
+    .option("--metadata <json>", "Additional metadata")
+    .option("--claim", "Claim/start the task before queueing")
+    .action(async (taskId: string, opts: { adapter?: string; command?: string; sandbox?: string; cwd?: string; agent?: string; title?: string; summary?: string; metadata?: string; claim?: boolean }) => {
+      const globalOpts = program.opts();
+      const { queueAgentRun } = await import("../../lib/agent-run-dispatcher.js");
+      const queued = queueAgentRun({
+        task_id: resolveTaskId(taskId),
+        adapter: opts.adapter,
+        command: opts.command,
+        sandbox: opts.sandbox,
+        cwd: opts.cwd,
+        agent_id: opts.agent || globalOpts.agent,
+        title: opts.title,
+        summary: opts.summary,
+        metadata: parseJsonOption(opts.metadata, "--metadata"),
+        claim: opts.claim,
+      });
+      if (globalOpts.json) { output(queued, true); return; }
+      console.log(chalk.green(`Queued agent run ${queued.run.id.slice(0, 8)} for task ${taskId}`));
+    });
+
+  agentRuns
+    .command("list")
+    .description("List queued local agent runs")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listAgentRunQueue } = await import("../../lib/agent-run-dispatcher.js");
+      const queue = listAgentRunQueue();
+      if (globalOpts.json) { output(queue, true); return; }
+      if (queue.length === 0) {
+        console.log(chalk.dim("No agent runs queued."));
+        return;
+      }
+      for (const item of queue) console.log(`${item.run.id.slice(0, 8)} ${item.dispatcher.state.padEnd(9)} ${item.dispatcher.adapter || "custom"} ${item.run.task_id}`);
+    });
+
+  agentRuns
+    .command("run-next")
+    .description("Run the next queued local agent dispatch")
+    .option("--adapter <name>", "Only run queue entries for this adapter")
+    .option("--dry-run", "Return the command that would run without executing it")
+    .action(async (opts: { adapter?: string; dryRun?: boolean }) => {
+      const globalOpts = program.opts();
+      const { runNextAgentDispatch } = await import("../../lib/agent-run-dispatcher.js");
+      const result = await runNextAgentDispatch({ adapter: opts.adapter, dry_run: opts.dryRun });
+      if (globalOpts.json) { output(result, true); return; }
+      if (!result) {
+        console.log(chalk.dim("No queued agent run matched."));
+        return;
+      }
+      console.log(`${result.status} ${result.run_id.slice(0, 8)} ${result.command}`);
+    });
+
+  agentRuns
+    .command("cancel <run-id>")
+    .description("Cancel a queued or running local agent dispatch")
+    .action(async (runId: string) => {
+      const globalOpts = program.opts();
+      const { cancelAgentRunDispatch } = await import("../../lib/agent-run-dispatcher.js");
+      const result = cancelAgentRunDispatch(runId);
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(chalk.yellow(`Cancelled agent run ${result.run.id.slice(0, 8)}`));
+    });
+
+  agentRuns
+    .command("retry <run-id>")
+    .description("Queue a retry for a previous local agent dispatch")
+    .action(async (runId: string) => {
+      const globalOpts = program.opts();
+      const { retryAgentRunDispatch } = await import("../../lib/agent-run-dispatcher.js");
+      const result = retryAgentRunDispatch(runId);
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(chalk.green(`Queued retry ${result.run.id.slice(0, 8)} for ${runId}`));
+    });
+
   // hook install/uninstall
   const hookCmd = program.command("hook").description("Manage git hooks for auto-linking commits to tasks");
 

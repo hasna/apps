@@ -30,6 +30,16 @@ import {
   startTaskRun,
   verifyTaskRunArtifacts,
 } from "../../db/task-runs.js";
+import {
+  cancelAgentRunDispatch,
+  listAgentRunAdapters,
+  listAgentRunQueue,
+  queueAgentRun,
+  removeAgentRunAdapter,
+  retryAgentRunDispatch,
+  runNextAgentDispatch,
+  upsertAgentRunAdapter,
+} from "../../lib/agent-run-dispatcher.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
 interface TaskResourcesContext {
@@ -574,6 +584,121 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const ledger = getTaskRunLedger(run_id);
           return { content: [{ type: "text" as const, text: JSON.stringify(ledger, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("set_agent_run_adapter")) {
+    server.tool(
+      "set_agent_run_adapter",
+      "Create or update a local agent run adapter command. Supports {task_id}, {run_id}, and {agent_id} placeholders.",
+      {
+        name: z.string(),
+        command: z.string(),
+        sandbox: z.string().optional(),
+        cwd: z.string().optional(),
+        env: z.record(z.string()).optional(),
+      },
+      async (input) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(upsertAgentRunAdapter(input), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_agent_run_adapters")) {
+    server.tool("list_agent_run_adapters", "List configured local agent run adapters.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listAgentRunAdapters(), null, 2) }] };
+      } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+    });
+  }
+
+  if (shouldRegisterTool("remove_agent_run_adapter")) {
+    server.tool(
+      "remove_agent_run_adapter",
+      "Remove a configured local agent run adapter.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeAgentRunAdapter(name) }, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("queue_agent_run")) {
+    server.tool(
+      "queue_agent_run",
+      "Queue a local agent run for a task and attach a run ledger ID. Does not call hosted runners.",
+      {
+        task_id: z.string(),
+        agent_id: z.string().optional(),
+        adapter: z.string().optional(),
+        command: z.string().optional(),
+        sandbox: z.string().optional(),
+        cwd: z.string().optional(),
+        title: z.string().optional(),
+        summary: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+        claim: z.boolean().optional(),
+      },
+      async ({ task_id, ...input }) => {
+        try {
+          const queued = queueAgentRun({ ...input, task_id: resolveId(task_id) });
+          return { content: [{ type: "text" as const, text: JSON.stringify(queued, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_agent_run_queue")) {
+    server.tool("list_agent_run_queue", "List local agent run dispatch queue entries.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listAgentRunQueue(), null, 2) }] };
+      } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+    });
+  }
+
+  if (shouldRegisterTool("run_next_agent_dispatch")) {
+    server.tool(
+      "run_next_agent_dispatch",
+      "Run the next queued local agent dispatch, optionally as a dry-run.",
+      {
+        adapter: z.string().optional(),
+        dry_run: z.boolean().optional(),
+      },
+      async (input) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(await runNextAgentDispatch(input), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("cancel_agent_run_dispatch")) {
+    server.tool(
+      "cancel_agent_run_dispatch",
+      "Cancel a queued or running local agent dispatch.",
+      { run_id: z.string() },
+      async ({ run_id }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(cancelAgentRunDispatch(run_id), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("retry_agent_run_dispatch")) {
+    server.tool(
+      "retry_agent_run_dispatch",
+      "Queue a retry for a previous local agent dispatch.",
+      { run_id: z.string() },
+      async ({ run_id }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(retryAgentRunDispatch(run_id), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

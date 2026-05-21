@@ -73,6 +73,27 @@ MCP clients can use `set_runner_sandbox_profile`,
 are local-only and compose with workspace trust checks, so command and write
 decisions stay auditable before an agent records run evidence.
 
+## Local Agent Run Queue
+
+Agent run adapters and queue entries are local. Queueing a task creates a run
+ledger immediately, then `run-next` launches the configured command template
+with `{task_id}`, `{run_id}`, and `{agent_id}` placeholders. Dry-runs show the
+command without execution, and cancellation/retry are recorded in the same local
+run ledger:
+
+```bash
+todos agent-runs adapter-set codex --command "codex exec --task {task_id}" --sandbox codex
+todos agent-runs queue <task-id> --adapter codex --agent codex --claim --json
+todos agent-runs run-next --dry-run --json
+todos agent-runs run-next --json
+todos agent-runs retry <run-id>
+```
+
+MCP clients can use `set_agent_run_adapter`, `queue_agent_run`,
+`list_agent_run_queue`, `run_next_agent_dispatch`,
+`cancel_agent_run_dispatch`, and `retry_agent_run_dispatch`. These commands
+launch only local processes and do not call hosted runners.
+
 ## Local Dependency Workflows
 
 Dependencies are stored in the local SQLite database and never require hosted

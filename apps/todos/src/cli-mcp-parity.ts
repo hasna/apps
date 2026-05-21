@@ -7,6 +7,7 @@ export type TodosCliMcpParityDomain =
   | "plans"
   | "workspace-trust"
   | "runner-sandbox"
+  | "agent-runs"
   | "runs"
   | "comments"
   | "search"
@@ -256,6 +257,36 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos runs start 1234abcd --agent codex --json",
       mcpTool: "start_task_run",
+    },
+  },
+  {
+    domain: "agent-runs",
+    cliCommands: [
+      "todos agent-runs adapter-set",
+      "todos agent-runs adapters",
+      "todos agent-runs adapter-remove",
+      "todos agent-runs queue",
+      "todos agent-runs list",
+      "todos agent-runs run-next",
+      "todos agent-runs cancel",
+      "todos agent-runs retry",
+    ],
+    mcpTools: [
+      "set_agent_run_adapter",
+      "list_agent_run_adapters",
+      "remove_agent_run_adapter",
+      "queue_agent_run",
+      "list_agent_run_queue",
+      "run_next_agent_dispatch",
+      "cancel_agent_run_dispatch",
+      "retry_agent_run_dispatch",
+    ],
+    jsonContracts: ["checkpoint", "structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos agent-runs queue 1234abcd --adapter codex --json",
+      mcpTool: "queue_agent_run",
     },
   },
   {

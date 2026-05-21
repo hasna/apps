@@ -382,6 +382,7 @@ export {
 export type {
   TodosConfig,
   AgentConfig,
+  AgentRunAdapterConfig,
   CompletionGuardConfig,
   LocalApiConfig,
   RunnerSandboxNetworkPolicy,
@@ -410,6 +411,25 @@ export {
   removeRunnerSandboxProfile,
   upsertRunnerSandboxProfile,
 } from "./lib/runner-sandbox.js";
+export {
+  cancelAgentRunDispatch,
+  listAgentRunAdapters,
+  listAgentRunQueue,
+  queueAgentRun,
+  removeAgentRunAdapter,
+  retryAgentRunDispatch,
+  runNextAgentDispatch,
+  upsertAgentRunAdapter,
+} from "./lib/agent-run-dispatcher.js";
+export type {
+  AgentRunDispatchMetadata,
+  AgentRunDispatchState,
+  QueueAgentRunInput,
+  QueuedAgentRun,
+  RunAgentDispatchResult,
+  RunNextAgentDispatchInput,
+  UpsertAgentRunAdapterInput,
+} from "./lib/agent-run-dispatcher.js";
 export type {
   RunnerSandboxCheck,
   RunnerSandboxCheckInput,

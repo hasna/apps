@@ -23,6 +23,8 @@ structured error contracts.
   write scopes, env redaction declarations, and prompt-required decisions.
 - `runner-sandbox`: local runner command allowlists, cwd boundaries, write
   scopes, env allowlists, network policy, audit evidence, and dry-run explains.
+- `agent-runs`: local adapter definitions, queued agent runs, dry-run launch
+  previews, cancellation, retries, and run-ledger evidence.
 - `runs`: local task-run ledgers, events, commands, files, artifacts, and
   finish records.
 - `comments`: task comments, progress notes, and activity entries.
@@ -68,6 +70,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "check_runner_sandbox", "arguments": { "name": "codex", "command": "bun test", "write_paths": ["src/index.ts"] } }
+```
+
+CLI agent run queue:
+
+```bash
+todos agent-runs queue 1234abcd --adapter codex --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "queue_agent_run", "arguments": { "task_id": "1234abcd", "adapter": "codex" } }
 ```
 
 CLI bridge export:

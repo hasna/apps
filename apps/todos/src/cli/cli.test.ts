@@ -787,4 +787,35 @@ describe("CLI integration", () => {
     rmSync(home, { recursive: true, force: true });
     try { unlinkSync(dbPath); } catch {}
   });
+
+  it("should queue and run local agent dispatches", async () => {
+    const dbPath = "/tmp/test-cli-agent-runs.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    const adapter = await runCli(["agent-runs", "adapter-set", "codex", "--command", "printf dispatched", "--json"], dbPath);
+    expect(adapter.exitCode).toBe(0);
+    expect(JSON.parse(adapter.stdout).name).toBe("codex");
+
+    const task = JSON.parse((await runCli(["add", "Queued agent task", "--json"], dbPath)).stdout);
+    const queued = await runCli(["agent-runs", "queue", task.id, "--adapter", "codex", "--agent", "codex", "--json"], dbPath);
+    expect(queued.exitCode).toBe(0);
+    const queuedPayload = JSON.parse(queued.stdout);
+    expect(queuedPayload.dispatcher.state).toBe("queued");
+
+    const dryRun = await runCli(["agent-runs", "run-next", "--dry-run", "--json"], dbPath);
+    expect(dryRun.exitCode).toBe(0);
+    expect(JSON.parse(dryRun.stdout).dry_run).toBe(true);
+
+    const result = await runCli(["agent-runs", "run-next", "--json"], dbPath);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.status).toBe("completed");
+    expect(payload.output_summary).toContain("dispatched");
+
+    const removed = await runCli(["agent-runs", "adapter-remove", "codex", "--json"], dbPath);
+    expect(removed.exitCode).toBe(0);
+    expect(JSON.parse(removed.stdout).removed).toBe(true);
+    try { unlinkSync(dbPath); } catch {}
+  });
 });

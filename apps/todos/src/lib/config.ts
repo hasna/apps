@@ -57,6 +57,16 @@ export interface RunnerSandboxProfile {
   updated_at?: string;
 }
 
+export interface AgentRunAdapterConfig {
+  name: string;
+  command: string;
+  sandbox?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface TodosConfig {
   /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
   apiUrl?: string;
@@ -77,6 +87,8 @@ export interface TodosConfig {
   workspace_trust?: Record<string, WorkspaceTrustProfile>;
   /** Local runner sandbox profiles, keyed by profile name. */
   runner_sandboxes?: Record<string, RunnerSandboxProfile>;
+  /** Local agent run adapters, keyed by adapter name. */
+  agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
 }
 
 function getTodosGlobalDir(): string {
