@@ -994,4 +994,18 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_handoff_acks_agent ON handoff_acknowledgements(agent_id, acknowledged_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (54);
   `,
+  // Migration 55: Local saved search views and filters
+  `
+  CREATE TABLE IF NOT EXISTS saved_search_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    scope TEXT NOT NULL DEFAULT 'tasks' CHECK(scope IN ('all', 'tasks', 'projects', 'plans', 'runs', 'comments')),
+    filters TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_saved_search_views_scope ON saved_search_views(scope);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (55);
+  `,
 ];

@@ -1911,4 +1911,98 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
     );
   }
 
+  if (shouldRegisterTool("save_search_view")) {
+    server.tool(
+      "save_search_view",
+      "Save a local search view for tasks, projects, plans, runs, comments, or all records.",
+      {
+        name: z.string().describe("Saved view name"),
+        query: z.string().optional().describe("Search query"),
+        scope: z.enum(["all", "tasks", "projects", "plans", "runs", "comments"]).optional(),
+        description: z.string().optional(),
+        project_id: z.string().optional(),
+        status: z.union([z.string(), z.array(z.string())]).optional(),
+        priority: z.union([z.string(), z.array(z.string())]).optional(),
+        assigned_to: z.string().optional(),
+        agent_id: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        limit: z.number().optional(),
+      },
+      async ({ name, scope, description, ...filters }) => {
+        try {
+          const { saveSearchView } = require("../../lib/saved-search-views.js") as typeof import("../../lib/saved-search-views.js");
+          const view = saveSearchView({
+            name,
+            description,
+            scope,
+            filters: {
+              ...filters,
+              project_id: filters.project_id ? resolveId(filters.project_id, "projects") : undefined,
+            },
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(view, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_search_views")) {
+    server.tool(
+      "list_search_views",
+      "List local saved search views.",
+      {
+        scope: z.enum(["all", "tasks", "projects", "plans", "runs", "comments"]).optional(),
+      },
+      async ({ scope }) => {
+        try {
+          const { listSearchViews } = require("../../lib/saved-search-views.js") as typeof import("../../lib/saved-search-views.js");
+          const views = listSearchViews(scope);
+          return { content: [{ type: "text" as const, text: JSON.stringify(views, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("run_search_view")) {
+    server.tool(
+      "run_search_view",
+      "Run a local saved search view and return stable JSON results.",
+      {
+        name: z.string().describe("Saved view name or id"),
+      },
+      async ({ name }) => {
+        try {
+          const { runSearchView } = require("../../lib/saved-search-views.js") as typeof import("../../lib/saved-search-views.js");
+          const result = runSearchView(name);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("delete_search_view")) {
+    server.tool(
+      "delete_search_view",
+      "Delete a local saved search view.",
+      {
+        name: z.string().describe("Saved view name or id"),
+      },
+      async ({ name }) => {
+        try {
+          const { deleteSearchView } = require("../../lib/saved-search-views.js") as typeof import("../../lib/saved-search-views.js");
+          const deleted = deleteSearchView(name);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ deleted }, null, 2) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
 }

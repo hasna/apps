@@ -504,6 +504,10 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     domain: "search",
     cliCommands: [
       "todos search",
+      "todos views save",
+      "todos views list",
+      "todos views run",
+      "todos views delete",
       "todos status",
       "todos recap",
       "todos standup",
@@ -515,6 +519,10 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     ],
     mcpTools: [
       "search_tasks",
+      "save_search_view",
+      "list_search_views",
+      "run_search_view",
+      "delete_search_view",
       "get_status",
       "standup",
       "get_task_stats",
@@ -523,7 +531,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "get_task_graph",
       "get_recent_activity",
     ],
-    jsonContracts: ["task", "status_summary", "audit_history", "structured_error", "api_error"],
+    jsonContracts: ["task", "saved_search_view", "saved_search_run_result", "status_summary", "audit_history", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
     example: {

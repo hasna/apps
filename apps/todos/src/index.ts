@@ -349,6 +349,23 @@ export type { AgentMetrics, LeaderboardEntry } from "./db/agent-metrics.js";
 // Search
 export { searchTasks } from "./lib/search.js";
 export type { SearchOptions } from "./lib/search.js";
+export {
+  deleteSearchView,
+  getSearchView,
+  listSearchViews,
+  normalizeScope,
+  runSavedSearch,
+  runSearchView,
+  saveSearchView,
+} from "./lib/saved-search-views.js";
+export type {
+  SavedSearchFilters,
+  SavedSearchResult,
+  SavedSearchRunResult,
+  SavedSearchScope,
+  SavedSearchView,
+  SaveSearchViewInput,
+} from "./lib/saved-search-views.js";
 
 // Sync
 export { defaultSyncAgents, syncWithAgent, syncWithAgents } from "./lib/sync.js";

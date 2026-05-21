@@ -16,6 +16,7 @@ import {
   importLocalBridgeBundle,
   validateLocalBridgeBundle,
 } from "./local-bridge.js";
+import { getSearchView, saveSearchView } from "./saved-search-views.js";
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
@@ -63,6 +64,11 @@ describe("local bridge import/export", () => {
     finishTaskRun({ run_id: run.id, status: "completed", summary: "done" }, db);
     linkTaskToCommit({ task_id: first.id, sha: "abcdef123456", message: "feat: bridge" }, db);
     linkTaskGitRef({ task_id: first.id, ref_type: "branch", name: "task/bridge" }, db);
+    saveSearchView({
+      name: "bridge-view",
+      scope: "tasks",
+      filters: { project_id: project.id, tags: ["bridge"] },
+    }, db);
 
     const bundle = createLocalBridgeBundle({
       project_id: project.id,
@@ -90,6 +96,7 @@ describe("local bridge import/export", () => {
       task_commits: 1,
       task_git_refs: 1,
       task_verifications: 1,
+      saved_views: 1,
     });
     expect(bundle.artifact_contents).toHaveLength(1);
     expect(validateLocalBridgeBundle(bundle).ok).toBe(true);
@@ -121,6 +128,7 @@ describe("local bridge import/export", () => {
     expect(applied.dry_run).toBe(false);
     expect(applied.inserted.projects).toBe(1);
     expect(applied.inserted.tasks).toBe(1);
+    expect(applied.inserted.saved_views).toBe(0);
     expect(getTask(task.id, targetDb)).toMatchObject({
       id: task.id,
       title: "Portable task",
@@ -135,6 +143,34 @@ describe("local bridge import/export", () => {
       table: "tasks",
       id: task.id,
       reason: "already_exists",
+    });
+  });
+
+  test("exports and imports local saved search views", () => {
+    const sourceDb = getDatabase();
+    const project = createProject({ name: "Bridge views", path: "/tmp/bridge-views" }, sourceDb);
+    createTask({ title: "View task", project_id: project.id, tags: ["view"] }, sourceDb);
+    const view = saveSearchView({
+      name: "project-view",
+      description: "Local project task view",
+      scope: "tasks",
+      filters: { project_id: project.id, tags: ["view"] },
+    }, sourceDb);
+    const bundle = createLocalBridgeBundle({ project_id: project.id }, sourceDb);
+    expect(bundle.stats.saved_views).toBe(1);
+
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    const targetDb = getDatabase();
+
+    const applied = importLocalBridgeBundle(bundle, { dryRun: false }, targetDb);
+    expect(applied.inserted.saved_views).toBe(1);
+    expect(getSearchView(view.name, targetDb)).toMatchObject({
+      name: "project-view",
+      description: "Local project task view",
+      scope: "tasks",
+      filters: { project_id: project.id, tags: ["view"] },
     });
   });
 

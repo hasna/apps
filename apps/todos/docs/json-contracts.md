@@ -43,6 +43,8 @@ The stable contracts cover these object IDs:
 - `local_bridge_import_result`
 - `cli_mcp_parity_manifest`
 - `project_bootstrap_result`
+- `saved_search_view`
+- `saved_search_run_result`
 
 ## Evolution Rules
 
@@ -77,6 +79,19 @@ when present.
 `todos fields set --json`, `get_task_fields`, and `set_task_fields`. It keeps
 labels, priority, severity, owner, area, and custom local metadata in task
 metadata so bridge exports and imports carry it without any hosted dependency.
+
+## Saved Search Views
+
+`saved_search_view` is the stable object returned by `todos views save`,
+`todos views list`, `save_search_view`, and `list_search_views`. It stores a
+local name, scope, description, and filter object for repeatable task, project,
+plan, run, comment, or cross-entity searches.
+
+`saved_search_run_result` is returned by `todos views run`, cross-entity
+`todos search --scope ... --json`, and `run_search_view`. It contains the
+applied scope, filters, result count, and an array of `{ entity_type, entity }`
+records. Saved views are included in local bridge bundles and require no hosted
+service.
 
 ## Duplicate Tasks
 
@@ -139,7 +154,7 @@ stored as plaintext JSON.
 `@hasna/todos` data between stores. It contains versioned package metadata,
 source scope, grouped records for projects, task lists, plans, tasks,
 dependencies, comments, runs, run evidence, file evidence, git refs, commits,
-and verification records.
+verification records, and saved search views.
 
 `local_bridge_import_result` is returned by dry-run and applied imports. It
 reports inserted counts, skipped counts, conflicts, and validation issues so a

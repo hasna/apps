@@ -198,6 +198,18 @@ export function ensureSchema(db: Database): void {
     )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_handoff_acks_agent ON handoff_acknowledgements(agent_id, acknowledged_at)");
 
+  ensureTable("saved_search_views", `
+    CREATE TABLE saved_search_views (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      scope TEXT NOT NULL DEFAULT 'tasks' CHECK(scope IN ('all', 'tasks', 'projects', 'plans', 'runs', 'comments')),
+      filters TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_saved_search_views_scope ON saved_search_views(scope)");
+
   ensureTable("task_relationships", `
     CREATE TABLE task_relationships (
       id TEXT PRIMARY KEY,

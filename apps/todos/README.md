@@ -385,6 +385,26 @@ for existing filters, and the metadata is included in local bridge exports.
 MCP clients use `get_task_fields`, `set_task_fields`, and
 `query_tasks_by_fields` for the same local-only workflow.
 
+## Local Saved Search Views
+
+Saved views are local SQLite records for repeatable task, project, plan, run,
+comment, and cross-entity searches. They can filter by query text, project,
+task list, plan, task, status, priority, assignee, agent, tags, local fields,
+dependency direction, and time windows:
+
+```bash
+todos views save active-cli --query parser --status pending,in_progress --tag cli --field-area parser --json
+todos views list --json
+todos views run active-cli --json
+todos search parser --scope all --limit 50 --json
+```
+
+View output is stable JSON with `{ view, scope, filters, count, results }`.
+Local bridge exports include saved views, so explicit backups and machine moves
+preserve the filters without any hosted service. MCP clients use
+`save_search_view`, `list_search_views`, `run_search_view`, and
+`delete_search_view`.
+
 ## Local Duplicate Detection
 
 Agents can scan local tasks for likely duplicates from imported issue URLs,

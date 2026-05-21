@@ -7,6 +7,7 @@ import type { Project, Plan, Task, TaskComment, TaskDependency, TaskList } from 
 import type { TaskCommit, TaskGitRef, TaskVerification } from "../db/task-commits.js";
 import type { TaskFile } from "../db/task-files.js";
 import type { TaskRun, TaskRunArtifact, TaskRunCommand, TaskRunEvent } from "../db/task-runs.js";
+import type { SavedSearchView } from "./saved-search-views.js";
 import { appendSyncConflict } from "./sync-utils.js";
 
 export const TODOS_LOCAL_BRIDGE_KIND = "hasna.todos.local-bridge";
@@ -38,6 +39,7 @@ export interface TodosLocalBridgeData {
   task_commits: TaskCommit[];
   task_git_refs: TaskGitRef[];
   task_verifications: TaskVerification[];
+  saved_views: SavedSearchView[];
 }
 
 export interface TodosLocalBridgeBundle {
@@ -102,6 +104,7 @@ const dataKeys = [
   "task_commits",
   "task_git_refs",
   "task_verifications",
+  "saved_views",
 ] as const satisfies readonly (keyof TodosLocalBridgeData)[];
 
 const insertColumns: Record<keyof TodosLocalBridgeData, readonly string[]> = {
@@ -128,6 +131,7 @@ const insertColumns: Record<keyof TodosLocalBridgeData, readonly string[]> = {
   task_commits: ["id", "task_id", "sha", "message", "author", "files_changed", "committed_at", "created_at"],
   task_git_refs: ["id", "task_id", "ref_type", "name", "url", "provider", "metadata", "created_at", "updated_at"],
   task_verifications: ["id", "task_id", "command", "status", "output_summary", "artifact_path", "agent_id", "run_at", "created_at"],
+  saved_views: ["id", "name", "description", "scope", "filters", "created_at", "updated_at"],
 };
 
 const tableByKey: Record<keyof TodosLocalBridgeData, string> = {
@@ -145,9 +149,10 @@ const tableByKey: Record<keyof TodosLocalBridgeData, string> = {
   task_commits: "task_commits",
   task_git_refs: "task_git_refs",
   task_verifications: "task_verifications",
+  saved_views: "saved_search_views",
 };
 
-const jsonColumns = new Set(["metadata", "tags", "data", "files_changed"]);
+const jsonColumns = new Set(["metadata", "tags", "data", "files_changed", "filters"]);
 
 function packageSource(version: string): TodosLocalBridgePackageSource {
   return {
@@ -226,6 +231,10 @@ function rowToRunEvent(row: Record<string, unknown>): TaskRunEvent {
 
 function rowToCommit(row: Record<string, unknown>): TaskCommit {
   return { ...row, files_changed: row.files_changed ? parseJsonArray<string>(row.files_changed) : null } as TaskCommit;
+}
+
+function rowToSavedView(row: Record<string, unknown>): SavedSearchView {
+  return { ...row, filters: parseJsonObject(row.filters) } as unknown as SavedSearchView;
 }
 
 function bridgeStats(data: TodosLocalBridgeData): Record<keyof TodosLocalBridgeData, number> {
@@ -308,6 +317,9 @@ export function createLocalBridgeBundle(
       "SELECT * FROM task_verifications WHERE task_id IN (__TASK_IDS__) ORDER BY run_at, id",
       taskIds,
     ),
+    saved_views: (options.project_id
+      ? d.query("SELECT * FROM saved_search_views WHERE json_extract(filters, '$.project_id') = ? ORDER BY name").all(options.project_id) as Record<string, unknown>[]
+      : d.query("SELECT * FROM saved_search_views ORDER BY name").all() as Record<string, unknown>[]).map(rowToSavedView),
   };
 
   const artifactContents = data.run_artifacts
@@ -354,6 +366,7 @@ export function validateLocalBridgeBundle(value: unknown): LocalBridgeValidation
     issues.push("data must be an object");
   } else {
     for (const key of dataKeys) {
+      if (key === "saved_views" && data[key] === undefined) continue;
       if (!Array.isArray(data[key])) issues.push(`data.${key} must be an array`);
     }
   }
@@ -551,6 +564,7 @@ export function importLocalBridgeBundle(
   const data: TodosLocalBridgeData = {
     ...bundle.data,
     tasks: sortedTasks(bundle.data.tasks),
+    saved_views: bundle.data.saved_views ?? [],
   };
 
   for (const key of dataKeys) {

@@ -10,9 +10,77 @@ import {
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
 import { searchTasks } from "../../lib/search.js";
+import {
+  deleteSearchView,
+  listSearchViews,
+  normalizeScope,
+  runSavedSearch,
+  runSearchView,
+  saveSearchView,
+  type SavedSearchFilters,
+  type SavedSearchScope,
+} from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
 import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function splitList(value: string | string[] | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const values = Array.isArray(value) ? value : [value];
+  const items = values.flatMap((item) => item.split(",").map((part) => part.trim()).filter(Boolean));
+  return items.length > 0 ? items : undefined;
+}
+
+function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {}
+  throw new Error(`${label} must be a JSON object`);
+}
+
+function buildSearchFilters(query: string | undefined, opts: any, projectId?: string): SavedSearchFilters {
+  const filterPatch = parseJsonObjectOption(opts.filter, "--filter");
+  const customFields = parseJsonObjectOption(opts.fieldCustom, "--field-custom");
+  const labels = splitList(opts.fieldLabel);
+  const tags = splitList(opts.tag);
+  const statuses = splitList(opts.status)?.map(normalizeStatus);
+  const filters: SavedSearchFilters = {
+    query: query || opts.query,
+    project_id: opts.allProjects ? undefined : projectId,
+    status: statuses,
+    priority: splitList(opts.priority) as SavedSearchFilters["priority"],
+    assigned_to: opts.assigned,
+    agent_id: opts.agentId,
+    task_list_id: opts.taskList,
+    plan_id: opts.plan,
+    task_id: opts.task,
+    tags,
+    created_after: opts.createdAfter,
+    updated_after: opts.since || opts.updatedAfter,
+    has_dependencies: opts.hasDeps ? true : undefined,
+    is_blocked: opts.blocked ? true : undefined,
+    depends_on: opts.dependsOn,
+    blocks: opts.blocks,
+    limit: opts.limit ? Number(opts.limit) : undefined,
+    local_fields: labels || opts.fieldOwner || opts.fieldArea || opts.fieldSeverity || customFields
+      ? {
+        labels,
+        owner: opts.fieldOwner,
+        area: opts.fieldArea,
+        severity: opts.fieldSeverity,
+        custom: customFields,
+      }
+      : undefined,
+    ...filterPatch,
+  };
+  return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)) as SavedSearchFilters;
+}
 
 export function registerProjectCommands(program: Command) {
   program
@@ -80,38 +148,193 @@ export function registerProjectCommands(program: Command) {
   // search
   program
     .command("search <query>")
-    .description("Search tasks")
+    .description("Search local tasks, or run/save a cross-entity search view")
     .option("--status <status>", "Filter by status")
     .option("--priority <p>", "Filter by priority")
     .option("--assigned <agent>", "Filter by assigned agent")
+    .option("--agent-id <agent>", "Filter by creator/run/comment agent")
+    .option("--task-list <id>", "Filter by task list")
+    .option("--plan <id>", "Filter by plan")
+    .option("--task <id>", "Filter runs/comments by task")
+    .option("--tag <tag>", "Filter by task tag (repeatable or comma-separated)", collectOption, [])
+    .option("--field-label <label>", "Filter by local field label (repeatable or comma-separated)", collectOption, [])
+    .option("--field-owner <owner>", "Filter by local field owner")
+    .option("--field-area <area>", "Filter by local field area")
+    .option("--field-severity <severity>", "Filter by local field severity")
+    .option("--field-custom <json>", "Filter by local custom fields as JSON")
     .option("--since <date>", "Only tasks updated after this date (ISO)")
+    .option("--created-after <date>", "Only records created after this date (ISO)")
     .option("--blocked", "Only blocked tasks (incomplete dependencies)")
     .option("--has-deps", "Only tasks with dependencies")
+    .option("--depends-on <id>", "Only tasks that depend on a task")
+    .option("--blocks <id>", "Only tasks that block a task")
+    .option("--scope <scope>", "Search scope: tasks, projects, plans, runs, comments, all", "tasks")
+    .option("--limit <n>", "Maximum results", "100")
+    .option("--filter <json>", "Merge an advanced saved-search filter JSON object")
+    .option("--save-as <name>", "Save this search as a named view")
+    .option("--description <text>", "Saved view description")
+    .option("--all-projects", "Do not auto-scope the search to the current project")
     .action((query: string, opts) => {
       const globalOpts = program.opts();
-      const projectId = autoProject(globalOpts);
-      const searchOpts: any = { query, project_id: projectId };
-      if (opts.status) searchOpts.status = normalizeStatus(opts.status);
-      if (opts.priority) searchOpts.priority = opts.priority;
-      if (opts.assigned) searchOpts.assigned_to = opts.assigned;
-      if (opts.since) searchOpts.updated_after = opts.since;
-      if (opts.blocked) searchOpts.is_blocked = true;
-      if (opts.hasDeps) searchOpts.has_dependencies = true;
-      const tasks = searchTasks(searchOpts);
+      try {
+        const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
+        const scope = normalizeScope(opts.scope) as SavedSearchScope;
+        const searchOpts = buildSearchFilters(query, opts, projectId);
+        if (opts.saveAs) {
+          const view = saveSearchView({
+            name: opts.saveAs,
+            description: opts.description,
+            scope,
+            filters: searchOpts,
+          });
+          output(view, Boolean(globalOpts.json));
+          if (!globalOpts.json) console.log(chalk.green(`Saved view ${view.name}.`));
+          return;
+        }
+        if (scope !== "tasks") {
+          const result = runSavedSearch(searchOpts, scope);
+          if (globalOpts.json) {
+            output(result, true);
+            return;
+          }
+          if (result.count === 0) {
+            console.log(chalk.dim(`No ${scope} results matching "${query}".`));
+            return;
+          }
+          console.log(chalk.bold(`${result.count} ${scope} result(s) for "${query}":\n`));
+          for (const item of result.results) {
+            const entity = item.entity as any;
+            console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
+          }
+          return;
+        }
+        const tasks = runSavedSearch(searchOpts, "tasks").results.map((item) => item.entity as ReturnType<typeof searchTasks>[number]);
 
-      if (globalOpts.json) {
-        output(tasks, true);
-        return;
+        if (globalOpts.json) {
+          output(tasks, true);
+          return;
+        }
+
+        if (tasks.length === 0) {
+          console.log(chalk.dim(`No tasks matching "${query}".`));
+          return;
+        }
+
+        console.log(chalk.bold(`${tasks.length} result(s) for "${query}":\n`));
+        for (const t of tasks) {
+          console.log(formatTaskLine(t));
+        }
+      } catch (e) {
+        handleError(e);
       }
+    });
 
-      if (tasks.length === 0) {
-        console.log(chalk.dim(`No tasks matching "${query}".`));
-        return;
+  const views = program
+    .command("views")
+    .description("Manage local saved search views");
+
+  views
+    .command("save <name>")
+    .description("Save a local search view")
+    .option("--query <query>", "Search query")
+    .option("--scope <scope>", "Search scope: tasks, projects, plans, runs, comments, all", "tasks")
+    .option("--description <text>", "Description")
+    .option("--status <status>", "Filter by status")
+    .option("--priority <p>", "Filter by priority")
+    .option("--assigned <agent>", "Filter by assigned agent")
+    .option("--agent-id <agent>", "Filter by creator/run/comment agent")
+    .option("--task-list <id>", "Filter by task list")
+    .option("--plan <id>", "Filter by plan")
+    .option("--task <id>", "Filter runs/comments by task")
+    .option("--tag <tag>", "Filter by task tag (repeatable or comma-separated)", collectOption, [])
+    .option("--field-label <label>", "Filter by local field label (repeatable or comma-separated)", collectOption, [])
+    .option("--field-owner <owner>", "Filter by local field owner")
+    .option("--field-area <area>", "Filter by local field area")
+    .option("--field-severity <severity>", "Filter by local field severity")
+    .option("--field-custom <json>", "Filter by local custom fields as JSON")
+    .option("--since <date>", "Only records updated after this date (ISO)")
+    .option("--created-after <date>", "Only records created after this date (ISO)")
+    .option("--blocked", "Only blocked tasks")
+    .option("--has-deps", "Only tasks with dependencies")
+    .option("--depends-on <id>", "Only tasks that depend on a task")
+    .option("--blocks <id>", "Only tasks that block a task")
+    .option("--limit <n>", "Maximum results", "100")
+    .option("--filter <json>", "Merge an advanced saved-search filter JSON object")
+    .option("--all-projects", "Do not auto-scope the view to the current project")
+    .action((name: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
+        const view = saveSearchView({
+          name,
+          description: opts.description,
+          scope: normalizeScope(opts.scope),
+          filters: buildSearchFilters(opts.query, opts, projectId),
+        });
+        output(view, Boolean(globalOpts.json));
+        if (!globalOpts.json) console.log(chalk.green(`Saved view ${view.name}.`));
+      } catch (e) {
+        handleError(e);
       }
+    });
 
-      console.log(chalk.bold(`${tasks.length} result(s) for "${query}":\n`));
-      for (const t of tasks) {
-        console.log(formatTaskLine(t));
+  views
+    .command("list")
+    .description("List local saved search views")
+    .option("--scope <scope>", "Filter by scope")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      try {
+        const rows = listSearchViews(opts.scope ? normalizeScope(opts.scope) : undefined);
+        output(rows, Boolean(globalOpts.json));
+        if (!globalOpts.json) {
+          if (rows.length === 0) {
+            console.log(chalk.dim("No saved search views."));
+            return;
+          }
+          for (const row of rows) console.log(`${chalk.cyan(row.name)} ${chalk.dim(`[${row.scope}]`)} ${JSON.stringify(row.filters)}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  views
+    .command("run <name>")
+    .description("Run a local saved search view")
+    .action((name: string) => {
+      const globalOpts = program.opts();
+      try {
+        const result = runSearchView(name);
+        if (globalOpts.json) {
+          output(result, true);
+          return;
+        }
+        console.log(chalk.bold(`${result.count} result(s) for view "${result.view?.name || name}":\n`));
+        for (const item of result.results) {
+          if (item.entity_type === "tasks") {
+            console.log(formatTaskLine(item.entity as any));
+            continue;
+          }
+          const entity = item.entity as any;
+          console.log(`${chalk.cyan(item.entity_type)} ${entity.id?.slice?.(0, 8) || ""} ${entity.name || entity.title || entity.content || entity.summary || ""}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  views
+    .command("delete <name>")
+    .description("Delete a local saved search view")
+    .action((name: string) => {
+      const globalOpts = program.opts();
+      try {
+        const deleted = deleteSearchView(name);
+        output({ deleted }, Boolean(globalOpts.json));
+        if (!globalOpts.json) console.log(deleted ? chalk.green(`Deleted view ${name}.`) : chalk.dim(`View not found: ${name}`));
+      } catch (e) {
+        handleError(e);
       }
     });
 

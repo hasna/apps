@@ -128,6 +128,42 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-search.db"); } catch {}
   });
 
+  it("should save and run local search views from the CLI", async () => {
+    const dbPath = "/tmp/test-cli-views.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const task = JSON.parse((await runCli(["add", "saved view cli task", "--tag", "views", "--json"], dbPath)).stdout);
+      const saved = await runCli([
+        "views",
+        "save",
+        "cli-views",
+        "--query",
+        "saved",
+        "--tag",
+        "views",
+        "--all-projects",
+        "--json",
+      ], dbPath);
+      expect(saved.exitCode).toBe(0);
+      expect(JSON.parse(saved.stdout).name).toBe("cli-views");
+
+      const listed = JSON.parse((await runCli(["views", "list", "--json"], dbPath)).stdout);
+      expect(listed.map((view: { name: string }) => view.name)).toContain("cli-views");
+
+      const run = JSON.parse((await runCli(["views", "run", "cli-views", "--json"], dbPath)).stdout);
+      expect(run.count).toBe(1);
+      expect(run.results[0].entity_type).toBe("tasks");
+      expect(run.results[0].entity.id).toBe(task.id);
+
+      const removed = JSON.parse((await runCli(["views", "delete", "cli-views", "--json"], dbPath)).stdout);
+      expect(removed.deleted).toBe(true);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should manage local task fields from the CLI", async () => {
     const dbPath = "/tmp/test-cli-fields.db";
     const { unlinkSync } = await import("node:fs");

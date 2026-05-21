@@ -46,8 +46,8 @@ structured error contracts.
   finish records.
 - `comments`: task comments, progress notes, and unified local activity
   timelines across task history and run evidence.
-- `search`: search, status, standup, report, graph, context, and recent
-  activity workflows.
+- `search`: task search, saved views, cross-entity search, status, standup,
+  report, graph, context, and recent activity workflows.
 - `context-packs`: deterministic Markdown/JSON local context bundles for agent
   run starts.
 - `imports`: template imports, inbox intake, and local bridge imports.
@@ -114,6 +114,20 @@ Matching MCP tool:
 
 ```json
 { "tool": "run_verification_provider", "arguments": { "name": "local", "task_id": "1234abcd" } }
+```
+
+CLI saved search view:
+
+```bash
+todos views save active-cli --query parser --status pending,in_progress --tag cli --json
+todos views run active-cli --json
+```
+
+Matching MCP tools:
+
+```json
+{ "tool": "save_search_view", "arguments": { "name": "active-cli", "query": "parser", "scope": "tasks", "tags": ["cli"] } }
+{ "tool": "run_search_view", "arguments": { "name": "active-cli" } }
 ```
 
 CLI workspace permission check:

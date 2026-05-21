@@ -105,6 +105,8 @@ describe("stable JSON contracts", () => {
       "local_bridge_import_result",
       "cli_mcp_parity_manifest",
       "project_bootstrap_result",
+      "saved_search_view",
+      "saved_search_run_result",
     ]);
     expect(TODOS_JSON_CONTRACTS_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });
@@ -304,6 +306,21 @@ describe("stable JSON contracts", () => {
       taskList: null,
       sources: [],
       created: { project: false, taskList: false, sources: [] },
+    });
+    expectValid("saved_search_view", {
+      id: "view-1",
+      name: "active-cli",
+      description: null,
+      scope: "tasks",
+      filters: { query: "parser", tags: ["cli"] },
+      created_at: "2026-01-02T03:04:05.000Z",
+      updated_at: "2026-01-02T03:04:05.000Z",
+    });
+    expectValid("saved_search_run_result", {
+      scope: "tasks",
+      filters: { query: "parser" },
+      count: 1,
+      results: [{ entity_type: "tasks", entity: { id: "task-1", title: "Parser" } }],
     });
   });
 

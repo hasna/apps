@@ -674,6 +674,39 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
     },
     optional: {},
   }),
+  contract({
+    id: "saved_search_view",
+    name: "Saved Search View",
+    description: "Local saved search view for repeatable task, project, plan, run, comment, or cross-entity searches.",
+    surfaces: ["cli", "mcp", "sdk"],
+    stability: "stable",
+    required: {
+      id: idField,
+      name: field("string", "Human-readable unique view name."),
+      description: field(["string", "null"], "Optional view description.", true),
+      scope: field("string", "Search scope: all, tasks, projects, plans, runs, or comments."),
+      filters: field("object", "Saved local filter object."),
+      created_at: isoDateField,
+      updated_at: isoDateField,
+    },
+    optional: {},
+  }),
+  contract({
+    id: "saved_search_run_result",
+    name: "Saved Search Run Result",
+    description: "Stable JSON envelope returned when running a saved search view or cross-entity search.",
+    surfaces: ["cli", "mcp", "sdk"],
+    stability: "stable",
+    required: {
+      scope: field("string", "Search scope used for the run."),
+      filters: field("object", "Applied local filters."),
+      count: field("integer", "Number of returned result records."),
+      results: field("array", "Result records with entity_type and entity."),
+    },
+    optional: {
+      view: field("object", "Saved view metadata when the run came from a named view."),
+    },
+  }),
 ];
 
 function expectedTypes(contract: TodosJsonFieldContract): readonly TodosJsonFieldType[] {

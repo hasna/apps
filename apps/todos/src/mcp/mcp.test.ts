@@ -970,6 +970,30 @@ describe("MCP tool wrappers", () => {
     expect(result.content[0]!.text).toContain("Needle wrapper task");
   });
 
+  it("saved search view wrappers manage local views", async () => {
+    const tools = captureTools(registerTaskProjectTools);
+    const task = createTask({ title: "Needle saved view task", tags: ["views"] }, db);
+
+    const savedResult = await callCapturedTool(tools, "save_search_view", {
+      name: "mcp-needle",
+      query: "Needle",
+      scope: "tasks",
+      tags: ["views"],
+    });
+    expect(JSON.parse(savedResult.content[0]!.text).name).toBe("mcp-needle");
+
+    const listResult = await callCapturedTool(tools, "list_search_views", {});
+    expect(JSON.parse(listResult.content[0]!.text).map((view: { name: string }) => view.name)).toContain("mcp-needle");
+
+    const runResult = await callCapturedTool(tools, "run_search_view", { name: "mcp-needle" });
+    const run = JSON.parse(runResult.content[0]!.text);
+    expect(run.count).toBe(1);
+    expect(run.results[0].entity.id).toBe(task.id);
+
+    const deletedResult = await callCapturedTool(tools, "delete_search_view", { name: "mcp-needle" });
+    expect(JSON.parse(deletedResult.content[0]!.text).deleted).toBe(true);
+  });
+
   it("task contract wrappers expose acceptance criteria and review gates", async () => {
     const tools = captureTools(registerTaskAdvTools);
     const task = createTask({ title: "Contract via MCP" }, db);
