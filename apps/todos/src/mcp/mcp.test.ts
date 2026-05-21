@@ -130,6 +130,27 @@ describe("MCP tool operations", () => {
     expect(project.name).toBe("MCP Project");
   });
 
+  it("bootstrap_project wrapper creates project state", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "todos-mcp-bootstrap-"));
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "@hasna/mcp-bootstrap" }, null, 2)}\n`);
+
+    try {
+      const tools = captureTools(registerTaskProjectTools);
+      const result = await callCapturedTool(tools, "bootstrap_project", { path: root });
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.discovery.projectName).toBe("mcp-bootstrap");
+      expect(payload.project.name).toBe("mcp-bootstrap");
+      expect(payload.taskList.slug).toBe("todos-mcp-bootstrap");
+      expect(payload.created.project).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("version-based optimistic locking via update_task", () => {
     const task = createTask({ title: "Lockable" }, db);
     const { updateTask } = require("./../../src/db/tasks.js");

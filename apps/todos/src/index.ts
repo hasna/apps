@@ -184,6 +184,17 @@ export {
   deletePlan,
 } from "./db/plans.js";
 
+// Project bootstrap and workspace discovery
+export {
+  bootstrapProject,
+  discoverProjectWorkspace,
+} from "./lib/project-bootstrap.js";
+export type {
+  ProjectBootstrapOptions,
+  ProjectBootstrapResult,
+  ProjectWorkspaceDiscovery,
+} from "./lib/project-bootstrap.js";
+
 // Comments
 export {
   addComment,

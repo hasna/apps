@@ -72,6 +72,7 @@ describe("stable JSON contracts", () => {
       "local_bridge_bundle",
       "local_bridge_import_result",
       "cli_mcp_parity_manifest",
+      "project_bootstrap_result",
     ]);
     expect(TODOS_JSON_CONTRACTS_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
   });
@@ -160,6 +161,14 @@ describe("stable JSON contracts", () => {
       localOnly: true,
       noNetworkRequired: true,
       parity: [],
+    });
+    expectValid("project_bootstrap_result", {
+      dryRun: true,
+      discovery: { projectPath: "/tmp/project", projectName: "project" },
+      project: null,
+      taskList: null,
+      sources: [],
+      created: { project: false, taskList: false, sources: [] },
     });
   });
 

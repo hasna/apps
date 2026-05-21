@@ -394,6 +394,22 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
     },
     optional: {},
   }),
+  contract({
+    id: "project_bootstrap_result",
+    name: "Project Bootstrap Result",
+    description: "Local project bootstrap and workspace discovery output for CLI, MCP, and SDK callers.",
+    surfaces: ["cli", "mcp", "sdk"],
+    stability: "stable",
+    required: {
+      dryRun: field("boolean", "True when no local project state was written."),
+      discovery: field("object", "Detected local workspace roots, package metadata, and monorepo markers."),
+      project: field(["object", "null"], "Registered project, or null during dry-run.", true),
+      taskList: field(["object", "null"], "Default task list, or null during dry-run.", true),
+      sources: field("array", "Project source records after bootstrap."),
+      created: field("object", "Flags and source types created by this bootstrap run."),
+    },
+    optional: {},
+  }),
 ];
 
 function expectedTypes(contract: TodosJsonFieldContract): readonly TodosJsonFieldType[] {

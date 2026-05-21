@@ -127,6 +127,7 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     domain: "projects",
     cliCommands: [
       "todos projects",
+      "todos project-bootstrap",
       "todos project-rename",
       "todos projects-path set",
       "todos projects-path list",
@@ -146,8 +147,9 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "get_focus",
       "set_focus",
       "unfocus",
+      "bootstrap_project",
     ],
-    jsonContracts: ["project", "task_list", "structured_error", "api_error"],
+    jsonContracts: ["project", "task_list", "project_bootstrap_result", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
     status: "matched",
     example: {
