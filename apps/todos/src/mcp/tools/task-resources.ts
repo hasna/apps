@@ -48,6 +48,12 @@ import {
   upsertVerificationProvider,
 } from "../../lib/verification-providers.js";
 import { simulateAgentReplay } from "../../lib/agent-replay-simulator.js";
+import {
+  inspectExtensionSource,
+  installLocalExtension,
+  listLocalExtensions,
+  removeLocalExtension,
+} from "../../lib/local-extensions.js";
 import { createInboxItem, getInboxItem, listInboxItems } from "../../db/inbox.js";
 
 interface TaskResourcesContext {
@@ -696,6 +702,59 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
         try {
           const simulation = simulateAgentReplay(fixture, { agent_id, scenario });
           return { content: [{ type: "text" as const, text: JSON.stringify(simulation, null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("inspect_local_extension")) {
+    server.tool(
+      "inspect_local_extension",
+      "Validate a local extension manifest, directory, or offline bundle without installing it.",
+      { source: z.string().describe("Path to todos.extension.json, extension directory, or offline bundle JSON") },
+      async ({ source }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(inspectExtensionSource(source), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("install_local_extension")) {
+    server.tool(
+      "install_local_extension",
+      "Install or update a local workflow extension from a manifest, directory, or offline bundle.",
+      {
+        source: z.string().describe("Path to todos.extension.json, extension directory, or offline bundle JSON"),
+        trust: z.boolean().optional().describe("Mark extension trusted immediately"),
+        checksum: z.string().optional().describe("Expected sha256:<hex> checksum for the source"),
+        signature: z.string().optional().describe("Optional detached signature over the checksum"),
+        public_key: z.string().optional().describe("Public key PEM string used to verify signature"),
+      },
+      async (input) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify(installLocalExtension(input), null, 2) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_local_extensions")) {
+    server.tool("list_local_extensions", "List installed local workflow extensions.", {}, async () => {
+      try {
+        return { content: [{ type: "text" as const, text: JSON.stringify(listLocalExtensions(), null, 2) }] };
+      } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+    });
+  }
+
+  if (shouldRegisterTool("remove_local_extension")) {
+    server.tool(
+      "remove_local_extension",
+      "Remove a local workflow extension from the registry.",
+      { name: z.string() },
+      async ({ name }) => {
+        try {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ removed: removeLocalExtension(name) }, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

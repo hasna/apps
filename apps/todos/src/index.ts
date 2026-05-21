@@ -640,6 +640,22 @@ export type {
   AgentReplaySimulation,
   AgentReplayStep,
 } from "./lib/agent-replay-simulator.js";
+export {
+  getLocalExtension,
+  inspectExtensionSource,
+  installLocalExtension,
+  listLocalExtensions,
+  removeLocalExtension,
+  renderExtensionSummary,
+  validateExtensionManifest,
+  verifyExtensionSignature,
+} from "./lib/local-extensions.js";
+export type {
+  ExtensionSourceInspection,
+  ExtensionValidationResult,
+  InstallLocalExtensionInput,
+  VerifyExtensionSignatureInput,
+} from "./lib/local-extensions.js";
 
 // Completion Guard
 export { checkCompletionGuard } from "./lib/completion-guard.js";

@@ -908,6 +908,51 @@ describe("MCP tool wrappers", () => {
     expect(getTask(task.id, db)!.status).toBe(before);
   });
 
+  it("manages local extension registry through MCP without hosted calls", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const previousHome = process.env["HOME"];
+    const home = mkdtempSync(join(tmpdir(), "todos-mcp-extensions-home-"));
+    const source = mkdtempSync(join(tmpdir(), "todos-mcp-extensions-source-"));
+    process.env["HOME"] = home;
+    resetConfig();
+    try {
+      writeFileSync(join(source, "todos.extension.json"), JSON.stringify({
+        name: "mcp-extension",
+        version: "1.0.0",
+        compatibility: { todos: "*" },
+        permissions: ["tasks:read"],
+        mcp_tools: [{ name: "mcp_extension_tool" }],
+      }, null, 2));
+      const tools = captureTools(registerTaskResources);
+
+      const inspected = JSON.parse((await callCapturedTool(tools, "inspect_local_extension", { source })).content[0]!.text);
+      expect(inspected.validation.ok).toBe(true);
+      expect(inspected.checksum).toMatch(/^sha256:/);
+
+      const installed = JSON.parse((await callCapturedTool(tools, "install_local_extension", {
+        source,
+        checksum: inspected.checksum,
+        trust: true,
+      })).content[0]!.text);
+      expect(installed.status).toBe("trusted");
+      expect(installed.trusted).toBe(true);
+
+      const listed = JSON.parse((await callCapturedTool(tools, "list_local_extensions", {})).content[0]!.text);
+      expect(listed.map((extension: { name: string }) => extension.name)).toEqual(["mcp-extension"]);
+
+      const removed = JSON.parse((await callCapturedTool(tools, "remove_local_extension", { name: "mcp-extension" })).content[0]!.text);
+      expect(removed.removed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      resetConfig();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(source, { recursive: true, force: true });
+    }
+  });
+
   it("agent run dispatcher tools queue and dry-run local adapters", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

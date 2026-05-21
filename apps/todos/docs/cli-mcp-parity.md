@@ -32,6 +32,9 @@ structured error contracts.
   write scopes, env redaction declarations, and prompt-required decisions.
 - `runner-sandbox`: local runner command allowlists, cwd boundaries, write
   scopes, env allowlists, network policy, audit evidence, and dry-run explains.
+- `extensions`: local extension manifests, compatibility checks, checksum or
+  signature verification, trust review state, offline bundles, and registry
+  install/list/remove workflows.
 - `policy-packs`: local done-gate policies for required commands, forbidden
   evidence, commits, pull requests, approvals, runs, and artifacts.
 - `approval-gates`: local manual checkpoints for risky task, plan, and run work
@@ -173,6 +176,18 @@ Matching MCP tool:
 
 ```json
 { "tool": "check_runner_sandbox", "arguments": { "name": "codex", "command": "bun test", "write_paths": ["src/index.ts"] } }
+```
+
+CLI extension install:
+
+```bash
+todos extensions install ./todos.extension.json --trust --json
+```
+
+Matching MCP tool:
+
+```json
+{ "tool": "install_local_extension", "arguments": { "source": "./todos.extension.json", "trust": true } }
 ```
 
 CLI policy validation:

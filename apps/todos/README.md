@@ -99,6 +99,29 @@ MCP clients can use `set_runner_sandbox_profile`,
 are local-only and compose with workspace trust checks, so command and write
 decisions stay auditable before an agent records run evidence.
 
+## Local Extension Registry
+
+Extensions are installed from local manifests, directories with
+`todos.extension.json`, or offline JSON bundles. The registry validates the
+manifest shape, checks `@hasna/todos` compatibility ranges, records requested
+permissions, verifies optional source checksums or detached signatures, and
+stores trust state in local config only:
+
+```bash
+todos extensions inspect ./todos.extension.json --json
+todos extensions install ./todos.extension.json --checksum sha256:... --trust --json
+todos extensions verify ./bundle.todos-extension.json --signature <signature> --public-key "$PUBLIC_KEY"
+todos extensions list
+todos extensions remove my-extension
+```
+
+Unsigned extensions are allowed but installed as local records with warnings.
+Without `--trust`, installs remain in `needs_review` so agents can discover
+custom commands, MCP tools, hooks, and permissions without treating them as
+approved. MCP clients can use `inspect_local_extension`,
+`install_local_extension`, `list_local_extensions`, and
+`remove_local_extension` for the same offline workflow.
+
 ## Local Policy Packs
 
 Policy packs are project-local done gates for agents. They validate task status,

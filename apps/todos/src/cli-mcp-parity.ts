@@ -12,6 +12,7 @@ export type TodosCliMcpParityDomain =
   | "workspace-trust"
   | "secret-safety"
   | "runner-sandbox"
+  | "extensions"
   | "policy-packs"
   | "approval-gates"
   | "local-event-hooks"
@@ -355,6 +356,29 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
     example: {
       cli: "todos sandbox check default --command \"bun test\" --write src/index.ts --json",
       mcpTool: "check_runner_sandbox",
+    },
+  },
+  {
+    domain: "extensions",
+    cliCommands: [
+      "todos extensions list",
+      "todos extensions inspect",
+      "todos extensions install",
+      "todos extensions verify",
+      "todos extensions remove",
+    ],
+    mcpTools: [
+      "list_local_extensions",
+      "inspect_local_extension",
+      "install_local_extension",
+      "remove_local_extension",
+    ],
+    jsonContracts: ["structured_error", "api_error"],
+    errorContracts: ["structured_error", "api_error"],
+    status: "matched",
+    example: {
+      cli: "todos extensions install ./todos.extension.json --trust --json",
+      mcpTool: "install_local_extension",
     },
   },
   {

@@ -437,6 +437,105 @@ export function registerConfigServeCommands(program: Command) {
     .option("--network", "Request network access")
     .action((name: string | undefined, opts: { path?: string; cwd?: string; command?: string; write?: string; env?: string; network?: boolean }) => runSandboxCheck(name, opts, false));
 
+  const extensions = program
+    .command("extensions")
+    .description("Manage local workflow extension registry");
+
+  extensions
+    .command("list")
+    .description("List installed local extensions")
+    .action(async () => {
+      const globalOpts = program.opts();
+      const { listLocalExtensions, renderExtensionSummary } = await import("../../lib/local-extensions.js");
+      const records = listLocalExtensions();
+      if (globalOpts.json) { output(records, true); return; }
+      if (records.length === 0) {
+        console.log(chalk.dim("No local extensions installed."));
+        return;
+      }
+      for (const record of records) console.log(renderExtensionSummary(record));
+    });
+
+  extensions
+    .command("inspect <source>")
+    .description("Validate a local extension manifest, directory, or offline bundle without installing it")
+    .action(async (source: string) => {
+      const globalOpts = program.opts();
+      const { inspectExtensionSource } = await import("../../lib/local-extensions.js");
+      const inspected = inspectExtensionSource(source);
+      if (globalOpts.json) { output(inspected, true); return; }
+      console.log(`${inspected.manifest.name}@${inspected.manifest.version} ${inspected.validation.ok ? chalk.green("valid") : chalk.red("invalid")}`);
+      console.log(`  ${chalk.dim("Source:")}   ${inspected.source_type} ${inspected.source}`);
+      console.log(`  ${chalk.dim("Checksum:")} ${inspected.checksum}`);
+      for (const warning of inspected.validation.warnings) console.log(`  ${chalk.yellow("warning:")} ${warning}`);
+      for (const error of inspected.validation.errors) console.log(`  ${chalk.red("error:")} ${error}`);
+      if (!inspected.validation.ok) process.exitCode = 1;
+    });
+
+  extensions
+    .command("install <source>")
+    .description("Install or update a local extension from a manifest, directory, or offline bundle")
+    .option("--trust", "Mark the extension trusted immediately")
+    .option("--checksum <sha256>", "Expected sha256:<hex> checksum for the source manifest or bundle")
+    .option("--signature <value>", "Optional detached signature over the checksum")
+    .option("--public-key <pem>", "Public key PEM string used to verify --signature")
+    .action(async (source: string, opts: { trust?: boolean; checksum?: string; signature?: string; publicKey?: string }) => {
+      const globalOpts = program.opts();
+      const { installLocalExtension } = await import("../../lib/local-extensions.js");
+      const record = installLocalExtension({
+        source,
+        trust: opts.trust,
+        checksum: opts.checksum,
+        signature: opts.signature,
+        public_key: opts.publicKey,
+      });
+      if (globalOpts.json) { output(record, true); return; }
+      console.log(chalk.green(`Extension ${record.name}@${record.version} installed as ${record.status}.`));
+      console.log(`  ${chalk.dim("Checksum:")} ${record.checksum}`);
+      console.log(`  ${chalk.dim("Signature:")} ${record.signature_verified ? "verified" : "not verified"}`);
+      for (const warning of record.warnings) console.log(`  ${chalk.yellow("warning:")} ${warning}`);
+    });
+
+  extensions
+    .command("verify <source>")
+    .description("Verify a local extension source checksum and optional signature without installing it")
+    .option("--checksum <sha256>", "Expected sha256:<hex> checksum for the source manifest or bundle")
+    .option("--signature <value>", "Optional detached signature over the checksum")
+    .option("--public-key <pem>", "Public key PEM string used to verify --signature")
+    .action(async (source: string, opts: { checksum?: string; signature?: string; publicKey?: string }) => {
+      const globalOpts = program.opts();
+      const { inspectExtensionSource, verifyExtensionSignature } = await import("../../lib/local-extensions.js");
+      const inspected = inspectExtensionSource(source);
+      const expected = opts.checksum || inspected.manifest.checksum;
+      const checksum_ok = expected ? expected === inspected.checksum : true;
+      const signature_verified = verifyExtensionSignature({
+        checksum: inspected.checksum,
+        signature: opts.signature || inspected.manifest.signature,
+        public_key: opts.publicKey || inspected.manifest.public_key,
+      });
+      const result = {
+        ...inspected,
+        checksum_ok,
+        signature_verified,
+      };
+      if (globalOpts.json) { output(result, true); return; }
+      console.log(checksum_ok && inspected.validation.ok ? chalk.green("Extension source verified") : chalk.red("Extension source failed verification"));
+      console.log(`  ${chalk.dim("Checksum:")} ${inspected.checksum}${checksum_ok ? "" : " (mismatch)"}`);
+      console.log(`  ${chalk.dim("Signature:")} ${signature_verified ? "verified" : "not verified"}`);
+      if (!checksum_ok || !inspected.validation.ok) process.exitCode = 1;
+    });
+
+  extensions
+    .command("remove <name>")
+    .description("Remove a local extension from the registry")
+    .action(async (name: string) => {
+      const globalOpts = program.opts();
+      const { removeLocalExtension } = await import("../../lib/local-extensions.js");
+      const removed = removeLocalExtension(name);
+      if (globalOpts.json) { output({ removed }, true); return; }
+      console.log(removed ? chalk.green("Extension removed.") : chalk.dim("No extension matched."));
+    });
+
   const policies = program
     .command("policies")
     .description("Manage local policy packs for task done gates");

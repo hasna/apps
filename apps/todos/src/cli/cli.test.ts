@@ -1260,6 +1260,54 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
+  it("should inspect, install, list, verify, and remove local extensions", async () => {
+    const dbPath = "/tmp/test-cli-extensions.db";
+    const { mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-extensions-home-"));
+    const source = mkdtempSync(join(tmpdir(), "todos-cli-extensions-source-"));
+    const manifestPath = join(source, "todos.extension.json");
+    writeFileSync(manifestPath, JSON.stringify({
+      name: "cli-extension",
+      version: "1.0.0",
+      compatibility: { todos: "*" },
+      permissions: ["tasks:read"],
+      commands: [{ name: "cli-demo", command: "echo demo" }],
+    }, null, 2));
+    const env = { HOME: home };
+    try { unlinkSync(dbPath); } catch {}
+
+    const inspected = await runCli(["extensions", "inspect", source, "--json"], dbPath, env);
+    expect(inspected.exitCode).toBe(0);
+    const inspectedPayload = JSON.parse(inspected.stdout);
+    expect(inspectedPayload.manifest.name).toBe("cli-extension");
+    expect(inspectedPayload.validation.ok).toBe(true);
+
+    const installed = await runCli(["extensions", "install", source, "--checksum", inspectedPayload.checksum, "--json"], dbPath, env);
+    expect(installed.exitCode).toBe(0);
+    const installedPayload = JSON.parse(installed.stdout);
+    expect(installedPayload.status).toBe("needs_review");
+    expect(installedPayload.trusted).toBe(false);
+
+    const listed = await runCli(["extensions", "list", "--json"], dbPath, env);
+    expect(JSON.parse(listed.stdout)).toHaveLength(1);
+
+    const verified = await runCli(["extensions", "verify", source, "--checksum", inspectedPayload.checksum, "--json"], dbPath, env);
+    expect(verified.exitCode).toBe(0);
+    expect(JSON.parse(verified.stdout).checksum_ok).toBe(true);
+
+    const removed = await runCli(["extensions", "remove", "cli-extension", "--json"], dbPath, env);
+    expect(removed.exitCode).toBe(0);
+    expect(JSON.parse(removed.stdout).removed).toBe(true);
+
+    rmSync(home, { recursive: true, force: true });
+    rmSync(source, { recursive: true, force: true });
+    try { unlinkSync(dbPath); } catch {}
+    try { unlinkSync(`${dbPath}-shm`); } catch {}
+    try { unlinkSync(`${dbPath}-wal`); } catch {}
+  });
+
   it("should manage local policy packs and validate task evidence", async () => {
     const dbPath = "/tmp/test-cli-policies.db";
     const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");

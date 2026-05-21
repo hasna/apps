@@ -87,6 +87,40 @@ export interface VerificationProviderConfig {
   updated_at?: string;
 }
 
+export type LocalExtensionInstallStatus = "trusted" | "needs_review" | "incompatible";
+
+export interface LocalExtensionManifest {
+  schema_version?: number;
+  name: string;
+  version: string;
+  description?: string;
+  compatibility?: {
+    todos?: string;
+  };
+  permissions?: string[];
+  commands?: Array<{ name: string; command?: string; description?: string }>;
+  mcp_tools?: Array<{ name: string; description?: string }>;
+  hooks?: string[];
+  checksum?: string;
+  signature?: string;
+  public_key?: string;
+}
+
+export interface LocalExtensionRecord {
+  name: string;
+  version: string;
+  source: string;
+  source_type: "manifest" | "directory" | "bundle";
+  manifest: LocalExtensionManifest;
+  checksum: string;
+  signature_verified: boolean;
+  trusted: boolean;
+  status: LocalExtensionInstallStatus;
+  warnings: string[];
+  installed_at: string;
+  updated_at?: string;
+}
+
 export interface PolicyPackConfig {
   name: string;
   version: number;
@@ -175,6 +209,8 @@ export interface TodosConfig {
   agent_run_adapters?: Record<string, AgentRunAdapterConfig>;
   /** Optional local verification provider adapters, keyed by provider name. */
   verification_providers?: Record<string, VerificationProviderConfig>;
+  /** Local extension registry entries, keyed by extension name. */
+  extension_registry?: Record<string, LocalExtensionRecord>;
   /** Local policy packs for task done gates, keyed by pack name. */
   policy_packs?: Record<string, PolicyPackConfig>;
   /** Local event hooks and automation triggers, keyed by hook name. */
